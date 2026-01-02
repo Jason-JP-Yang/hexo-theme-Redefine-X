@@ -181,11 +181,12 @@ function cleanData(data) {
   return data;
 }
 
+const Jieba = require("@node-rs/jieba").Jieba;
+const jiebaInstance = new Jieba();
 function tokenize(data) {
-  const jieba = require("nodejieba");
-  return jieba
-    .cut(cleanData(data), true)
-    .filter((word) => word !== " " && !/^[0-9]*$/.test(word));
+  const cleaned = cleanData(data);
+  const words = jiebaInstance.cut(cleaned, true);
+  return words.filter((word) => word && word !== " " && !/^[0-9]*$/.test(word));
 }
 
 function cosineSimilarity(vector1, vector2) {
@@ -360,7 +361,7 @@ function userInterface(recommendedArticles, cfg) {
 function itemInterface(item) {
   const url = hexo.extend.helper.get('url_for').call(hexo, item.path);
   return `<a class="recommended-article-item" href="${url}" title="${item.title}" rel="bookmark">
-  <img src="${item.headimg}" alt="${item.title}" class="!max-w-none">
+  <img src="/${item.headimg}" alt="${item.title}" class="!max-w-none">
   <span class="title">${item.title}</span>
 </a>`;
 }

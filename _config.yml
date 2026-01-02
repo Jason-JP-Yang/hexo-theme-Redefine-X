@@ -329,7 +329,7 @@ articles:
   lazyload: true
   # Pangu.js (automatically add space between Chinese and English). See https://github.com/vinta/pangu.js
   pangu_js: false
-  # Article recommendation. Requires nodejieba (npm install nodejieba). Transplanted from hexo-theme-volantis.
+  # Article recommendation. Requires @node-rs/jieba (npm install @node-rs/jieba). Transplanted from hexo-theme-volantis.
   recommendation:
     # Whether to enable article recommendation
     enable: false
