@@ -1,5 +1,12 @@
 "use strict";
 
+/**
+ * Redefine-X Image Preloader - Build Phase
+ * 
+ * This filter transforms <img> tags into <div class="img-preloader"> containers
+ * that will be processed by JavaScript at runtime for progressive loading.
+ */
+
 const fs = require("fs");
 const path = require("path");
 const imageSize = require("image-size");
@@ -23,16 +30,6 @@ function escapeHtmlAttr(value) {
 
 function stripQueryAndHash(url) {
   return String(url).split("#")[0].split("?")[0];
-}
-
-function isExternalOrDataUrl(src) {
-  const s = String(src).trim();
-  return (
-    s.startsWith("data:") ||
-    s.startsWith("blob:") ||
-    /^https?:\/\//i.test(s) ||
-    s.startsWith("//")
-  );
 }
 
 function normalizeRemoteUrl(src) {
@@ -81,7 +78,6 @@ function fetchUrlBuffer(urlString, redirectsLeft = REMOTE_MAX_REDIRECTS) {
       (res) => {
         const status = res.statusCode || 0;
 
-        // Follow redirects
         if (
           [301, 302, 303, 307, 308].includes(status) &&
           res.headers.location &&
@@ -123,13 +119,11 @@ function fetchUrlBuffer(urlString, redirectsLeft = REMOTE_MAX_REDIRECTS) {
 }
 
 async function getImageDimensions(src, imgTag, data) {
-  // 1) Prefer explicit width/height in tag
   const fromTag = tryGetDimensionsFromTag(imgTag);
   if (fromTag) return fromTag;
 
   const s = String(src).trim();
 
-  // 2) data: URL
   if (s.startsWith("data:")) {
     const buffer = decodeDataUrlToBuffer(s);
     if (buffer) {
@@ -143,10 +137,8 @@ async function getImageDimensions(src, imgTag, data) {
     return null;
   }
 
-  // 3) blob: URL can't be resolved at build time
   if (s.startsWith("blob:")) return null;
 
-  // 4) Remote URL
   if (/^https?:\/\//i.test(s) || s.startsWith("//")) {
     const normalized = normalizeRemoteUrl(s);
     if (!remoteSizeCache.has(normalized)) {
@@ -168,7 +160,6 @@ async function getImageDimensions(src, imgTag, data) {
     }
   }
 
-  // 5) Local path
   const localPath = resolveLocalImagePath(s, data);
   if (localPath) {
     try {
@@ -185,7 +176,6 @@ async function getImageDimensions(src, imgTag, data) {
 function resolveLocalImagePath(src, data) {
   const rawSrc = stripQueryAndHash(src);
 
-  // Normalize path segment from URL
   const siteRoot = hexo.config.root || "/";
   let rel = rawSrc;
   if (siteRoot !== "/" && rel.startsWith(siteRoot)) {
@@ -193,7 +183,6 @@ function resolveLocalImagePath(src, data) {
   }
   rel = rel.replace(/^\//, "");
 
-  // Some content may contain URI-encoded characters
   const relDecoded = (() => {
     try {
       return decodeURIComponent(rel);
@@ -204,17 +193,14 @@ function resolveLocalImagePath(src, data) {
 
   const candidates = [];
 
-  // 1) Site source dir: source/<rel>
   if (hexo.source_dir) {
     candidates.push(path.join(hexo.source_dir, relDecoded));
   }
 
-  // 2) Theme source dir: themes/<theme>/source/<rel>
   if (hexo.theme_dir) {
     candidates.push(path.join(hexo.theme_dir, "source", relDecoded));
   }
 
-  // 3) Relative to current post/page source file directory
   const sourcePath = data && (data.full_source || data.source);
   if (sourcePath) {
     const sourceFullPath = path.isAbsolute(sourcePath)
@@ -223,7 +209,6 @@ function resolveLocalImagePath(src, data) {
     candidates.push(path.join(path.dirname(sourceFullPath), relDecoded));
   }
 
-  // 4) If raw src itself is a relative path, also try from source dir directly
   if (hexo.source_dir && !rawSrc.startsWith("/")) {
     const rawDecoded = (() => {
       try {
@@ -256,18 +241,43 @@ function tryGetDimensionsFromTag(imgTag) {
   return null;
 }
 
-function makeInlineLoadingSvgDataUri(width, height) {
-  const w = Math.max(1, Math.floor(width));
-  const h = Math.max(1, Math.floor(height));
-  // Keep the markup minimal; encode into a data URI so it is 100% synchronous (no extra request).
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" ` +
-    `width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
-    `<rect x="0" y="0" rx="24" ry="24" width="${w}" height="${h}" style="fill: #e0e0e0;">` +
-    `<animate attributeName="opacity" values="1;0.6;1" dur="1.5s" repeatCount="indefinite" />` +
-    `</rect></svg>`;
+/**
+ * Extract alt text from img tag
+ */
+function extractAltText(imgTag) {
+  const altMatch = imgTag.match(/\balt\s*=\s*(["'])([^"']*)\1/i);
+  return altMatch ? altMatch[2] : "";
+}
 
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+/**
+ * Extract class from img tag
+ */
+function extractClass(imgTag) {
+  const classMatch = imgTag.match(/\bclass\s*=\s*(["'])([^"']*)\1/i);
+  return classMatch ? classMatch[2] : "";
+}
+
+/**
+ * Build the img-preloader div container
+ */
+function buildPreloaderDiv(src, dims, alt, originalClass) {
+  const w = dims.width;
+  const h = dims.height;
+  const aspectRatio = (w / h).toFixed(6);
+  
+  const classes = ["img-preloader"];
+  if (originalClass) {
+    classes.push(originalClass);
+  }
+
+  return `<div class="${classes.join(" ")}" ` +
+    `data-src="${escapeHtmlAttr(src)}" ` +
+    `data-width="${w}" ` +
+    `data-height="${h}" ` +
+    `data-alt="${escapeHtmlAttr(alt)}" ` +
+    `style="aspect-ratio: ${aspectRatio}; max-width: ${w}px;">` +
+    `<div class="img-preloader-skeleton"></div>` +
+    `</div>`;
 }
 
 hexo.extend.filter.register(
@@ -289,8 +299,8 @@ hexo.extend.filter.register(
       result += data.content.slice(lastIndex, start);
       lastIndex = end;
 
-      // Skip if already processed
-      if (/\blazyload\b/i.test(imgTag) || /\bdata-src\b/i.test(imgTag)) {
+      // Skip if marked with data-no-lazyload
+      if (/\bdata-no-lazyload\b/i.test(imgTag)) {
         result += imgTag;
         continue;
       }
@@ -307,6 +317,12 @@ hexo.extend.filter.register(
         continue;
       }
 
+      // Skip data: URLs (already inline) and blob: URLs
+      if (originalSrc.startsWith("data:") || originalSrc.startsWith("blob:")) {
+        result += imgTag;
+        continue;
+      }
+
       let dims = await getImageDimensions(originalSrc, imgTag, data);
       if (!dims || !dims.width || !dims.height) {
         dims = DEFAULT_FALLBACK_DIMENSIONS;
@@ -317,30 +333,12 @@ hexo.extend.filter.register(
         }
       }
 
-      const placeholderSrc = makeInlineLoadingSvgDataUri(dims.width, dims.height);
-
-      // Replace src with inline placeholder
-      let out = imgTag.replace(/\bsrc\s*=\s*(["'])([^"']*)\1/i, function () {
-        return `src="${placeholderSrc}"`;
-      });
-
-      // Inject lazyload + data-src + width/height (if missing)
-      const inject = [];
-      inject.push(" lazyload");
-      inject.push(` data-src="${escapeHtmlAttr(originalSrc)}"`);
-
-      if (!/\bwidth\s*=\s*/i.test(out)) {
-        inject.push(` width="${dims.width}"`);
-      }
-      if (!/\bheight\s*=\s*/i.test(out)) {
-        inject.push(` height="${dims.height}"`);
-      }
-
-      out = out.replace(/\s*\/?>\s*$/i, function (tagEnd) {
-        return `${inject.join("")}${tagEnd}`;
-      });
-
-      result += out;
+      const alt = extractAltText(imgTag);
+      const originalClass = extractClass(imgTag);
+      
+      // Replace <img> with <div class="img-preloader">
+      const preloaderDiv = buildPreloaderDiv(originalSrc, dims, alt, originalClass);
+      result += preloaderDiv;
     }
 
     result += data.content.slice(lastIndex);

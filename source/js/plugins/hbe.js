@@ -229,11 +229,26 @@ export function initHBE() {
           .appendChild(await convertHTMLToElement(decoded));
         document.getElementById("hexo-blog-encrypt").appendChild(hideButton);
 
-        // support html5 lazyload functionality.
-        document.querySelectorAll("img").forEach((elem) => {
-          if (elem.getAttribute("data-src") && !elem.src) {
-            elem.src = elem.getAttribute("data-src");
+        // Trigger lazy loading for any preloaders in decrypted content
+        import("../layouts/lazyload.js").then((module) => {
+          if (module.forceLoadAllPreloaders) {
+            module.forceLoadAllPreloaders();
           }
+        }).catch(() => {
+          // Fallback: try to load preloaders directly
+          document.querySelectorAll(".img-preloader").forEach((preloader) => {
+            if (preloader.dataset.loaded !== "true") {
+              const src = preloader.dataset.src;
+              if (src) {
+                const img = document.createElement("img");
+                img.src = src;
+                img.alt = preloader.dataset.alt || "";
+                if (preloader.parentNode) {
+                  preloader.parentNode.replaceChild(img, preloader);
+                }
+              }
+            }
+          });
         });
 
         // // load Redefine Page components

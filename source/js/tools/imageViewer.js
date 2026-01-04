@@ -112,8 +112,17 @@ export default function imageViewer() {
   });
 
   const imgDoms = document.querySelectorAll(
-    ".markdown-body img, .masonry-item img, #shuoshuo-content img",
+    ".markdown-body img:not(.img-preloader-loaded), .masonry-item img:not(.img-preloader-loaded), #shuoshuo-content img:not(.img-preloader-loaded)",
   );
+
+  const allViewableElements = [];
+  
+  imgDoms.forEach((img) => {
+    allViewableElements.push({
+      element: img,
+      getSrc: () => img.dataset.originalSrc || img.src,
+    });
+  });
 
   const escapeKeyListener = (event) => {
     if (event.key === "Escape" && isBigImage) {
@@ -123,18 +132,41 @@ export default function imageViewer() {
       translateX = 0;
       translateY = 0;
       targetImg.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-      // Remove the event listener when the image viewer is closed
       document.removeEventListener("keydown", escapeKeyListener);
     }
   };
 
-  if (imgDoms.length > 0) {
-    imgDoms.forEach((img, index) => {
-      img.addEventListener("click", () => {
+  const observeNewImages = () => {
+    const newImgs = document.querySelectorAll(
+      ".markdown-body .img-preloader-loaded, .masonry-item .img-preloader-loaded, #shuoshuo-content .img-preloader-loaded"
+    );
+    
+    newImgs.forEach((img) => {
+      if (!allViewableElements.some(item => item.element === img)) {
+        const index = allViewableElements.length;
+        allViewableElements.push({
+          element: img,
+          getSrc: () => img.dataset.originalSrc || img.src,
+        });
+        
+        img.addEventListener("click", () => {
+          currentImgIndex = index;
+          isBigImage = true;
+          showHandle(isBigImage);
+          targetImg.src = img.dataset.originalSrc || img.src;
+          document.addEventListener("keydown", escapeKeyListener);
+        });
+      }
+    });
+  };
+
+  if (allViewableElements.length > 0 || document.querySelector(".img-preloader")) {
+    allViewableElements.forEach((item, index) => {
+      item.element.addEventListener("click", () => {
         currentImgIndex = index;
         isBigImage = true;
         showHandle(isBigImage);
-        targetImg.src = img.src;
+        targetImg.src = item.getSrc();
         document.addEventListener("keydown", escapeKeyListener);
       });
     });
@@ -143,28 +175,20 @@ export default function imageViewer() {
       if (!isBigImage) return;
 
       if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-        currentImgIndex =
-          (currentImgIndex - 1 + imgDoms.length) % imgDoms.length;
+        currentImgIndex = (currentImgIndex - 1 + allViewableElements.length) % allViewableElements.length;
       } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-        currentImgIndex = (currentImgIndex + 1) % imgDoms.length;
+        currentImgIndex = (currentImgIndex + 1) % allViewableElements.length;
       } else {
         return;
       }
 
-      const currentImg = imgDoms[currentImgIndex];
-      let newSrc = currentImg.src;
-
-      if (currentImg.hasAttribute("lazyload")) {
-        newSrc = currentImg.getAttribute("data-src");
-        currentImg.src = newSrc;
-        currentImg.removeAttribute("lazyload");
-      }
-
-      targetImg.src = newSrc;
+      targetImg.src = allViewableElements[currentImgIndex].getSrc();
     };
 
     document.addEventListener("keydown", handleArrowKeys);
-  } else {
-    // console.warn("No images found to attach image viewer functionality.");
+
+    const imgObserver = new MutationObserver(observeNewImages);
+    imgObserver.observe(document.body, { childList: true, subtree: true });
+    setInterval(observeNewImages, 1000);
   }
 }

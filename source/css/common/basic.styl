@@ -99,10 +99,84 @@ a
 // ======================================================================
 // img
 // ======================================================================
-img
-  &[lazyload]
-    cursor not-allowed
-    pointer-events none
+
+// Image Preloader Styles
+.img-preloader
+  position relative
+  display block
+  width 100%
+  overflow hidden
+  border-radius $redefine-border-radius-medium
+  background-color var(--third-background-color)
+  margin 20px auto
+
+  .img-preloader-skeleton
+    position absolute
+    top 0
+    left 0
+    width 100%
+    height 100%
+    background linear-gradient(
+      90deg,
+      var(--third-background-color) 0%,
+      var(--second-background-color) 50%,
+      var(--third-background-color) 100%
+    )
+    background-size 200% 100%
+    animation img-preloader-shimmer 1.5s infinite ease-in-out
+    border-radius inherit
+    display flex
+    flex-direction column
+    align-items center
+    justify-content center
+
+  &.img-preloader-fade-out
+    opacity 0
+    transition opacity 0.2s ease
+
+  &.img-preloader-error
+    .img-preloader-skeleton
+      animation none
+      background var(--third-background-color)
+
+    .img-preloader-error-icon
+      font-size 3rem
+      color var(--default-text-color)
+      opacity 0.4
+      margin-bottom 1rem
+
+    .img-preloader-error-text
+      text-align center
+      color var(--default-text-color)
+      opacity 0.6
+      padding 0 20px
+      font-size 0.85rem
+
+      .error-message
+        font-weight 500
+        margin-bottom 0.5rem
+
+      .error-url
+        word-break break-all
+        font-size 0.75rem
+        opacity 0.7
+
+.img-preloader-loaded
+  animation img-preloader-fade-in 0.3s ease forwards
+
+@keyframes img-preloader-shimmer
+  0%
+    background-position 200% 0
+  100%
+    background-position -200% 0
+
+@keyframes img-preloader-fade-in
+  from
+    opacity 0
+    transform scale(0.98)
+  to
+    opacity 1
+    transform scale(1)
 
 // ======================================================================
 // button
