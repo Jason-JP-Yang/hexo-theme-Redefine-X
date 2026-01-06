@@ -1,39 +1,40 @@
 {
-  "name": "hexo-theme-redefine",
+  "name": "hexo-theme-redefine-x",
   "version": "2.8.5",
   "private": false,
-  "description": "Redefine your writing with Hexo Theme Redefine.",
+  "description": "Redefine-X your writing with Hexo Theme Redefine-X. A customized fork of hexo-theme-redefine.",
   "scripts": {
     "npm:publish": "npm run build && npm publish",
     "build": "npm run build:css && npm run build:js",
     "build:css": "npx @tailwindcss/cli -i source/css/tailwind.source.css -o source/css/build/tailwind.css --minify",
     "build:js": "node source/js/build.js",
     "watch:css": "npx @tailwindcss/cli -i source/css/tailwind.source.css -o source/css/build/tailwind.css --watch --minify",
-    "prepare": "husky",
-    "release": "standard-version",
-    "release:minor": "standard-version --release-as minor",
-    "release:patch": "standard-version --release-as patch",
-    "release:major": "standard-version --release-as major"
+    "prepare": "npx husky",
+    "release": "npx standard-version",
+    "release:minor": "npx standard-version --release-as minor",
+    "release:patch": "npx standard-version --release-as patch",
+    "release:major": "npx standard-version --release-as major"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/EvanNotFound/hexo-theme-redefine.git"
+    "url": "git+https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X.git"
   },
   "keywords": [
     "hexo",
     "theme",
     "redefine",
+    "redefine-x",
     "simple",
     "pure",
     "powerful",
     "hexo-theme"
   ],
-  "author": "EvanNotFound",
+  "author": "Jason-JP-Yang",
   "license": "GPL-3.0",
   "bugs": {
-    "url": "https://github.com/EvanNotFound/hexo-theme-redefine/issues"
+    "url": "https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X/issues"
   },
-  "homepage": "https://redefine.ohevan.com",
+  "homepage": "https://redefine-x-docs.jason-yang.top/zh",
   "devDependencies": {
     "eslint": "^8.47.0",
     "glob-promise": "^6.0.7",

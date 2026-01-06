@@ -1,23 +1,24 @@
 # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# THEME REDEFINE CONFIGURATION FILE V2
-# BY EVANNOTFOUND
-# GITHUB: https://github.com/EvanNotFound/hexo-theme-redefine
-# DOCUMENTATION: https://redefine-docs.ohevan.com
-# DEMO: https://redefine.ohevan.com
+# THEME REDEFINE-X CONFIGURATION FILE V2
+# BY JASON-JP-YANG
+# GITHUB: https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X
+# DOCUMENTATION: https://redefine-x-docs.jason-yang.top/zh
+# DEMO: https://blog.jason-yang.top
+# BASED ON: hexo-theme-redefine by EvanNotFound
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 
 # BASIC INFORMATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/basic/info
+# Docs: https://redefine-x-docs.jason-yang.top/zh/basic/info
 info:
   # Site title
-  title: Theme Redefine
+  title: Theme Redefine-X
   # Site subtitle
   subtitle: Redefine Your Hexo Journey.
   # Author name
-  author: The Redefine Team
+  author: Jason-JP-Yang
   # Site URL
-  url: https://redefine.ohevan.com
+  url: https://blog.jason-yang.top
 # BASIC INFORMATION <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 

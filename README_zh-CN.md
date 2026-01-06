@@ -4,27 +4,33 @@
   <a title="zh-TW" href="README_zh-TW.md"><img src="https://img.shields.io/badge/-%E7%B9%81%E4%BD%93%E4%B8%AD%E6%96%87-545759?style=for-the-badge" alt="繁体中文"></a>
 </div>
 
-<a href="https://redefine.ohevan.com"><img align="center" src="https://github.com/EvanNotFound/hexo-theme-redefine/assets/68590232/f2ff10f6-a740-4120-ba04-1b2a518fb019"  alt="Redefine"></a>
+<div align="center">
+
+```
+ ____               __             ___                              __   __     
+/\  _`\            /\ \          /'___\ __                         /\ \ /\ \    
+\ \ \L\ \     __   \_\ \     __ /\ \__//\_\    ___      __         \ `\`\/'/'   
+ \ \ ,  /   /'__`\ /'_` \  /'__`\ \ ,__\/\ \ /' _ `\  /'__`\ _______`\/ > <     
+  \ \ \\ \ /\  __//\ \L\ \/\  __/\ \ \_/\ \ \/\ \/\ \/\  __//\______\  \/'/\`\  
+   \ \_\ \_\ \____\ \___,_\ \____\\ \_\  \ \_\ \_\ \_\ \____\/______/  /\_\\ \_\
+    \/_/\/ /\/____/\/__,_ /\/____/ \/_/   \/_/\/_/\/_/\/____/          \/_/ \/_/
+```
+
+</div>
 
 
-# hexo-theme-redefine
+# hexo-theme-Redefine-X
 
-"Redefine" 是一款简洁、快速、纯粹的 Hexo 主题，其简约之美遥非平凡，让人领略到设计的力量。本主题不仅包含诸多实用丰富的功能，而且赋予了精致而出色的设计理念。
+"Redefine-X" 是一款简洁、快速、纯粹的 Hexo 主题，其简约之美遥非平凡，让人领略到设计的力量。本主题不仅包含诸多实用丰富的功能，而且赋予了精致而出色的设计理念。
+
+本主题源自 [hexo-theme-redefine](https://github.com/EvanNotFound/hexo-theme-redefine)，进一步进行了精心打磨和扩展。在保留了原主题的精炼基础上，我们优化了整体样式，引入了自定义功能，增添了多种个性化支持。同时，大幅提高了自定义的灵活度，旨在让您能够更加便捷、顺畅地运用本主题，打造出独具匠心的个人博客。
 
 本主题源自 [hexo-theme-keep](https://github.com/XPoet/hexo-theme-keep) 的早期版本，进一步进行了精心打磨和扩展。在保留了原主题的精炼基础上，我们优化了整体样式，引入了丰富的写作模块，并增添了多种插件支持。同时，大幅提高了自定义的灵活度，旨在让您能够更加便捷、顺畅地运用本主题，打造出独具匠心的个人博客。
 
 <p align="center">
-    <a href="https://www.npmjs.com/package/hexo-theme-redefine">
-        <img src="https://img.shields.io/npm/v/hexo-theme-redefine?color=F38181&amp;label=version&amp;logo=npm&amp;logoColor=F38181&amp;style=for-the-badge" referrerpolicy="no-referrer" alt="NPM version" />
-    </a>
-    <a href="https://www.npmjs.com/package/hexo-theme-redefine">
-        <img src="https://img.shields.io/npm/dm/hexo-theme-redefine?color=FCE38A&amp;logo=npm&amp;logoColor=FCE38A&amp;style=for-the-badge" referrerpolicy="no-referrer" alt="npm downloads" />
-    </a>
-    <a href="https://www.npmjs.com/package/hexo-theme-redefine">
-        <img src="https://img.shields.io/npm/dt/hexo-theme-redefine?color=95E1D3&amp;label=total&amp;logo=npm&amp;logoColor=95E1D3&amp;style=for-the-badge" referrerpolicy="no-referrer" alt="npm-total" />
-    </a>
     <a href="https://hexo.io"><img src="https://img.shields.io/badge/hexo-%3E=5.0.0-8caaee?style=for-the-badge&amp;logo=hexo&amp;logoColor=8caaee" referrerpolicy="no-referrer" alt="Required Hexo version" /></a>
     <img src="https://img.shields.io/badge/node-%3E=12.0-a6d189?style=for-the-badge&amp;logo=node.js&amp;logoColor=a6d189" referrerpolicy="no-referrer" alt="NodeJS Version" />
+    <a href="https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X"><img src="https://img.shields.io/github/stars/Jason-JP-Yang/hexo-theme-Redefine-X?style=for-the-badge" alt="GitHub Stars" /></a>
 </p>
 
 
@@ -42,119 +48,88 @@
 
 ## 🌐 官方演示站
 
-- [EvanNotFound's Blog](https://ohevan.com)
-- [Theme Redefine 演示站点](https://redefine.ohevan.com)
-- [Redefine 用户墙](https://redefine.ohevan.com/showcase)
-
-如果你也在使用 Redefine，欢迎在前往 [Redefine 用户墙](https://redefine.ohevan.com/showcase) 添加你的博客链接。
+- [Jason Yang's Blog](https://blog.jason-yang.top)
+- [Theme Redefine-X 文档](https://redefine-x-docs.jason-yang.top/zh)
 
 ## ⛰️ 部分功能
 
-- [笔记模块](https://redefine-docs.ohevan.com/modules/notes)
-- [友链样式](https://redefine-docs.ohevan.com/page_templates/friends)
-- [数学公式](https://redefine-docs.ohevan.com/plugins/mathjax)
+- [笔记模块](https://redefine-x-docs.jason-yang.top/zh/modules/notes)
+- [友链样式](https://redefine-x-docs.jason-yang.top/zh/page_templates/friends)
+- [数学公式](https://redefine-x-docs.jason-yang.top/zh/plugins/mathjax)
 - 代码块语言显示
 - Light/Dark 模式切换
-- [Font Awesome 6.2.1 Pro](https://redefine-docs.ohevan.com/basic/fontawesome)（包含 Duotone/Regular/Thin 等不同样式）
-- [下拉菜单](https://redefine-docs.ohevan.com/dhome/navbar#%E9%93%BE%E6%8E%A5%E5%88%97%E8%A1%A8)
-- [可自定义页脚](https://redefine-docs.ohevan.com/footer)
-- [网站运行时间显示](https://redefine-docs.ohevan.com/footer#%E8%BF%90%E8%A1%8C%E6%97%B6%E9%97%B4)
-- [文章头图](https://redefine-docs.ohevan.com/article_customize/banner)
-- [Mermaid JS 支持](https://redefine-docs.ohevan.com/plugins/mermaid)
+- [Font Awesome 6.2.1 Pro](https://redefine-x-docs.jason-yang.top/zh/basic/fontawesome)（包含 Duotone/Regular/Thin 等不同样式）
+- [下拉菜单](https://redefine-x-docs.jason-yang.top/zh/home/navbar)
+- [可自定义页脚](https://redefine-x-docs.jason-yang.top/zh/footer)
+- [网站运行时间显示](https://redefine-x-docs.jason-yang.top/zh/footer)
+- [文章头图](https://redefine-x-docs.jason-yang.top/zh/article_customize/banner)
+- [Mermaid JS 支持](https://redefine-x-docs.jason-yang.top/zh/plugins/mermaid)
 - SEO 友好
-- [Aplayer 音乐播放器支持](https://redefine-docs.ohevan.com/plugins/aplayer)
-- [说说模块](https://redefine-docs.ohevan.com/shuoshuo)
-- [自定义字体](https://redefine-docs.ohevan.com/basic/global#%E8%87%AA%E5%AE%9A%E4%B9%89%E5%AD%97%E4%BD%93)
+- [Aplayer 音乐播放器支持](https://redefine-x-docs.jason-yang.top/zh/plugins/aplayer)
+- [说说模块](https://redefine-x-docs.jason-yang.top/zh/shuoshuo)
+- [自定义字体](https://redefine-x-docs.jason-yang.top/zh/basic/global)
 - Tailwind CSS 支持
 
 ## ☁️ 安装
 
-如果你的 Hexo 版本在 `5.0` 及以上，推荐通过 `npm` 安装
+使用 git 克隆
 
 ```sh
 $ cd your-hexo-site
-$ npm install hexo-theme-redefine@latest
+$ git clone https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X.git themes/redefine-x
 ```
 
-或者使用 git 克隆
-
-```sh
-$ cd your-hexo-site
-$ git clone https://github.com/EvanNotFound/hexo-theme-redefine.git themes/redefine
-```
-
-安装完成后，在 Hexo 配置文件 `_config.yml` 中将 `theme` 设置为 `Redefine`。
+安装完成后，在 Hexo 配置文件 `_config.yml` 中将 `theme` 设置为 `redefine-x`。
 
 ```yaml
-theme: redefine
+theme: redefine-x
 ```
 
 
 ## ⏫ 更新
 
-Theme Redefine 经常发布新版本，你可以通过如下命令更新 Theme Redefine。
-
-通过 `npm` 安装最新版本：
-
-```sh
-$ npm install hexo-theme-redefine@latest
-```
+Theme Redefine-X 经常发布新版本，你可以通过如下命令更新 Theme Redefine-X。
 
 通过 `git` 更新到最新的 `main` 分支：
 
 ```sh
-$ cd themes/redefine
+$ cd themes/redefine-x
 $ git pull
 ```
 
 
 ## 📄 文档
 
-请阅读 [Redefine 主题官方文档](https://redefine-docs.ohevan.com/) 进行主题配置与安装，非常简单易懂。
+请阅读 [Redefine-X 主题官方文档](https://redefine-x-docs.jason-yang.top/zh) 进行主题配置与安装，非常简单易懂。
 
 ## ☕ 支持
 
 欢迎 **pull request** 或者 提交 **issues**.
 
-如有问题，请发邮件到 [contact@ohevan.com](mailto:contact@ohevan.com). 我会及时回复
+如有问题，请发邮件到 [jiepengyang@outlook.com](mailto:jiepengyang@outlook.com). 我会及时回复
 
 如果你觉得主题还不错的话，欢迎给我 Github 点个 Star，谢谢。建议点个 Watch，以便及时获取主题更新。
 
-如果你在使用 [Typora](https://typora.io/) 编辑器写文章，欢迎查看我写的 [Typora Redefine 主题](https://github.com/EvanNotFound/typora-theme-redefine)，按照本 Hexo 主题样式编写，让你可以直接预览文章效果，更好排版。
-
-## 💗 赞助
-
-非常感谢所有赞助者的支持，你们的支持是我维护这个项目的动力。
-
-如果你觉得这个项目还不错，欢迎给我[买杯咖啡](https://github.com/EvanNotFound/hexo-theme-redefine/blob/dev/DONATION.md)，让我更有动力维护这个项目。
-
-所有赞助者名单：[赞助者名单](https://github.com/EvanNotFound/hexo-theme-redefine/blob/dev/DONATION.md)
-
-🎉 **想体验 OpenAI 的 ChatGPT Plus 会员？官网 20 美元每月太贵了？不用担心！**
-
-🚀 立即加入我的 [GPT Plus Share](https://gpt.oknice.ca) GPT Plus 共享站，ChatGPT Plus 随心用。
-
-- ✅ 支持 OpenAI 最新所有模型，包括 `GPT-5`, `o3` 系列模型，支持高级图片生成
-- ✅ 后台大量官方正版账号号池，随心使用
-- ✅ 每月仅需低至 23.99 人民币，支持一天免费试用
-- ✅ 无需梯子，国内免翻访问！
-- ✅ 由 Evan 本人运营，售后保证，已稳定运行超过一年
-
-[![gpt-billboard](https://github.com/user-attachments/assets/e4b142ad-b48f-4ea1-828e-57a743f54d90)](https://www.gptplus.ca/home)
-
-
 ## 🌟 Star 记录
 
-<a href="https://star-history.com/#EvanNotFound/hexo-theme-redefine&Date">
+<a href="https://star-history.com/#Jason-JP-Yang/hexo-theme-Redefine-X&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=EvanNotFound/hexo-theme-redefine&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=EvanNotFound/hexo-theme-redefine&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=EvanNotFound/hexo-theme-redefine&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Jason-JP-Yang/hexo-theme-Redefine-X&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Jason-JP-Yang/hexo-theme-Redefine-X&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Jason-JP-Yang/hexo-theme-Redefine-X&type=Date" />
   </picture>
 </a>
 
 ## 💻 主题开发
 
-如果你想参与主题开发，请 `clone` 本项目的 `dev` 分支，然后在 `dev` 分支上进行开发。
+如果你想参与主题开发，请 `clone` 本项目的 `main` 分支，然后在 `main` 分支上进行开发。
 
-同时，请查看 [Redefine 主题开发文档](https://redefine-docs.ohevan.com/developer)。
+同时，请查看 [Redefine-X 主题开发文档](https://redefine-x-docs.jason-yang.top/zh/developer)。
+
+## 📜 许可证
+
+Copyright © 2025-2026 Jason-JP-Yang
+
+本项目基于 GPL-3.0 许可证开源 - 详见 [LICENSE](LICENSE) 文件。
+
+基于 EvanNotFound 的 [hexo-theme-redefine](https://github.com/EvanNotFound/hexo-theme-redefine) 开发。
