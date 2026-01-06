@@ -23,7 +23,7 @@ info:
 
 
 # IMAGE CONFIGURATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/basic/defaults
+# Docs: https://redefine-x-docs.jason-yang.top/zh/basic/defaults
 defaults:
   # Favicon
   favicon: /images/redefine-favicon.svg
@@ -35,7 +35,7 @@ defaults:
 
 
 # COLORS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/basic/colors
+# Docs: https://redefine-x-docs.jason-yang.top/zh/basic/colors
 colors:
   #Primary color
   primary: "#A31F34"
@@ -47,7 +47,7 @@ colors:
 
 
 # SITE CUSTOMIZATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/basic/global
+# Docs: https://redefine-x-docs.jason-yang.top/zh/basic/global
 global:
   # Custom global fonts
   fonts:
@@ -110,7 +110,7 @@ global:
     
 
 # FONTAWESOME >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/basic/fontawesome
+# Docs: https://redefine-x-docs.jason-yang.top/zh/basic/fontawesome
 fontawesome: # Pro v6.2.1
   # Thin version
   thin: false
@@ -124,7 +124,7 @@ fontawesome: # Pro v6.2.1
 
 
 # HOME BANNER >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/home/home_banner
+# Docs: https://redefine-x-docs.jason-yang.top/zh/home/home_banner
 home_banner:
   # Whether to enable home banner
   enable: true
@@ -191,7 +191,7 @@ home_banner:
 
 
 # NAVIGATION BAR >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/home/navbar
+# Docs: https://redefine-x-docs.jason-yang.top/zh/home/navbar
 navbar:
   # Auto hide navbar
   auto_hide: false
@@ -213,14 +213,14 @@ navbar:
     #   path: /archives 
     #   icon: fa-regular fa-archive # can be empty
     # Status: 
-    #   path: https://status.ohevan.com/
+    #   path: https://status.jason-yang.top/
     #   icon: fa-regular fa-chart-bar
     # About: 
     #   icon: fa-regular fa-user
     #   submenus:
     #     Me: /about
-    #     Github: https://github.com/EvanNotFound/hexo-theme-redefine
-    #     Blog: https://ohevan.com
+    #     Github: https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X
+    #     Blog: https://blog.jason-yang.top
     #     Friends: /friends
     # Links: 
     #   icon: fa-regular fa-link
@@ -239,7 +239,7 @@ navbar:
 
 
 # HOME PAGE ARTICLE SETTINGS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/home/home
+# Docs: https://redefine-x-docs.jason-yang.top/zh/home/home
 home:
   # Sidebar settings
   sidebar:
@@ -275,7 +275,7 @@ home:
 
 
 # ARTICLE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/posts/articles
+# Docs: https://redefine-x-docs.jason-yang.top/zh/posts/articles
 articles:
   # Set the styles of the article
   style:
@@ -348,7 +348,7 @@ articles:
 
 
 # COMMENT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/posts/comment
+# Docs: https://redefine-x-docs.jason-yang.top/zh/posts/comment
 comment:
   # Whether to enable comment
   enable: true
@@ -393,7 +393,7 @@ comment:
 
 
 # FOOTER >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/footer
+# Docs: https://redefine-x-docs.jason-yang.top/zh/footer
 footer:
   # Show website running time
   runtime: true # show website running time or not
@@ -414,7 +414,7 @@ footer:
 
 
 # INJECT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/inject
+# Docs: https://redefine-x-docs.jason-yang.top/zh/inject
 inject:
   # Whether to enable inject
   enable: false
@@ -430,7 +430,7 @@ inject:
 
 
 # PLUGINS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/plugins
+# Docs: https://redefine-x-docs.jason-yang.top/zh/plugins
 plugins:
   # RSS feed. Requires hexo-generator-feed (npm i hexo-generator-feed). See https://github.com/hexojs/hexo-generator-feed
   feed:
@@ -459,7 +459,7 @@ plugins:
 
 
 # PAGE TEMPLATES >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/page_templates
+# Docs: https://redefine-x-docs.jason-yang.top/zh/page_templates
 page_templates:
   # Friend Links page column number
   friends_column: 2
@@ -469,7 +469,7 @@ page_templates:
 
 
 # CDN >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/cdn
+# Docs: https://redefine-x-docs.jason-yang.top/zh/cdn
 cdn:
   # Whether to enable CDN
   enable: false
@@ -482,7 +482,7 @@ cdn:
 # CDN <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # DEVELOPER MODE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-docs.ohevan.com/developer
+# Docs: https://redefine-x-docs.jason-yang.top/zh/developer
 developer:
   # Whether to enable developer mode (only for developers who want to modify the theme source code, not for ordinary users)
   enable: false

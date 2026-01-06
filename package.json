@@ -9,7 +9,6 @@
     "build:css": "npx @tailwindcss/cli -i source/css/tailwind.source.css -o source/css/build/tailwind.css --minify",
     "build:js": "node source/js/build.js",
     "watch:css": "npx @tailwindcss/cli -i source/css/tailwind.source.css -o source/css/build/tailwind.css --watch --minify",
-    "prepare": "npx husky",
     "release": "npx standard-version",
     "release:minor": "npx standard-version --release-as minor",
     "release:patch": "npx standard-version --release-as patch",
@@ -38,7 +37,6 @@
   "devDependencies": {
     "eslint": "^8.47.0",
     "glob-promise": "^6.0.7",
-    "husky": "^9.1.6",
     "postcss": "^8.4.47",
     "standard-version": "^9.5.0",
     "tailwindcss": "^4.1.11",

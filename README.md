@@ -97,9 +97,7 @@ $ git pull
 
 Please read [Redefine-X Docs](https://redefine-x-docs.jason-yang.top/zh) when installing
 
-It's very easy to understand.
-
-
+It's very easy to understand. I'm currenting considering also setup a github wikis version for better accessing.
 
 ## ☕ Support
 
@@ -108,6 +106,9 @@ Feel free to **pull request** and **send issues**.
 If you have any questions, please send an email to [jiepengyang@outlook.com](mailto:jiepengyang@outlook.com). I will reply in time.
 
 Please **give me a star** to support me, thanks!
+
+Hexo-Theme-Redefine-X is a fully open-source project and completely non-commercial. Currently, this project can only utilize public CDNs for acceleration. I have focused on enriching features and optimizing the core webpage loading logic. If you appreciate this design and visual style, please consider supporting the original Hexo-Theme-Redefine at:  
+https://github.com/EvanNotFound/hexo-theme-redefine
 
 ## 🌟 Star History
 

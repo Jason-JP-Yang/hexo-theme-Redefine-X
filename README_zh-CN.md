@@ -110,6 +110,9 @@ $ git pull
 
 如果你觉得主题还不错的话，欢迎给我 Github 点个 Star，谢谢。建议点个 Watch，以便及时获取主题更新。
 
+Hexo-Theme-Redefine-X 是一个完全开源且完全公益的项目。本项目目前仅能使用公开的CDN进行加速。我的开发重点在于增加更丰富的功能并优化网页的核心加载逻辑。如果你喜欢这个设计与画风，请前往 Hexo-Theme-Redefine 支持原项目：  
+https://github.com/EvanNotFound/hexo-theme-redefine
+
 ## 🌟 Star 记录
 
 <a href="https://star-history.com/#Jason-JP-Yang/hexo-theme-Redefine-X&Date">

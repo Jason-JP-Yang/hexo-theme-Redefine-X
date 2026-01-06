@@ -22,15 +22,16 @@
 当前主题尚未发布到npm，用户只能通过git clone方式安装。
 
 **待办：**
-- [ ] 准备npm发布配置
-- [ ] 创建npm账号（如果还没有）
-- [ ] 发布第一个版本到npm：`hexo-theme-redefine-x`
+- [X] 准备npm发布配置
+- [X] 创建npm账号（如果还没有）
+- [X] 发布第一个版本到npm：`hexo-theme-redefine-x`
 - [ ] 更新README中的安装说明，添加npm安装方式：
   ```sh
   npm install hexo-theme-redefine-x@latest
   ```
-- [ ] 在package.json中确保npm发布配置正确
+- [X] 在package.json中确保npm发布配置正确
 - [ ] 创建GitHub Release与npm版本同步
+- [ ] 修改Redefine-X Version API地址
 
 **参考资料：**
 - npm发布指南：https://docs.npmjs.com/cli/v8/commands/npm-publish
@@ -45,15 +46,9 @@
 当前DONATION.md仍包含原作者的赞助信息，需要创建自己的赞助页面或移除。
 
 **待办：**
-- [ ] 决定是否接受赞助
-- [ ] 如果接受赞助：
-  - [ ] 准备支付方式（微信、支付宝、Paypal等）
-  - [ ] 创建二维码图片
-  - [ ] 编写新的DONATION.md文件
-  - [ ] 更新README中的赞助链接
-- [ ] 如果不接受赞助：
-  - [ ] 删除DONATION.md文件
-  - [ ] 从README中移除所有赞助相关内容
+- [X] 如果不接受赞助：
+  - [X] 删除DONATION.md文件
+  - [X] 从README中移除所有赞助相关内容
 
 ---
 
@@ -82,9 +77,6 @@
 
 - [ ] 页面展示图（浅色模式）：
   - `assets/68590232/c6df4b81-557d-4e0b-8038-b056075d0fa4`
-
-- [ ] GPT广告图（已删除引用，但可能还在文件中）：
-  - `https://github.com/user-attachments/assets/e4b142ad-b48f-4ea1-828e-57a743f54d90`
 
 **操作步骤：**
 1. [ ] 在自己的博客或测试站点上截取主题效果图
@@ -137,11 +129,11 @@
 文档链接已更新为 `https://redefine-x-docs.jason-yang.top/zh`，需要确保文档站点正常运行。
 
 **待办：**
-- [ ] 确认文档站点已部署并可访问
-- [ ] Fork或复制原主题文档并进行定制化修改
-- [ ] 更新所有文档中的链接和示例
-- [ ] 添加Redefine-X特有功能的文档
-- [ ] 配置域名和SSL证书
+- [X] 确认文档站点已部署并可访问
+- [X] Fork或复制原主题文档并进行定制化修改
+- [X] 更新所有文档中的链接和示例
+- [X] 添加Redefine-X特有功能的文档
+- [X] 配置域名和SSL证书
 
 ---
 
@@ -151,33 +143,15 @@
 **优先级：低**
 
 - [ ] 检查并更新所有JavaScript文件头部的作者信息
-- [ ] 更新license声明中的作者名称
+- [X] 更新license声明中的作者名称
 - [ ] 搜索并替换代码注释中遗留的原作者信息
 
 #### 6.2 配置文件注释
 **优先级：低**
 
-- [ ] 检查_config.yml中所有注释
-- [ ] 更新配置文档链接
-- [ ] 添加Redefine-X特有配置的说明
-
-#### 6.3 语言文件
-**优先级：低**
-
-检查以下文件是否需要更新：
-- [ ] languages/en.yml
-- [ ] languages/zh-CN.yml  
-- [ ] languages/zh-TW.yml
-- [ ] languages/ja.yml
-- [ ] languages/es.yml
-- [ ] languages/fr.yml
-
-#### 6.4 CONTRIBUTING.md 和 CODE_OF_CONDUCT.md
-**优先级：低**
-
-- [ ] 更新CONTRIBUTING.md中的联系邮箱
-- [ ] 更新CODE_OF_CONDUCT.md中的联系邮箱
-- [ ] 检查贡献指南是否适用于Redefine-X
+- [X] 检查_config.yml中所有注释
+- [X] 更新配置文档链接
+- [X] 添加Redefine-X特有配置的说明
 
 ---
 
@@ -185,13 +159,13 @@
 
 ### 检查清单
 
-- [ ] 所有README中的链接都已更新且可访问
-- [ ] package.json中的信息完整且正确
-- [ ] _config.yml示例配置可用
-- [ ] 主题可以正常安装和使用
-- [ ] Footer中的版权信息正确
-- [ ] 没有遗留原作者的广告内容
-- [ ] 所有文档链接指向正确的位置
+- [X] 所有README中的链接都已更新且可访问
+- [X] package.json中的信息完整且正确
+- [X] _config.yml示例配置可用
+- [X] 主题可以正常安装和使用
+- [X] Footer中的版权信息正确
+- [X] 没有遗留原作者的广告内容
+- [X] 所有文档链接指向正确的位置
 
 ---
 

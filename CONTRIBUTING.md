@@ -8,7 +8,7 @@ Before you start, please make sure you read the [README](README.md) and familiar
 
 To start contributing to hexo-theme-redefine, please follow these steps:
 
-1. Fork the [repository](https://github.com/EvanNotFound/hexo-theme-redefine) on GitHub.
+1. Fork the [repository](https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X) on GitHub.
 2. Clone your forked repository to your local machine.
 3. Make your changes and test them locally.
 4. Commit your changes and push them to your forked repository.
@@ -18,7 +18,7 @@ To start contributing to hexo-theme-redefine, please follow these steps:
 
 We value your contributions and want to ensure they are appropriate for the project. Please follow these guidelines when contributing:
 
-1. Use [GitHub issues](https://github.com/yourusername/yourthemename/issues) to report bugs, suggest new features, or ask questions.
+1. Use [GitHub issues](https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X/issues) to report bugs, suggest new features, or ask questions.
 
 2. Use descriptive commit messages and include references to related issues or PRs.
 
@@ -46,6 +46,6 @@ To ensure a welcoming and inclusive community, we adhere to the [Contributor Cov
 
 ## Contact
 
-If you have any questions or need help with your contributions, please contact me at contact@ohevan.com.
+If you have any questions or need help with your contributions, please contact me at jiepengyang@outlook.com
 
 Thank you for your contributions to hexo-theme-redefine!

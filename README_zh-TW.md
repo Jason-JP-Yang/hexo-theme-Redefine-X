@@ -71,24 +71,17 @@
 
 ## ☁️ 安裝
 
-如果你的 Hexo 版本在 `5.0` 及以上，推薦通過 `npm` 安裝
+如果你的 Hexo 版本在 `5.0` 及以上，推薦通過git 克隆
 
 ```sh
 $ cd your-hexo-site
-$ npm install hexo-theme-redefine@latest
+$ git clone https://github.com/EvanNotFound/hexo-theme-redefine.git themes/redefine-x
 ```
 
-或者使用 git 克隆
-
-```sh
-$ cd your-hexo-site
-$ git clone https://github.com/EvanNotFound/hexo-theme-redefine.git themes/redefine
-```
-
-安裝完成後，在 Hexo 配置文件 `_config.yml` 中將 `theme` 設置為 `Redefine`。
+安裝完成後，在 Hexo 配置文件 `_config.yml` 中將 `theme` 設置為 `redefine-x`。
 
 ```yaml
-theme: redefine
+theme: redefine-x
 ```
 
 
@@ -114,38 +107,18 @@ $ git pull
 
 ## 📄 文檔
 
-請閱讀 [Redefine 主題官方文檔](https://redefine-docs.ohevan.com/) 進行主題配置與安裝，非常簡單易懂。
+請閱讀 [Redefine 主題官方文檔](https://redefine-x-docs.jason-yang.top/zh/) 進行主題配置與安裝，非常簡單易懂。
 
 ## ☕ 支持
 
 歡迎 **pull request** 或者 提交 **issues**.
 
-如有問題，請發郵件到 [contact@ohevan.com](mailto:contact@ohevan.com). 我會及時回复
+如有問題，請發郵件到 [jiepengyang@outlook.com](mailto:jiepengyang@outlook.com). 我會及時回复
 
 如果你覺得主題還不錯的話，歡迎給我 Github 點個 Star，謝謝
 
-如果你在使用 [Typora](https://typora.io/) 編輯器寫文章，歡迎查看我寫的 [Typora Redefine 主題](https://github.com/EvanNotFound/typora-theme-redefine)，按照本 Hexo 主題樣式編寫，讓你可以直接預覽文章效果，更好排版。
-
-## 💗 贊助
-
-非常感謝所有贊助者的支持，你們的支持是我維護這個項目的動力。
-
-如果你覺得這個項目還不錯，歡迎給我買杯咖啡，給 CDN 續命續久一點，感謝
-
-所有贊助者名單：[贊助者名單](https://github.com/EvanNotFound/hexo-theme-redefine/blob/dev/DONATION.md)
-
-🎉 **想体验 OpenAI 的 ChatGPT Plus 会员？官网 20 美元每月太贵了？不用担心！**
-
-🚀 立即加入我的 [GPT Plus Share](https://gpt.oknice.ca) GPT Plus 共享站，ChatGPT Plus 随心用。
-
-- ✅ 支持 OpenAI 最新所有模型，包括 `GPT-5`, `o3` 系列模型，支持高级图片生成
-- ✅ 后台大量官方正版账号号池，随心使用
-- ✅ 每月仅需低至 23.99 人民币，支持一天免费试用
-- ✅ 无需梯子，国内免翻访问！
-- ✅ 由 Evan 本人运营，售后保证，已稳定运行超过一年
-
-[![gpt-billboard](https://github.com/user-attachments/assets/e4b142ad-b48f-4ea1-828e-57a743f54d90)](https://www.gptplus.ca/home)
-
+Hexo-Theme-Redefine-X 是一個完全開源且完全公益的專案。本專案目前僅能使用公開的CDN進行加速。我的開發重點在於增加更豐富的功能並優化網頁的核心加載邏輯。如果你喜歡這個設計與畫風，請前往 Hexo-Theme-Redefine 支持原專案：  
+https://github.com/EvanNotFound/hexo-theme-redefine
 
 ## 🌟 Star 記錄
 
@@ -161,4 +134,4 @@ $ git pull
 
 如果你想參與主題開發，請 `clone` 本專案的 `dev` 分支，然後在 `dev` 分支上進行開發。
 
-同時，請查看 [Redefine 主題開發文件](https://redefine-docs.ohevan.com/developer)。
+同時，請查看 [Redefine 主題開發文件](https://redefine-x-docs.jason-yang.top/zh/developer)。
