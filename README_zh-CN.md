@@ -72,12 +72,25 @@
 
 ## ☁️ 安装
 
-使用 git 克隆
+### 通过 npm 安装（推荐）
+
+如果你的 Hexo 版本在 `5.0` 及以上，推荐通过 `npm` 安装
+
+```sh
+$ cd your-hexo-site
+$ npm install hexo-theme-redefine-x@latest
+```
+
+### 通过 git 克隆安装
+
+或者使用 git 克隆
 
 ```sh
 $ cd your-hexo-site
 $ git clone https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X.git themes/redefine-x
 ```
+
+### 配置
 
 安装完成后，在 Hexo 配置文件 `_config.yml` 中将 `theme` 设置为 `redefine-x`。
 
@@ -88,9 +101,17 @@ theme: redefine-x
 
 ## ⏫ 更新
 
+### 通过 npm 更新
+
 Theme Redefine-X 经常发布新版本，你可以通过如下命令更新 Theme Redefine-X。
 
-通过 `git` 更新到最新的 `main` 分支：
+```sh
+$ npm install hexo-theme-redefine-x@latest
+```
+
+### 通过 git 更新
+
+如果你是通过 `git clone` 安装的，可以通过以下命令更新到最新的 `main` 分支：
 
 ```sh
 $ cd themes/redefine-x

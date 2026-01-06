@@ -69,12 +69,25 @@ Building on the solid foundation of hexo-theme-redefine, "Redefine-X" elevates t
 
 ## ☁️ Installation
 
-Install Theme Redefine-X by **git clone**
+### Install via npm (Recommended)
+
+The easiest way to install Theme Redefine-X is by using **npm** (after your hexo version has been up to `5.0`+)
+
+```sh
+$ cd your-hexo-site
+$ npm install hexo-theme-redefine-x@latest
+```
+
+### Install via git clone
+
+Another method is by **git clone**
 
 ```sh
 $ cd your-hexo-site
 $ git clone https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X.git themes/redefine-x
 ```
+
+### Configuration
 
 After the installation, go to the `_config.yml` of your hexo site and set
 
@@ -84,7 +97,17 @@ theme: redefine-x
 
 ## ⏫ Update
 
-To update hexo-theme-Redefine-X, run the following command
+### Update via npm
+
+To update hexo-theme-Redefine-X, you can run the **npm** command
+
+```sh
+$ npm install hexo-theme-redefine-x@latest
+```
+
+### Update via git
+
+If you installed the theme by **git clone**, you can update the theme by running the following command
 
 ```sh
 $ cd themes/redefine-x

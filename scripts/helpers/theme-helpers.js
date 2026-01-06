@@ -109,23 +109,21 @@ hexo.extend.helper.register("renderJS", function (path, options = {}) {
   }
 
   const cdnProviders = {
-    zstatic:
-      "https://s4.zstatic.net/ajax/libs/hexo-theme-redefine/:version/:path",
-    cdnjs:
-      "https://cdnjs.cloudflare.com/ajax/libs/hexo-theme-redefine/:version/:path",
-    unpkg: "https://unpkg.com/hexo-theme-redefine@:version/source/:path",
     jsdelivr:
-      "https://cdn.jsdelivr.net/npm/hexo-theme-redefine@:version/source/:path",
-    aliyun:
-      "https://evan.beee.top/projects/hexo-theme-redefine@:version/source/:path",
+      "https://cdn.jsdelivr.net/npm/hexo-theme-redefine-x@:version/source/:path",
+    unpkg: "https://unpkg.com/hexo-theme-redefine-x@:version/source/:path",
+    cdnjs:
+      "https://cdnjs.cloudflare.com/ajax/libs/hexo-theme-redefine-x/:version/source/:path",
+    zstatic:
+      "https://s4.zstatic.net/ajax/libs/hexo-theme-redefine-x/:version/source/:path",
     npmmirror:
-      "https://registry.npmmirror.com/hexo-theme-redefine/:version/files/source/:path",
+      "https://registry.npmmirror.com/hexo-theme-redefine-x/:version/files/source/:path",
     custom: this.theme.cdn.custom_url,
   };
 
   const cdnPathHandle = (path) => {
     const cdnBase =
-      cdnProviders[this.theme.cdn.provider] || cdnProviders.npmmirror;
+      cdnProviders[this.theme.cdn.provider] || cdnProviders.jsdelivr;
     let scriptTag;
 
     const typeAttr = module ? 'type="module"' : "";
@@ -172,23 +170,21 @@ hexo.extend.helper.register("renderCSS", function (path) {
   const _css = hexo.extend.helper.get("css").bind(hexo);
 
   const cdnProviders = {
-    zstatic:
-      "https://s4.zstatic.net/ajax/libs/hexo-theme-redefine/:version/:path",
-    cdnjs:
-      "https://cdnjs.cloudflare.com/ajax/libs/hexo-theme-redefine/:version/:path",
-    unpkg: "https://unpkg.com/hexo-theme-redefine@:version/source/:path",
     jsdelivr:
-      "https://cdn.jsdelivr.net/npm/hexo-theme-redefine@:version/source/:path",
-    aliyun:
-      "https://evan.beee.top/projects/hexo-theme-redefine@:version/source/:path",
+      "https://cdn.jsdelivr.net/npm/hexo-theme-redefine-x@:version/source/:path",
+    unpkg: "https://unpkg.com/hexo-theme-redefine-x@:version/source/:path",
+    cdnjs:
+      "https://cdnjs.cloudflare.com/ajax/libs/hexo-theme-redefine-x/:version/source/:path",
+    zstatic:
+      "https://s4.zstatic.net/ajax/libs/hexo-theme-redefine-x/:version/source/:path",
     npmmirror:
-      "https://registry.npmmirror.com/hexo-theme-redefine/:version/files/source/:path",
+      "https://registry.npmmirror.com/hexo-theme-redefine-x/:version/files/source/:path",
     custom: this.theme.cdn.custom_url,
   };
 
   const cdnPathHandle = (path) => {
     const cdnBase =
-      cdnProviders[this.theme.cdn.provider] || cdnProviders.npmmirror;
+      cdnProviders[this.theme.cdn.provider] || cdnProviders.jsdelivr;
     let cssLink;
 
     if (this.theme.cdn.enable) {
