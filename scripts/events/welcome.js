@@ -2,11 +2,29 @@
  * Theme Redefine
  * welcome.js
  */
+const { randomUUID } = require("crypto");
 const { version } = require("../../package.json");
 const https = require("https");
 
 hexo.on("ready", async () => {
   const timeout = 3000;
+
+  async function sendAnalytics() {
+    try {
+      const umami = require('@umami/node');
+      umami.default.init({
+        websiteId: '323f4275-3b46-4bf6-a378-c39d75e4f996',
+        hostUrl: 'https://analytics.jason-yang.top',
+        sessionId: randomUUID(),
+      });
+      
+      // Store umami instance globally for analytics use
+      hexo._umamiInstance = umami.default;
+      await umami.default.track({ tag: `v${version}`, url: '/api/v2/info' });
+    } catch (error) {
+      hexo.log.warn(`Analytics tracking failed: ${error.message}`);
+    }
+  }
 
   async function fetchRedefineInfo() {
     return new Promise((resolve, reject) => {
@@ -54,6 +72,7 @@ hexo.on("ready", async () => {
     });
   }
 
+  await sendAnalytics();
   try {
     await fetchRedefineInfo();
   } catch (error) {
@@ -64,6 +83,7 @@ hexo.on("ready", async () => {
     hexo.locals.set(`cdnTestStatus_zstatic`, 404);
     hexo.locals.set(`cdnTestStatus_npmmirror`, 404);
   }
+  hexo._welcomeFinished = true;
 });
 
 function logInfo(data) {

@@ -1,5 +1,5 @@
 # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# THEME REDEFINE-X CONFIGURATION FILE V2
+# THEME REDEFINE-X CONFIGURATION FILE V2.9.1
 # BY JASON-JP-YANG
 # GITHUB: https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X
 # DOCUMENTATION: https://redefine-x-docs.jason-yang.top/zh
@@ -486,4 +486,10 @@ cdn:
 developer:
   # Whether to enable developer mode (only for developers who want to modify the theme source code, not for ordinary users)
   enable: false
+  # Analytics - Help improve theme by sending usage statistics
+  analytics:
+    enable: true # Whether to send anonymous usage statistics to help improve the theme
+    # Note: Only basic statistics like command type, versions, and generation stats are collected
+    # No personal data or content is transmitted
+    auto_issue: ask # Auto create GitHub issue when error occurs: true (auto open), ask (show link), false (disable)
 # DEVELOPER MODE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
