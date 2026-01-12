@@ -330,6 +330,7 @@ articles:
   # Strongly recommended to enable this feature to improve page load speed
   lazyload: true
   # Preload Images that out of viewpoint when Idle to improve user experience
+  # Only Enable this when lazyload is true
   lazyload_preload: false
   # Pangu.js (automatically add space between Chinese and English). See https://github.com/vinta/pangu.js
   pangu_js: false

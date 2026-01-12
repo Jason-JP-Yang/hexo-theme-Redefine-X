@@ -346,5 +346,5 @@ hexo.extend.filter.register(
 
     return data;
   },
-  1,
+  20,
 );
