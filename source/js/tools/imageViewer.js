@@ -177,9 +177,11 @@ export default function imageViewer() {
   // z-index for open animation: must be above image-viewer-container (z-index: 1008)
   // so the flying image is not affected by backdrop-filter blur
   const FLIGHT_Z_OPEN = 1009;
-  // z-index for close animation: must be below fixed navbar (z-index: 1005)
-  // We first fade out backdrop-filter, then animate with low z-index
-  const FLIGHT_Z_CLOSE = 1;
+  // Close-layer order requirement:
+  // navbar (1005) > flying image (1004) > blur mask (1003) > article
+  // This keeps the image unblurred while staying under the navbar.
+  const FLIGHT_Z_CLOSE = 1004;
+  const MASK_Z_CLOSE = 1003;
 
   const setFlightStyles = (img, targetRect, fromRect, decoration, borderRadius, container, zIndex) => {
     // Calculate the transform to go from target position to from position
@@ -306,6 +308,7 @@ export default function imageViewer() {
     if (state.fixedHidden) hideFixedElements();
 
     stage.innerHTML = "";
+    maskDom.style.zIndex = "";
     maskDom.classList.add("active");
 
     // Open animation: fly from article position to viewer center
@@ -375,6 +378,10 @@ export default function imageViewer() {
       boxShadow: state.saved?.boxShadow ?? "none"
     };
 
+    // Lower the blur mask BEFORE moving the image, so backdrop-filter never affects the image.
+    // Keep mask above article but below navbar and image.
+    maskDom.style.zIndex = String(MASK_Z_CLOSE);
+
     // CRITICAL: Set new styles in ONE operation to prevent flash
     // We set position:fixed with transform that places image at its CURRENT visual position
     // Then animate the transform to (0,0) scale(1,1) to reach target position
@@ -392,7 +399,7 @@ export default function imageViewer() {
       margin:0;
       max-width:none;
       max-height:none;
-      z-index:${FLIGHT_Z_OPEN};
+      z-index:${FLIGHT_Z_CLOSE};
       pointer-events:none;
       transform-origin:top left;
       will-change:transform,opacity;
@@ -410,7 +417,7 @@ export default function imageViewer() {
 
     // Start blur/background fade-out exactly when the flight transition starts.
     // CSS transition duration is 360ms, matching CLOSE_MS, so they end together.
-    // Image stays ABOVE the blur layer for the whole close, so blur never affects it.
+    // Image stays ABOVE the blur layer (and below navbar) for the whole close.
     maskDom.classList.remove("active");
 
     // Animate flight back to article position
@@ -433,6 +440,9 @@ export default function imageViewer() {
     state.activeImg = state.placeholder = state.saved = null;
     state.pointers.clear(); state.pinchStart = null;
     state.isOpen = state.isAnimating = false;
+
+    // Restore mask stacking for next open
+    maskDom.style.zIndex = "";
   }
 
   async function navigate(delta) {
