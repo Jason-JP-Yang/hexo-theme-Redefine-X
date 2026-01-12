@@ -21,6 +21,8 @@ export default function imageViewer() {
    */
   const FIXED_ELEMENTS_SELECTOR = ".right-side-tools-container, .aplayer.aplayer-fixed";
   let showFixedElementsTimer = null;
+  const shouldHideFixedElements = () =>
+    window.matchMedia && window.matchMedia("(max-width: 768px), (pointer: coarse)").matches;
 
   const hideFixedElements = () => {
     if (showFixedElementsTimer) {
@@ -50,16 +52,17 @@ export default function imageViewer() {
   const state = {
     isOpen: false, isAnimating: false, currentIndex: -1, items: [], activeImg: null,
     placeholder: null, saved: null, scale: 1, translateX: 0, translateY: 0, isDragging: false,
-    dragStartX: 0, dragStartY: 0, pointers: new Map(), pinchStart: null
+    dragStartX: 0, dragStartY: 0, pointers: new Map(), pinchStart: null,
+    fixedHidden: false
   };
 
   const applyTransform = () => state.activeImg && 
     (state.activeImg.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`);
 
   const constrainVisible = () => {
-    if (!state.activeImg || state.scale <= 1) return;
+    if (!state.activeImg) return;
     const sr = stage.getBoundingClientRect(), ir = state.activeImg.getBoundingClientRect();
-    const minW = ir.width * 0.2, minH = ir.height * 0.2;
+    const minW = ir.width * 0.1, minH = ir.height * 0.1;
     if (ir.right < sr.left + minW) state.translateX += sr.left + minW - ir.right;
     else if (ir.left > sr.right - minW) state.translateX += sr.right - minW - ir.left;
     if (ir.bottom < sr.top + minH) state.translateY += sr.top + minH - ir.bottom;
@@ -299,7 +302,8 @@ export default function imageViewer() {
 
     // Disable scroll and hide fixed elements
     document.documentElement.style.overflow = "hidden";
-    hideFixedElements();
+    state.fixedHidden = shouldHideFixedElements();
+    if (state.fixedHidden) hideFixedElements();
 
     stage.innerHTML = "";
     maskDom.classList.add("active");
@@ -388,7 +392,7 @@ export default function imageViewer() {
       margin:0;
       max-width:none;
       max-height:none;
-      z-index:${FLIGHT_Z_CLOSE};
+      z-index:${FLIGHT_Z_OPEN};
       pointer-events:none;
       transform-origin:top left;
       will-change:transform,opacity;
@@ -403,8 +407,10 @@ export default function imageViewer() {
     
     // Clear stage after img is moved
     stage.innerHTML = "";
-    
-    // Start background fade
+
+    // Start blur/background fade-out exactly when the flight transition starts.
+    // CSS transition duration is 360ms, matching CLOSE_MS, so they end together.
+    // Image stays ABOVE the blur layer for the whole close, so blur never affects it.
     maskDom.classList.remove("active");
 
     // Animate flight back to article position
@@ -419,7 +425,10 @@ export default function imageViewer() {
 
     // Re-enable scroll and show fixed elements after close animation completes
     document.documentElement.style.overflow = "";
-    showFixedElements(300); // 300ms delay as requested
+    if (state.fixedHidden) {
+      showFixedElements(300); // 300ms delay as requested
+      state.fixedHidden = false;
+    }
 
     state.activeImg = state.placeholder = state.saved = null;
     state.pointers.clear(); state.pinchStart = null;
