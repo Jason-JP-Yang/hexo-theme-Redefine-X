@@ -118,6 +118,8 @@ export default function imageViewer() {
       display:${cs.display};
       width:${cs.width};
       max-width:${cs.maxWidth};
+      max-height:${cs.maxHeight};
+      height:auto;
       aspect-ratio:${aspectRatio};
       margin:${cs.margin};
       padding:0;

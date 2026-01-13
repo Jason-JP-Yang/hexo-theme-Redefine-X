@@ -112,11 +112,13 @@ a
 .img-preloader
   position relative
   display block
-  width 100%
+  max-width 100%
+  width auto
+  max-height $usr-img-max-height
   overflow hidden
   border-radius $redefine-border-radius-medium
   background-color var(--third-background-color)
-  margin 20px auto
+  margin 1rem auto 1rem
 
   .img-preloader-skeleton
     position absolute
@@ -143,8 +145,10 @@ a
     transition opacity 0.2s ease
 
   &.img-preloader-error
-    max-height 200px
-    height auto !important
+    max-height fit-content !important
+    height fit-content !important
+    width 100% !important
+    max-width 100% !important
     aspect-ratio unset !important
     transition max-height 0.4s ease-out, padding 0.4s ease-out
     padding 20px 0

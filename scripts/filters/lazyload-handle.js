@@ -275,7 +275,7 @@ function buildPreloaderDiv(src, dims, alt, originalClass) {
     `data-width="${w}" ` +
     `data-height="${h}" ` +
     `data-alt="${escapeHtmlAttr(alt)}" ` +
-    `style="aspect-ratio: ${aspectRatio}; max-width: ${w}px;">` +
+    `style="aspect-ratio: ${aspectRatio};">` +
     `<div class="img-preloader-skeleton"></div>` +
     `</div>`;
 }

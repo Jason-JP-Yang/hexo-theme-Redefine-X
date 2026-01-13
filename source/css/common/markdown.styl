@@ -200,14 +200,13 @@
     box-sizing border-box
     border-radius $usr-img-border-radius
     max-width 100%
+    max-height $usr-img-max-height
+    height auto
+    width auto
     cursor zoom-in
     display block
+    margin 1rem auto 1rem
     transition-t('padding, margin', '0, 0', '0.2, 0.2', 'linear, linear')
-
-    if (hexo-config('articles.style.image_alignment') == 'center')
-      margin 1rem auto 1rem
-    else
-      margin 1rem 0 1rem
 
   
   del.mask
