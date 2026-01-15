@@ -1,4 +1,4 @@
-import { requestImageBySrc } from "../layouts/lazyload.js";
+import { requestImageBySrc, transformPreloaderToImage, loadedPreloaders } from "../layouts/lazyload.js";
 
 export default function imageViewer() {
   const global = window.__REDEFINE_X_IMAGE_VIEWER__ || (window.__REDEFINE_X_IMAGE_VIEWER__ = {
@@ -659,8 +659,13 @@ export default function imageViewer() {
 
       requestImageBySrc(item.src, item.alt).then((loadedImg) => {
         if (!state.isOpen) return;
-        loadedImg.classList.add("img-preloader-loaded");
-        mountLoadedImgToStage(loadedImg);
+
+        const articleImg = loadedImg;
+        transformPreloaderToImage(liveNode, articleImg);
+        articleImg.classList.remove("img-preloader-fade-out");
+        state.articleOriginalNode = articleImg;
+        loadedPreloaders.add(liveNode);
+        mountLoadedImgToStage(articleImg);
       }).catch(() => {
         flight.classList.add("img-preloader-error");
       });
@@ -988,8 +993,13 @@ export default function imageViewer() {
 
         requestImageBySrc(nextItem.src, nextItem.alt).then((loadedImg) => {
           if (!state.isOpen || state.currentIndex !== targetIndex) return;
-          loadedImg.classList.add("img-preloader-loaded");
-          mountLoadedImgToStage(loadedImg);
+
+          const articleImg = loadedImg;
+          transformPreloaderToImage(liveNode, articleImg);
+          articleImg.classList.remove("img-preloader-fade-out");
+          state.articleOriginalNode = articleImg;
+          loadedPreloaders.add(liveNode);
+          mountLoadedImgToStage(articleImg);
         }).catch(() => {
           incomingPre.classList.add("img-preloader-error");
         });

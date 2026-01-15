@@ -9,7 +9,7 @@
  * - Optional preload for out-of-viewport images when network is idle
  */
 
-const loadedPreloaders = new WeakSet();
+export const loadedPreloaders = new WeakSet();
 const preloadedImages = new Map();
 const inflightLoads = new Map();
 let intersectionObserver = null;
@@ -51,14 +51,6 @@ function loadImage(src, alt) {
   });
 }
 
-function cloneLoadedImage(img, alt) {
-  const clone = img.cloneNode(false);
-  clone.alt = alt || img.alt || "";
-  if (img.crossOrigin) clone.crossOrigin = img.crossOrigin;
-  clone.src = img.src;
-  return clone;
-}
-
 async function ensureImageCached(src, alt) {
   if (preloadedImages.has(src)) return preloadedImages.get(src);
   if (inflightLoads.has(src)) return inflightLoads.get(src);
@@ -76,14 +68,30 @@ async function ensureImageCached(src, alt) {
 }
 
 export async function requestImageBySrc(src, alt = "") {
-  const img = await ensureImageCached(src, alt);
-  return cloneLoadedImage(img, alt);
+  if (preloadedImages.has(src)) {
+    const img = preloadedImages.get(src);
+    preloadedImages.delete(src);
+    if (alt) img.alt = alt;
+    return img;
+  }
+  
+  if (inflightLoads.has(src)) {
+    await inflightLoads.get(src);
+    return loadImage(src, alt);
+  }
+  
+  const p = loadImage(src, alt).then((img) => {
+    inflightLoads.delete(src);
+    return img;
+  }).catch((err) => {
+    inflightLoads.delete(src);
+    throw err;
+  });
+  inflightLoads.set(src, p);
+  return p;
 }
 
-/**
- * Replace preloader with loaded image
- */
-function replacePreloader(preloader, img) {
+export function transformPreloaderToImage(preloader, img) {
   // Transfer classes
   const classes = Array.from(preloader.classList).filter(c => !c.startsWith("img-preloader"));
   classes.forEach(c => img.classList.add(c));
@@ -94,9 +102,18 @@ function replacePreloader(preloader, img) {
   if (width) img.width = parseInt(width, 10);
   if (height) img.height = parseInt(height, 10);
   
-  // Mark and animate
+  // Mark
   img.classList.add("img-preloader-loaded");
   img.dataset.originalSrc = preloader.dataset.src;
+  
+  return img;
+}
+
+/**
+ * Replace preloader with loaded image
+ */
+function replacePreloader(preloader, img) {
+  transformPreloaderToImage(preloader, img);
   preloader.classList.add("img-preloader-fade-out");
   
   // Replace DOM node
