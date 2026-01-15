@@ -191,14 +191,27 @@ export default function imageViewer() {
   };
 
   /**
-   * Compute the target rect for the image in viewer (centered, fit within 92% viewport)
+   * Compute the target rect for the image in viewer (centered, fit within stage rect)
    * This calculates the border-box dimensions including padding (2px as per CSS)
    */
   const VIEWER_PADDING = 2; // Must match CSS .image-viewer-stage img padding
+  const getViewerContentRect = () => {
+    const mr = maskDom.getBoundingClientRect();
+    const cs = getComputedStyle(maskDom);
+    const pl = parseFloat(cs.paddingLeft || "0") || 0;
+    const pr = parseFloat(cs.paddingRight || "0") || 0;
+    const pt = parseFloat(cs.paddingTop || "0") || 0;
+    const pb = parseFloat(cs.paddingBottom || "0") || 0;
+    return {
+      left: mr.left + pl,
+      top: mr.top + pt,
+      width: Math.max(0, mr.width - pl - pr),
+      height: Math.max(0, mr.height - pt - pb)
+    };
+  };
   const computeViewerRect = (img) => {
-    const vw = window.innerWidth, vh = window.innerHeight;
-    // CSS max-width/max-height are 92vw/92vh for border-box (including padding)
-    const maxW = vw * 0.92, maxH = vh * 0.92;
+    const vr = getViewerContentRect();
+    const maxW = vr.width, maxH = vr.height;
     // Calculate content area (excluding padding on both sides)
     const contentMaxW = maxW - VIEWER_PADDING * 2;
     const contentMaxH = maxH - VIEWER_PADDING * 2;
@@ -209,7 +222,7 @@ export default function imageViewer() {
     // Add padding back to get border-box dimensions
     const width = contentW + VIEWER_PADDING * 2;
     const height = contentH + VIEWER_PADDING * 2;
-    return { left: (vw - width) / 2, top: (vh - height) / 2, width, height };
+    return { left: vr.left + (vr.width - width) / 2, top: vr.top + (vr.height - height) / 2, width, height };
   };
 
   /**
@@ -416,8 +429,8 @@ export default function imageViewer() {
   };
 
   const computeViewerRectFromAspect = (aspectRatio) => {
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const maxW = vw * 0.92, maxH = vh * 0.92;
+    const vr = getViewerContentRect();
+    const maxW = vr.width, maxH = vr.height;
     const contentMaxW = maxW - VIEWER_PADDING * 2;
     const contentMaxH = maxH - VIEWER_PADDING * 2;
     const ar = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
@@ -425,7 +438,7 @@ export default function imageViewer() {
     if (contentH > contentMaxH) { contentH = contentMaxH; contentW = contentH * ar; }
     const width = contentW + VIEWER_PADDING * 2;
     const height = contentH + VIEWER_PADDING * 2;
-    return { left: (vw - width) / 2, top: (vh - height) / 2, width, height };
+    return { left: vr.left + (vr.width - width) / 2, top: vr.top + (vr.height - height) / 2, width, height };
   };
 
   const getNodeAspectRatio = (node, item) => {
@@ -775,6 +788,8 @@ export default function imageViewer() {
 
   const mountLoadedImgToStage = (img) => {
     stage.innerHTML = "";
+    img.classList.remove("img-preloader-loaded");
+    img.style.animation = "";
     stage.appendChild(img);
     state.activeImg = img;
     state.activeEl = img;
