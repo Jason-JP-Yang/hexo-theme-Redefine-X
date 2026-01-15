@@ -124,18 +124,50 @@ $friend-link-item-border-radius = 9px
     transition opacity 0.2s ease-out
 
   figure.image-caption
-    img
-      margin-bottom 0
+    $image-caption-style = hexo-config('articles.style.image_caption')
 
-    .img-preloader
-      margin-bottom 0
+    if $image-caption-style == 'float'
+      position relative
 
-    figcaption
-      margin-top 5px
-      margin-bottom 10px
-      text-align center
-      font-size 0.9rem
-      color var(--third-text-color)
+      img
+        margin-bottom 0
+
+      .img-preloader
+        margin-bottom 0
+
+      figcaption
+        position absolute
+        left 50%
+        bottom 10px
+        transform translateX(-50%)
+        text-align center
+        font-size 0.9rem
+        color var(--default-text-color)
+        background-color var(--background-color-transparent)
+        padding 5px 10px
+        opacity 0
+        max-width 80%
+        backdrop-filter blur(10px)
+        -webkit-backdrop-filter blur(10px)
+        border-radius $redefine-border-radius-small
+        transition opacity 0.2s ease-out
+
+      &:hover figcaption
+        opacity 1
+
+    else
+      img
+        margin-bottom 0
+
+      .img-preloader
+        margin-bottom 0
+
+      figcaption
+        margin-top 5px
+        margin-bottom 10px
+        text-align center
+        font-size 0.9rem
+        color var(--third-text-color)
 
   .image-container:hover .image-title, .image-container:hover .image-description
     opacity 1

@@ -282,7 +282,7 @@ articles:
     font_size: 16px # Font size
     line_height: 1.5 # Line height
     image_border_radius: 14px # image border radius
-    image_caption: false # Whether to display image caption
+    image_caption: block # Whether to display image caption: false | float | block
     image_figure_number: false # Whether to display figure number for images; Only works when image_caption is true
     image_max_height: 80svh # Max height for images
     link_icon: true # Whether to display link icon
