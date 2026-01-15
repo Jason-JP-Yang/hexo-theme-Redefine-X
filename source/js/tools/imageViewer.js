@@ -621,15 +621,125 @@ export default function imageViewer() {
 
   const updateSwitcher = () => {
     switcherPages.innerHTML = "";
-    state.items.forEach((_, idx) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "image-viewer-switcher-page";
-      btn.dataset.index = String(idx);
-      btn.textContent = String(idx + 1);
-      switcherPages.appendChild(btn);
+    
+    const totalPages = state.items.length;
+    if (totalPages <= 1) {
+      switcherPages.style.display = "none";
+      return;
+    }
+
+    const switcherGap = parseFloat(getComputedStyle(switcher).gap || "0") || 0;
+    const pagesGap = parseFloat(getComputedStyle(switcherPages).gap || "0") || 0;
+
+    const isVisible = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.visibility === "hidden") return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    };
+
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const maxContainerW = Math.floor(vw * 0.8);
+
+    const prevVisible = isVisible(switcherPrev);
+    const nextVisible = isVisible(switcherNext);
+    const prevW = prevVisible ? switcherPrev.getBoundingClientRect().width : 0;
+    const nextW = nextVisible ? switcherNext.getBoundingClientRect().width : 0;
+    const gapCount = (prevVisible ? 1 : 0) + (nextVisible ? 1 : 0);
+    const reservedW = prevW + nextW + gapCount * switcherGap;
+
+    const availableW = Math.max(0, maxContainerW - reservedW);
+    const itemW = 38;
+    const maxSlots = Math.floor((availableW + pagesGap) / (itemW + pagesGap));
+
+    if (maxSlots < 3) {
+      switcherPages.style.display = "none";
+      return;
+    }
+    switcherPages.style.display = "";
+
+    const currentPage = state.currentIndex + 1;
+
+    const tokens = buildPaginationTokens(totalPages, currentPage, maxSlots);
+    tokens.forEach((t) => {
+      if (t === "ellipsis") createEllipsis();
+      else createSwitcherBtn(t - 1, t);
     });
+    
     updateSwitcherActive();
+  };
+
+  const buildPaginationTokens = (totalPages, currentPage, maxSlots) => {
+    if (totalPages <= maxSlots) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+
+    if (maxSlots === 3) {
+      let start = Math.max(1, Math.min(currentPage - 1, totalPages - 2));
+      return [start, start + 1, start + 2];
+    }
+
+    if (maxSlots === 4) {
+      if (currentPage <= 2) return [1, 2, 3, "ellipsis"];
+      if (currentPage >= totalPages - 1) return ["ellipsis", totalPages - 2, totalPages - 1, totalPages];
+      return ["ellipsis", currentPage - 1, currentPage, "ellipsis"];
+    }
+
+    if (maxSlots === 5) {
+      if (currentPage <= 3) return [1, 2, 3, 4, "ellipsis"];
+      if (currentPage >= totalPages - 2) return ["ellipsis", totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+      return ["ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis"];
+    }
+
+    const innerSlots = maxSlots - 2;
+
+    if (currentPage <= innerSlots - 1) {
+      const pages = Array.from({ length: innerSlots }, (_, i) => i + 1);
+      return [...pages, "ellipsis", totalPages];
+    }
+
+    if (currentPage >= totalPages - (innerSlots - 2)) {
+      const start = totalPages - innerSlots + 1;
+      const pages = Array.from({ length: innerSlots }, (_, i) => start + i);
+      return [1, "ellipsis", ...pages];
+    }
+
+    const windowSize = innerSlots - 2;
+    let start = currentPage - Math.floor(windowSize / 2);
+    let end = start + windowSize - 1;
+
+    if (start < 2) {
+      start = 2;
+      end = start + windowSize - 1;
+    }
+    if (end > totalPages - 1) {
+      end = totalPages - 1;
+      start = end - windowSize + 1;
+    }
+
+    const mid = Array.from({ length: windowSize }, (_, i) => start + i);
+    return [1, "ellipsis", ...mid, "ellipsis", totalPages];
+  };
+  
+  const createSwitcherBtn = (idx, text) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "image-viewer-switcher-page";
+    btn.dataset.index = String(idx);
+    btn.textContent = String(text);
+    switcherPages.appendChild(btn);
+  };
+  
+  const createEllipsis = () => {
+    const el = document.createElement("div");
+    el.className = "image-viewer-switcher-ellipsis";
+    el.innerHTML = `
+      <span class="dot"></span>
+      <span class="dot"></span>
+      <span class="dot"></span>
+    `;
+    switcherPages.appendChild(el);
   };
 
   const updateSwitcherActive = () => {
@@ -825,6 +935,17 @@ export default function imageViewer() {
 
     state.isAnimating = false;
     document.addEventListener("keydown", onKeydown);
+    if (!state.resizeHandler) {
+      state.resizeHandler = () => {
+        if (!state.isOpen) return;
+        if (state.resizeTimer) clearTimeout(state.resizeTimer);
+        state.resizeTimer = setTimeout(() => {
+          state.resizeTimer = null;
+          updateSwitcher();
+        }, 120);
+      };
+      window.addEventListener("resize", state.resizeHandler, { passive: true });
+    }
     scheduleShowSwitcher();
   }
 
@@ -834,6 +955,14 @@ export default function imageViewer() {
 
     state.isAnimating = true;
     document.removeEventListener("keydown", onKeydown);
+    if (state.resizeHandler) {
+      window.removeEventListener("resize", state.resizeHandler);
+      state.resizeHandler = null;
+    }
+    if (state.resizeTimer) {
+      clearTimeout(state.resizeTimer);
+      state.resizeTimer = null;
+    }
     hideSwitcher();
     maskDom.classList.remove("switching");
 
@@ -1052,7 +1181,7 @@ export default function imageViewer() {
     setTimeout(async () => {
       if (!state.isOpen) return;
       state.currentIndex = targetIndex;
-      updateSwitcherActive();
+      updateSwitcher();
 
       const liveNode = getLiveNodeForItem(nextItem);
       const aspectRatio = getNodeAspectRatio(liveNode, nextItem);
