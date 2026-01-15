@@ -145,13 +145,7 @@ a
     transition opacity 0.2s ease
 
   &.img-preloader-error
-    max-height fit-content !important
-    height fit-content !important
-    width 100% !important
-    max-width 100% !important
-    aspect-ratio unset !important
     transition max-height 0.4s ease-out, padding 0.4s ease-out
-    padding 20px 0
     
     .img-preloader-skeleton
       animation none
@@ -182,6 +176,28 @@ a
         opacity 0.7
         max-width 100%
         overflow-wrap break-word
+
+  &.img-preloader-error:not(.image-viewer-img-preloader)
+    max-height fit-content
+    height fit-content
+    width 100%
+    max-width 100%
+    aspect-ratio unset
+    padding 20px 0
+
+  &.img-preloader-error.image-viewer-img-preloader
+    padding 2px
+    box-sizing border-box
+
+    .img-preloader-skeleton
+      position absolute
+      inset 0
+      padding 28px 24px
+      box-sizing border-box
+      display flex
+      flex-direction column
+      align-items center
+      justify-content center
 
 .img-preloader-loaded
   animation img-preloader-fade-in 0.3s ease forwards
@@ -256,6 +272,3 @@ button
 // ======================================================================
 .clear
   clear both
-
-
-

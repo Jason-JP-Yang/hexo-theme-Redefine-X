@@ -110,6 +110,12 @@ function replacePreloader(preloader, img) {
  */
 function showError(preloader, src) {
   preloader.classList.add("img-preloader-error");
+  preloader.style.removeProperty("width");
+  preloader.style.removeProperty("height");
+  preloader.style.removeProperty("aspect-ratio");
+  preloader.style.removeProperty("max-height");
+  preloader.style.removeProperty("max-width");
+  preloader.style.removeProperty("margin");
   const skeleton = preloader.querySelector(".img-preloader-skeleton");
   if (skeleton) {
     skeleton.innerHTML = `
