@@ -7,7 +7,7 @@ import initLocalSearch from "./tools/localSearch.js";
 import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
 import initLazyLoad from "./layouts/lazyload.js";
-import initHomeAutoHover from "./layouts/homeAutoHover.js";
+import initAutoHover from "./layouts/autoHover.js";
 
 export const main = {
   themeInfo: {
@@ -82,7 +82,7 @@ export const main = {
       });
     }
 
-    initHomeAutoHover();
+    initAutoHover();
   },
 };
 

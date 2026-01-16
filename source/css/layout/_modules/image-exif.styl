@@ -194,6 +194,11 @@ $image-exif-border-radius = $redefine-border-radius-medium
     opacity 1
     pointer-events auto
 
+  &:not(.image-exif-overflow-fallback).auto-hover
+    .image-exif-info-card
+      opacity 1
+      pointer-events auto
+
   .image-exif-data
     grid-template-columns repeat(auto-fit, minmax(180px, 1fr))
 
