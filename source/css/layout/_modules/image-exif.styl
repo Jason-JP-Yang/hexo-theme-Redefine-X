@@ -15,7 +15,7 @@ $image-exif-border-radius = $redefine-border-radius-medium
     width 100%
     text-align center
 
-    img.image-exif-img
+    .image-exif-img
       display block
       max-width 100%
       max-height 80svh
@@ -24,6 +24,9 @@ $image-exif-border-radius = $redefine-border-radius-medium
       border-radius $image-exif-border-radius
       object-fit contain
       margin 0 auto
+      
+      &.img-preloader .img-preloader-shim
+        max-height 80svh
 
   .image-exif-info-card
     background $image-exif-card-bg
@@ -162,8 +165,11 @@ $image-exif-border-radius = $redefine-border-radius-medium
     text-align left
     vertical-align top
 
-    img.image-exif-img
+    .image-exif-img
       max-height 80svh
+      
+      &.img-preloader .img-preloader-shim
+        max-height 80svh
 
   .image-exif-info-card
     position absolute
@@ -232,7 +238,7 @@ $image-exif-border-radius = $redefine-border-radius-medium
       text-align center
       margin-bottom 0
       
-      img.image-exif-img
+      .image-exif-img
         max-width 100%
         margin 0 auto
         
@@ -294,9 +300,12 @@ $image-exif-border-radius = $redefine-border-radius-medium
     margin-bottom 0
     width 100%
 
-    img.image-exif-img
+    .image-exif-img
       max-height 80svh
       max-width 100%
+      
+      &.img-preloader .img-preloader-shim
+        max-height 80svh
 
   .image-exif-info-card
     width 100%

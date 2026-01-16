@@ -559,7 +559,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
     ? `
 <figure class="image-exif-container ${layoutClass}" data-no-img-handle="true">
   <div class="image-exif-image-wrapper">
-    <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" data-no-lazyload="true" />
+    <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" />
     ${infoCardHtml}
   </div>
 </figure>
@@ -567,7 +567,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
     : `
 <figure class="image-exif-container ${layoutClass}" data-no-img-handle="true">
   <div class="image-exif-image-wrapper">
-    <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" data-no-lazyload="true" />
+    <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" />
   </div>
   ${infoCardHtml}
 </figure>

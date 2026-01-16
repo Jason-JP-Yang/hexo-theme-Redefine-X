@@ -208,26 +208,27 @@
       });
 
       // Listen for lazyload completion
-      const preloaders = container.querySelectorAll('.img-preloader');
-      preloaders.forEach(preloader => {
-        // Create a mutation observer to detect when img is added
+      const imageWrapper = container.querySelector('.image-exif-image-wrapper');
+      if (imageWrapper && imageWrapper.querySelector('.img-preloader')) {
+        // Create a mutation observer to detect when img replaces preloader
         const observer = new MutationObserver((mutations) => {
           mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
               if (node.tagName === 'IMG') {
-                node.addEventListener('load', () => {
-                  checkFloatOverflow(container);
-                });
                 if (node.complete) {
                   checkFloatOverflow(container);
+                } else {
+                  node.addEventListener('load', () => {
+                    checkFloatOverflow(container);
+                  });
                 }
               }
             });
           });
         });
         
-        observer.observe(preloader, { childList: true });
-      });
+        observer.observe(imageWrapper, { childList: true });
+      }
     });
   }
 

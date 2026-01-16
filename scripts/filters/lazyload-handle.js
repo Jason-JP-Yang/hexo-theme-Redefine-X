@@ -275,7 +275,8 @@ function buildPreloaderDiv(src, dims, alt, originalClass) {
     `data-width="${w}" ` +
     `data-height="${h}" ` +
     `data-alt="${escapeHtmlAttr(alt)}" ` +
-    `style="aspect-ratio: ${aspectRatio};">` +
+    `style="aspect-ratio: ${aspectRatio}; max-width: 100%;">` +
+    `<svg viewBox="0 0 ${w} ${h}" class="img-preloader-shim" style="width: 100%; height: auto; display: block; opacity: 0; pointer-events: none;"></svg>` +
     `<div class="img-preloader-skeleton"></div>` +
     `</div>`;
 }

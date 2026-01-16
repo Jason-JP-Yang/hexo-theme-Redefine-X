@@ -109,6 +109,10 @@ function replacePreloader(preloader, img) {
  * Show error state
  */
 function showError(preloader, src) {
+  // Remove shim if exists to prevent layout issues
+  const shim = preloader.querySelector(".img-preloader-shim");
+  if (shim) shim.remove();
+
   preloader.classList.add("img-preloader-error");
   preloader.style.removeProperty("width");
   preloader.style.removeProperty("height");
