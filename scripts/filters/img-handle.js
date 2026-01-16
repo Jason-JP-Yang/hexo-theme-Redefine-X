@@ -17,8 +17,26 @@ hexo.extend.filter.register('after_post_render', function (data) {
         const parts = data.content.split(exifContainerRegex);
         
         data.content = parts.map((part, index) => {
-            // Odd indices are the matched image-exif-container blocks - skip them
+            // Odd indices are the matched image-exif-container blocks
             if (index % 2 === 1) {
+                if (enableFigureNumber) {
+                    figureIndex += 1;
+                    
+                    // Case 1: Has existing title
+                    if (part.includes('class="image-exif-title"')) {
+                        return part.replace(
+                            /(<div class="image-exif-title">)(.*?)(<\/div>)/, 
+                            `$1<strong>Figure ${figureIndex}.</strong> $2$3`
+                        );
+                    } 
+                    // Case 2: No title, insert one
+                    else {
+                        return part.replace(
+                            /(<div class="image-exif-header-content">)/,
+                            `$1<div class="image-exif-title">Figure ${figureIndex}</div>`
+                        );
+                    }
+                }
                 return part;
             }
             
