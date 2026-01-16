@@ -7,6 +7,7 @@ import initLocalSearch from "./tools/localSearch.js";
 import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
 import initLazyLoad from "./layouts/lazyload.js";
+import initHomeAutoHover from "./layouts/homeAutoHover.js";
 
 export const main = {
   themeInfo: {
@@ -80,6 +81,8 @@ export const main = {
         preload: theme.articles.lazyload_preload === true
       });
     }
+
+    initHomeAutoHover();
   },
 };
 

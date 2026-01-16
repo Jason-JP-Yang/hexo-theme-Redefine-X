@@ -74,6 +74,7 @@ global:
   hover:
     shadow: true # shadow effect
     scale: true # scale effect
+    auto_hover: true # when element move into viewpoint, show the hover animation automatically
   # Scroll progress
   scroll_progress:
     bar: true # progress bar

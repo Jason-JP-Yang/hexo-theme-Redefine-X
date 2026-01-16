@@ -13,6 +13,7 @@ hover-style(isTransform, scaleX, scaleY)
     transition-t('transform', '0', '0.2', 'linear')
 
   &:hover
+  &.auto-hover
     if (hexo-config('global.hover.scale') && isTransform)
       transform scaleX(scaleX) scaleY(scaleX)
 
