@@ -206,7 +206,9 @@ $image-exif-border-radius = $redefine-border-radius-medium
       pointer-events auto
 
   .image-exif-data
-    grid-template-columns repeat(auto-fit, minmax(170px, 1fr))
+    // Override grid template to be controlled by JS in float mode
+    // We set a default here but JS will likely override it based on width
+    grid-template-columns repeat(auto-fit, minmax(180px, 1fr))
 
   // Pure Float Mode Styles (NOT fallback)
   &:not(.image-exif-overflow-fallback)
@@ -216,6 +218,8 @@ $image-exif-border-radius = $redefine-border-radius-medium
       opacity 1 !important
       margin-top 0.1rem !important
       display grid !important
+      // Remove default repeat(auto-fit) to avoid conflict with JS calculated columns
+      // JS will set specific grid-template-columns
       
     .image-exif-toggle-btn
       display none !important

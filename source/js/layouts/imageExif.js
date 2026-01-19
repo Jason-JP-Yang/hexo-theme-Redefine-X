@@ -12,7 +12,7 @@
 
   // Developer Constant: Force Layout Mode
   // Options: 'None' (default), 'Side', 'Float', 'Block'
-  const DEV_FORCE_LAYOUT_MODE = 'Float';
+  const DEV_FORCE_LAYOUT_MODE = 'None';
 
   /**
    * Check if Side-by-Side layout is possible
@@ -140,6 +140,12 @@
         // This is CRITICAL to prevent wrapping
         infoCard.style.maxWidth = targetWidth + 'px';
         
+        // CRITICAL: Clear any grid-template-columns set by Float mode check
+        // Side mode uses CSS-defined repeat(auto-fit, minmax(130px, 1fr))
+        if (infoCard.querySelector('.image-exif-data')) {
+             infoCard.querySelector('.image-exif-data').style.gridTemplateColumns = '';
+        }
+        
         return true;
       } else {
         if (DEV_FORCE_LAYOUT_MODE !== 'None') {
@@ -236,6 +242,10 @@
 
     if (imageHeight === 0) return;
 
+    // Get the data items count to decide columns
+    const dataItems = infoCard.querySelectorAll('.image-exif-item');
+    const itemsCount = dataItems.length;
+    
     // Use clone to measure dimensions
     const clone = infoCard.cloneNode(true);
     clone.classList.remove('expanded');
@@ -247,7 +257,7 @@
         top: '0',
         left: '0',
         width: 'max-content',
-        maxWidth: '60%',
+        maxWidth: '60%', // Constraint by CSS
         height: 'auto',
         maxHeight: 'none',
         overflow: 'visible',
@@ -258,27 +268,83 @@
     });
     
     const cloneData = clone.querySelector('.image-exif-data');
-    if (cloneData) {
-      Object.assign(cloneData.style, {
+    
+    // Try column configurations: 4 -> 2 -> 1
+    // Min width per column is 180px
+    // Gap is 0.6rem (approx 9.6px -> 10px)
+    
+    const tryColumns = (cols) => {
+        if (!cloneData) return 99999;
+        
+        // Calculate required width for this column config
+        // width = cols * 180 + (cols - 1) * 10
+        // But we are constrained by max-width 60% of image width?
+        // Actually we are testing if "fit-content" can fit these columns.
+        // We set the grid template explicitly.
+        
+        Object.assign(cloneData.style, {
           display: 'grid',
           height: 'auto',
           opacity: '1',
           marginTop: '0.6rem',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gridTemplateColumns: `repeat(${cols}, 1fr)`,
           gap: '0.6rem'
-      });
-    }
-    
+        });
+        
+        // Check if this configuration forces the card to be wider than 60% of image width
+        // Wait, clone has maxWidth: 60%. So if content is wider, it will wrap or overflow horizontally?
+        // But we want to see if it fits vertically.
+        // If we force 4 columns, but width is constrained, the browser will shrink columns if using 1fr, 
+        // OR we should set min-width on columns?
+        // User requirement: "每一列最小宽度180px"
+        // So we should set grid-template-columns: repeat(cols, minmax(180px, 1fr))
+        
+        cloneData.style.gridTemplateColumns = `repeat(${cols}, minmax(180px, 1fr))`;
+        
+        // Now measure height
+        return Math.max(clone.offsetHeight, clone.scrollHeight);
+    };
+
     const cloneBtn = clone.querySelector('.image-exif-toggle-btn');
     if (cloneBtn) cloneBtn.style.display = 'none';
 
     imageWrapper.appendChild(clone);
-    const cardHeight = clone.offsetHeight;
-    const scrollHeight = clone.scrollHeight;
-    const finalCardHeight = Math.max(cardHeight, scrollHeight);
-    imageWrapper.removeChild(clone);
+    
+    const availableHeight = imageHeight - 24; // 12px padding top/bottom
+    
+    // Try 4 columns first (if enough items)
+    let bestCols = 1;
+    let finalCardHeight = 99999;
+    
+    // Logic: Try largest possible columns that fit within constraints
+    // But we are also constrained by width!
+    // Float mode width is "fit-content" but max "60%".
+    // So actual width available = imageWidth * 0.6.
+    
+    // We can calculate max possible columns based on width
+    const imageWidth = imageWrapper.offsetWidth;
+    const maxAvailableWidth = imageWidth * 0.6 - 22; // 22px padding (0.65rem * 2 approx)
+    const colWidth = 180;
+    const gap = 10;
+    
+    // Calculate max columns that fit in width
+    // n * 180 + (n-1) * 10 <= maxAvailableWidth
+    // 190n - 10 <= maxAvailableWidth
+    // 190n <= maxAvailableWidth + 10
+    // n <= (maxAvailableWidth + 10) / 190
+    
+    let maxColsByWidth = Math.floor((maxAvailableWidth + 10) / 190);
+    maxColsByWidth = Math.max(1, Math.min(4, maxColsByWidth));
+    
+    // Now try from maxColsByWidth down to 1 to find first one that fits HEIGHT
+    // Wait, more columns = less height. So we should prefer MORE columns.
+    // So if maxColsByWidth fits height, we use it. If not, we are doomed anyway (less columns = more height).
+    // So we just need to check if maxColsByWidth fits height.
+    
+    finalCardHeight = tryColumns(maxColsByWidth);
+    bestCols = maxColsByWidth;
 
-    const availableHeight = imageHeight - 24;
+    imageWrapper.removeChild(clone);
 
     if (finalCardHeight > availableHeight - 2) {
       if (!container.classList.contains('image-exif-overflow-fallback')) {
@@ -287,13 +353,25 @@
                 finalCardHeight,
                 availableHeight,
                 diff: finalCardHeight - availableHeight,
-                reason: 'Card height exceeds available image height (Forced Mode Active)'
+                reason: 'Card height exceeds available image height (Forced Mode Active)',
+                triedCols: bestCols,
+                maxAvailableWidth
             });
             // If forced Float, we DO NOT add fallback class, effectively ignoring the overflow
-            if (DEV_FORCE_LAYOUT_MODE === 'Float') return;
+            if (DEV_FORCE_LAYOUT_MODE === 'Float') {
+                // Apply the calculated columns to the real card
+                if (infoCard.querySelector('.image-exif-data')) {
+                     infoCard.querySelector('.image-exif-data').style.gridTemplateColumns = `repeat(${bestCols}, minmax(180px, 1fr))`;
+                }
+                return;
+            }
         }
         
         container.classList.add('image-exif-overflow-fallback');
+        // Reset specific grid style when falling back
+        if (infoCard.querySelector('.image-exif-data')) {
+             infoCard.querySelector('.image-exif-data').style.gridTemplateColumns = '';
+        }
         infoCard.style.display = '';
         infoCard.style.visibility = '';
         infoCard.style.opacity = '';
@@ -304,6 +382,10 @@
         container.classList.remove('image-exif-overflow-fallback');
         infoCard.offsetHeight;
         infoCard.style.transition = '';
+      }
+      // Apply the calculated columns to the real card
+      if (infoCard.querySelector('.image-exif-data')) {
+           infoCard.querySelector('.image-exif-data').style.gridTemplateColumns = `repeat(${bestCols}, minmax(180px, 1fr))`;
       }
     }
   }
@@ -335,6 +417,10 @@
         // CRITICAL: Clean up side-mode inline styles
         if (infoCard) {
             infoCard.style.maxWidth = ''; // Remove fixed width
+            // Clean up grid template potentially left over or needed for other modes
+            if (infoCard.querySelector('.image-exif-data')) {
+                 infoCard.querySelector('.image-exif-data').style.gridTemplateColumns = '';
+            }
         }
     }
 
