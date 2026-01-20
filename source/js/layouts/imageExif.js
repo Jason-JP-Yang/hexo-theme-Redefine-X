@@ -587,6 +587,14 @@
 
   document.addEventListener('swup:contentReplaced', initImageExif);
   document.addEventListener('pjax:complete', initImageExif);
+  try {
+    if (typeof swup !== 'undefined' && swup?.hooks?.on) {
+      swup.hooks.on('page:view', () => {
+        initImageExif();
+        setTimeout(initImageExif, 50);
+      });
+    }
+  } catch (e) {}
 
   window.addEventListener('resize', debouncedResize);
   
