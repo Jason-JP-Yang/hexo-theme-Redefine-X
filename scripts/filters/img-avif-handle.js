@@ -8,7 +8,7 @@ const { Worker, isMainThread, parentPort } = require("worker_threads");
 // Configuration
 const MAX_PIXELS = 4_000_000; // Increased limit
 const MAX_BYTES = 40 * 1024; // 40KB
-const QUALITY_STEPS = [50, 45, 40, 35, 30, 25];
+const QUALITY_STEPS = [45, 35, 25];
 const MAX_WORKERS = Math.max(1, (os.cpus()?.length || 2) - 1);
 
 // ----------------------------------------------------------------------------
@@ -384,6 +384,16 @@ hexo.extend.filter.register(
       // Calculate paths
       const { outputPath, url, routePath } = buildAvifPaths(local.rel);
       const cacheKey = `${local.abs}|${outputPath}`;
+
+      try {
+        const inStat = fs.statSync(local.abs);
+        const outStat = fs.statSync(outputPath);
+        if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
+          hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+          taskCache.set(cacheKey, Promise.resolve({ ok: true, skipped: "cached" }));
+          return tagContent.replace(srcMatch[0], `${attrName}="${url}"`);
+        }
+      } catch {}
 
       // Enqueue task if not cached
       if (!taskCache.has(cacheKey)) {
