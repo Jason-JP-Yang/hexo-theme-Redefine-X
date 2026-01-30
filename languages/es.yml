@@ -90,3 +90,61 @@ ago:
 create_time: Creado
 update_time: Actualizado
 expired: "Esta publicación fue escrita hace %s días, el contenido puede no estar actualizado."
+
+# ----------------------------------------
+# Image EXIF
+# ----------------------------------------
+image_exif:
+  ui:
+    toggle: EXIF Camb
+  section:
+    camera: Cam
+    lens: Lens
+    exposure: Expo
+    other: Otro
+  field:
+    make: Marca
+    model: Modelo
+    datetime_original: Fecha
+    lens_model: Lens
+    focal_length: FocLen
+    focus_mode: AF Mod
+    exposure_time: Shutter
+    aperture: Apert
+    iso: ISO
+    exposure_program: ExpProg
+    exposure_bias: ExpComp
+    metering_mode: Meter
+    flash: Flash
+    white_balance: WB
+    gps_latitude: Lat
+    gps_longitude: Lon
+    gps_altitude: Alt
+  exposure_program:
+    undefined: Undef
+    manual: Manual
+    normal: Auto
+    aperture_priority: Av
+    shutter_priority: Tv
+    creative: Creat
+    action: Action
+    portrait: Port
+    landscape: Land
+  metering_mode:
+    unknown: Unk
+    average: Avg
+    center_weighted: CtrWt
+    spot: Spot
+    multi_spot: MSpot
+    evaluative: Eval
+    partial: Part
+    other: Otro
+  white_balance:
+    auto: Auto
+    manual: Man
+  flash:
+    on: ON
+    off: OFF
+  value:
+    program_with_number: "Prog %s"
+    mode_with_number: "Modo %s"
