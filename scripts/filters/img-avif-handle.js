@@ -3,138 +3,151 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { Worker, isMainThread, parentPort } = require("worker_threads");
+const { spawn } = require("child_process");
 
 // Configuration
-const MAX_PIXELS = 4_000_000; // Increased limit
-const MAX_BYTES = 40 * 1024; // 40KB
-const QUALITY_STEPS = [45, 35, 25];
-const MAX_WORKERS = Math.max(1, (os.cpus()?.length || 2) - 1);
+const MAX_PIXELS = 2073600; // 1920x1080 limit
+const TARGET_CRF = 25; // "25%" quality/compression balance
+const ENCODER_PRESET = 4; // Prioritize quality (lower is slower/better)
+const MAX_CONCURRENCY = Math.max(1, Math.floor((os.cpus().length || 2) / 2)); // Conservative concurrency for SVT-AV1
 
 // ----------------------------------------------------------------------------
-// Worker Thread Logic
+// FFmpeg & Process Logic
 // ----------------------------------------------------------------------------
-if (!isMainThread) {
-  const sharp = require("sharp");
-  // Disable sharp cache to prevent process hang
-  sharp.cache(false);
 
-  async function encodeAvif(inputPath, outputPath, targetWidth, targetHeight, maxBytes) {
-    let lastBuffer = null;
-    let lastQuality = QUALITY_STEPS[QUALITY_STEPS.length - 1];
+function runCommand(command, args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { shell: false });
+    let stdout = "";
+    let stderr = "";
 
-    for (const quality of QUALITY_STEPS) {
-      try {
-        const buffer = await sharp(inputPath, { failOn: "none" })
-          .rotate()
-          .resize({
-            width: targetWidth,
-            height: targetHeight,
-            fit: "inside",
-            withoutEnlargement: true,
-          })
-          .avif({ quality, effort: 4 })
-          .toBuffer();
+    proc.stdout.on("data", (data) => (stdout += data));
+    proc.stderr.on("data", (data) => (stderr += data));
 
-        lastBuffer = buffer;
-        lastQuality = quality;
-
-        if (buffer.length <= maxBytes) {
-          await fs.promises.writeFile(outputPath, buffer);
-          return { ok: true, quality, size: buffer.length };
-        }
-      } catch (err) {
-        return { ok: false, error: err.message };
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`Command failed with code ${code}: ${stderr}`));
       }
-    }
+    });
 
-    // Fallback: shrink dimensions if quality reduction wasn't enough
-    if (lastBuffer && lastBuffer.length > maxBytes) {
-      try {
-        const shrinkRatio = Math.sqrt(maxBytes / lastBuffer.length);
-        const shrinkWidth = Math.max(1, Math.floor(targetWidth * shrinkRatio));
-        const shrinkHeight = Math.max(1, Math.floor(targetHeight * shrinkRatio));
-
-        const buffer = await sharp(inputPath, { failOn: "none" })
-          .rotate()
-          .resize({
-            width: shrinkWidth,
-            height: shrinkHeight,
-            fit: "inside",
-            withoutEnlargement: true,
-          })
-          .avif({ quality: lastQuality, effort: 4 })
-          .toBuffer();
-
-        await fs.promises.writeFile(outputPath, buffer);
-        return { ok: true, quality: lastQuality, size: buffer.length, resized: true };
-      } catch (err) {
-        return { ok: false, error: err.message };
-      }
-    }
-
-    return { ok: false, error: "unable_to_compress" };
-  }
-
-  async function processTask(task) {
-    const { inputPath, outputPath, maxPixels, maxBytes } = task;
-
-    if (!fs.existsSync(inputPath)) {
-      return { ok: false, error: "input_missing" };
-    }
-
-    const outDir = path.dirname(outputPath);
-    await fs.promises.mkdir(outDir, { recursive: true });
-
-    try {
-      // Check cache validity based on mtime
-      const inStat = await fs.promises.stat(inputPath);
-      try {
-        const outStat = await fs.promises.stat(outputPath);
-        if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
-          return { ok: true, skipped: "cached" };
-        }
-      } catch {
-        // Output doesn't exist, proceed
-      }
-
-      const meta = await sharp(inputPath, { failOn: "none" }).metadata();
-      if (!meta || !meta.width || !meta.height) {
-        return { ok: false, error: "metadata_missing" };
-      }
-
-      const width = meta.width;
-      const height = meta.height;
-      const pixels = width * height;
-      const scale = pixels > maxPixels ? Math.sqrt(maxPixels / pixels) : 1;
-
-      const targetWidth = Math.max(1, Math.floor(width * scale));
-      const targetHeight = Math.max(1, Math.floor(height * scale));
-
-      return await encodeAvif(inputPath, outputPath, targetWidth, targetHeight, maxBytes);
-    } catch (error) {
-      return { ok: false, error: error?.message || String(error) };
-    }
-  }
-
-  parentPort.on("message", async (task) => {
-    const id = task?.id;
-    if (!id) return;
-    
-    try {
-      const result = await processTask(task);
-      parentPort.postMessage({ id, ...result });
-    } catch (error) {
-      parentPort.postMessage({
-        id,
-        ok: false,
-        error: error?.message || String(error),
-      });
-    }
+    proc.on("error", (err) => reject(err));
   });
-
-  return;
 }
+
+async function getImageMetadata(inputPath) {
+  try {
+    // Use ffmpeg -i to probe since ffprobe might not be aliased/available separately
+    // We expect a failure exit code usually if we don't provide output, but we catch the stderr
+    return new Promise((resolve, reject) => {
+      const proc = spawn("ffmpeg", ["-i", inputPath], { shell: false });
+      let stderr = "";
+      proc.stderr.on("data", (data) => (stderr += data));
+      proc.on("close", () => {
+        // Parse dimensions from stderr
+        // Pattern: Stream #0:0... Video: ... 1920x1080 ...
+        const match = stderr.match(/Stream #\d+:\d+.*Video:.*?\s(\d+)x(\d+)/);
+        if (match) {
+          resolve({ width: parseInt(match[1], 10), height: parseInt(match[2], 10) });
+        } else {
+          reject(new Error("Could not determine image dimensions from ffmpeg output"));
+        }
+      });
+    });
+  } catch (e) {
+    throw e;
+  }
+}
+
+async function encodeAvif(inputPath, outputPath, options) {
+  const { width, height } = options;
+  
+  // Calculate scaling
+  let targetWidth = width;
+  let targetHeight = height;
+  const pixels = width * height;
+  
+  if (pixels > MAX_PIXELS) {
+    const scale = Math.sqrt(MAX_PIXELS / pixels);
+    targetWidth = Math.floor(width * scale);
+    targetHeight = Math.floor(height * scale);
+  }
+
+  // Ensure even dimensions for YUV420
+  if (targetWidth % 2 !== 0) targetWidth -= 1;
+  if (targetHeight % 2 !== 0) targetHeight -= 1;
+  
+  // Safety check: ensure at least 2x2
+  targetWidth = Math.max(2, targetWidth);
+  targetHeight = Math.max(2, targetHeight);
+
+  // Prepare args
+  const args = [
+    "-y", // Overwrite
+    "-i", inputPath,
+    "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`, // High quality scaling
+    "-c:v", "libsvtav1",
+    "-crf", String(TARGET_CRF),
+    "-preset", String(ENCODER_PRESET),
+    "-pix_fmt", "yuv420p10le", // 10-bit color for better quality
+    "-svtav1-params", "tune=0", // 0 = Visual Quality
+    outputPath
+  ];
+
+  await runCommand("ffmpeg", args);
+  
+  // Verification
+  if (!fs.existsSync(outputPath)) {
+    throw new Error("Output file not created");
+  }
+  const stat = await fs.promises.stat(outputPath);
+  if (stat.size === 0) {
+    await fs.promises.unlink(outputPath);
+    throw new Error("Output file is 0 bytes");
+  }
+
+  return { ok: true, size: stat.size };
+}
+
+// ----------------------------------------------------------------------------
+// Queue System
+// ----------------------------------------------------------------------------
+
+class TaskQueue {
+  constructor(concurrency) {
+    this.concurrency = concurrency;
+    this.active = 0;
+    this.queue = [];
+  }
+
+  enqueue(fn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ fn, resolve, reject });
+      this.process();
+    });
+  }
+
+  async process() {
+    if (this.active >= this.concurrency || this.queue.length === 0) return;
+
+    this.active++;
+    const { fn, resolve, reject } = this.queue.shift();
+
+    try {
+      const result = await fn();
+      resolve(result);
+    } catch (err) {
+      reject(err);
+    } finally {
+      this.active--;
+      this.process();
+    }
+  }
+}
+
+const queue = new TaskQueue(MAX_CONCURRENCY);
+const taskCache = new Map();
 
 // ----------------------------------------------------------------------------
 // Main Thread Logic
@@ -160,7 +173,7 @@ function normalizeRootPath(src) {
 
 function isSupportedBitmap(ext) {
   const e = ext.toLowerCase();
-  return e === ".jpg" || e === ".jpeg" || e === ".png";
+  return e === ".jpg" || e === ".jpeg" || e === ".png" || e === ".gif";
 }
 
 function resolveSourceImagePath(src) {
@@ -205,144 +218,6 @@ function buildAvifPaths(relPath) {
   return { outputRel, outputPath, url, routePath };
 }
 
-// Worker Pool Implementation
-class AvifWorkerPool {
-  constructor() {
-    this.workerCount = MAX_WORKERS;
-    this.workers = [];
-    this.ready = [];
-    this.queue = [];
-    this.inflight = new Map();
-    this.nextId = 1;
-    this.pending = 0;
-    this.idleResolvers = [];
-    this.closed = false;
-
-    for (let i = 0; i < this.workerCount; i += 1) {
-      const worker = new Worker(__filename);
-      // Ensure worker doesn't keep process alive if it's the only thing left
-      if (hexo.env.cmd === 'generate') {
-         worker.unref(); 
-      }
-      
-      worker.on("message", (msg) => this.handleMessage(worker, msg));
-      worker.on("error", (err) => this.handleError(worker, err));
-      worker.on("exit", () => this.handleExit(worker));
-      
-      this.workers.push(worker);
-      this.ready.push(worker);
-    }
-  }
-
-  enqueue(task) {
-    if (this.closed) {
-      return Promise.resolve({ ok: false, error: "pool_closed" });
-    }
-
-    const id = this.nextId++;
-    this.pending += 1;
-
-    return new Promise((resolve) => {
-      this.queue.push({ id, task, resolve });
-      this.dispatch();
-    }).finally(() => {
-      this.pending -= 1;
-      if (this.pending === 0) {
-        this.idleResolvers.splice(0).forEach((fn) => fn());
-      }
-    });
-  }
-
-  dispatch() {
-    if (this.closed) return;
-    while (this.ready.length > 0 && this.queue.length > 0) {
-      const worker = this.ready.shift();
-      const item = this.queue.shift();
-      this.inflight.set(worker, item);
-      worker.postMessage({ id: item.id, ...item.task });
-    }
-  }
-
-  handleMessage(worker, msg) {
-    const item = this.inflight.get(worker);
-    this.inflight.delete(worker);
-    this.ready.push(worker);
-
-    if (item) {
-      item.resolve(msg);
-    }
-
-    this.dispatch();
-  }
-
-  handleError(worker, err) {
-    const item = this.inflight.get(worker);
-    this.inflight.delete(worker);
-    
-    // Replace dead worker
-    if (!this.closed) {
-        const newWorker = new Worker(__filename);
-        if (hexo.env.cmd === 'generate') newWorker.unref();
-        newWorker.on("message", (msg) => this.handleMessage(newWorker, msg));
-        newWorker.on("error", (e) => this.handleError(newWorker, e));
-        newWorker.on("exit", () => this.handleExit(newWorker));
-        this.workers = this.workers.filter(w => w !== worker).concat(newWorker);
-        this.ready.push(newWorker);
-    }
-
-    if (item) {
-      item.resolve({ ok: false, error: err?.message || String(err) });
-    }
-
-    this.dispatch();
-  }
-  
-  handleExit(worker) {
-      // Clean up if a worker exits unexpectedly
-      const item = this.inflight.get(worker);
-      if (item) {
-          this.inflight.delete(worker);
-          item.resolve({ ok: false, error: "worker_exited" });
-      }
-  }
-
-  async idle() {
-    if (this.pending === 0) return;
-    await new Promise((resolve) => this.idleResolvers.push(resolve));
-  }
-
-  async close() {
-    if (this.closed) return;
-    this.closed = true;
-    
-    await this.idle();
-    
-    const terminations = this.workers.map(async (w) => {
-        try {
-            await w.terminate();
-        } catch(e) {
-            // ignore termination errors
-        }
-    });
-    
-    await Promise.all(terminations);
-    
-    this.workers = [];
-    this.ready = [];
-    this.queue = [];
-    this.inflight.clear();
-  }
-}
-
-// Global state
-let pool = null;
-const taskCache = new Map();
-
-function getPool() {
-  if (!pool) pool = new AvifWorkerPool();
-  return pool;
-}
-
 // ----------------------------------------------------------------------------
 // Hexo Filters
 // ----------------------------------------------------------------------------
@@ -355,117 +230,131 @@ hexo.extend.filter.register(
 
     const pending = [];
 
-    // Helper to process tags (img or div)
-    const processTag = (tagContent, attrName) => {
-      // Skip if marked
-      if (/\bdata-no-avif\b/i.test(tagContent)) return null;
+    // Helper to process tags (img or div) is integrated into the loop below for async handling.
 
-      // Extract attribute
-      const attrRegex = new RegExp(`\\b${attrName}\\s*=\\s*("|')([^"']*)\\1`, "i");
-      const srcMatch = tagContent.match(attrRegex);
-      if (!srcMatch) return null;
 
-      const originalSrc = srcMatch[2];
-      if (!originalSrc) return null;
-
-      // Skip invalid schemes
-      if (/^data:|^blob:/i.test(originalSrc)) return null;
-      if (/^https?:\/\//i.test(originalSrc) || originalSrc.startsWith("//")) return null;
-
-      // Check extension
-      const normalizedSrc = stripQueryAndHash(originalSrc);
-      const ext = path.extname(normalizedSrc).toLowerCase();
-      if (!isSupportedBitmap(ext)) return null;
-
-      // Resolve local file
-      const local = resolveSourceImagePath(normalizedSrc);
-      if (!local) return null;
-
-      // Calculate paths
-      const { outputPath, url, routePath } = buildAvifPaths(local.rel);
-      const cacheKey = `${local.abs}|${outputPath}`;
-
-      try {
-        const inStat = fs.statSync(local.abs);
-        const outStat = fs.statSync(outputPath);
-        if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
-          hexo.route.set(routePath, () => fs.createReadStream(outputPath));
-          taskCache.set(cacheKey, Promise.resolve({ ok: true, skipped: "cached" }));
-          return tagContent.replace(srcMatch[0], `${attrName}="${url}"`);
-        }
-      } catch {}
-
-      // Enqueue task if not cached
-      if (!taskCache.has(cacheKey)) {
-        const taskPromise = getPool()
-          .enqueue({
-            inputPath: local.abs,
-            outputPath,
-            maxPixels: MAX_PIXELS,
-            maxBytes: MAX_BYTES,
-          })
-          .then((res) => {
-            if (res?.ok) {
-              // Register route
-              hexo.route.set(routePath, () => fs.createReadStream(outputPath));
-              if (!res.skipped) {
-                hexo.log.info(`[redefine-x][img-avif] Generated: ${routePath}`);
-              }
-            } else if (res?.error && hexo?.log?.warn) {
-                // Warning log
-               // hexo.log.warn(`[redefine-x][img-avif] Failed: ${local.rel} -> ${res.error}`);
-            }
-            return res;
-          });
-
-        taskCache.set(cacheKey, taskPromise);
-      }
-
-      pending.push(taskCache.get(cacheKey));
-
-      // Return replacement string
-      return tagContent.replace(srcMatch[0], `${attrName}="${url}"`);
-    };
-
-    // 1. Process <img> tags
+    // We need to capture all matches and decide what to do.
+    // Since we need to wait for tasks to finish to know if we should use AVIF or Original,
+    // we can't do simple synchronous replace.
+    
+    // Strategy: Find all matches, start tasks, wait for all tasks, THEN replace.
+    
+    const matches = [];
+    
+    // 1. <img> tags
     const imgRegex = /<img\b[^>]*>/gim;
+    let match;
+    while ((match = imgRegex.exec(str)) !== null) {
+        matches.push({
+            type: 'img',
+            tag: match[0],
+            index: match.index,
+            attr: 'src'
+        });
+    }
+    
+    // 2. <div class="img-preloader">
+    const divRegex = /<div\b[^>]*class="[^"]*img-preloader[^"]*"[^>]*>/gim;
+    while ((match = divRegex.exec(str)) !== null) {
+        matches.push({
+            type: 'div',
+            tag: match[0],
+            index: match.index,
+            attr: 'data-src'
+        });
+    }
+    
+    // Sort matches by index reverse to allow easy replacement without messing up indices? 
+    // Actually, string slicing is better.
+    matches.sort((a, b) => a.index - b.index);
+    
     let result = "";
     let lastIndex = 0;
-    let match;
-
-    while ((match = imgRegex.exec(str)) !== null) {
-      const tag = match[0];
-      const start = match.index;
-      result += str.slice(lastIndex, start);
-      lastIndex = imgRegex.lastIndex;
-
-      const newTag = processTag(tag, "src");
-      result += newTag || tag;
+    
+    for (const m of matches) {
+        // Append text before this match
+        result += str.slice(lastIndex, m.index);
+        lastIndex = m.index + m.tag.length;
+        
+        // Process
+        const tagContent = m.tag;
+        const attrName = m.attr;
+        
+        // --- Same Logic as processTag but async-aware ---
+        let newTag = null;
+        
+        // Skip if marked
+        if (!/\bdata-no-avif\b/i.test(tagContent)) {
+            const attrRegex = new RegExp(`\\b${attrName}\\s*=\\s*("|')([^"']*)\\1`, "i");
+            const srcMatch = tagContent.match(attrRegex);
+            
+            if (srcMatch) {
+                const originalSrc = srcMatch[2];
+                // Checks...
+                if (originalSrc && 
+                    !/^data:|^blob:/i.test(originalSrc) && 
+                    !/^https?:\/\//i.test(originalSrc) && !originalSrc.startsWith("//")) {
+                        
+                    const normalizedSrc = stripQueryAndHash(originalSrc);
+                    const ext = path.extname(normalizedSrc).toLowerCase();
+                    
+                    if (isSupportedBitmap(ext)) {
+                        const local = resolveSourceImagePath(normalizedSrc);
+                        if (local) {
+                            const { outputPath, url, routePath } = buildAvifPaths(local.rel);
+                            const cacheKey = `${local.abs}|${outputPath}`;
+                            
+                            // Ensure task is running/cached
+                            let task = taskCache.get(cacheKey);
+                            if (!task) {
+                                // Check disk cache
+                                let isCached = false;
+                                try {
+                                    const inStat = fs.statSync(local.abs);
+                                    const outStat = fs.statSync(outputPath);
+                                    if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
+                                        isCached = true;
+                                    }
+                                } catch {}
+                                
+                                if (isCached) {
+                                    hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+                                    task = Promise.resolve({ ok: true, skipped: "cached" });
+                                } else {
+                                    // Enqueue
+                                    task = queue.enqueue(async () => {
+                                        const outDir = path.dirname(outputPath);
+                                        await fs.promises.mkdir(outDir, { recursive: true });
+                                        try {
+                                            const meta = await getImageMetadata(local.abs);
+                                            const r = await encodeAvif(local.abs, outputPath, meta);
+                                            hexo.log.info(`[redefine-x][avif] Generated: ${local.rel} -> ${routePath} (${(r.size/1024).toFixed(2)} KB)`);
+                                            hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+                                            return { ok: true };
+                                        } catch (err) {
+                                            hexo.log.warn(`[redefine-x][avif] Failed: ${local.rel} -> ${err.message}`);
+                                            return { ok: false };
+                                        }
+                                    });
+                                }
+                                taskCache.set(cacheKey, task);
+                            }
+                            
+                            // Wait for result
+                            const res = await task;
+                            if (res.ok) {
+                                newTag = tagContent.replace(srcMatch[0], `${attrName}="${url}"`);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        result += newTag || tagContent;
     }
+    
     result += str.slice(lastIndex);
-    str = result;
-
-    // 2. Process <div class="img-preloader"> tags
-    const divRegex = /<div\b[^>]*class="[^"]*img-preloader[^"]*"[^>]*>/gim;
-    result = "";
-    lastIndex = 0;
-
-    while ((match = divRegex.exec(str)) !== null) {
-      const tag = match[0];
-      const start = match.index;
-      result += str.slice(lastIndex, start);
-      lastIndex = divRegex.lastIndex;
-
-      const newTag = processTag(tag, "data-src");
-      result += newTag || tag;
-    }
-    result += str.slice(lastIndex);
-
-    // Wait for all tasks for THIS file to complete
-    if (pending.length > 0) {
-      await Promise.all(pending);
-    }
-
     return result;
   },
   5
@@ -485,37 +374,35 @@ hexo.extend.filter.register("after_generate", async function () {
       if (hexo.route.get(avifRoute)) {
         hexo.route.remove(route);
         deleted.push(route);
-      } else {
-        // If AVIF does NOT exist, it means this image was not processed/used in any HTML
-        // Warn the user that this image will remain as-is
-        hexo.log.warn(`[redefine-x][img-avif] Unused image detected: ${route} (kept original)`);
       }
     }
   });
 
   if (deleted.length > 0) {
-    hexo.log.debug(`[redefine-x][img-avif] Removed ${deleted.length} original images from output.`);
-  }
-
-  // 2. Close pool
-  if (pool) {
-    await pool.close();
-    pool = null;
-  }
-});
-
-// Fallback cleanup on exit
-hexo.on('exit', async () => {
-    if (pool) {
-        await pool.close();
-        pool = null;
+    hexo.log.info(`[redefine-x][avif] Removed ${deleted.length} original images from output routes.`);
+    
+    // CRITICAL FIX: Manually remove the files from public directory
+    // because they might have been written before we removed the route.
+    if (hexo.public_dir) {
+        for (const route of deleted) {
+            const publicPath = path.join(hexo.public_dir, route);
+            if (fs.existsSync(publicPath)) {
+                try {
+                    fs.unlinkSync(publicPath);
+                    // Try to remove empty parent directory? (Optional, skipping for safety)
+                } catch (e) {
+                    hexo.log.warn(`[redefine-x][avif] Failed to delete original file from public: ${publicPath}`);
+                }
+            }
+        }
     }
+  }
 });
 
 // Cleanup build dir on clean
 hexo.extend.filter.register("after_clean", function () {
   if (hexo.env.args["exclude-minify"]) {
-    hexo.log.info("[redefine-x][img-avif] Build directory cleanup skipped (--exclude-minify).");
+    hexo.log.info("[redefine-x][avif] Build directory cleanup skipped (--exclude-minify).");
     return;
   }
 
