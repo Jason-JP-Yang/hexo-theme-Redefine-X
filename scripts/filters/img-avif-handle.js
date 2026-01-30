@@ -38,15 +38,11 @@ function runCommand(command, args) {
 
 async function getImageMetadata(inputPath) {
   try {
-    // Use ffmpeg -i to probe since ffprobe might not be aliased/available separately
-    // We expect a failure exit code usually if we don't provide output, but we catch the stderr
     return new Promise((resolve, reject) => {
       const proc = spawn("ffmpeg", ["-i", inputPath], { shell: false });
       let stderr = "";
       proc.stderr.on("data", (data) => (stderr += data));
       proc.on("close", () => {
-        // Parse dimensions from stderr
-        // Pattern: Stream #0:0... Video: ... 1920x1080 ...
         const match = stderr.match(/Stream #\d+:\d+.*Video:.*?\s(\d+)x(\d+)/);
         if (match) {
           resolve({ width: parseInt(match[1], 10), height: parseInt(match[2], 10) });
@@ -78,7 +74,6 @@ async function encodeAvif(inputPath, outputPath, options) {
   if (targetWidth % 2 !== 0) targetWidth -= 1;
   if (targetHeight % 2 !== 0) targetHeight -= 1;
   
-  // Safety check: ensure at least 2x2
   targetWidth = Math.max(2, targetWidth);
   targetHeight = Math.max(2, targetHeight);
 
@@ -86,18 +81,17 @@ async function encodeAvif(inputPath, outputPath, options) {
   const args = [
     "-y", // Overwrite
     "-i", inputPath,
-    "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`, // High quality scaling
+    "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
     "-c:v", "libsvtav1",
     "-crf", String(TARGET_CRF),
     "-preset", String(ENCODER_PRESET),
-    "-pix_fmt", "yuv420p10le", // 10-bit color for better quality
-    "-svtav1-params", "tune=0", // 0 = Visual Quality
+    "-pix_fmt", "yuv420p10le",
+    "-svtav1-params", "tune=0",
     outputPath
   ];
 
   await runCommand("ffmpeg", args);
   
-  // Verification
   if (!fs.existsSync(outputPath)) {
     throw new Error("Output file not created");
   }
@@ -147,13 +141,13 @@ class TaskQueue {
 }
 
 const queue = new TaskQueue(MAX_CONCURRENCY);
-const taskCache = new Map();
+// Global set to track successfully processed source files (relative paths)
+const successfulConversions = new Set();
 
 // ----------------------------------------------------------------------------
-// Main Thread Logic
+// Helpers & Path Logic
 // ----------------------------------------------------------------------------
 
-// Helper Functions
 function stripQueryAndHash(url) {
   return String(url).split("#")[0].split("?")[0];
 }
@@ -176,32 +170,6 @@ function isSupportedBitmap(ext) {
   return e === ".jpg" || e === ".jpeg" || e === ".png" || e === ".gif";
 }
 
-function resolveSourceImagePath(src) {
-  const rel = normalizeRootPath(src);
-  if (!rel) return null;
-  if (rel.toLowerCase().startsWith("build/")) return null;
-
-  const decodedRel = (() => {
-    try {
-      return decodeURIComponent(rel);
-    } catch {
-      return rel;
-    }
-  })();
-
-  // 1. Check blog source
-  let abs = path.join(hexo.source_dir || "", decodedRel);
-  if (abs && fs.existsSync(abs)) return { abs, rel: decodedRel };
-
-  // 2. Check theme source
-  if (hexo.theme_dir) {
-    abs = path.join(hexo.theme_dir, "source", decodedRel);
-    if (abs && fs.existsSync(abs)) return { abs, rel: decodedRel };
-  }
-
-  return null;
-}
-
 function buildAvifPaths(relPath) {
   const posixRel = relPath.replace(/\\/g, "/");
   const ext = path.posix.extname(posixRel);
@@ -218,185 +186,283 @@ function buildAvifPaths(relPath) {
   return { outputRel, outputPath, url, routePath };
 }
 
-// ----------------------------------------------------------------------------
-// Hexo Filters
-// ----------------------------------------------------------------------------
-
-hexo.extend.filter.register(
-  "after_render:html",
-  async function (str, data) {
-    // Basic validation
-    if (!str || typeof str !== "string" || str.length === 0) return str;
-
-    const pending = [];
-
-    // Helper to process tags (img or div) is integrated into the loop below for async handling.
-
-
-    // We need to capture all matches and decide what to do.
-    // Since we need to wait for tasks to finish to know if we should use AVIF or Original,
-    // we can't do simple synchronous replace.
+function resolveSourceImagePath(src) {
+    const rel = normalizeRootPath(src);
+    if (!rel) return null;
+    if (rel.toLowerCase().startsWith("build/")) return null;
+  
+    const decodedRel = (() => {
+      try { return decodeURIComponent(rel); } catch { return rel; }
+    })();
+  
+    // Check successful conversions first
+    // This allows us to know if we have a valid AVIF for this source
+    // We check both direct match or if file exists on disk
     
-    // Strategy: Find all matches, start tasks, wait for all tasks, THEN replace.
+    // Logic: 
+    // 1. Check if file exists in source or theme
+    // 2. Return absolute path
     
-    const matches = [];
-    
-    // 1. <img> tags
-    const imgRegex = /<img\b[^>]*>/gim;
-    let match;
-    while ((match = imgRegex.exec(str)) !== null) {
-        matches.push({
-            type: 'img',
-            tag: match[0],
-            index: match.index,
-            attr: 'src'
-        });
+    let abs = path.join(hexo.source_dir || "", decodedRel);
+    if (abs && fs.existsSync(abs)) return { abs, rel: decodedRel };
+  
+    if (hexo.theme_dir) {
+      abs = path.join(hexo.theme_dir, "source", decodedRel);
+      if (abs && fs.existsSync(abs)) return { abs, rel: decodedRel };
     }
+  
+    return null;
+}
+
+// ----------------------------------------------------------------------------
+// Phase 1: Pre-process ALL images before generation
+// ----------------------------------------------------------------------------
+
+async function scanAndProcessAllImages() {
+    hexo.log.info("[redefine-x][avif] Scanning and processing all source images...");
     
-    // 2. <div class="img-preloader">
-    const divRegex = /<div\b[^>]*class="[^"]*img-preloader[^"]*"[^>]*>/gim;
-    while ((match = divRegex.exec(str)) !== null) {
-        matches.push({
-            type: 'div',
-            tag: match[0],
-            index: match.index,
-            attr: 'data-src'
-        });
-    }
+    const sourceDir = hexo.source_dir;
+    const themeSourceDir = hexo.theme_dir ? path.join(hexo.theme_dir, "source") : null;
     
-    // Sort matches by index reverse to allow easy replacement without messing up indices? 
-    // Actually, string slicing is better.
-    matches.sort((a, b) => a.index - b.index);
-    
-    let result = "";
-    let lastIndex = 0;
-    
-    for (const m of matches) {
-        // Append text before this match
-        result += str.slice(lastIndex, m.index);
-        lastIndex = m.index + m.tag.length;
+    // Recursive file finder
+    async function getFiles(dir) {
+        let results = [];
+        if (!fs.existsSync(dir)) return results;
         
-        // Process
-        const tagContent = m.tag;
-        const attrName = m.attr;
-        
-        // --- Same Logic as processTag but async-aware ---
-        let newTag = null;
-        
-        // Skip if marked
-        if (!/\bdata-no-avif\b/i.test(tagContent)) {
-            const attrRegex = new RegExp(`\\b${attrName}\\s*=\\s*("|')([^"']*)\\1`, "i");
-            const srcMatch = tagContent.match(attrRegex);
-            
-            if (srcMatch) {
-                const originalSrc = srcMatch[2];
-                // Checks...
-                if (originalSrc && 
-                    !/^data:|^blob:/i.test(originalSrc) && 
-                    !/^https?:\/\//i.test(originalSrc) && !originalSrc.startsWith("//")) {
-                        
-                    const normalizedSrc = stripQueryAndHash(originalSrc);
-                    const ext = path.extname(normalizedSrc).toLowerCase();
-                    
-                    if (isSupportedBitmap(ext)) {
-                        const local = resolveSourceImagePath(normalizedSrc);
-                        if (local) {
-                            const { outputPath, url, routePath } = buildAvifPaths(local.rel);
-                            const cacheKey = `${local.abs}|${outputPath}`;
-                            
-                            // Ensure task is running/cached
-                            let task = taskCache.get(cacheKey);
-                            if (!task) {
-                                // Check disk cache
-                                let isCached = false;
-                                try {
-                                    const inStat = fs.statSync(local.abs);
-                                    const outStat = fs.statSync(outputPath);
-                                    if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
-                                        isCached = true;
-                                    }
-                                } catch {}
-                                
-                                if (isCached) {
-                                    hexo.route.set(routePath, () => fs.createReadStream(outputPath));
-                                    task = Promise.resolve({ ok: true, skipped: "cached" });
-                                } else {
-                                    // Enqueue
-                                    task = queue.enqueue(async () => {
-                                        const outDir = path.dirname(outputPath);
-                                        await fs.promises.mkdir(outDir, { recursive: true });
-                                        try {
-                                            const meta = await getImageMetadata(local.abs);
-                                            const r = await encodeAvif(local.abs, outputPath, meta);
-                                            hexo.log.info(`[redefine-x][avif] Generated: ${local.rel} -> ${routePath} (${(r.size/1024).toFixed(2)} KB)`);
-                                            hexo.route.set(routePath, () => fs.createReadStream(outputPath));
-                                            return { ok: true };
-                                        } catch (err) {
-                                            hexo.log.warn(`[redefine-x][avif] Failed: ${local.rel} -> ${err.message}`);
-                                            return { ok: false };
-                                        }
-                                    });
-                                }
-                                taskCache.set(cacheKey, task);
-                            }
-                            
-                            // Wait for result
-                            const res = await task;
-                            if (res.ok) {
-                                newTag = tagContent.replace(srcMatch[0], `${attrName}="${url}"`);
-                            }
-                        }
-                    }
-                }
+        const list = await fs.promises.readdir(dir);
+        for (const file of list) {
+            const filePath = path.join(dir, file);
+            const stat = await fs.promises.stat(filePath);
+            if (stat && stat.isDirectory()) {
+                // Skip build dir to avoid recursion loop
+                if (file === "build") continue;
+                results = results.concat(await getFiles(filePath));
+            } else {
+                results.push(filePath);
             }
         }
+        return results;
+    }
+
+    let files = await getFiles(sourceDir);
+    if (themeSourceDir) {
+        files = files.concat(await getFiles(themeSourceDir));
+    }
+
+    const tasks = [];
+
+    for (const absPath of files) {
+        const ext = path.extname(absPath).toLowerCase();
+        if (!isSupportedBitmap(ext)) continue;
+
+        // Determine relative path for Hexo
+        let relPath;
+        if (absPath.startsWith(sourceDir)) {
+            relPath = absPath.slice(sourceDir.length);
+        } else if (themeSourceDir && absPath.startsWith(themeSourceDir)) {
+            relPath = absPath.slice(themeSourceDir.length);
+        } else {
+            continue;
+        }
         
-        result += newTag || tagContent;
+        // Normalize relPath
+        if (relPath.startsWith(path.sep)) relPath = relPath.slice(1);
+        relPath = relPath.replace(/\\/g, "/"); // Ensure POSIX for consistency
+        
+        // Skip if inside build/ (double safety)
+        if (relPath.startsWith("build/")) continue;
+
+        const { outputPath, routePath } = buildAvifPaths(relPath);
+
+        // Enqueue Task
+        const task = queue.enqueue(async () => {
+             // Check cache
+             try {
+                const inStat = await fs.promises.stat(absPath);
+                // Check if output exists
+                try {
+                    const outStat = await fs.promises.stat(outputPath);
+                    if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
+                        // Cached
+                        hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+                        successfulConversions.add(relPath);
+                        return;
+                    }
+                } catch {}
+             } catch (e) {
+                 return; // Input missing?
+             }
+
+             // Generate
+             const outDir = path.dirname(outputPath);
+             await fs.promises.mkdir(outDir, { recursive: true });
+
+             try {
+                 const meta = await getImageMetadata(absPath);
+                 const res = await encodeAvif(absPath, outputPath, meta);
+                 
+                 hexo.log.info(`[redefine-x][avif] Generated: ${relPath} -> ${routePath} (${(res.size/1024).toFixed(2)} KB)`);
+                 
+                 // Register route
+                 hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+                 successfulConversions.add(relPath);
+                 
+             } catch (err) {
+                 hexo.log.warn(`[redefine-x][avif] Failed: ${relPath} -> ${err.message}`);
+                 // Do NOT add to successfulConversions -> Original will be kept
+             }
+        });
+        
+        tasks.push(task);
+    }
+
+    await Promise.all(tasks);
+    hexo.log.info(`[redefine-x][avif] Processed ${tasks.length} images. ${successfulConversions.size} AVIFs ready.`);
+    
+    // IMMEDIATE CLEANUP: Remove original routes NOW if possible
+    // Hexo might not have loaded routes yet if this is before_generate?
+    // But 'before_generate' runs after load. So routes should exist.
+    const routes = hexo.route.list();
+    let removedCount = 0;
+    
+    // We iterate successful conversions and remove their original counterparts
+    for (const relPath of successfulConversions) {
+        // Hexo routes usually match the relative path (e.g. "images/foo.jpg")
+        // Our relPath is "images/foo.jpg" (POSIX)
+        // Check if route exists
+        if (hexo.route.get(relPath)) {
+             hexo.route.remove(relPath);
+             removedCount++;
+        }
     }
     
-    result += str.slice(lastIndex);
-    return result;
-  },
-  5
-);
-
-// Cleanup and Optimization hook
-hexo.extend.filter.register("after_generate", async function () {
-  // 1. Remove original images if AVIF version exists in routes
-  const routes = hexo.route.list();
-  const deleted = [];
-
-  routes.forEach((route) => {
-    const ext = path.extname(route).toLowerCase();
-    if (isSupportedBitmap(ext)) {
-      const { routePath: avifRoute } = buildAvifPaths(route);
-      // If AVIF exists in the route system, remove the original bitmap route
-      if (hexo.route.get(avifRoute)) {
-        hexo.route.remove(route);
-        deleted.push(route);
-      }
+    if (removedCount > 0) {
+        hexo.log.info(`[redefine-x][avif] Prevented ${removedCount} original images from being output.`);
     }
-  });
+}
 
-  if (deleted.length > 0) {
-    hexo.log.info(`[redefine-x][avif] Removed ${deleted.length} original images from output routes.`);
+hexo.extend.filter.register("before_generate", scanAndProcessAllImages);
+
+// ----------------------------------------------------------------------------
+// Phase 2: HTML Replacement (Simplified)
+// ----------------------------------------------------------------------------
+
+hexo.extend.filter.register("after_render:html", function (str, data) {
+    if (!str || typeof str !== "string" || str.length === 0) return str;
+
+    // Synchronous replacement logic since files are already processed
+    // We rely on 'successfulConversions' Set or checking route existence
     
-    // CRITICAL FIX: Manually remove the files from public directory
-    // because they might have been written before we removed the route.
+    const processTag = (tagContent, attrName) => {
+        if (/\bdata-no-avif\b/i.test(tagContent)) return null;
+
+        const attrRegex = new RegExp(`\\b${attrName}\\s*=\\s*("|')([^"']*)\\1`, "i");
+        const match = tagContent.match(attrRegex);
+        if (!match) return null;
+
+        const originalSrc = match[2];
+        if (!originalSrc || /^data:|^blob:|^https?:\/\/|^\/\//i.test(originalSrc)) return null;
+
+        const normalizedSrc = stripQueryAndHash(originalSrc);
+        const ext = path.extname(normalizedSrc).toLowerCase();
+        if (!isSupportedBitmap(ext)) return null;
+
+        // Resolve local file to get relative path
+        const local = resolveSourceImagePath(normalizedSrc);
+        if (!local) return null;
+
+        // Check if we successfully converted this file
+        // local.rel is the key we stored in successfulConversions
+        // Note: successfulConversions stores POSIX paths
+        const relKey = local.rel.replace(/\\/g, "/");
+        
+        if (successfulConversions.has(relKey)) {
+             const { url } = buildAvifPaths(local.rel);
+             return tagContent.replace(match[0], `${attrName}="${url}"`);
+        }
+        
+        return null;
+    };
+
+    // Replace <img>
+    str = str.replace(/<img\b[^>]*>/gim, (tag) => {
+        return processTag(tag, "src") || tag;
+    });
+
+    // Replace <div class="img-preloader">
+    str = str.replace(/<div\b[^>]*class="[^"]*img-preloader[^"]*"[^>]*>/gim, (tag) => {
+        return processTag(tag, "data-src") || tag;
+    });
+
+    return str;
+});
+
+// ----------------------------------------------------------------------------
+// Phase 3: Cleanup Hook (Double Safety)
+// ----------------------------------------------------------------------------
+
+hexo.extend.filter.register("after_generate", function () {
+    // This hook is now a safety net. 
+    // Most removals should happen in 'before_generate'.
+    // But if Hexo added routes back (unlikely for source files if removed?), we check again.
+    
+    const routes = hexo.route.list();
+    const toDelete = [];
+    
+    for (const relPath of successfulConversions) {
+        if (hexo.route.get(relPath)) {
+            hexo.route.remove(relPath);
+            toDelete.push(relPath);
+        }
+    }
+
+    if (toDelete.length > 0) {
+         hexo.log.info(`[redefine-x][avif] (Safety) Removed ${toDelete.length} original images from routes.`);
+    }
+    
+    // Explicitly clean up public folder for any originals that might have slipped through
+    // or existed from previous runs if 'clean' wasn't run.
     if (hexo.public_dir) {
-        for (const route of deleted) {
-            const publicPath = path.join(hexo.public_dir, route);
+        let cleaned = 0;
+        let synced = 0;
+
+        // 1. Remove originals from public
+        for (const relPath of successfulConversions) {
+            const publicPath = path.join(hexo.public_dir, relPath);
             if (fs.existsSync(publicPath)) {
                 try {
                     fs.unlinkSync(publicPath);
-                    // Try to remove empty parent directory? (Optional, skipping for safety)
+                    cleaned++;
+                } catch {}
+            }
+        }
+
+        // 2. Ensure AVIFs exist in public (Fix for first-run issue)
+        for (const relPath of successfulConversions) {
+            const { outputRel, outputPath } = buildAvifPaths(relPath);
+            const publicAvifPath = path.join(hexo.public_dir, outputRel);
+            
+            if (!fs.existsSync(publicAvifPath)) {
+                try {
+                    const publicDir = path.dirname(publicAvifPath);
+                    if (!fs.existsSync(publicDir)) {
+                        fs.mkdirSync(publicDir, { recursive: true });
+                    }
+                    fs.copyFileSync(outputPath, publicAvifPath);
+                    synced++;
                 } catch (e) {
-                    hexo.log.warn(`[redefine-x][avif] Failed to delete original file from public: ${publicPath}`);
+                    hexo.log.warn(`[redefine-x][avif] Failed to sync AVIF to public: ${outputRel} - ${e.message}`);
                 }
             }
         }
+
+        if (cleaned > 0) {
+            hexo.log.info(`[redefine-x][avif] Cleaned ${cleaned} original files from public folder.`);
+        }
+        if (synced > 0) {
+            hexo.log.info(`[redefine-x][avif] Manually synced ${synced} AVIF files to public folder.`);
+        }
     }
-  }
 });
 
 // Cleanup build dir on clean
