@@ -315,20 +315,20 @@ const queue = new TaskQueue(2);
 async function scanAndProcessAllImages() {
   const config = ConfigManager.get();
   if (!config.ENABLE_AVIF && !config.ENABLE_SVG) {
-    hexo.log.debug("[redefine-x][minifier] Image optimization disabled.");
+    hexo.log.debug("[minifier] Image optimization disabled.");
     return;
   }
 
   queue.concurrency = config.MAX_CONCURRENCY;
-  hexo.log.debug("[redefine-x][minifier] Scanning images...");
+  hexo.log.debug("[minifier] Scanning images...");
 
   const files = await gatherFiles();
-  hexo.log.debug(`[redefine-x][minifier] Found ${files.length} candidate files.`);
+  hexo.log.debug(`[minifier] Found ${files.length} candidate files.`);
 
   const tasks = files.map(absPath => processFile(absPath, config));
   await Promise.all(tasks);
 
-  hexo.log.debug(`[redefine-x][minifier] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
+  hexo.log.debug(`[minifier] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
   cleanupRoutes();
 }
@@ -412,12 +412,12 @@ async function processFile(absPath, config) {
         isSvg
       });
 
-      hexo.log.info(`[redefine-x][minifier] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
+      hexo.log.info(`[minifier] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
 
       hexo.route.set(routePath, () => fs.createReadStream(outputPath));
       successfulConversions.add(relPath);
     } catch (err) {
-      hexo.log.warn(`[redefine-x][minifier] Failed: ${relPath} -> ${err.message}`);
+      hexo.log.warn(`[minifier] Failed: ${relPath} -> ${err.message}`);
     }
   });
 }
@@ -431,7 +431,7 @@ function cleanupRoutes() {
       removed++;
     }
   }
-  if (removed > 0) hexo.log.info(`[redefine-x][minifier] Removed ${removed} original images from routes.`);
+  if (removed > 0) hexo.log.info(`[minifier] Removed ${removed} original images from routes.`);
 }
 
 // ----------------------------------------------------------------------------
@@ -488,7 +488,7 @@ hexo.extend.filter.register("after_generate", function () {
       toDelete.push(relPath);
     }
   }
-  if (toDelete.length > 0) hexo.log.debug(`[redefine-x][minifier] (Safety) Removed ${toDelete.length} originals.`);
+  if (toDelete.length > 0) hexo.log.debug(`[minifier] (Safety) Removed ${toDelete.length} originals.`);
 
   if (hexo.public_dir) {
     let cleaned = 0,
@@ -521,18 +521,18 @@ hexo.extend.filter.register("after_generate", function () {
           fs.copyFileSync(outputPath, publicDest);
           synced++;
         } catch (e) {
-          hexo.log.warn(`[redefine-x][minifier] Sync failed: ${routePath} - ${e.message}`);
+          hexo.log.warn(`[minifier] Sync failed: ${routePath} - ${e.message}`);
         }
       }
     }
-    if (cleaned > 0) hexo.log.info(`[redefine-x][minifier] Cleaned ${cleaned} files from public.`);
-    if (synced > 0) hexo.log.info(`[redefine-x][minifier] Synced ${synced} optimized files to public.`);
+    if (cleaned > 0) hexo.log.info(`[minifier] Cleaned ${cleaned} files from public.`);
+    if (synced > 0) hexo.log.info(`[minifier] Synced ${synced} optimized files to public.`);
   }
 });
 
 hexo.extend.filter.register("after_clean", function () {
   if (!hexo.env.args["include-minify"]) {
-    hexo.log.info("[redefine-x][minifier] Build cleanup skipped (use --include-minify).");
+    hexo.log.info("[minifier] Build cleanup skipped (use --include-minify).");
     return;
   }
   const buildDir = path.join(hexo.source_dir || "", "build");
@@ -541,6 +541,6 @@ hexo.extend.filter.register("after_clean", function () {
       recursive: true,
       force: true
     });
-    hexo.log.info("[redefine-x][minifier] Cleaned build dir.");
+    hexo.log.info("[minifier] Cleaned build dir.");
   } catch { }
 });

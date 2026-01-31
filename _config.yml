@@ -452,6 +452,9 @@ plugins:
       ENCODER_PRESET: 4 # Encoder preset, lower value means higher speed (3-10)
       # Whether to enable SVG compress. Requires SVGO
       SVGO_COMPRESS: true # Compress SVG
+    jsOptimize: true # Whether to enable JS compress.
+    htmlOptimize: true # Whether to enable HTML compress.
+    cssOptimize: true # Whether to enable CSS compress.
   # RSS feed. Requires hexo-generator-feed (npm i hexo-generator-feed). See https://github.com/hexojs/hexo-generator-feed
   feed:
     enable: false # Whether to enable
