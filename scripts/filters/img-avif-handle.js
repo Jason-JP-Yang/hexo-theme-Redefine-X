@@ -6,10 +6,18 @@ const os = require("os");
 const { spawn } = require("child_process");
 
 // Configuration
-const MAX_PIXELS = 2073600; // 1920x1080 limit
-const TARGET_CRF = 25; // "25%" quality/compression balance
-const ENCODER_PRESET = 4; // Prioritize quality (lower is slower/better)
-const MAX_CONCURRENCY = Math.max(1, Math.floor((os.cpus().length || 2) / 2)); // Conservative concurrency for SVT-AV1
+// We read configuration from hexo.theme.config.plugins.minifier.imagesOptimize
+// Defaults are provided if config is missing
+const getConfig = () => {
+    const config = hexo.theme.config.plugins?.minifier?.imagesOptimize || {};
+    return {
+        ENABLE: config.AVIF_COMPRESS ?? true,
+        MAX_PIXELS: config.IMG_MAX_PIXELS || 2073600, // 1920x1080 limit
+        TARGET_CRF: config.AVIF_TARGET_CRF || 25, // "25%" quality/compression balance
+        ENCODER_PRESET: config.ENCODER_PRESET || 4, // Prioritize quality
+        MAX_CONCURRENCY: Math.max(1, Math.floor((os.cpus().length || 2) / 2))
+    };
+};
 
 // ----------------------------------------------------------------------------
 // FFmpeg & Process Logic
@@ -58,14 +66,15 @@ async function getImageMetadata(inputPath) {
 
 async function encodeAvif(inputPath, outputPath, options) {
   const { width, height } = options;
+  const config = getConfig();
   
   // Calculate scaling
   let targetWidth = width;
   let targetHeight = height;
   const pixels = width * height;
   
-  if (pixels > MAX_PIXELS) {
-    const scale = Math.sqrt(MAX_PIXELS / pixels);
+  if (pixels > config.MAX_PIXELS) {
+    const scale = Math.sqrt(config.MAX_PIXELS / pixels);
     targetWidth = Math.floor(width * scale);
     targetHeight = Math.floor(height * scale);
   }
@@ -83,8 +92,8 @@ async function encodeAvif(inputPath, outputPath, options) {
     "-i", inputPath,
     "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
     "-c:v", "libsvtav1",
-    "-crf", String(TARGET_CRF),
-    "-preset", String(ENCODER_PRESET),
+    "-crf", String(config.TARGET_CRF),
+    "-preset", String(config.ENCODER_PRESET),
     "-pix_fmt", "yuv420p10le",
     "-svtav1-params", "tune=0",
     outputPath
@@ -140,7 +149,7 @@ class TaskQueue {
   }
 }
 
-const queue = new TaskQueue(MAX_CONCURRENCY);
+const queue = new TaskQueue(Math.max(1, Math.floor((os.cpus().length || 2) / 2)));
 // Global set to track successfully processed source files (relative paths)
 const successfulConversions = new Set();
 
@@ -219,6 +228,15 @@ function resolveSourceImagePath(src) {
 // ----------------------------------------------------------------------------
 
 async function scanAndProcessAllImages() {
+    const config = getConfig();
+    if (!config.ENABLE) {
+        hexo.log.debug("[redefine-x][avif] AVIF compression disabled in config.");
+        return;
+    }
+    
+    // Update queue concurrency if needed (optional, here we just set it initially)
+    queue.concurrency = config.MAX_CONCURRENCY;
+
     hexo.log.info("[redefine-x][avif] Scanning and processing all source images...");
     
     const sourceDir = hexo.source_dir;
