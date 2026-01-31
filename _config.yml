@@ -101,7 +101,7 @@ global:
   # Whether to enable open graph
   open_graph:
     enable: true
-    image: /images/redefine-og.webp  # default og:image
+    image: /images/redefine-og.avif  # default og:image
     description: Hexo Theme Redefine, Redefine Your Hexo Journey.
   # Google Analytics
   google_analytics:
@@ -133,8 +133,8 @@ home_banner:
   style: fixed # static or fixed
   # Home banner image
   image: 
-    light: /images/wallhaven-wqery6-light.webp # light mode
-    dark: /images/wallhaven-wqery6-dark.webp # dark mode
+    light: /images/wallhaven-wqery6-light.avif # light mode
+    dark: /images/wallhaven-wqery6-dark.avif # dark mode
   # Home banner title
   title: Theme Redefine
   # Home banner subtitle
@@ -347,7 +347,7 @@ articles:
     # Max number of articles to display mobile
     mobile_limit: 2
     # Placeholder image
-    placeholder: /images/wallhaven-wqery6-light.webp
+    placeholder: /images/wallhaven-wqery6-light.avif
     # Skip directory
     skip_dirs: []
 # ARTICLE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end

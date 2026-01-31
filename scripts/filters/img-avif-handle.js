@@ -167,7 +167,7 @@ function normalizeRootPath(src) {
 
 function isSupportedBitmap(ext) {
   const e = ext.toLowerCase();
-  return e === ".jpg" || e === ".jpeg" || e === ".png" || e === ".gif";
+  return e === ".jpg" || e === ".jpeg" || e === ".png" || e === ".gif" || e === ".webp";
 }
 
 function buildAvifPaths(relPath) {
