@@ -450,7 +450,8 @@ plugins:
       IMG_MAX_PIXELS: 2073600 # approx 1920*1080
       AVIF_TARGET_CRF: 25 # AVIF compression quality, lower value means higher quality (0-63)
       ENCODER_PRESET: 4 # Encoder preset, lower value means higher speed (3-10)
-    
+      # Whether to enable SVG compress. Requires SVGO
+      SVGO_COMPRESS: true # Compress SVG
   # RSS feed. Requires hexo-generator-feed (npm i hexo-generator-feed). See https://github.com/hexojs/hexo-generator-feed
   feed:
     enable: false # Whether to enable
