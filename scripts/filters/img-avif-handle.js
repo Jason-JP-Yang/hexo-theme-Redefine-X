@@ -467,14 +467,15 @@ hexo.extend.filter.register("after_generate", function () {
 
 // Cleanup build dir on clean
 hexo.extend.filter.register("after_clean", function () {
-  if (hexo.env.args["exclude-minify"]) {
-    hexo.log.info("[redefine-x][avif] Build directory cleanup skipped (--exclude-minify).");
+  if (!hexo.env.args["include-minify"]) {
+    hexo.log.info("[redefine-x][avif] Build directory cleanup skipped (use --include-minify to clean).");
     return;
   }
 
   const buildDir = path.join(hexo.source_dir || "", "build");
   try {
     fs.rmSync(buildDir, { recursive: true, force: true });
+    hexo.log.info("[redefine-x][avif] Cleaned build directory.");
   } catch {
     // ignore
   }
