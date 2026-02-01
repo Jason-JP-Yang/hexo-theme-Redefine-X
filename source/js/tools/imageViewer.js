@@ -984,11 +984,17 @@ export default function imageViewer() {
 
            const clone = infoCard.cloneNode(true);
            clone.classList.add("expanded");
+           
+           // Remove side/float mode specific restrictions
+           clone.style.removeProperty("max-width");
+           clone.style.removeProperty("width");
+           
            clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
            clone.querySelectorAll(".image-exif-data").forEach((data) => {
              data.style.removeProperty("height");
              data.style.removeProperty("opacity");
              data.style.removeProperty("margin-top");
+             data.style.removeProperty("grid-template-columns");
            });
            wrap.appendChild(clone);
            infoContent.appendChild(wrap);

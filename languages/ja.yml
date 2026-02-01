@@ -90,3 +90,61 @@ ago:
 create_time: 作成
 update_time: 更新
 expired: "この記事は %s 日前に最後に更新される"
+
+# ----------------------------------------
+# Image EXIF
+# ----------------------------------------
+image_exif:
+  ui:
+    toggle: EXIF切替
+  section:
+    camera: カメラ
+    lens: レンズ
+    exposure: 露出
+    other: 他
+  field:
+    make: ﾌﾞﾗﾝﾄﾞ
+    model: ﾓﾃﾞﾙ
+    datetime_original: 日時
+    lens_model: ﾚﾝｽﾞ
+    focal_length: 焦点
+    focus_mode: AFﾓｰﾄﾞ
+    exposure_time: ｼｬｯﾀｰ
+    aperture: 絞り
+    iso: ISO
+    exposure_program: 露出ﾌﾟﾛｸﾞ
+    exposure_bias: 露出補正
+    metering_mode: 測光
+    flash: ﾌﾗｯｼｭ
+    white_balance: WB
+    gps_latitude: 緯度
+    gps_longitude: 経度
+    gps_altitude: 高度
+  exposure_program:
+    undefined: 未定義
+    manual: 手動
+    normal: 自動
+    aperture_priority: Av
+    shutter_priority: Tv
+    creative: ｸﾘｴｲﾄ
+    action: ｱｸｼｮﾝ
+    portrait: ﾎﾟｰﾄﾚ
+    landscape: 風景
+  metering_mode:
+    unknown: 不明
+    average: 平均
+    center_weighted: 中央
+    spot: ｽﾎﾟｯﾄ
+    multi_spot: Mｽﾎﾟｯﾄ
+    evaluative: 評価
+    partial: 部分
+    other: 他
+  white_balance:
+    auto: 自動
+    manual: 手動
+  flash:
+    on: ON
+    off: OFF
+  value:
+    program_with_number: "Prog %s"
+    mode_with_number: "Mode %s"

@@ -89,6 +89,9 @@
       // Calculate strict width limit
       const targetWidth = Math.min(availableSpace, 400);
       
+      // Copy critical styles from original to ensure measurement accuracy
+      const computedStyle = window.getComputedStyle(infoCard);
+      
       Object.assign(clone.style, {
           display: 'block',
           visibility: 'hidden',
@@ -98,9 +101,14 @@
           width: targetWidth + 'px', // Enforce strict width
           height: 'auto',
           maxHeight: 'none',
-          padding: '0.65rem',
-          boxSizing: 'border-box',
-          zIndex: '-9999'
+          zIndex: '-9999',
+          // Restore styles that affect layout
+          padding: computedStyle.padding,
+          border: computedStyle.border,
+          boxSizing: computedStyle.boxSizing,
+          fontSize: computedStyle.fontSize,
+          fontFamily: computedStyle.fontFamily,
+          lineHeight: computedStyle.lineHeight
       });
       
       // Force data visible
@@ -110,8 +118,7 @@
             display: 'grid',
             height: 'auto',
             marginTop: '0.6rem',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-            gap: '0.6rem'
+            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))'
         });
       }
       
@@ -250,6 +257,9 @@
     const clone = infoCard.cloneNode(true);
     clone.classList.remove('expanded');
     
+    // Copy critical styles from original to ensure measurement accuracy
+    const computedStyle = window.getComputedStyle(infoCard);
+    
     Object.assign(clone.style, {
         display: 'block',
         visibility: 'hidden',
@@ -261,10 +271,15 @@
         height: 'auto',
         maxHeight: 'none',
         overflow: 'visible',
-        boxSizing: 'border-box',
-        padding: '0.65rem',
         background: 'transparent',
-        zIndex: '-9999'
+        zIndex: '-9999',
+        // Restore styles that affect layout
+        padding: computedStyle.padding,
+        border: computedStyle.border,
+        boxSizing: computedStyle.boxSizing,
+        fontSize: computedStyle.fontSize,
+        fontFamily: computedStyle.fontFamily,
+        lineHeight: computedStyle.lineHeight
     });
     
     const cloneData = clone.querySelector('.image-exif-data');
@@ -287,19 +302,9 @@
           height: 'auto',
           opacity: '1',
           marginTop: '0.6rem',
-          gridTemplateColumns: `repeat(${cols}, 1fr)`,
+          gridTemplateColumns: `repeat(${cols}, minmax(180px, 1fr))`,
           gap: '0.6rem'
         });
-        
-        // Check if this configuration forces the card to be wider than 60% of image width
-        // Wait, clone has maxWidth: 60%. So if content is wider, it will wrap or overflow horizontally?
-        // But we want to see if it fits vertically.
-        // If we force 4 columns, but width is constrained, the browser will shrink columns if using 1fr, 
-        // OR we should set min-width on columns?
-        // User requirement: "每一列最小宽度180px"
-        // So we should set grid-template-columns: repeat(cols, minmax(180px, 1fr))
-        
-        cloneData.style.gridTemplateColumns = `repeat(${cols}, minmax(180px, 1fr))`;
         
         // Now measure height
         return Math.max(clone.offsetHeight, clone.scrollHeight);
@@ -472,6 +477,18 @@
     }
   }
 
+  // Resize Observer to monitor container size changes
+  const resizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      // Use requestAnimationFrame to avoid "ResizeObserver loop limit exceeded"
+      requestAnimationFrame(() => {
+        if (entry.target.classList.contains('image-exif-container')) {
+           checkLayout(entry.target);
+        }
+      });
+    }
+  });
+
   /**
    * Initialize all image-exif containers
    */
@@ -479,6 +496,13 @@
     const containers = document.querySelectorAll('.image-exif-container');
     
     containers.forEach(container => {
+      // Prevent double initialization
+      if (container.dataset.imageExifInit) return;
+      container.dataset.imageExifInit = "true";
+
+      // Use ResizeObserver instead of IntersectionObserver for better reliability on size changes
+      resizeObserver.observe(container);
+
       const toggleBtns = container.querySelectorAll('.image-exif-toggle-btn');
       toggleBtns.forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -489,6 +513,9 @@
 
       // Initial check
       checkLayout(container);
+      
+      // Retry layout check after a short delay for Swup animations
+      setTimeout(() => checkLayout(container), 300);
 
       // Listen for image load
       const images = container.querySelectorAll('img.image-exif-img');
@@ -508,7 +535,7 @@
             mutation.addedNodes.forEach(node => {
               if (node.tagName === 'IMG') {
                 if (node.complete) {
-                  checkLayout(container);
+                  requestAnimationFrame(() => checkLayout(container));
                 } else {
                   node.addEventListener('load', () => {
                     checkLayout(container);
@@ -560,6 +587,14 @@
 
   document.addEventListener('swup:contentReplaced', initImageExif);
   document.addEventListener('pjax:complete', initImageExif);
+  try {
+    if (typeof swup !== 'undefined' && swup?.hooks?.on) {
+      swup.hooks.on('page:view', () => {
+        initImageExif();
+        setTimeout(initImageExif, 50);
+      });
+    }
+  } catch (e) {}
 
   window.addEventListener('resize', debouncedResize);
   
@@ -571,4 +606,14 @@
   }
 
   window.addEventListener('redefine:force-exif-check', debouncedResize);
+
+  window.addEventListener('redefine:image-loaded', (e) => {
+    const img = e.detail?.img;
+    if (img) {
+      const container = img.closest('.image-exif-container');
+      if (container) {
+        requestAnimationFrame(() => checkLayout(container));
+      }
+    }
+  });
 })();

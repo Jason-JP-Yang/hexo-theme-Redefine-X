@@ -102,6 +102,7 @@ function replacePreloader(preloader, img) {
   // Replace DOM node
   setTimeout(() => {
     preloader.parentNode?.replaceChild(img, preloader);
+    window.dispatchEvent(new CustomEvent('redefine:image-loaded', { detail: { img } }));
   }, 200);
 }
 

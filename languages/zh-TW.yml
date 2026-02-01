@@ -92,3 +92,61 @@ ago:
 create_time: 撰寫
 update_time: 更新
 expired: "這篇文章最後更新於 %s 天前，內容可能已經過時。"
+
+# ----------------------------------------
+# Image EXIF
+# ----------------------------------------
+image_exif:
+  ui:
+    toggle: 切換 EXIF 資訊
+  section:
+    camera: 相機
+    lens: 鏡頭
+    exposure: 曝光
+    other: 其他
+  field:
+    make: 品牌
+    model: 機型
+    datetime_original: 拍攝時間
+    lens_model: 鏡頭
+    focal_length: 焦距
+    focus_mode: 對焦模式
+    exposure_time: 快門
+    aperture: 光圈
+    iso: 感光度
+    exposure_program: 曝光程序
+    exposure_bias: 曝光補償
+    metering_mode: 測光模式
+    flash: 閃光燈
+    white_balance: 白平衡
+    gps_latitude: 緯度
+    gps_longitude: 經度
+    gps_altitude: 海拔
+  exposure_program:
+    undefined: 未定義
+    manual: 手動
+    normal: 自動
+    aperture_priority: 光圈優先
+    shutter_priority: 快門優先
+    creative: 創意程式
+    action: 動作程式
+    portrait: 肖像模式
+    landscape: 風景模式
+  metering_mode:
+    unknown: 未知
+    average: 平均測光
+    center_weighted: 中央重點
+    spot: 點測光
+    multi_spot: 多點測光
+    evaluative: 評價測光
+    partial: 局部測光
+    other: 其他
+  white_balance:
+    auto: 自動
+    manual: 手動
+  flash:
+    on: 開
+    off: 關
+  value:
+    program_with_number: "程式 %s"
+    mode_with_number: "模式 %s"
