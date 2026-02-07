@@ -468,7 +468,8 @@ hexo.extend.filter.register("after_render:html", function (str) {
   };
 
   str = str.replace(/<img\b[^>]*>/gim, (tag) => processTag(tag, "src") || tag);
-  str = str.replace(/<div\b[^>]*class="[^"]*img-preloader[^"]*"[^>]*>/gim, (tag) => processTag(tag, "data-src") || tag);
+  // Match img-preloader div with either single or double quotes for class attribute
+  str = str.replace(/<div\b[^>]*class=(["'])[^"']*img-preloader[^"']*\1[^>]*>/gim, (tag) => processTag(tag, "data-src") || tag);
 
   return str;
 });
