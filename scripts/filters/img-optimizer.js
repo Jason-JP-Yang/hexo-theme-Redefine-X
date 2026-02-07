@@ -323,12 +323,12 @@ async function scanAndProcessAllImages() {
   hexo.log.debug("[minifier] Scanning images...");
 
   const files = await gatherFiles();
-  hexo.log.debug(`[minifier] Found ${files.length} candidate files.`);
+  hexo.log.info(`[minifier] Found ${files.length} candidate files.`);
 
   const tasks = files.map(absPath => processFile(absPath, config));
   await Promise.all(tasks);
 
-  hexo.log.debug(`[minifier] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
+  hexo.log.info(`[minifier] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
   cleanupRoutes();
 }
@@ -438,8 +438,10 @@ function cleanupRoutes() {
 // HTML Replacement
 // ----------------------------------------------------------------------------
 
-hexo.extend.filter.register("after_render:html", function (str) {
+function replaceImagesInHtml(str) {
   if (!str || typeof str !== "string" || str.length === 0) return str;
+  
+  const config = ConfigManager.get();
 
   const processTag = (tagContent, attrName) => {
     if (/\bdata-no-avif\b/i.test(tagContent)) return null;
@@ -454,17 +456,22 @@ hexo.extend.filter.register("after_render:html", function (str) {
     const local = PathManager.resolveSourceImagePath(originalSrc.split("#")[0].split("?")[0]);
     if (!local) return null;
 
-    const relKey = local.rel.replace(/\\/g, "/");
-    if (successfulConversions.has(relKey)) {
-      const ext = path.extname(local.rel);
-      const isBitmap = PathManager.isSupportedBitmap(ext);
-      const {
-        routePath
-      } = PathManager.buildOptimizedPath(local.rel, isBitmap);
-      const url = encodeURI(path.posix.join(hexo.config.root || "/", routePath));
-      return tagContent.replace(match[0], `${attrName}="${url}"`);
+    // Optimistic check: based on config only, independent of processing state
+    const ext = path.extname(local.rel).toLowerCase();
+    const isBitmap = PathManager.isSupportedBitmap(ext);
+    const isSvg = PathManager.isSupportedSvg(ext);
+
+    if ((!isBitmap && !isSvg) ||
+        (isBitmap && !config.ENABLE_AVIF) ||
+        (isSvg && !config.ENABLE_SVG)) {
+        return null;
     }
-    return null;
+
+    const { routePath } = PathManager.buildOptimizedPath(local.rel, isBitmap);
+    const url = encodeURI(path.posix.join(hexo.config.root || "/", routePath));
+    
+    // Inject data-original-src to preserve the link to the original image
+    return tagContent.replace(match[0], `${attrName}="${url}" data-original-src="${originalSrc}"`);
   };
 
   str = str.replace(/<img\b[^>]*>/gim, (tag) => processTag(tag, "src") || tag);
@@ -472,7 +479,19 @@ hexo.extend.filter.register("after_render:html", function (str) {
   str = str.replace(/<div\b[^>]*class=(["'])[^"']*img-preloader[^"']*\1[^>]*>/gim, (tag) => processTag(tag, "data-src") || tag);
 
   return str;
-});
+}
+
+// Register filters
+// 1. Run before img-handle (Priority 5)
+hexo.extend.filter.register("after_post_render", function(data) {
+  if (data.content) {
+    data.content = replaceImagesInHtml(data.content);
+  }
+  return data;
+}, 5);
+
+// 2. Run for full page
+hexo.extend.filter.register("after_render:html", replaceImagesInHtml);
 
 // ----------------------------------------------------------------------------
 // Hooks

@@ -17,6 +17,10 @@ export default function imageViewer() {
   const infoContent = infoTrigger?.querySelector(".image-viewer-info-content");
   if (!maskDom || !stage || !switcher || !switcherPages || !switcherPrev || !switcherNext || !switcherSidePrev || !switcherSideNext || !infoTrigger || !infoContent) return;
 
+  if (global.maskEl === maskDom && global.stageEl === stage) {
+    return;
+  }
+
   const VIEWABLE_IMG_SELECTOR = ".markdown-body img, .masonry-item img, #shuoshuo-content img";
   const VIEWABLE_ITEM_SELECTOR = ".markdown-body img, .markdown-body .img-preloader, .masonry-item img, .masonry-item .img-preloader, #shuoshuo-content img, #shuoshuo-content .img-preloader";
   const OPEN_MS = 420, CLOSE_MS = 360, EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
