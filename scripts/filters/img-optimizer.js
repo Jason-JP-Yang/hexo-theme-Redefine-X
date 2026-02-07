@@ -470,7 +470,8 @@ function replaceImagesInHtml(str) {
     const { routePath } = PathManager.buildOptimizedPath(local.rel, isBitmap);
     const url = encodeURI(path.posix.join(hexo.config.root || "/", routePath));
     
-    return tagContent.replace(match[0], `${attrName}="${url}"`);
+    // Inject data-original-src to preserve the link to the original image
+    return tagContent.replace(match[0], `${attrName}="${url}" data-original-src="${originalSrc}"`);
   };
 
   str = str.replace(/<img\b[^>]*>/gim, (tag) => processTag(tag, "src") || tag);
@@ -480,7 +481,7 @@ function replaceImagesInHtml(str) {
 }
 
 // Register filters
-// 1. Run before encryption (Priority 5)
+// 1. Run before img-handle (Priority 5)
 hexo.extend.filter.register("after_post_render", function(data) {
   if (data.content) {
     data.content = replaceImagesInHtml(data.content);
