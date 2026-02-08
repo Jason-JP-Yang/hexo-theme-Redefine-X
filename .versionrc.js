@@ -31,5 +31,6 @@ current version: {{currentTag}}
     // 跳过某步骤 可设置 bump changelog commit tag
     skip: {
         // commit: true
+        "changelog": true
     }
 }
