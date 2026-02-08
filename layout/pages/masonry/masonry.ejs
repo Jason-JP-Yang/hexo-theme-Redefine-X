@@ -1,27 +1,41 @@
 <%
 // Define an array of images to display in the masonry layout
 const images = page.images || theme.masonry;
+const siteRoot = config.root || '/';
+
+// Helper to build full image path
+function buildImagePath(imagePath) {
+    if (!imagePath) return '';
+    // If already absolute or starts with http/https, return as is
+    if (imagePath.startsWith('/') || imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+        return imagePath;
+    }
+    // Otherwise, prepend /masonry/ path
+    return siteRoot + 'masonry/' + imagePath;
+}
 %>
 
 <h1 class="page-title-header">
 	<%- getPageTitle(page) %>
 </h1>
 
-<div class="loading-placeholder">
-	<div class="flex-grid generic-card">
-		<div class="card loading"></div>
-		<div class="card loading"></div>
-		<div class="card loading"></div>
-	</div>
-</div>
-
-<div id="masonry-container">
+<%# 
+Masonry layout using CSS columns. 
+Images are output as regular <img> tags which will be transformed to img-preloader 
+by lazyload-handle.js during hexo build (same as normal post images).
+The preloaders have correct aspect ratios so layout is stable from page load.
+%>
+<div id="masonry-container" class="markdown-body">
 	<% images.forEach(function(image) { %>
 	<div class="masonry-item">
 		<div class="image-container">
-			<img src="<%- image.image %>" alt="<%- image.title %>">
+			<img src="<%- buildImagePath(image.image) %>" alt="<%- image.title || '' %>">
+			<% if (image.title) { %>
 			<div class="image-title"><%- image.title %></div>
+			<% } %>
+			<% if (image.description) { %>
 			<div class="image-description"><%- image.description %></div>
+			<% } %>
 		</div>
 	</div>
 	<% }); %>
