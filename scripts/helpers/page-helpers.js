@@ -64,6 +64,12 @@ const pageData = {
 		partial: "pages/friends/friends-link",
 		layout: "default",
 	},
+	masonryCollection: {
+		titles: ["masonry-links"],
+		types: ["masonry-links"],
+		partial: "pages/masonry/masonry-collection",
+		layout: "default",
+	},
 	shuoshuo: {
 		titles: ["shuoshuo", "说说"],
 		types: ["essays", "essay", "shuoshuo"],
