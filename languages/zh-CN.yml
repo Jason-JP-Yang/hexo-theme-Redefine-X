@@ -93,3 +93,61 @@ ago:
 create_time: 创建
 update_time: 更新
 expired: "这篇文章最后更新于 %s 天前，内容可能已经过时。"
+
+# ----------------------------------------
+# Image EXIF
+# ----------------------------------------
+image_exif:
+  ui:
+    toggle: 切换 EXIF 信息
+  section:
+    camera: 相机
+    lens: 镜头
+    exposure: 曝光
+    other: 其他
+  field:
+    make: 品牌
+    model: 机型
+    datetime_original: 拍摄时间
+    lens_model: 镜头
+    focal_length: 焦距
+    focus_mode: 对焦模式
+    exposure_time: 快门
+    aperture: 光圈
+    iso: 感光度
+    exposure_program: 曝光程序
+    exposure_bias: 曝光补偿
+    metering_mode: 测光模式
+    flash: 闪光灯
+    white_balance: 白平衡
+    gps_latitude: 纬度
+    gps_longitude: 经度
+    gps_altitude: 海拔
+  exposure_program:
+    undefined: 未定义
+    manual: 手动
+    normal: 自动
+    aperture_priority: 光圈优先
+    shutter_priority: 快门优先
+    creative: 创意程序
+    action: 动作程序
+    portrait: 肖像模式
+    landscape: 风景模式
+  metering_mode:
+    unknown: 未知
+    average: 平均测光
+    center_weighted: 中央重点
+    spot: 点测光
+    multi_spot: 多点测光
+    evaluative: 评价测光
+    partial: 局部测光
+    other: 其他
+  white_balance:
+    auto: 自动
+    manual: 手动
+  flash:
+    on: ON
+    off: OFF
+  value:
+    program_with_number: "程序 %s"
+    mode_with_number: "模式 %s"

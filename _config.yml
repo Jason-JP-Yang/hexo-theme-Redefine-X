@@ -101,7 +101,7 @@ global:
   # Whether to enable open graph
   open_graph:
     enable: true
-    image: /images/redefine-og.webp  # default og:image
+    image: /images/redefine-og.avif  # default og:image
     description: Hexo Theme Redefine, Redefine Your Hexo Journey.
   # Google Analytics
   google_analytics:
@@ -133,8 +133,8 @@ home_banner:
   style: fixed # static or fixed
   # Home banner image
   image: 
-    light: /images/wallhaven-wqery6-light.webp # light mode
-    dark: /images/wallhaven-wqery6-dark.webp # dark mode
+    light: /images/wallhaven-wqery6-light.avif # light mode
+    dark: /images/wallhaven-wqery6-dark.avif # dark mode
   # Home banner title
   title: Theme Redefine
   # Home banner subtitle
@@ -347,7 +347,7 @@ articles:
     # Max number of articles to display mobile
     mobile_limit: 2
     # Placeholder image
-    placeholder: /images/wallhaven-wqery6-light.webp
+    placeholder: /images/wallhaven-wqery6-light.avif
     # Skip directory
     skip_dirs: []
 # ARTICLE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
@@ -438,6 +438,23 @@ inject:
 # PLUGINS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/plugins
 plugins:
+  # All Minifiers. 
+  minifier:
+    # Whether to enable images optimize
+    imagesOptimize: 
+      # All bitmap images will be optimized to AVIF format
+      # Requires FFMPEG with LibSVTAV1 codec. See https://trac.ffmpeg.org/wiki/Encode/AV1
+      # Delete the optimized images through hexo clean --include-minify
+      # Please do remember delete the cached images after you change the config
+      AVIF_COMPRESS: true # Convert JPEG, JPG, PNG, WEBP, GIF, Animated GIF to AVIF
+      IMG_MAX_PIXELS: 2073600 # approx 1920*1080
+      AVIF_TARGET_CRF: 25 # AVIF compression quality, lower value means higher quality (0-63)
+      ENCODER_PRESET: 4 # Encoder preset, lower value means higher speed (3-10)
+      # Whether to enable SVG compress. Requires SVGO
+      SVGO_COMPRESS: true # Compress SVG
+    jsOptimize: true # Whether to enable JS compress.
+    htmlOptimize: true # Whether to enable HTML compress.
+    cssOptimize: true # Whether to enable CSS compress.
   # RSS feed. Requires hexo-generator-feed (npm i hexo-generator-feed). See https://github.com/hexojs/hexo-generator-feed
   feed:
     enable: false # Whether to enable

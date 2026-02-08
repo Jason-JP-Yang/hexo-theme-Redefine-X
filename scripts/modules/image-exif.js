@@ -34,6 +34,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const yaml = require("js-yaml");
 
 // Try to load exif-parser, if not available, auto-exif will be disabled
 let ExifParser = null;
@@ -64,52 +65,32 @@ const EXIF_FIELD_MAPPINGS = {
   ExposureBias: ["ExposureBiasValue", "ExposureCompensation", "exposureBias", "exposureCompensation"],
 };
 
-// Exposure program mapping
-const EXPOSURE_PROGRAM_MAP = {
-  0: "未定义",
-  1: "手动",
-  2: "自动",
-  3: "光圈优先",
-  4: "快门优先",
-  5: "创意程序",
-  6: "动作程序",
-  7: "肖像模式",
-  8: "风景模式",
+const EXPOSURE_PROGRAM_KEYS = {
+  0: "image_exif.exposure_program.undefined",
+  1: "image_exif.exposure_program.manual",
+  2: "image_exif.exposure_program.normal",
+  3: "image_exif.exposure_program.aperture_priority",
+  4: "image_exif.exposure_program.shutter_priority",
+  5: "image_exif.exposure_program.creative",
+  6: "image_exif.exposure_program.action",
+  7: "image_exif.exposure_program.portrait",
+  8: "image_exif.exposure_program.landscape",
 };
 
-// Metering mode mapping
-const METERING_MODE_MAP = {
-  0: "未知",
-  1: "平均测光",
-  2: "中央重点",
-  3: "点测光",
-  4: "多点测光",
-  5: "评价测光",
-  6: "局部测光",
-  255: "其他",
+const METERING_MODE_KEYS = {
+  0: "image_exif.metering_mode.unknown",
+  1: "image_exif.metering_mode.average",
+  2: "image_exif.metering_mode.center_weighted",
+  3: "image_exif.metering_mode.spot",
+  4: "image_exif.metering_mode.multi_spot",
+  5: "image_exif.metering_mode.evaluative",
+  6: "image_exif.metering_mode.partial",
+  255: "image_exif.metering_mode.other",
 };
 
-// Flash mode mapping
-const FLASH_MODE_MAP = {
-  0: "未闪光",
-  1: "闪光",
-  5: "闪光（无返回光）",
-  7: "闪光（有返回光）",
-  8: "禁止闪光",
-  9: "强制闪光",
-  13: "强制闪光（无返回光）",
-  15: "强制闪光（有返回光）",
-  16: "未闪光（强制禁止）",
-  24: "自动（未闪光）",
-  25: "自动闪光",
-  29: "自动（无返回光）",
-  31: "自动（有返回光）",
-};
-
-// White balance mapping
-const WHITE_BALANCE_MAP = {
-  0: "自动",
-  1: "手动",
+const WHITE_BALANCE_KEYS = {
+  0: "image_exif.white_balance.auto",
+  1: "image_exif.white_balance.manual",
 };
 
 /**
@@ -144,18 +125,18 @@ function validateContent(content, hexoLog) {
   const imageMatches = content.match(/!\[([^\]]*)\]\(([^)]+)\)/g);
 
   if (!imageMatches || imageMatches.length === 0) {
-    throw new Error("[image-exif] 内容必须包含一张图片。请使用 ![description](path/to/image) 格式。");
+    throw new Error("[image-exif] Content must include one image. Use ![description](path/to/image).");
   }
 
   if (imageMatches.length > 1) {
-    throw new Error("[image-exif] 内容只能包含一张图片，检测到 " + imageMatches.length + " 张图片。");
+    throw new Error("[image-exif] Only one image is allowed. Detected " + imageMatches.length + " images.");
   }
 
   // Check for exif-info comment block
   const exifInfoMatches = content.match(/<!--\s*exif-info[\s\S]*?-->/g);
 
   if (exifInfoMatches && exifInfoMatches.length > 1) {
-    throw new Error("[image-exif] 内容最多只能包含一个 exif-info 块，检测到 " + exifInfoMatches.length + " 个。");
+    throw new Error("[image-exif] Only one exif-info block is allowed. Detected " + exifInfoMatches.length + " blocks.");
   }
 
   // Check for other content that shouldn't be there
@@ -169,7 +150,7 @@ function validateContent(content, hexoLog) {
     // Check if remaining content is just whitespace or newlines
     const meaningfulContent = cleanedContent.replace(/\s+/g, "");
     if (meaningfulContent.length > 0) {
-      throw new Error("[image-exif] 内容只能包含一张图片和一个可选的 exif-info 块，发现额外内容: " + cleanedContent.substring(0, 50) + "...");
+      throw new Error("[image-exif] Content must contain one image and one optional exif-info block. Extra content: " + cleanedContent.substring(0, 50) + "...");
     }
   }
 
@@ -304,7 +285,7 @@ function resolveLocalImagePath(src, hexo, data) {
  */
 function readExifData(imagePath, hexoLog) {
   if (!ExifParser) {
-    hexoLog && hexoLog.warn("[image-exif] exif-parser 未安装，自动 EXIF 读取已禁用。请运行 npm install exif-parser");
+    hexoLog && hexoLog.warn("[image-exif] exif-parser not installed. Auto EXIF reading is disabled. Run npm install exif-parser");
     return {};
   }
 
@@ -314,7 +295,7 @@ function readExifData(imagePath, hexoLog) {
     const result = parser.parse();
     return result.tags || {};
   } catch (e) {
-    hexoLog && hexoLog.debug("[image-exif] 无法读取 EXIF 数据: " + imagePath + " - " + e.message);
+    hexoLog && hexoLog.debug("[image-exif] Failed to read EXIF data: " + imagePath + " - " + e.message);
     return {};
   }
 }
@@ -354,10 +335,96 @@ function convertToDMS(value, isLatitude) {
   return `${degrees}°${minutes}'${seconds}"${direction}`;
 }
 
+const LANGUAGE_ALIASES = {
+  jp: "ja",
+};
+
+const LANGUAGE_CACHE = new Map();
+
+function formatString(template, values) {
+  let index = 0;
+  return template.replace(/%s/g, () => {
+    const value = values[index];
+    index += 1;
+    return value !== undefined ? value : "";
+  });
+}
+
+function resolveLanguageDir() {
+  return path.join(__dirname, "../..", "languages");
+}
+
+function normalizeLanguageKey(language) {
+  if (!language) return "en";
+  const raw = String(language).trim();
+  if (!raw) return "en";
+  if (LANGUAGE_ALIASES[raw]) return LANGUAGE_ALIASES[raw];
+  const base = raw.split("-")[0];
+  if (LANGUAGE_ALIASES[base]) return LANGUAGE_ALIASES[base];
+  return raw;
+}
+
+function resolveLanguageFilePath(language) {
+  const languageDir = resolveLanguageDir();
+  const normalized = normalizeLanguageKey(language);
+  const directPath = path.join(languageDir, `${normalized}.yml`);
+  if (fs.existsSync(directPath)) return directPath;
+  const base = normalized.split("-")[0];
+  const basePath = path.join(languageDir, `${base}.yml`);
+  if (base !== normalized && fs.existsSync(basePath)) return basePath;
+  return path.join(languageDir, "en.yml");
+}
+
+function loadLanguageContent(hexo) {
+  const language = getPrimaryLanguage(hexo);
+  const filePath = resolveLanguageFilePath(language);
+  if (LANGUAGE_CACHE.has(filePath)) return LANGUAGE_CACHE.get(filePath);
+  let content = {};
+  try {
+    content = yaml.load(fs.readFileSync(filePath, "utf8")) || {};
+  } catch (e) {
+    content = {};
+  }
+  LANGUAGE_CACHE.set(filePath, content);
+  return content;
+}
+
+function getNestedValue(source, key) {
+  if (!source || !key) return undefined;
+  return key.split(".").reduce((acc, part) => {
+    if (acc && Object.prototype.hasOwnProperty.call(acc, part)) {
+      return acc[part];
+    }
+    return undefined;
+  }, source);
+}
+
+function getTranslator(hexo) {
+  const languageContent = loadLanguageContent(hexo);
+  return (key, fallback, ...values) => {
+    const value = getNestedValue(languageContent, key);
+    if (value !== undefined && value !== null && value !== key) {
+      return values.length ? formatString(String(value), values) : value;
+    }
+    if (fallback !== undefined && fallback !== null) {
+      return values.length ? formatString(String(fallback), values) : fallback;
+    }
+    return key;
+  };
+}
+
+function getPrimaryLanguage(hexo) {
+  const language = hexo?.config?.language;
+  if (Array.isArray(language)) {
+    return language[0] || "en";
+  }
+  return language || "en";
+}
+
 /**
  * Format EXIF value for display
  */
-function formatExifValue(fieldName, value) {
+function formatExifValue(fieldName, value, t, locale) {
   if (value === null || value === undefined || value === "") return null;
 
   switch (fieldName) {
@@ -387,26 +454,31 @@ function formatExifValue(fieldName, value) {
 
     case "ExposureProgram":
       if (typeof value === "number") {
-        return EXPOSURE_PROGRAM_MAP[value] || `程序 ${value}`;
+        const key = EXPOSURE_PROGRAM_KEYS[value];
+        if (key) return t(key);
+        return t("image_exif.value.program_with_number", "Program %s", value);
       }
       return value;
 
     case "MeteringMode":
       if (typeof value === "number") {
-        return METERING_MODE_MAP[value] || `模式 ${value}`;
+        const key = METERING_MODE_KEYS[value];
+        if (key) return t(key);
+        return t("image_exif.value.mode_with_number", "Mode %s", value);
       }
       return value;
 
     case "Flash":
       if (typeof value === "number") {
-        // Bit 0 indicates if flash fired
-        return (value & 1) ? "ON" : "OFF";
+        return (value & 1) ? t("image_exif.flash.on", "ON") : t("image_exif.flash.off", "OFF");
       }
       return value;
 
     case "WhiteBalance":
       if (typeof value === "number") {
-        return WHITE_BALANCE_MAP[value] || `模式 ${value}`;
+        const key = WHITE_BALANCE_KEYS[value];
+        if (key) return t(key);
+        return t("image_exif.value.mode_with_number", "Mode %s", value);
       }
       return value;
 
@@ -432,7 +504,7 @@ function formatExifValue(fieldName, value) {
       if (typeof value === "number") {
         // Unix timestamp
         const date = new Date(value * 1000);
-        return date.toLocaleString("zh-CN");
+        return date.toLocaleString(locale);
       }
       return value;
 
@@ -451,7 +523,7 @@ function formatExifValue(fieldName, value) {
 /**
  * Build merged EXIF info from auto-read and custom data
  */
-function buildMergedInfo(autoExifData, customInfo, autoExifEnabled) {
+function buildMergedInfo(autoExifData, customInfo, autoExifEnabled, t, locale) {
   const result = {};
   const fields = Object.keys(EXIF_FIELD_MAPPINGS);
 
@@ -463,7 +535,7 @@ function buildMergedInfo(autoExifData, customInfo, autoExifEnabled) {
       }
     } else if (autoExifEnabled && autoExifData) {
       const value = getExifValue(autoExifData, field);
-      const formatted = formatExifValue(field, value);
+      const formatted = formatExifValue(field, value, t, locale);
       if (formatted) {
         result[field] = formatted;
       }
@@ -479,6 +551,32 @@ function buildMergedInfo(autoExifData, customInfo, autoExifEnabled) {
 function generateHTML(imageInfo, title, description, exifInfo, hexo) {
   const theme = hexo.theme.config;
   const imageCaptionStyle = theme?.articles?.style?.image_caption || "block";
+  const t = getTranslator(hexo);
+  const sectionLabels = {
+    camera: t("image_exif.section.camera", "Camera"),
+    lens: t("image_exif.section.lens", "Lens"),
+    exposure: t("image_exif.section.exposure", "Exposure"),
+    other: t("image_exif.section.other", "Other"),
+  };
+  const fieldLabels = {
+    make: t("image_exif.field.make", "Make"),
+    model: t("image_exif.field.model", "Model"),
+    datetimeOriginal: t("image_exif.field.datetime_original", "Date Taken"),
+    lensModel: t("image_exif.field.lens_model", "Lens"),
+    focalLength: t("image_exif.field.focal_length", "Focal Length"),
+    focusMode: t("image_exif.field.focus_mode", "Focus Mode"),
+    exposureTime: t("image_exif.field.exposure_time", "Shutter"),
+    aperture: t("image_exif.field.aperture", "Aperture"),
+    iso: t("image_exif.field.iso", "ISO"),
+    exposureProgram: t("image_exif.field.exposure_program", "Exposure Program"),
+    exposureBias: t("image_exif.field.exposure_bias", "Exposure Compensation"),
+    meteringMode: t("image_exif.field.metering_mode", "Metering Mode"),
+    flash: t("image_exif.field.flash", "Flash"),
+    whiteBalance: t("image_exif.field.white_balance", "White Balance"),
+    gpsLatitude: t("image_exif.field.gps_latitude", "Latitude"),
+    gpsLongitude: t("image_exif.field.gps_longitude", "Longitude"),
+    gpsAltitude: t("image_exif.field.gps_altitude", "Altitude"),
+  };
 
   // Check if we have any data to display
   const hasTitle = title && title.trim().length > 0;
@@ -486,7 +584,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
   const hasExifData = Object.keys(exifInfo).length > 0;
 
   if (!hasTitle && !hasDescription && !hasExifData) {
-    throw new Error("[image-exif] 必须至少有一项数据（title、description 或 EXIF 信息）。");
+    throw new Error("[image-exif] At least one of title, description, or EXIF info is required.");
   }
 
   // Check for Simple Mode (No EXIF data, but has image info)
@@ -532,7 +630,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
   
   // Add toggle button for block mode (default collapsed)
   headerHtml += `
-    <button class="image-exif-toggle-btn" aria-label="Toggle EXIF data">
+    <button class="image-exif-toggle-btn" aria-label="${escapeHtmlAttr(t("image_exif.ui.toggle", "Toggle EXIF data"))}">
       <i class="fa-solid fa-chevron-down"></i>
     </button>
   `;
@@ -548,29 +646,29 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
   const otherInfo = [];
 
   // Camera info
-  if (exifInfo.Make) cameraInfo.push({ label: "品牌", value: exifInfo.Make });
-  if (exifInfo.Model) cameraInfo.push({ label: "机型", value: exifInfo.Model });
-  if (exifInfo.DateTimeOriginal) cameraInfo.push({ label: "拍摄时间", value: exifInfo.DateTimeOriginal });
+  if (exifInfo.Make) cameraInfo.push({ label: fieldLabels.make, value: exifInfo.Make });
+  if (exifInfo.Model) cameraInfo.push({ label: fieldLabels.model, value: exifInfo.Model });
+  if (exifInfo.DateTimeOriginal) cameraInfo.push({ label: fieldLabels.datetimeOriginal, value: exifInfo.DateTimeOriginal });
 
   // Lens info
-  if (exifInfo.LensModel) lensInfo.push({ label: "镜头", value: exifInfo.LensModel });
-  if (exifInfo.FocalLength) lensInfo.push({ label: "焦距", value: exifInfo.FocalLength });
-  if (exifInfo.FocusMode) lensInfo.push({ label: "对焦模式", value: exifInfo.FocusMode });
+  if (exifInfo.LensModel) lensInfo.push({ label: fieldLabels.lensModel, value: exifInfo.LensModel });
+  if (exifInfo.FocalLength) lensInfo.push({ label: fieldLabels.focalLength, value: exifInfo.FocalLength });
+  if (exifInfo.FocusMode) lensInfo.push({ label: fieldLabels.focusMode, value: exifInfo.FocusMode });
 
   // Exposure info
-  if (exifInfo.ExposureTime) exposureInfo.push({ label: "快门", value: exifInfo.ExposureTime });
-  if (exifInfo.Aperture) exposureInfo.push({ label: "光圈", value: exifInfo.Aperture });
-  if (exifInfo.ISOSpeedRatings) exposureInfo.push({ label: "感光度", value: exifInfo.ISOSpeedRatings });
-  if (exifInfo.ExposureProgram) exposureInfo.push({ label: "曝光程序", value: exifInfo.ExposureProgram });
-  if (exifInfo.ExposureBias) exposureInfo.push({ label: "曝光补偿", value: exifInfo.ExposureBias });
-  if (exifInfo.MeteringMode) exposureInfo.push({ label: "测光模式", value: exifInfo.MeteringMode });
+  if (exifInfo.ExposureTime) exposureInfo.push({ label: fieldLabels.exposureTime, value: exifInfo.ExposureTime });
+  if (exifInfo.Aperture) exposureInfo.push({ label: fieldLabels.aperture, value: exifInfo.Aperture });
+  if (exifInfo.ISOSpeedRatings) exposureInfo.push({ label: fieldLabels.iso, value: exifInfo.ISOSpeedRatings });
+  if (exifInfo.ExposureProgram) exposureInfo.push({ label: fieldLabels.exposureProgram, value: exifInfo.ExposureProgram });
+  if (exifInfo.ExposureBias) exposureInfo.push({ label: fieldLabels.exposureBias, value: exifInfo.ExposureBias });
+  if (exifInfo.MeteringMode) exposureInfo.push({ label: fieldLabels.meteringMode, value: exifInfo.MeteringMode });
 
   // Other info
-  if (exifInfo.Flash) otherInfo.push({ label: "闪光灯", value: exifInfo.Flash });
-  if (exifInfo.WhiteBalance) otherInfo.push({ label: "白平衡", value: exifInfo.WhiteBalance });
-  if (exifInfo.GPSLatitude) otherInfo.push({ label: "纬度", value: exifInfo.GPSLatitude });
-  if (exifInfo.GPSLongitude) otherInfo.push({ label: "经度", value: exifInfo.GPSLongitude });
-  if (exifInfo.GPSAltitude) otherInfo.push({ label: "海拔", value: exifInfo.GPSAltitude });
+  if (exifInfo.Flash) otherInfo.push({ label: fieldLabels.flash, value: exifInfo.Flash });
+  if (exifInfo.WhiteBalance) otherInfo.push({ label: fieldLabels.whiteBalance, value: exifInfo.WhiteBalance });
+  if (exifInfo.GPSLatitude) otherInfo.push({ label: fieldLabels.gpsLatitude, value: exifInfo.GPSLatitude });
+  if (exifInfo.GPSLongitude) otherInfo.push({ label: fieldLabels.gpsLongitude, value: exifInfo.GPSLongitude });
+  if (exifInfo.GPSAltitude) otherInfo.push({ label: fieldLabels.gpsAltitude, value: exifInfo.GPSAltitude });
 
   // Build EXIF sections
   let exifHTML = "";
@@ -580,7 +678,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
 
     if (cameraInfo.length > 0) {
       exifHTML += '<div class="image-exif-section image-exif-camera">';
-      exifHTML += '<div class="image-exif-section-title"><i class="fa-solid fa-camera"></i> 相机</div>';
+      exifHTML += `<div class="image-exif-section-title"><i class="fa-solid fa-camera"></i> ${sectionLabels.camera}</div>`;
       exifHTML += '<div class="image-exif-items">';
       for (const item of cameraInfo) {
         exifHTML += `<div class="image-exif-item"><span class="image-exif-label">${item.label}</span><span class="image-exif-value">${escapeHtml(item.value)}</span></div>`;
@@ -590,7 +688,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
 
     if (lensInfo.length > 0) {
       exifHTML += '<div class="image-exif-section image-exif-lens">';
-      exifHTML += '<div class="image-exif-section-title"><i class="fa-solid fa-circle-dot"></i> 镜头</div>';
+      exifHTML += `<div class="image-exif-section-title"><i class="fa-solid fa-circle-dot"></i> ${sectionLabels.lens}</div>`;
       exifHTML += '<div class="image-exif-items">';
       for (const item of lensInfo) {
         exifHTML += `<div class="image-exif-item"><span class="image-exif-label">${item.label}</span><span class="image-exif-value">${escapeHtml(item.value)}</span></div>`;
@@ -600,7 +698,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
 
     if (exposureInfo.length > 0) {
       exifHTML += '<div class="image-exif-section image-exif-exposure">';
-      exifHTML += '<div class="image-exif-section-title"><i class="fa-solid fa-sun"></i> 曝光</div>';
+      exifHTML += `<div class="image-exif-section-title"><i class="fa-solid fa-sun"></i> ${sectionLabels.exposure}</div>`;
       exifHTML += '<div class="image-exif-items">';
       for (const item of exposureInfo) {
         exifHTML += `<div class="image-exif-item"><span class="image-exif-label">${item.label}</span><span class="image-exif-value">${escapeHtml(item.value)}</span></div>`;
@@ -610,7 +708,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
 
     if (otherInfo.length > 0) {
       exifHTML += '<div class="image-exif-section image-exif-other">';
-      exifHTML += '<div class="image-exif-section-title"><i class="fa-solid fa-circle-info"></i> 其他</div>';
+      exifHTML += `<div class="image-exif-section-title"><i class="fa-solid fa-circle-info"></i> ${sectionLabels.other}</div>`;
       exifHTML += '<div class="image-exif-items">';
       for (const item of otherInfo) {
         exifHTML += `<div class="image-exif-item"><span class="image-exif-label">${item.label}</span><span class="image-exif-value">${escapeHtml(item.value)}</span></div>`;
@@ -682,6 +780,8 @@ function escapeHtmlAttr(str) {
  */
 function imageExifTag(args, content) {
   const hexoLog = hexo.log;
+  const t = getTranslator(hexo);
+  const locale = getPrimaryLanguage(hexo);
 
   try {
     // Parse arguments
@@ -693,7 +793,7 @@ function imageExifTag(args, content) {
     // Extract image info
     const imageInfo = extractImageInfo(content);
     if (!imageInfo) {
-      throw new Error("[image-exif] 无法解析图片信息。");
+      throw new Error("[image-exif] Failed to parse image information.");
     }
 
     // Extract custom info from comment block
@@ -707,12 +807,12 @@ function imageExifTag(args, content) {
       if (localPath) {
         autoExifData = readExifData(localPath, hexoLog);
       } else {
-        hexoLog && hexoLog.debug("[image-exif] 无法找到本地图片文件，跳过自动 EXIF 读取: " + imageInfo.path);
+        hexoLog && hexoLog.debug("[image-exif] Local image not found. Skipping auto EXIF read: " + imageInfo.path);
       }
     }
 
     // Merge EXIF info (custom has priority)
-    const mergedInfo = buildMergedInfo(autoExifData, customInfo, autoExif);
+    const mergedInfo = buildMergedInfo(autoExifData, customInfo, autoExif, t, locale);
 
     // Generate HTML
     const html = generateHTML(

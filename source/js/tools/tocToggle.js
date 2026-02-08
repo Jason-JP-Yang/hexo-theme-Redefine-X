@@ -15,13 +15,15 @@ export function initTocToggle() {
     isOpenPageAside: false,
 
     initToggleBarButton() {
-      this.toggleBar &&
+      if (this.toggleBar && !this.toggleBar.dataset.hasTocListener) {
         this.toggleBar.addEventListener("click", () => {
           this.isOpenPageAside = !this.isOpenPageAside;
           main.styleStatus.isOpenPageAside = this.isOpenPageAside;
           main.setStyleStatus();
           this.changePageLayoutWhenOpenToggle(this.isOpenPageAside);
         });
+        this.toggleBar.dataset.hasTocListener = "true";
+      }
     },
 
     toggleClassName(element, className, condition) {

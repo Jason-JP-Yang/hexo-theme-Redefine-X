@@ -1,5 +1,6 @@
 import { main } from "../main.js";
 import { initTOC } from "../layouts/toc.js";
+import { initTocToggle } from "../tools/tocToggle.js";
 
 export function initHBE() {
   const cryptoObj = window.crypto || window.msCrypto;
@@ -253,7 +254,9 @@ export function initHBE() {
 
         // // load Redefine Page components
         main.refresh();
+        rebuildTOC();
         initTOC();
+        initTocToggle().pageAsideHandleOfTOC(true);
 
         // trigger event
         var event = new Event("hexo-blog-decrypt");
@@ -268,6 +271,51 @@ export function initHBE() {
       });
 
     return result;
+  }
+
+  function rebuildTOC() {
+    const container = document.getElementById("hexo-blog-encrypt");
+    if (!container) return;
+
+    const headers = container.querySelectorAll("h1, h2, h3, h4, h5, h6");
+    if (headers.length === 0) return;
+
+    let tocContainer = document.querySelector(".toc-content-container");
+    if (!tocContainer) {
+      const postPageContainer = document.querySelector(".post-page-container");
+      if (postPageContainer) {
+        tocContainer = document.createElement("div");
+        tocContainer.className = "toc-content-container";
+        postPageContainer.appendChild(tocContainer);
+      } else {
+        return;
+      }
+    }
+
+    let tocHTML = '<div class="post-toc-wrap"><div class="post-toc">';
+    tocHTML += '<div class="toc-title">Catalog</div>';
+    
+    const pageTitleElem = document.querySelector(".article-title-regular") || document.querySelector(".article-title-cover");
+    const pageTitle = pageTitleElem ? pageTitleElem.innerText : document.title;
+    
+    tocHTML += `<div class="page-title">${pageTitle}</div>`;
+    tocHTML += '<ol class="nav">';
+
+    headers.forEach((header, index) => {
+      if (!header.id) {
+        header.id = "hbe-" + index + "-" + header.textContent.trim().replace(/\s+/g, "-");
+      }
+      const level = header.tagName.substring(1);
+      tocHTML += `
+        <li class="nav-item nav-level-${level}">
+          <a class="nav-link" href="#${header.id}">
+            <span class="nav-text">${header.textContent}</span>
+          </a>
+        </li>`;
+    });
+
+    tocHTML += "</ol></div></div>";
+    tocContainer.innerHTML = tocHTML;
   }
 
   function hbeLoader() {

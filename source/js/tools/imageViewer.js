@@ -17,6 +17,10 @@ export default function imageViewer() {
   const infoContent = infoTrigger?.querySelector(".image-viewer-info-content");
   if (!maskDom || !stage || !switcher || !switcherPages || !switcherPrev || !switcherNext || !switcherSidePrev || !switcherSideNext || !infoTrigger || !infoContent) return;
 
+  if (global.maskEl === maskDom && global.stageEl === stage) {
+    return;
+  }
+
   const VIEWABLE_IMG_SELECTOR = ".markdown-body img, .masonry-item img, #shuoshuo-content img";
   const VIEWABLE_ITEM_SELECTOR = ".markdown-body img, .markdown-body .img-preloader, .masonry-item img, .masonry-item .img-preloader, #shuoshuo-content img, #shuoshuo-content .img-preloader";
   const OPEN_MS = 420, CLOSE_MS = 360, EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
@@ -260,18 +264,26 @@ export default function imageViewer() {
    * The placeholder uses aspect-ratio to maintain responsive behavior like the original img.
    */
   const createPlaceholder = (img, saved) => {
-    const ph = document.createElement("span");
+    // Use div instead of span for better block-level behavior
+    const ph = document.createElement("div");
     ph.className = "image-viewer-placeholder";
     const cs = getComputedStyle(img);
+    const rect = img.getBoundingClientRect();
+    
     // Use aspect-ratio to maintain responsive sizing like the original img
     // This ensures placeholder resizes correctly if viewport changes
     const aspectRatio = (img.naturalWidth || 1) / (img.naturalHeight || 1);
+    
+    // For width/height: prefer actual rendered dimensions if available
+    const width = (rect.width > 0) ? `${rect.width}px` : cs.width;
+    const height = (rect.height > 0) ? `${rect.height}px` : 'auto';
+    
     ph.style.cssText = `
-      display:${cs.display};
-      width:${cs.width};
+      display:${cs.display === 'inline' ? 'block' : cs.display};
+      width:${width};
+      height:${height};
       max-width:${cs.maxWidth};
       max-height:${cs.maxHeight};
-      height:auto;
       aspect-ratio:${aspectRatio};
       margin:${cs.margin};
       padding:0;
@@ -472,15 +484,25 @@ export default function imageViewer() {
   };
 
   const createPlaceholderForNode = (node, aspectRatio) => {
-    const ph = document.createElement("span");
+    // Use div instead of span for better block-level behavior
+    const ph = document.createElement("div");
     ph.className = "image-viewer-placeholder";
+    
+    // Get both computed style AND actual rendered dimensions
     const cs = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    
+    // For width: prefer actual rendered width if available, fallback to computed style
+    // This ensures placeholder has correct dimensions even when computed width is 'auto'
+    const width = (rect.width > 0) ? `${rect.width}px` : cs.width;
+    const height = (rect.height > 0) ? `${rect.height}px` : 'auto';
+    
     ph.style.cssText = `
-      display:${cs.display};
-      width:${cs.width};
+      display:${cs.display === 'inline' ? 'block' : cs.display};
+      width:${width};
+      height:${height};
       max-width:${cs.maxWidth};
       max-height:${cs.maxHeight};
-      height:auto;
       aspect-ratio:${aspectRatio};
       margin:${cs.margin};
       padding:0;

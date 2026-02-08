@@ -340,7 +340,7 @@ hexo.extend.filter.register(
         dims = DEFAULT_FALLBACK_DIMENSIONS;
         if (hexo?.log?.warn) {
           hexo.log.warn(
-            `[redefine-x][lazyload] Unable to detect image size, fallback to ${dims.width}x${dims.height}: ${originalSrc}`,
+            `[lazyload] Unable to detect image size, fallback to ${dims.width}x${dims.height}: ${originalSrc}`,
           );
         }
       }
