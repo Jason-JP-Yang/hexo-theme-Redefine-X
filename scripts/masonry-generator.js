@@ -23,7 +23,7 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
     path: 'masonry/links/index.html',
     data: {
       type: 'masonry-links',
-      title: '相册列表',
+      title: 'Mansory Collection 瀑布流相册合集',
       masonry_items: collectionData,
       layout: 'page',
       comment: false
@@ -40,7 +40,7 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                 path: `masonry/${pageTitle}/index.html`,
                 data: {
                     type: 'masonry',
-                    title: item.name,
+                    title: item['page-title'] || item.name,
                     images: item.images,
                     content: '',
                     layout: 'page',
