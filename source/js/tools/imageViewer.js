@@ -1024,6 +1024,35 @@ export default function imageViewer() {
        }
     }
 
+    // Check for masonry EXIF template (hidden <template> with EXIF info card)
+    if (!hasInfo) {
+      const masonryItem = liveNode.closest(".masonry-item");
+      if (masonryItem) {
+        const exifTemplate = masonryItem.querySelector("template.masonry-exif-template");
+        if (exifTemplate && exifTemplate.content) {
+          const infoCard = exifTemplate.content.querySelector(".image-exif-info-card");
+          if (infoCard) {
+            const wrap = document.createElement("div");
+            wrap.className = "image-exif-container image-exif-block";
+            const clone = infoCard.cloneNode(true);
+            clone.classList.add("expanded");
+            clone.style.removeProperty("max-width");
+            clone.style.removeProperty("width");
+            clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
+            clone.querySelectorAll(".image-exif-data").forEach((data) => {
+              data.style.removeProperty("height");
+              data.style.removeProperty("opacity");
+              data.style.removeProperty("margin-top");
+              data.style.removeProperty("grid-template-columns");
+            });
+            wrap.appendChild(clone);
+            infoContent.appendChild(wrap);
+            hasInfo = true;
+          }
+        }
+      }
+    }
+
     if (!hasInfo) {
       const figure = liveNode.closest("figure.image-caption");
       if (figure) {

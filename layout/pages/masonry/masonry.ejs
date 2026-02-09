@@ -13,6 +13,16 @@ function buildImagePath(imagePath) {
     // Otherwise, prepend /masonry/ path
     return siteRoot + 'masonry/' + imagePath;
 }
+
+// Determine container CSS class based on image metadata
+function getContainerClass(image) {
+    const classes = ['image-container'];
+    // Title-only mode: no description → title centered at bottom
+    if (image.title && !image.description) {
+        classes.push('masonry-title-only');
+    }
+    return classes.join(' ');
+}
 %>
 
 <h1 class="page-title-header">
@@ -24,17 +34,24 @@ Masonry layout using CSS columns.
 Images are output as regular <img> tags which will be transformed to img-preloader 
 by lazyload-handle.js during hexo build (same as normal post images).
 The preloaders have correct aspect ratios so layout is stable from page load.
+
+EXIF support: images with data beyond just 'title' get a hidden <template> containing
+the EXIF info card HTML. The imageViewer picks this up when the image is opened.
+On the masonry grid, only title/description overlay is shown on hover.
 %>
 <div id="masonry-container" class="markdown-body">
 	<% images.forEach(function(image) { %>
 	<div class="masonry-item">
-		<div class="image-container">
+		<div class="<%- getContainerClass(image) %>">
 			<img src="<%- buildImagePath(image.image) %>" alt="<%- image.title || '' %>">
 			<% if (image.title) { %>
 			<div class="image-title"><%- image.title %></div>
 			<% } %>
 			<% if (image.description) { %>
 			<div class="image-description"><%- image.description %></div>
+			<% } %>
+			<% if (image.hasExifInfo && image.exifCardHtml) { %>
+			<template class="masonry-exif-template"><%- image.exifCardHtml %></template>
 			<% } %>
 		</div>
 	</div>
