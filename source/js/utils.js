@@ -257,6 +257,21 @@ export default function initUtils() {
       }
     },
 
+    // scroll to main content (home banner button)
+    bindScrollToMain() {
+      const scrollButton = document.querySelector(
+        ".home-banner-scroll-to-main",
+      );
+      if (scrollButton) {
+        scrollButton.addEventListener("click", () => {
+          const target = document.querySelector(".main-content-container");
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth" });
+          }
+        });
+      }
+    },
+
     // get dom element height
     getElementHeight(selectors) {
       const dom = document.querySelector(selectors);
@@ -368,6 +383,9 @@ export default function initUtils() {
 
   // go comment
   utils.goComment();
+
+  // scroll to main content (home banner button)
+  utils.bindScrollToMain();
 
   // init page height handle
   utils.initPageHeightHandle();
