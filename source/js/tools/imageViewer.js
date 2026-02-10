@@ -131,6 +131,86 @@ export default function imageViewer() {
     return document;
   };
 
+  /**
+   * Ensure a node is visible by expanding any ancestor containers that
+   * hide their content (folding blocks, tabs, code-block folds, etc.).
+   * Processes from outermost to innermost so that parent containers
+   * are revealed first, allowing inner containers to be measured correctly.
+   */
+  const ensureNodeVisible = (node) => {
+    if (!node || !node.parentElement) return;
+
+    // Walk from node up to root, collecting hidden containers
+    const containers = [];
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    while (el) {
+      // 1. Inactive tab-pane (display:none when not .active)
+      if (el.classList?.contains("tab-pane") && !el.classList.contains("active")) {
+        containers.push({ type: "tab", el });
+      }
+      // 2. Closed <details> (native folding block)
+      if (el.tagName === "DETAILS" && !el.open) {
+        containers.push({ type: "details", el });
+      }
+      // 3. Folded code block container
+      if (
+        (el.classList?.contains("highlight-container") || el.classList?.contains("code-container")) &&
+        el.classList.contains("folded")
+      ) {
+        containers.push({ type: "code-fold", el });
+      }
+      el = el.parentElement;
+    }
+
+    if (containers.length === 0) return;
+
+    // Process from outermost (last collected) to innermost (first collected)
+    containers.reverse();
+
+    for (const c of containers) {
+      switch (c.type) {
+        case "details":
+          c.el.open = true;
+          break;
+
+        case "tab": {
+          const tabPane = c.el;
+          const tabContent = tabPane.parentElement; // .tab-content
+          const tabsContainer = tabContent?.parentElement; // .tabs
+          if (!tabsContainer || !tabsContainer.classList.contains("tabs")) break;
+
+          // Deactivate current active tab & pane
+          tabsContainer.querySelector(".nav-tabs .tab.active")?.classList.remove("active");
+          tabsContainer.querySelector(".tab-content .tab-pane.active")?.classList.remove("active");
+
+          // Activate the target pane
+          tabPane.classList.add("active");
+
+          // Find & activate the corresponding nav tab
+          // The nav <a> has className "#<paneId>", so match by that
+          const paneId = tabPane.id;
+          if (paneId) {
+            const navLinks = tabsContainer.querySelectorAll(".nav-tabs .tab a");
+            for (const link of navLinks) {
+              if (link.className === "#" + paneId) {
+                link.parentElement.classList.add("active");
+                break;
+              }
+            }
+          }
+          break;
+        }
+
+        case "code-fold":
+          c.el.classList.remove("folded");
+          // Update fold button icon to reflect expanded state
+          const foldIcon = c.el.querySelector(".fold-button i");
+          if (foldIcon) foldIcon.className = "fa-solid fa-chevron-down";
+          break;
+      }
+    }
+  };
+
   const collectItems = (root) => {
     const nodes = Array.from((root || document).querySelectorAll(VIEWABLE_ITEM_SELECTOR));
     const items = [];
@@ -1498,6 +1578,11 @@ export default function imageViewer() {
       updateInfo();
 
       const liveNode = getLiveNodeForItem(nextItem);
+
+      // Ensure the target node is visible by expanding any hidden ancestor
+      // containers (folded blocks, inactive tabs, folded code blocks, etc.)
+      ensureNodeVisible(liveNode);
+
       const aspectRatio = getNodeAspectRatio(liveNode, nextItem);
       const viewerRect = (liveNode instanceof HTMLImageElement && liveNode.naturalWidth && liveNode.naturalHeight)
         ? computeViewerRect(liveNode)
