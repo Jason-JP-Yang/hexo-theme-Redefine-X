@@ -338,6 +338,9 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
 
   const t = getTranslator(hexo);
   const sourceDir = hexo.source_dir;
+  
+  // Get comment setting from theme config
+  const commentEnabled = hexo.theme.config.comment && hexo.theme.config.comment.enable ? true : false;
 
   // Extract custom title if present
   let collectionTitle = 'Masonry Collection 瀑布流相册合集';
@@ -475,7 +478,7 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                     images: processedImages,
                     content: '',
                     layout: 'page',
-                    comment: false
+                    comment: commentEnabled
                 },
                 layout: 'page'
             });
