@@ -1,7 +1,189 @@
-(function(){function g(a){return`[giscus] An error occurred. Error message: "${a}".`}function l(a,h=!1){return(a=document.querySelector((h?`meta[property='og:${a}'],`:"")+`meta[name='${a}']`))?a.content:""}function m(){delete c.session;const a=`${k}${q}/widget?${new URLSearchParams(c)}`;e.src=a}const n=document.currentScript,k=n.dataset.giscusOrigin||"https://giscus.app";var b=new URL(location.href),d=b.searchParams.get("giscus")||"";const p=localStorage.getItem("giscus-session");b.searchParams.delete("giscus");
-b.hash="";var f=b.toString();if(d)localStorage.setItem("giscus-session",JSON.stringify(d)),history.replaceState(void 0,document.title,f);else if(p)try{d=JSON.parse(p)}catch(a){localStorage.removeItem("giscus-session"),console.warn(`${g(a?.message)} Session has been cleared.`)}b=n.dataset;const c={origin:f};c.session=d;c.theme=b.theme;c.reactionsEnabled=b.reactionsEnabled||"1";c.emitMetadata=b.emitMetadata||"0";c.inputPosition=b.inputPosition||"bottom";c.repo=b.repo;c.repoId=b.repoId;c.category=b.category||
-"";c.categoryId=b.categoryId;c.strict=b.strict||"0";c.description=l("description",!0);c.backLink=l("giscus:backlink")||f;switch(b.mapping){case "url":c.term=f;break;case "title":c.term=document.title;break;case "og:title":c.term=l("title",!0);break;case "specific":c.term=b.term;break;case "number":c.number=b.term;break;default:c.term=2>location.pathname.length?"index":decodeURIComponent(location.pathname.substring(1).replace(/\.\w+$/,""))}const r=(d=document.querySelector(".giscus"))&&d.id;r&&(c.origin=
-`${f}#${r}`);const q=b.lang?`/${b.lang}`:"";f=`${k}${q}/widget?${new URLSearchParams(c)}`;b="lazy"===b.loading?"lazy":void 0;const e=document.createElement("iframe");Object.entries({class:"giscus-frame giscus-frame--loading",title:"Comments",scrolling:"no",allow:"clipboard-write",src:f,loading:b}).forEach(([a,h])=>h&&e.setAttribute(a,h));e.style.opacity="0";e.addEventListener("load",()=>{e.style.removeProperty("opacity");e.classList.remove("giscus-frame--loading")});document.getElementById("giscus-css")||
-(b=document.createElement("style"),b.id="giscus-css",b.textContent=".giscus,.giscus-frame{width:100%;min-height:150px}.giscus-frame{border:none;color-scheme:light dark}.giscus-frame--loading{opacity:0}",document.head.prepend(b));if(d){for(;d.firstChild;)d.firstChild.remove();d.appendChild(e)}else d=document.createElement("div"),d.setAttribute("class","giscus"),d.appendChild(e),n.insertAdjacentElement("afterend",d);window.addEventListener("message",a=>{a.origin===k&&({data:a}=a,"object"===typeof a&&
-a.giscus&&(a.giscus.resizeHeight&&(e.style.height=`${a.giscus.resizeHeight}px`),a.giscus.signOut?(localStorage.removeItem("giscus-session"),console.log("[giscus] User has logged out. Session has been cleared."),m()):a.giscus.error&&(a=a.giscus.error,a.includes("Bad credentials")||a.includes("Invalid state value")||a.includes("State has expired")?null!==localStorage.getItem("giscus-session")?(localStorage.removeItem("giscus-session"),console.warn(`${g(a)} Session has been cleared.`),m()):p||console.error(`${g(a)} No session is stored initially. ${"Please consider reporting this error at https://github.com/giscus/giscus/issues/new."}`):
-a.includes("Discussion not found")?console.warn(`[giscus] ${a}. A new discussion will be created if a comment/reaction is submitted.`):a.includes("API rate limit exceeded")?console.warn(g(a)):console.error(`${g(a)} ${"Please consider reporting this error at https://github.com/giscus/giscus/issues/new."}`))))});window.__giscus={signOut:m,setConfig(a){e.contentWindow?.postMessage({giscus:{setConfig:a}},k)}}})();
+/**
+ * Giscus Client - Self-hosted Version
+ *
+ * Based on the official giscus client.ts, modified for self-hosting:
+ * - Script can be loaded from any domain (not just giscus.app)
+ * - The giscus widget iframe still points to giscus.app's server
+ * - CSS is inlined locally (no external default.css request)
+ * - Supports configurable giscus server origin via data-giscus-origin attribute
+ *
+ * Build: tsc client-self-hosted.ts --outDir build-client --target ES2020
+ * Usage: Load this script with data-* attributes same as official giscus client.js
+ */
+(function () {
+    const GISCUS_SESSION_KEY = 'giscus-session';
+    const script = document.currentScript;
+    // Self-hosted: giscus server origin is configurable, defaults to giscus.app
+    // The iframe widget always loads from the giscus server, not from the script's origin
+    const giscusOrigin = script.dataset.giscusOrigin || 'https://giscus.app';
+    function formatError(message) {
+        return `[giscus] An error occurred. Error message: "${message}".`;
+    }
+    function getMetaContent(property, og = false) {
+        const ogSelector = og ? `meta[property='og:${property}'],` : '';
+        const element = document.querySelector(ogSelector + `meta[name='${property}']`);
+        return element ? element.content : '';
+    }
+    // Set up session and clear the session param on load
+    const url = new URL(location.href);
+    let session = url.searchParams.get('giscus') || '';
+    const savedSession = localStorage.getItem(GISCUS_SESSION_KEY);
+    url.searchParams.delete('giscus');
+    url.hash = '';
+    const cleanedLocation = url.toString();
+    if (session) {
+        localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(session));
+        history.replaceState(undefined, document.title, cleanedLocation);
+    }
+    else if (savedSession) {
+        try {
+            session = JSON.parse(savedSession);
+        }
+        catch (e) {
+            localStorage.removeItem(GISCUS_SESSION_KEY);
+            console.warn(`${formatError(e?.message)} Session has been cleared.`);
+        }
+    }
+    const attributes = script.dataset;
+    const params = {};
+    params.origin = cleanedLocation;
+    params.session = session;
+    params.theme = attributes.theme;
+    params.reactionsEnabled = attributes.reactionsEnabled || '1';
+    params.emitMetadata = attributes.emitMetadata || '0';
+    params.inputPosition = attributes.inputPosition || 'bottom';
+    params.repo = attributes.repo;
+    params.repoId = attributes.repoId;
+    params.category = attributes.category || '';
+    params.categoryId = attributes.categoryId;
+    params.strict = attributes.strict || '0';
+    params.description = getMetaContent('description', true);
+    params.backLink = getMetaContent('giscus:backlink') || cleanedLocation;
+    switch (attributes.mapping) {
+        case 'url':
+            params.term = cleanedLocation;
+            break;
+        case 'title':
+            params.term = document.title;
+            break;
+        case 'og:title':
+            params.term = getMetaContent('title', true);
+            break;
+        case 'specific':
+            params.term = attributes.term;
+            break;
+        case 'number':
+            params.number = attributes.term;
+            break;
+        case 'pathname':
+        default:
+            params.term =
+                location.pathname.length < 2
+                    ? 'index'
+                    : decodeURIComponent(location.pathname.substring(1).replace(/\.\w+$/, ''));
+            break;
+    }
+    // Check anchor of the existing container and append it to origin URL
+    const existingContainer = document.querySelector('.giscus');
+    const id = existingContainer && existingContainer.id;
+    if (id) {
+        params.origin = `${cleanedLocation}#${id}`;
+    }
+    // Set up iframe src and loading attribute
+    const locale = attributes.lang ? `/${attributes.lang}` : '';
+    const src = `${giscusOrigin}${locale}/widget?${new URLSearchParams(params)}`;
+    const loading = attributes.loading === 'lazy' ? 'lazy' : undefined;
+    // Set up iframe element
+    const iframeElement = document.createElement('iframe');
+    const iframeAttributes = {
+        class: 'giscus-frame giscus-frame--loading',
+        title: 'Comments',
+        scrolling: 'no',
+        allow: 'clipboard-write',
+        src,
+        loading,
+    };
+    Object.entries(iframeAttributes).forEach(([key, value]) => value && iframeElement.setAttribute(key, value));
+    // Prevent white flash on load
+    iframeElement.style.opacity = '0';
+    iframeElement.addEventListener('load', () => {
+        iframeElement.style.removeProperty('opacity');
+        iframeElement.classList.remove('giscus-frame--loading');
+    });
+    // Self-hosted: inject giscus CSS inline instead of loading from giscus.app
+    // This avoids an external CSS request and ensures styling works even offline
+    if (!document.getElementById('giscus-css')) {
+        const style = document.createElement('style');
+        style.id = 'giscus-css';
+        style.textContent = '.giscus,.giscus-frame{width:100%;min-height:150px}.giscus-frame{border:none;color-scheme:light dark}.giscus-frame--loading{opacity:0}';
+        document.head.prepend(style);
+    }
+    // Insert iframe element
+    if (!existingContainer) {
+        const iframeContainer = document.createElement('div');
+        iframeContainer.setAttribute('class', 'giscus');
+        iframeContainer.appendChild(iframeElement);
+        script.insertAdjacentElement('afterend', iframeContainer);
+    }
+    else {
+        while (existingContainer.firstChild)
+            existingContainer.firstChild.remove();
+        existingContainer.appendChild(iframeElement);
+    }
+    const suggestion = `Please consider reporting this error at https://github.com/giscus/giscus/issues/new.`;
+    function signOut() {
+        delete params.session;
+        const src = `${giscusOrigin}${locale}/widget?${new URLSearchParams(params)}`;
+        iframeElement.src = src; // Force reload
+    }
+    // Listen to messages
+    window.addEventListener('message', (event) => {
+        if (event.origin !== giscusOrigin)
+            return;
+        const { data } = event;
+        if (!(typeof data === 'object' && data.giscus))
+            return;
+        if (data.giscus.resizeHeight) {
+            iframeElement.style.height = `${data.giscus.resizeHeight}px`;
+        }
+        if (data.giscus.signOut) {
+            localStorage.removeItem(GISCUS_SESSION_KEY);
+            console.log(`[giscus] User has logged out. Session has been cleared.`);
+            signOut();
+            return;
+        }
+        if (!data.giscus.error)
+            return;
+        const message = data.giscus.error;
+        if (message.includes('Bad credentials') ||
+            message.includes('Invalid state value') ||
+            message.includes('State has expired')) {
+            // Might be because token is expired or other causes
+            if (localStorage.getItem(GISCUS_SESSION_KEY) !== null) {
+                localStorage.removeItem(GISCUS_SESSION_KEY);
+                console.warn(`${formatError(message)} Session has been cleared.`);
+                signOut();
+            }
+            else if (!savedSession) {
+                console.error(`${formatError(message)} No session is stored initially. ${suggestion}`);
+            }
+        }
+        else if (message.includes('Discussion not found')) {
+            console.warn(`[giscus] ${message}. A new discussion will be created if a comment/reaction is submitted.`);
+        }
+        else if (message.includes('API rate limit exceeded')) {
+            console.warn(formatError(message));
+        }
+        else {
+            console.error(`${formatError(message)} ${suggestion}`);
+        }
+    });
+    // Self-hosted: expose sendMessage for parent-to-giscus communication
+    // This allows theme scripts to update giscus config dynamically
+    window.__giscus = {
+        signOut,
+        setConfig(config) {
+            iframeElement.contentWindow?.postMessage({ giscus: { setConfig: config } }, giscusOrigin);
+        },
+    };
+})();
