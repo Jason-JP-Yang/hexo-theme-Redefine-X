@@ -463,12 +463,20 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   });
 
   // 3. Generate Individual Masonry Pages with EXIF processing
+  // Pick up pre-generated reaction data from masonry-reactions.js (before_generate filter)
+  const allReactions = hexo._masonryReactions || {};
+  const giscusConfig = hexo.theme.config?.comment?.config?.giscus || {};
+
   categories.forEach(category => {
     category.list.forEach(item => {
         if (item.images && item.images.length > 0) {
             const pageTitle = item['page-title'] || item.name;
+            const pagePath = `masonry/${pageTitle}/`;
             const pageAutoExif = item['auto-exif'] || false;
             const processedImages = item.images.map(img => processImage(img, pageAutoExif));
+
+            // Attach reaction data if available
+            const reactionsInfo = allReactions[pagePath] || null;
 
             pages.push({
                 path: `masonry/${pageTitle}/index.html`,
@@ -478,7 +486,16 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                     images: processedImages,
                     content: '',
                     layout: 'page',
-                    comment: commentEnabled
+                    comment: commentEnabled,
+                    // Masonry reactions data for the frontend
+                    masonryReactions: reactionsInfo ? {
+                        repo: giscusConfig.repo || '',
+                        repoId: giscusConfig.repo_id || '',
+                        categoryId: giscusConfig.category_id || '',
+                        discussionTerm: `[masonry-reactions] ${pagePath}`,
+                        discussionNumber: reactionsInfo.discussionNumber,
+                        imageReactions: reactionsInfo.imageReactions,
+                    } : null,
                 },
                 layout: 'page'
             });

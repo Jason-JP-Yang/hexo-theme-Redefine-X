@@ -395,6 +395,11 @@ comment:
       lang: en # Giscus language. e.g. en, zh-CN, zh-TW
       input_position: bottom # Place the comment box above/below the comments. e.g. top, bottom
       loading: lazy # Load the comments lazily
+
+      # Masonry Reactions Pre-Generation Comments
+      # Currently only available through giscus
+      # Personal Access Tokens from auther github account with read and write premission to the repo is REQUIRED
+      author_pat: 
 # COMMENT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 
