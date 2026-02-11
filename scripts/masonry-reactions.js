@@ -108,7 +108,7 @@ async function findReactionsDiscussion(pat, repo, pagePath) {
 /**
  * Create a new reactions discussion
  */
-async function createReactionsDiscussion(pat, repositoryId, categoryId, pagePath) {
+async function createReactionsDiscussion(pat, repositoryId, categoryId, pagePath, retryCount = 0) {
   const term = `${REACTIONS_PREFIX}${pagePath}`;
 
   const query = `
@@ -133,6 +133,15 @@ async function createReactionsDiscussion(pat, repositoryId, categoryId, pagePath
   });
 
   if (result.errors) {
+    const isRateLimit = result.errors.some(e => 
+      e.message?.includes("submitted too quickly") || e.message?.includes("abuse")
+    );
+    if (isRateLimit && retryCount < 3) {
+      const backoff = Math.pow(2, retryCount + 1) * 2000;
+      hexo.log.info(`[masonry-reactions] Rate limited on discussion creation, retrying in ${backoff / 1000}s (attempt ${retryCount + 1}/3)`);
+      await new Promise((r) => setTimeout(r, backoff));
+      return createReactionsDiscussion(pat, repositoryId, categoryId, pagePath, retryCount + 1);
+    }
     throw new Error(`Failed to create discussion: ${JSON.stringify(result.errors)}`);
   }
 
@@ -140,9 +149,9 @@ async function createReactionsDiscussion(pat, repositoryId, categoryId, pagePath
 }
 
 /**
- * Add a comment for a specific image
+ * Add a comment for a specific image, with retry for rate limiting
  */
-async function addImageComment(pat, discussionId, imageId, imageTitle) {
+async function addImageComment(pat, discussionId, imageId, imageTitle, retryCount = 0) {
   const query = `
     mutation($input: AddDiscussionCommentInput!) {
       addDiscussionComment(input: $input) {
@@ -160,6 +169,15 @@ async function addImageComment(pat, discussionId, imageId, imageTitle) {
   });
 
   if (result.errors) {
+    const isRateLimit = result.errors.some(e => 
+      e.message?.includes("submitted too quickly") || e.message?.includes("abuse")
+    );
+    if (isRateLimit && retryCount < 3) {
+      const backoff = Math.pow(2, retryCount + 1) * 2000; // 4s, 8s, 16s
+      hexo.log.info(`[masonry-reactions] Rate limited, retrying in ${backoff / 1000}s (attempt ${retryCount + 1}/3)`);
+      await new Promise((r) => setTimeout(r, backoff));
+      return addImageComment(pat, discussionId, imageId, imageTitle, retryCount + 1);
+    }
     throw new Error(`Failed to add comment: ${JSON.stringify(result.errors)}`);
   }
 
@@ -227,6 +245,8 @@ async function processPageReactions(pat, repo, repositoryId, categoryId, pagePat
       }
       discussion.comments = { totalCount: 0, nodes: [] };
       discussion.locked = false;
+      // Delay after creating a new discussion to avoid secondary rate limit
+      await new Promise((r) => setTimeout(r, 3000));
     }
 
     // 2. Parse existing comments
@@ -264,8 +284,8 @@ async function processPageReactions(pat, repo, repositoryId, categoryId, pagePat
             heartCount: 0,
           };
         }
-        // Small delay to avoid hitting rate limits
-        await new Promise((r) => setTimeout(r, 200));
+        // Delay between comment creations to respect GitHub secondary rate limits
+        await new Promise((r) => setTimeout(r, 3000));
       }
 
       // Re-lock
@@ -340,6 +360,9 @@ hexo.extend.filter.register("before_generate", async function () {
           `[masonry-reactions] ${pagePath}: ${Object.keys(result.imageReactions).length} images tracked`
         );
       }
+
+      // Delay between pages to avoid secondary rate limits
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 

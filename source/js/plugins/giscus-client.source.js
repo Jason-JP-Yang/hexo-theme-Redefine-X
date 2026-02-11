@@ -80,7 +80,7 @@
             params.term =
                 location.pathname.length < 2
                     ? 'index'
-                    : location.pathname.substring(1).replace(/\.\w+$/, '');
+                    : decodeURIComponent(location.pathname.substring(1).replace(/\.\w+$/, ''));
             break;
     }
     // Check anchor of the existing container and append it to origin URL
