@@ -12,10 +12,22 @@
  *   (GitHub's API properly supports CORS with Authorization headers).
  * - Toggling reactions uses GitHub GraphQL with the user's OAuth token.
  * - OAuth token synced with main giscus-client (shared localStorage key).
+ *   On OAuth callback, this script reads the ?giscus= URL param directly
+ *   (before giscus-client loads) to ensure immediate token availability.
  * - Clicking the heart button when not logged in → redirect to GitHub OAuth.
+ *   Scroll position and the clicked heart are saved; after login callback,
+ *   scroll is restored and the pending heart is auto-clicked.
  * - Swup-compatible: registers page:view hook AFTER swup is initialized.
  * - sessionStorage caching to avoid redundant API calls during navigation.
  * - Pagination: fetches all comments (100/page) with minimum requests.
+ *
+ * Build Steps (from project root):
+ *   cd dev/giscus
+ *   npx tsc -p tsconfig.client.json
+ *   npx terser build-client/masonry-reactions-client.js -o build-client/masonry-reactions-client.min.js --compress --mangle
+ *   copy build-client\masonry-reactions-client.min.js ..\..\themes\redefine-x\source\js\plugins\masonry-reactions.js
+ *   copy build-client\masonry-reactions-client.js ..\..\themes\redefine-x\source\js\plugins\masonry-reactions.source.js
+ *   cd ..\..\themes\redefine-x && npm run build
  */
 (function () {
     "use strict";
@@ -24,6 +36,8 @@
     const GITHUB_GRAPHQL_API = "https://api.github.com/graphql";
     const CACHE_KEY_PREFIX = "masonry-reactions-cache:";
     const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    const MASONRY_SCROLL_KEY = "masonry-scroll-position";
+    const PENDING_HEART_KEY = "masonry-pending-heart";
     /* ==================== State ==================== */
     let currentPagePath = "";
     let imageReactions = {};
@@ -394,8 +408,15 @@
         const btn = e.currentTarget;
         if (btn.classList.contains("is-loading"))
             return;
-        // Not authenticated? Redirect to GitHub OAuth
+        // Not authenticated? Save state and redirect to GitHub OAuth
         if (!isAuthenticated || !userToken) {
+            // Save scroll position for restoration after OAuth callback
+            sessionStorage.setItem(MASONRY_SCROLL_KEY, String(window.scrollY));
+            // Save the clicked heart's imageId to auto-click after login
+            const clickedImageId = btn.dataset.imageId;
+            if (clickedImageId) {
+                sessionStorage.setItem(PENDING_HEART_KEY, clickedImageId);
+            }
             window.location.href = getGiscusLoginUrl();
             return;
         }
@@ -445,9 +466,26 @@
             return;
         currentPagePath = newPagePath;
         isInitialized = true;
+        // Check for OAuth callback state (scroll + pending heart)
+        // Read and remove immediately to prevent re-triggering on subsequent inits
+        const pendingHeart = sessionStorage.getItem(PENDING_HEART_KEY);
+        if (pendingHeart)
+            sessionStorage.removeItem(PENDING_HEART_KEY);
+        const savedScroll = sessionStorage.getItem(MASONRY_SCROLL_KEY);
+        if (savedScroll)
+            sessionStorage.removeItem(MASONRY_SCROLL_KEY);
         // 1. Create heart buttons from the image list
         initializeHeartButtons(config.imageIds);
-        // 2. Try to get auth token (synced with giscus-client)
+        // 2. Restore scroll position (saved before OAuth redirect)
+        if (savedScroll) {
+            const scrollY = parseInt(savedScroll, 10);
+            if (!isNaN(scrollY) && scrollY > 0) {
+                requestAnimationFrame(() => {
+                    window.scrollTo({ top: scrollY, behavior: 'instant' });
+                });
+            }
+        }
+        // 3. Try to get auth token (synced with giscus-client)
         try {
             userToken = await getGiscusToken();
             isAuthenticated = !!userToken;
@@ -456,7 +494,7 @@
             userToken = null;
             isAuthenticated = false;
         }
-        // 3. Check cache first
+        // 4. Check cache first
         const cached = getCache(config.discussionTerm);
         if (cached) {
             applyCachedReactions(cached);
@@ -464,10 +502,30 @@
             if (isAuthenticated) {
                 fetchAndApplyLive(config);
             }
+            // Auto-click pending heart after reactions are applied
+            if (pendingHeart && isAuthenticated) {
+                handlePendingHeart(pendingHeart);
+            }
             return;
         }
-        // 4. Fetch live data
+        // 5. Fetch live data
         await fetchAndApplyLive(config);
+        // 6. Auto-click pending heart after reactions are applied
+        if (pendingHeart && isAuthenticated) {
+            handlePendingHeart(pendingHeart);
+        }
+    }
+    /**
+     * Auto-click a pending heart button after OAuth callback.
+     * Only clicks if the user hasn't already reacted to this image.
+     */
+    function handlePendingHeart(imageId) {
+        setTimeout(() => {
+            const btn = document.querySelector(`.masonry-heart-btn[data-image-id="${CSS.escape(imageId)}"]`);
+            if (btn && !btn.classList.contains("is-reacted")) {
+                btn.click();
+            }
+        }, 500);
     }
     /**
      * Fetch live data and apply to UI + cache.
@@ -610,6 +668,41 @@
         }
     });
     /* ==================== Boot ==================== */
+    // ====== OAuth Callback Session Sync ======
+    // When returning from GitHub OAuth, the URL contains ?giscus=SESSION.
+    // client-self-hosted.ts also processes this, but it loads later (via
+    // giscus.ejs with 1000ms delay). We sync the session here FIRST so
+    // that init() can immediately use it for authentication.
+    (function syncOAuthSession() {
+        try {
+            const url = new URL(location.href);
+            const giscusParam = url.searchParams.get('giscus');
+            if (giscusParam) {
+                // Save session to localStorage (same key & format as client-self-hosted.ts)
+                localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(giscusParam));
+                // Note: don't modify the URL here — client-self-hosted.ts needs the
+                // param to configure the giscus iframe session.
+            }
+        }
+        catch { }
+    })();
+    // ====== Listen for session changes from client-self-hosted.ts ======
+    // client-self-hosted.ts dispatches 'giscus:session-change' when it saves
+    // a new session. This handles the case where client loads AFTER us and
+    // processes the OAuth callback.
+    window.addEventListener('giscus:session-change', () => {
+        getGiscusToken().then((token) => {
+            if (token) {
+                userToken = token;
+                isAuthenticated = true;
+                const config = getPageConfig();
+                if (config) {
+                    clearCache(config.discussionTerm);
+                    fetchAndApplyLive(config);
+                }
+            }
+        });
+    });
     // Try registering Swup now (unlikely to succeed since swup.ejs loads later)
     tryRegisterSwup();
     if (document.readyState === "loading") {

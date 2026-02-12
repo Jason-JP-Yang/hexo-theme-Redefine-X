@@ -6,8 +6,17 @@
  * - The giscus widget iframe still points to giscus.app's server
  * - CSS is inlined locally (no external default.css request)
  * - Supports configurable giscus server origin via data-giscus-origin attribute
+ * - Scroll position save/restore across OAuth login redirects
+ * - Auto-refresh for stale comment data after new comments are posted
  *
- * Build: tsc client-self-hosted.ts --outDir build-client --target ES2020
+ * Build Steps (from project root):
+ *   cd dev/giscus
+ *   npx tsc -p tsconfig.client.json
+ *   npx terser build-client/client-self-hosted.js -o build-client/client-self-hosted.min.js --compress --mangle
+ *   copy build-client\client-self-hosted.min.js ..\..\themes\redefine-x\source\js\plugins\giscus-client.js
+ *   copy build-client\client-self-hosted.js ..\..\themes\redefine-x\source\js\plugins\giscus-client.source.js
+ *   cd ..\..\themes\redefine-x && npm run build
+ *
  * Usage: Load this script with data-* attributes same as official giscus client.js
  */
 (function () {
@@ -34,6 +43,8 @@
     if (session) {
         localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(session));
         history.replaceState(undefined, document.title, cleanedLocation);
+        // Notify other scripts (e.g., masonry-reactions-client) about the new session
+        window.dispatchEvent(new CustomEvent('giscus:session-change', { detail: { session } }));
     }
     else if (savedSession) {
         try {
@@ -131,6 +142,29 @@
         existingContainer.appendChild(iframeElement);
     }
     const suggestion = `Please consider reporting this error at https://github.com/giscus/giscus/issues/new.`;
+    // ==================== Scroll Position Save/Restore ====================
+    const SCROLL_KEY = 'giscus-scroll-position';
+    // Save scroll position before page unload (catches OAuth redirect from giscus iframe)
+    window.addEventListener('beforeunload', () => {
+        sessionStorage.setItem(SCROLL_KEY, String(window.scrollY));
+    });
+    // Restore scroll position on OAuth callback (fresh session from URL, not from storage)
+    if (session && !savedSession) {
+        const savedScroll = sessionStorage.getItem(SCROLL_KEY);
+        if (savedScroll) {
+            sessionStorage.removeItem(SCROLL_KEY);
+            const scrollY = parseInt(savedScroll, 10);
+            if (!isNaN(scrollY) && scrollY > 0) {
+                // Defer until after layout to ensure page content is rendered
+                requestAnimationFrame(() => {
+                    window.scrollTo({ top: scrollY, behavior: 'instant' });
+                });
+            }
+        }
+    }
+    // ==================== Comment Refresh Tracking ====================
+    let lastKnownCommentCount = -1;
+    let pendingRefreshTimer = null;
     function signOut() {
         delete params.session;
         const src = `${giscusOrigin}${locale}/widget?${new URLSearchParams(params)}`;
@@ -145,6 +179,21 @@
             return;
         if (data.giscus.resizeHeight) {
             iframeElement.style.height = `${data.giscus.resizeHeight}px`;
+        }
+        // Track discussion metadata for comment submission detection
+        if (data.giscus.discussion && typeof data.giscus.discussion.totalCommentCount === 'number') {
+            const newCount = data.giscus.discussion.totalCommentCount;
+            if (lastKnownCommentCount >= 0 && newCount > lastKnownCommentCount) {
+                // Comment count increased — schedule a delayed soft-refresh to ensure
+                // data consistency (handles GitHub API eventual consistency)
+                clearTimeout(pendingRefreshTimer);
+                pendingRefreshTimer = setTimeout(() => {
+                    if (iframeElement.isConnected && iframeElement.contentWindow) {
+                        iframeElement.contentWindow.postMessage({ giscus: { setConfig: { term: params.term } } }, giscusOrigin);
+                    }
+                }, 3000);
+            }
+            lastKnownCommentCount = newCount;
         }
         if (data.giscus.signOut) {
             localStorage.removeItem(GISCUS_SESSION_KEY);
@@ -170,6 +219,16 @@
         }
         else if (message.includes('Discussion not found')) {
             console.warn(`[giscus] ${message}. A new discussion will be created if a comment/reaction is submitted.`);
+            // If user is logged in, schedule a soft retry — the discussion may have just
+            // been created by a comment submission and GitHub API hasn't propagated yet
+            if (session) {
+                clearTimeout(pendingRefreshTimer);
+                pendingRefreshTimer = setTimeout(() => {
+                    if (iframeElement.isConnected && iframeElement.contentWindow) {
+                        iframeElement.contentWindow.postMessage({ giscus: { setConfig: { term: params.term } } }, giscusOrigin);
+                    }
+                }, 5000);
+            }
         }
         else if (message.includes('API rate limit exceeded')) {
             console.warn(formatError(message));
@@ -184,6 +243,14 @@
         signOut,
         setConfig(config) {
             iframeElement.contentWindow?.postMessage({ giscus: { setConfig: config } }, giscusOrigin);
+        },
+        /** Soft refresh — triggers giscus to re-fetch discussion data without full iframe reload */
+        refresh() {
+            iframeElement.contentWindow?.postMessage({ giscus: { setConfig: { term: params.term } } }, giscusOrigin);
+        },
+        /** Full iframe reload — recreates the entire giscus widget */
+        reload() {
+            iframeElement.src = src;
         },
     };
 })();
