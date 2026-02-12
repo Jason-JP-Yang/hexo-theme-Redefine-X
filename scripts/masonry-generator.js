@@ -466,7 +466,6 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   // Pick up pre-generated reaction data from masonry-reactions.js (before_generate filter)
   const allReactions = hexo._masonryReactions || {};
   const giscusConfig = hexo.theme.config?.comment?.config?.giscus || {};
-  const reactionsEnabled = commentEnabled && giscusConfig.repo && giscusConfig.repo_id && giscusConfig.category_id;
 
   categories.forEach(category => {
     category.list.forEach(item => {
@@ -476,21 +475,8 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
             const pageAutoExif = item['auto-exif'] || false;
             const processedImages = item.images.map(img => processImage(img, pageAutoExif));
 
-            // Build reactions config for the frontend client
-            // Client fetches all data live - we only pass imageIds and discussion term
+            // Attach reaction data if available
             const reactionsInfo = allReactions[pagePath] || null;
-            let masonryReactions = null;
-
-            if (reactionsEnabled) {
-                masonryReactions = {
-                    repo: giscusConfig.repo,
-                    repoId: giscusConfig.repo_id,
-                    categoryId: giscusConfig.category_id,
-                    discussionTerm: `[masonry-reactions] ${pagePath}`,
-                    // List of image IDs so the client knows which images to track
-                    imageIds: item.images.map(img => img.image),
-                };
-            }
 
             pages.push({
                 path: `masonry/${pageTitle}/index.html`,
@@ -501,7 +487,15 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                     content: '',
                     layout: 'page',
                     comment: commentEnabled,
-                    masonryReactions,
+                    // Masonry reactions data for the frontend
+                    masonryReactions: reactionsInfo ? {
+                        repo: giscusConfig.repo || '',
+                        repoId: giscusConfig.repo_id || '',
+                        categoryId: giscusConfig.category_id || '',
+                        discussionTerm: `[masonry-reactions] ${pagePath}`,
+                        discussionNumber: reactionsInfo.discussionNumber,
+                        imageReactions: reactionsInfo.imageReactions,
+                    } : null,
                 },
                 layout: 'page'
             });

@@ -2,7 +2,7 @@
 // Define an array of images to display in the masonry layout
 const images = page.images || theme.masonry;
 const siteRoot = config.root || '/';
-const hasReactions = page.masonryReactions != null;
+const hasReactions = page.masonryReactions && page.masonryReactions.imageReactions;
 
 // Helper to build full image path
 function buildImagePath(imagePath) {
@@ -65,10 +65,10 @@ images show title (top-left) and heart button (bottom-right) instead of descript
 </div>
 
 <% if (hasReactions) { %>
-<%# Embed minimal config data as JSON for the frontend script (no heartCounts) %>
+<%# Embed reactions data as JSON for the frontend script %>
 <script type="application/json" id="masonry-reactions-data">
 <%- JSON.stringify(page.masonryReactions).replace(/</g, '\\u003c') %>
 </script>
-<%# Load the masonry reactions client script - swup-compatible %>
-<script src="<%- url_for('/js/plugins/masonry-reactions.js') %>" defer <%= theme.global.single_page === true && 'data-swup-reload-script' %>></script>
+<%# Load the masonry reactions client script %>
+<script src="<%- url_for('/js/plugins/masonry-reactions.js') %>" defer></script>
 <% } %>
