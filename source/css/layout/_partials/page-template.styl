@@ -35,33 +35,48 @@ $friend-link-item-border-radius = 9px
       cursor zoom-in
 
 
+  // Masonry layout using CSS columns
+  // Preloaders have correct aspect ratios from lazyload-handle.js
+  // Layout is stable from page load - no waiting for images
   #masonry-container
-    position relative
-    display none
-    opacity 0
-    transition opacity 0.1s ease-in
+    column-count 2
+    column-gap 10px
+    opacity 1
+    
+    @media screen and (min-width: 768px)
+      column-count 3
+    
+    @media screen and (min-width: 1200px)
+      column-count 4
+
+    &.masonry-ready
+      opacity 1
 
     .masonry-item
-      position absolute
+      break-inside avoid
+      margin-bottom 10px
+      display inline-block
+      width 100%
       box-sizing border-box
 
       &:hover
-        img
+        img, .img-preloader
           box-shadow var(--redefine-box-shadow)
 
-      img
+      img, .img-preloader
         width 100%
+        height auto
         border-radius $redefine-border-radius-medium
         box-shadow var(--redefine-box-shadow-flat)
         cursor zoom-in
+        display block
+        margin 0
+        
+      .img-preloader
+        // Override default img-preloader margin for masonry items
+        margin 0
 
-  /* Loading */
-  .loading-placeholder
-    display block
-    justify-content center
-    align-items center
-    opacity 1
-    transition opacity 0.1s ease-out
+  /* Loading placeholder removed - preloaders show immediately */
 
   .loading
     -webkit-animation gradient-slide 1.1s ease infinite
@@ -174,6 +189,31 @@ $friend-link-item-border-radius = 9px
 
   .image-container:hover .image-title, .image-container:hover .image-description
     opacity 1
+
+  // Masonry title-only mode: no description → title centered at bottom
+  .image-container.masonry-title-only
+    .image-title
+      top auto
+      left 50%
+      right auto
+      bottom 10px
+      transform translateX(-50%)
+      text-align center
+      max-width 90%
+
+  // Masonry compact mode (JS-triggered when description overflows or overlaps title)
+  .image-container.masonry-compact
+    .image-description
+      display none !important
+
+    .image-title
+      top auto
+      left 50%
+      right auto
+      bottom 10px
+      transform translateX(-50%)
+      text-align center
+      max-width 90%
 
   .image-container img
     width 100%

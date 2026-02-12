@@ -287,6 +287,7 @@ class PathManager {
       }
     })();
 
+    // Try exact match first
     let abs = path.join(hexo.source_dir || "", decodedRel);
     if (fs.existsSync(abs)) return {
       abs,
@@ -299,6 +300,22 @@ class PathManager {
         abs,
         rel: decodedRel
       };
+    }
+
+    // Fallback: try .jpg <-> .jpeg alternative extension
+    const ext = path.extname(decodedRel).toLowerCase();
+    const altExtMap = { ".jpg": ".jpeg", ".jpeg": ".jpg" };
+    const altExt = altExtMap[ext];
+    if (altExt) {
+      const altRel = decodedRel.slice(0, decodedRel.length - ext.length) + altExt;
+
+      abs = path.join(hexo.source_dir || "", altRel);
+      if (fs.existsSync(abs)) return { abs, rel: altRel };
+
+      if (hexo.theme_dir) {
+        abs = path.join(hexo.theme_dir, "source", altRel);
+        if (fs.existsSync(abs)) return { abs, rel: altRel };
+      }
     }
 
     return null;

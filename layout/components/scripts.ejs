@@ -56,7 +56,7 @@
 <% } %>
 
 <% if (theme.masonry || theme.photos || theme.gallery) { %>
-    <%- renderJS('libs/minimasonry.min.js') %>
+    <%# Masonry now uses CSS columns - no external library needed %>
     <%- renderJS('plugins/masonry.js', {
         module: true
     }) %>
