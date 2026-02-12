@@ -2,15 +2,24 @@
 
 /**
  * Masonry Reactions - Build-time script
- * 
+ *
  * Pre-creates GitHub Discussions with comments for each masonry page image.
- * Each comment tracks heart reactions as "likes" for individual photos.
- * 
+ * Each comment maps to a photo and tracks heart reactions as "likes".
+ *
+ * This script does NOT store reaction counts at build time.
+ * All reaction data is fetched live by the frontend client via giscus.app API.
+ *
  * Flow:
- * 1. For each masonry page, find or create a discussion with prefix [masonry-reactions]
- * 2. Create a comment for each image (if not already present)
- * 3. Lock the discussion (users can still react, but can't add new comments)
- * 4. Fetch heart reaction counts and embed them in the page data
+ * 1. Batch-search for existing discussions across all masonry pages (single query)
+ * 2. Create missing discussions (one per masonry page, 1s interval)
+ * 3. Create missing comments (one per image, 1s interval)
+ * 4. Update old-format comments to include visible image ID tag (for bodyHTML parsing)
+ * 5. Lock discussions to prevent manual comments (reactions still work)
+ *
+ * Rate limit handling:
+ * - 1s delay between all mutation API calls
+ * - Secondary rate limit: read Retry-After header, wait accordingly, retry up to 3 times
+ * - Primary rate limit (X-RateLimit-Remaining=0): abort all operations with ERROR
  */
 
 const https = require("https");
@@ -18,8 +27,16 @@ const https = require("https");
 const GITHUB_GRAPHQL_API = "https://api.github.com/graphql";
 const REACTIONS_PREFIX = "[masonry-reactions] ";
 
+// Rate limit state
+let rateLimitRemaining = null;
+let abortAll = false;
+
 /* ==================== GitHub GraphQL API ==================== */
 
+/**
+ * Make a GitHub GraphQL request.
+ * Returns { data, headers } so callers can inspect rate limit headers.
+ */
 function graphqlRequest(pat, query, variables = {}) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ query, variables });
@@ -41,7 +58,13 @@ function graphqlRequest(pat, query, variables = {}) {
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
         try {
-          resolve(JSON.parse(data));
+          const parsed = JSON.parse(data);
+          // Track primary rate limit
+          const remaining = res.headers["x-ratelimit-remaining"];
+          if (remaining !== undefined) {
+            rateLimitRemaining = parseInt(remaining, 10);
+          }
+          resolve({ data: parsed, headers: res.headers });
         } catch (e) {
           reject(new Error(`Failed to parse GitHub API response: ${e.message}`));
         }
@@ -53,19 +76,96 @@ function graphqlRequest(pat, query, variables = {}) {
   });
 }
 
+/**
+ * Execute a GraphQL mutation with retry logic.
+ * - 1 second delay before each attempt
+ * - Reads Retry-After header on secondary rate limits
+ * - Max 3 retries per mutation
+ * - Aborts all operations if primary rate limit is exhausted
+ */
+async function executeMutation(pat, query, variables, log, label = "mutation") {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (abortAll) {
+      throw new Error("Aborted: primary rate limit reached");
+    }
+
+    // Check primary rate limit before attempting
+    if (rateLimitRemaining !== null && rateLimitRemaining <= 0) {
+      abortAll = true;
+      log.error(`[masonry-reactions] PRIMARY RATE LIMIT reached (X-RateLimit-Remaining: 0). Aborting all operations.`);
+      throw new Error("Aborted: X-RateLimit-Remaining is 0");
+    }
+
+    // 1 second delay before each mutation
+    await new Promise((r) => setTimeout(r, 1000));
+
+    let result;
+    try {
+      result = await graphqlRequest(pat, query, variables);
+    } catch (err) {
+      if (attempt < 2) {
+        log.warn(`[masonry-reactions] Network error on ${label}, retrying (attempt ${attempt + 1}/3): ${err.message}`);
+        continue;
+      }
+      throw err;
+    }
+
+    const responseData = result.data;
+    const headers = result.headers;
+
+    // Check primary rate limit after response
+    if (rateLimitRemaining !== null && rateLimitRemaining <= 0) {
+      abortAll = true;
+      log.error(`[masonry-reactions] PRIMARY RATE LIMIT reached after ${label}. Aborting all operations.`);
+      throw new Error("Aborted: X-RateLimit-Remaining is 0");
+    }
+
+    if (responseData.errors) {
+      const isSecondaryRateLimit = responseData.errors.some((e) =>
+        e.message?.includes("submitted too quickly") ||
+        e.message?.includes("abuse") ||
+        e.message?.includes("secondary rate limit")
+      );
+
+      if (isSecondaryRateLimit && attempt < 2) {
+        // Read Retry-After header; fallback to progressive wait
+        const retryAfter = headers["retry-after"];
+        const waitSeconds = retryAfter ? parseInt(retryAfter, 10) : (attempt + 1) * 5;
+        log.warn(`[masonry-reactions] Secondary rate limit on ${label}, waiting ${waitSeconds}s (attempt ${attempt + 1}/3)`);
+        await new Promise((r) => setTimeout(r, waitSeconds * 1000));
+        continue;
+      }
+
+      // Final attempt failed or non-rate-limit error
+      throw new Error(`${label} failed: ${JSON.stringify(responseData.errors)}`);
+    }
+
+    return responseData;
+  }
+}
+
 /* ==================== Discussion Management ==================== */
 
 /**
- * Search for an existing reactions discussion by exact title match
+ * Batch search for existing discussions across all masonry pages
+ * in a single GraphQL query using aliases.
+ * Groups searches to avoid query complexity limits (max 10 per batch).
  */
-async function findReactionsDiscussion(pat, repo, pagePath) {
-  const term = `${REACTIONS_PREFIX}${pagePath}`;
-  const searchQuery = `"${term}" in:title repo:${repo} is:discussion`;
+async function batchFindDiscussions(pat, repo, pageInfos, log) {
+  const BATCH_SIZE = 10;
+  const allResults = {};
 
-  const query = `
-    query($searchQuery: String!) {
-      search(query: $searchQuery, type: DISCUSSION, first: 5) {
-        discussionCount
+  for (let i = 0; i < pageInfos.length; i += BATCH_SIZE) {
+    if (abortAll) break;
+
+    const batch = pageInfos.slice(i, i + BATCH_SIZE);
+
+    // Build aliased query
+    const varDefs = batch.map((_, j) => `$q${j}: String!`).join(", ");
+    const searchParts = batch
+      .map(
+        (_, j) => `
+      search${j}: search(query: $q${j}, type: DISCUSSION, first: 5) {
         nodes {
           ... on Discussion {
             id
@@ -74,152 +174,166 @@ async function findReactionsDiscussion(pat, repo, pagePath) {
             locked
             comments(first: 100) {
               totalCount
-              nodes {
-                id
-                body
-                reactions(content: HEART, first: 0) {
-                  totalCount
-                }
-              }
+              nodes { id body }
             }
           }
         }
-      }
+      }`
+      )
+      .join("\n");
+
+    const fullQuery = `query(${varDefs}) { ${searchParts} }`;
+    const variables = {};
+    batch.forEach((info, j) => {
+      const term = `${REACTIONS_PREFIX}${info.pagePath}`;
+      variables[`q${j}`] = `"${term}" in:title repo:${repo} is:discussion`;
+    });
+
+    const result = await graphqlRequest(pat, fullQuery, variables);
+
+    if (result.data.errors) {
+      log.warn(`[masonry-reactions] Batch search errors: ${JSON.stringify(result.data.errors)}`);
     }
-  `;
 
-  const result = await graphqlRequest(pat, query, { searchQuery });
+    // Match results to pages
+    batch.forEach((info, j) => {
+      const searchResult = result.data.data?.[`search${j}`];
+      if (searchResult?.nodes) {
+        const term = `${REACTIONS_PREFIX}${info.pagePath}`;
+        const match = searchResult.nodes.find((n) => n.title === term);
+        if (match) {
+          allResults[info.pagePath] = match;
+        }
+      }
+    });
 
-  if (result.errors) {
-    throw new Error(`GitHub search error: ${JSON.stringify(result.errors)}`);
+    // 1 second delay between batches
+    if (i + BATCH_SIZE < pageInfos.length) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
   }
 
-  if (result.data?.search?.nodes) {
-    for (const node of result.data.search.nodes) {
-      if (node.title === term) {
-        return node;
-      }
-    }
-  }
-
-  return null;
+  return allResults;
 }
 
 /**
  * Create a new reactions discussion
  */
-async function createReactionsDiscussion(pat, repositoryId, categoryId, pagePath, retryCount = 0) {
+async function createReactionsDiscussion(pat, repositoryId, categoryId, pagePath, log) {
   const term = `${REACTIONS_PREFIX}${pagePath}`;
 
-  const query = `
-    mutation($input: CreateDiscussionInput!) {
+  const result = await executeMutation(
+    pat,
+    `mutation($input: CreateDiscussionInput!) {
       createDiscussion(input: $input) {
-        discussion {
-          id
-          number
-          title
-        }
+        discussion { id number title }
       }
-    }
-  `;
-
-  const result = await graphqlRequest(pat, query, {
-    input: {
-      repositoryId,
-      categoryId,
-      title: term,
-      body: `This discussion is auto-generated for tracking photo reactions on the masonry page: \`${pagePath}\`\n\n⚠️ Please do not delete or modify this discussion. Comments here are mapped to individual photos.\n\n---\n*Generated by hexo-masonry-reactions*`,
+    }`,
+    {
+      input: {
+        repositoryId,
+        categoryId,
+        title: term,
+        body: [
+          `This discussion is auto-generated for tracking photo reactions on the masonry page: \`${pagePath}\``,
+          "",
+          "⚠️ Please do not delete or modify this discussion. Comments here are mapped to individual photos.",
+          "",
+          "---",
+          "*Generated by hexo-masonry-reactions*",
+        ].join("\n"),
+      },
     },
-  });
+    log,
+    `create discussion: ${pagePath}`
+  );
 
-  if (result.errors) {
-    const isRateLimit = result.errors.some(e => 
-      e.message?.includes("submitted too quickly") || e.message?.includes("abuse")
-    );
-    if (isRateLimit && retryCount < 3) {
-      const backoff = Math.pow(2, retryCount + 1) * 2000;
-      hexo.log.info(`[masonry-reactions] Rate limited on discussion creation, retrying in ${backoff / 1000}s (attempt ${retryCount + 1}/3)`);
-      await new Promise((r) => setTimeout(r, backoff));
-      return createReactionsDiscussion(pat, repositoryId, categoryId, pagePath, retryCount + 1);
-    }
-    throw new Error(`Failed to create discussion: ${JSON.stringify(result.errors)}`);
-  }
-
-  return result.data?.createDiscussion?.discussion;
+  return result?.createDiscussion?.discussion;
 }
 
 /**
- * Add a comment for a specific image, with retry for rate limiting
+ * Add a comment for a specific image.
+ * Body includes:
+ * - HTML comment tag (for build-time raw body parsing)
+ * - Visible code tag (for frontend bodyHTML parsing via giscus API)
  */
-async function addImageComment(pat, discussionId, imageId, imageTitle, retryCount = 0) {
-  const query = `
-    mutation($input: AddDiscussionCommentInput!) {
+async function addImageComment(pat, discussionId, imageId, imageTitle, log) {
+  const displayTitle = imageTitle || imageId;
+  const body = `<!-- masonry-image-id: ${imageId} -->\n📷 **${displayTitle}**\n\n\`masonry-image:${imageId}\``;
+
+  const result = await executeMutation(
+    pat,
+    `mutation($input: AddDiscussionCommentInput!) {
       addDiscussionComment(input: $input) {
-        comment {
-          id
-        }
+        comment { id }
       }
-    }
-  `;
+    }`,
+    { input: { discussionId, body } },
+    log,
+    `add comment: ${imageId}`
+  );
 
-  const body = `<!-- masonry-image-id: ${imageId} -->\n📷 **${imageTitle || imageId}**`;
+  return result?.addDiscussionComment?.comment;
+}
 
-  const result = await graphqlRequest(pat, query, {
-    input: { discussionId, body },
-  });
+/**
+ * Update an existing comment to add the visible code tag.
+ * Migrates old-format comments (HTML comment only) to new format.
+ */
+async function updateCommentBody(pat, commentId, newBody, log, label) {
+  const result = await executeMutation(
+    pat,
+    `mutation($commentId: ID!, $body: String!) {
+      updateDiscussionComment(input: {commentId: $commentId, body: $body}) {
+        comment { id }
+      }
+    }`,
+    { commentId, body: newBody },
+    log,
+    label || `update comment: ${commentId}`
+  );
 
-  if (result.errors) {
-    const isRateLimit = result.errors.some(e => 
-      e.message?.includes("submitted too quickly") || e.message?.includes("abuse")
-    );
-    if (isRateLimit && retryCount < 3) {
-      const backoff = Math.pow(2, retryCount + 1) * 2000; // 4s, 8s, 16s
-      hexo.log.info(`[masonry-reactions] Rate limited, retrying in ${backoff / 1000}s (attempt ${retryCount + 1}/3)`);
-      await new Promise((r) => setTimeout(r, backoff));
-      return addImageComment(pat, discussionId, imageId, imageTitle, retryCount + 1);
-    }
-    throw new Error(`Failed to add comment: ${JSON.stringify(result.errors)}`);
-  }
-
-  return result.data?.addDiscussionComment?.comment;
+  return result?.updateDiscussionComment?.comment;
 }
 
 /**
  * Lock a discussion to prevent new comments (reactions still allowed)
  */
-async function lockDiscussion(pat, lockableId) {
-  const query = `
-    mutation($input: LockLockableInput!) {
+async function lockDiscussion(pat, lockableId, log) {
+  await executeMutation(
+    pat,
+    `mutation($input: LockLockableInput!) {
       lockLockable(input: $input) {
         lockedRecord { locked }
       }
-    }
-  `;
-
-  await graphqlRequest(pat, query, {
-    input: { lockableId, lockReason: "OFF_TOPIC" },
-  });
+    }`,
+    { input: { lockableId, lockReason: "OFF_TOPIC" } },
+    log,
+    "lock discussion"
+  );
 }
 
 /**
  * Unlock a discussion (needed to add new comments)
  */
-async function unlockDiscussion(pat, lockableId) {
-  const query = `
-    mutation($input: UnlockLockableInput!) {
+async function unlockDiscussion(pat, lockableId, log) {
+  await executeMutation(
+    pat,
+    `mutation($input: UnlockLockableInput!) {
       unlockLockable(input: $input) {
         unlockedRecord { locked }
       }
-    }
-  `;
-
-  await graphqlRequest(pat, query, {
-    input: { lockableId },
-  });
+    }`,
+    { input: { lockableId } },
+    log,
+    "unlock discussion"
+  );
 }
 
+/* ==================== Helpers ==================== */
+
 /**
- * Parse the masonry-image-id from a comment body
+ * Parse masonry-image-id from raw comment body
  */
 function parseImageId(commentBody) {
   if (!commentBody) return null;
@@ -228,82 +342,108 @@ function parseImageId(commentBody) {
 }
 
 /**
- * Process reactions for a single masonry page.
- * Returns { discussionNumber, imageReactions: { [imageId]: { commentId, heartCount } } }
+ * Check if a comment body already has the new visible code tag
  */
-async function processPageReactions(pat, repo, repositoryId, categoryId, pagePath, images, log) {
-  try {
-    // 1. Find or create discussion
-    let discussion = await findReactionsDiscussion(pat, repo, pagePath);
+function hasVisibleImageTag(commentBody) {
+  return commentBody && commentBody.includes("`masonry-image:");
+}
 
+/* ==================== Page Processing ==================== */
+
+/**
+ * Process a single masonry page:
+ * 1. Create discussion if missing
+ * 2. Update old-format comments (add visible code tag)
+ * 3. Create comments for new images
+ * 4. Lock discussion
+ */
+async function processPageReactions(pat, repo, repositoryId, categoryId, pagePath, images, discussion, log) {
+  try {
+    if (abortAll) {
+      log.error(`[masonry-reactions] Skipping ${pagePath}: operations aborted`);
+      return false;
+    }
+
+    // 1. Create discussion if needed
     if (!discussion) {
       log.info(`[masonry-reactions] Creating discussion for: ${pagePath}`);
-      discussion = await createReactionsDiscussion(pat, repositoryId, categoryId, pagePath);
+      discussion = await createReactionsDiscussion(pat, repositoryId, categoryId, pagePath, log);
       if (!discussion) {
         log.error(`[masonry-reactions] Failed to create discussion for: ${pagePath}`);
-        return null;
+        return false;
       }
       discussion.comments = { totalCount: 0, nodes: [] };
       discussion.locked = false;
-      // Delay after creating a new discussion to avoid secondary rate limit
-      await new Promise((r) => setTimeout(r, 3000));
     }
 
     // 2. Parse existing comments
     const existingComments = discussion.comments?.nodes || [];
     const existingImageIds = new Set();
-    const imageCommentMap = {};
+    const commentsToUpdate = [];
 
     for (const comment of existingComments) {
       const imageId = parseImageId(comment.body);
       if (imageId) {
         existingImageIds.add(imageId);
-        imageCommentMap[imageId] = {
-          commentId: comment.id,
-          heartCount: comment.reactions?.totalCount || 0,
-        };
-      }
-    }
-
-    // 3. Find images that need new comments
-    const newImages = images.filter((img) => !existingImageIds.has(img.image));
-
-    if (newImages.length > 0) {
-      // Unlock if locked
-      if (discussion.locked) {
-        log.info(`[masonry-reactions] Unlocking discussion to add ${newImages.length} new comments`);
-        await unlockDiscussion(pat, discussion.id);
-      }
-
-      for (const img of newImages) {
-        log.info(`[masonry-reactions] Adding comment for: ${img.image}`);
-        const comment = await addImageComment(pat, discussion.id, img.image, img.title);
-        if (comment) {
-          imageCommentMap[img.image] = {
+        // Check if comment needs format upgrade
+        if (!hasVisibleImageTag(comment.body)) {
+          commentsToUpdate.push({
             commentId: comment.id,
-            heartCount: 0,
-          };
+            imageId,
+            oldBody: comment.body,
+          });
         }
-        // Delay between comment creations to respect GitHub secondary rate limits
-        await new Promise((r) => setTimeout(r, 3000));
       }
-
-      // Re-lock
-      log.info(`[masonry-reactions] Locking discussion`);
-      await lockDiscussion(pat, discussion.id);
-    } else if (!discussion.locked) {
-      // Lock if not already locked and no new comments needed
-      log.info(`[masonry-reactions] Locking discussion (no new images)`);
-      await lockDiscussion(pat, discussion.id);
     }
 
-    return {
-      discussionNumber: discussion.number,
-      imageReactions: imageCommentMap,
-    };
+    // 3. Determine what work is needed
+    const newImages = images.filter((img) => !existingImageIds.has(img.image));
+    const needsMutations = newImages.length > 0 || commentsToUpdate.length > 0;
+
+    if (!needsMutations) {
+      // Ensure discussion is locked, nothing else to do
+      if (!discussion.locked) {
+        log.info(`[masonry-reactions] Locking discussion: ${pagePath}`);
+        await lockDiscussion(pat, discussion.id, log);
+      }
+      return true;
+    }
+
+    // 4. Unlock if locked (we need to modify comments)
+    if (discussion.locked) {
+      log.info(`[masonry-reactions] Unlocking discussion: ${pagePath}`);
+      await unlockDiscussion(pat, discussion.id, log);
+    }
+
+    // 5. Update old-format comments
+    for (const item of commentsToUpdate) {
+      if (abortAll) break;
+      log.info(`[masonry-reactions] Updating comment format for: ${item.imageId}`);
+      const newBody = `${item.oldBody}\n\n\`masonry-image:${item.imageId}\``;
+      await updateCommentBody(pat, item.commentId, newBody, log, `update format: ${item.imageId}`);
+    }
+
+    // 6. Add comments for new images
+    for (const img of newImages) {
+      if (abortAll) break;
+      log.info(`[masonry-reactions] Adding comment for: ${img.image}`);
+      await addImageComment(pat, discussion.id, img.image, img.title, log);
+    }
+
+    // 7. Lock discussion
+    if (!abortAll) {
+      log.info(`[masonry-reactions] Locking discussion: ${pagePath}`);
+      await lockDiscussion(pat, discussion.id, log);
+    }
+
+    return true;
   } catch (err) {
-    log.error(`[masonry-reactions] Error processing ${pagePath}: ${err.message}`);
-    return null;
+    if (abortAll) {
+      log.error(`[masonry-reactions] ABORTED ${pagePath}: ${err.message}`);
+    } else {
+      log.error(`[masonry-reactions] ERROR processing ${pagePath}: ${err.message}`);
+    }
+    return false;
   }
 }
 
@@ -329,6 +469,10 @@ hexo.extend.filter.register("before_generate", async function () {
     return;
   }
 
+  // Reset state for this build
+  rateLimitRemaining = null;
+  abortAll = false;
+
   // Load masonry data
   const data = hexo.locals.get("data");
   const masonryData = data?.masonry;
@@ -338,35 +482,58 @@ hexo.extend.filter.register("before_generate", async function () {
   }
 
   const categories = masonryData.filter((item) => item.links_category);
-  const allReactions = {};
 
-  hexo.log.info("[masonry-reactions] Processing masonry page reactions...");
-
+  // Collect all page infos
+  const allPageInfos = [];
   for (const category of categories) {
     for (const item of category.list || []) {
       if (!item.images || item.images.length === 0) continue;
-
       const pageTitle = item["page-title"] || item.name;
-      // Build the page path as giscus pathname mapping would
       const pagePath = `masonry/${pageTitle}/`;
-
-      const result = await processPageReactions(
-        pat, repo, repositoryId, categoryId, pagePath, item.images, hexo.log
-      );
-
-      if (result) {
-        allReactions[pagePath] = result;
-        hexo.log.info(
-          `[masonry-reactions] ${pagePath}: ${Object.keys(result.imageReactions).length} images tracked`
-        );
-      }
-
-      // Delay between pages to avoid secondary rate limits
-      await new Promise((r) => setTimeout(r, 2000));
+      allPageInfos.push({ pagePath, images: item.images, pageTitle });
     }
   }
 
-  // Store for the masonry generator to pick up
-  hexo._masonryReactions = allReactions;
-  hexo.log.info(`[masonry-reactions] Done. ${Object.keys(allReactions).length} pages processed.`);
+  if (allPageInfos.length === 0) {
+    hexo.log.info("[masonry-reactions] No masonry pages with images found");
+    return;
+  }
+
+  hexo.log.info(`[masonry-reactions] Processing ${allPageInfos.length} masonry pages...`);
+
+  // Phase 1: Batch search for all existing discussions (single query or few batches)
+  let existingDiscussions = {};
+  try {
+    existingDiscussions = await batchFindDiscussions(pat, repo, allPageInfos, hexo.log);
+    hexo.log.info(
+      `[masonry-reactions] Found ${Object.keys(existingDiscussions).length}/${allPageInfos.length} existing discussions`
+    );
+  } catch (err) {
+    hexo.log.error(`[masonry-reactions] Batch search failed: ${err.message}`);
+    return;
+  }
+
+  // Phase 2+3: Process each page (create discussions/comments, update old formats)
+  let successCount = 0;
+  for (const info of allPageInfos) {
+    if (abortAll) {
+      hexo.log.error(`[masonry-reactions] ABORTING remaining pages due to rate limit.`);
+      break;
+    }
+
+    const discussion = existingDiscussions[info.pagePath] || null;
+    const success = await processPageReactions(
+      pat, repo, repositoryId, categoryId,
+      info.pagePath, info.images, discussion, hexo.log
+    );
+
+    if (success) {
+      successCount++;
+      hexo.log.info(`[masonry-reactions] ✓ ${info.pagePath}: ${info.images.length} images`);
+    }
+  }
+
+  hexo.log.info(
+    `[masonry-reactions] Done. ${successCount}/${allPageInfos.length} pages processed successfully.`
+  );
 });

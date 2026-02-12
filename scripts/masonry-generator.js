@@ -463,9 +463,10 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   });
 
   // 3. Generate Individual Masonry Pages with EXIF processing
-  // Pick up pre-generated reaction data from masonry-reactions.js (before_generate filter)
-  const allReactions = hexo._masonryReactions || {};
+  // Masonry reactions config: pass only config data for the frontend client.
+  // All reaction data is fetched LIVE from giscus.app API by the client script.
   const giscusConfig = hexo.theme.config?.comment?.config?.giscus || {};
+  const hasGiscusReactions = commentEnabled && giscusConfig.repo && giscusConfig.category;
 
   categories.forEach(category => {
     category.list.forEach(item => {
@@ -475,8 +476,8 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
             const pageAutoExif = item['auto-exif'] || false;
             const processedImages = item.images.map(img => processImage(img, pageAutoExif));
 
-            // Attach reaction data if available
-            const reactionsInfo = allReactions[pagePath] || null;
+            // Collect image IDs for the frontend client
+            const imageIds = item.images.map(img => img.image).filter(Boolean);
 
             pages.push({
                 path: `masonry/${pageTitle}/index.html`,
@@ -487,14 +488,13 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                     content: '',
                     layout: 'page',
                     comment: commentEnabled,
-                    // Masonry reactions data for the frontend
-                    masonryReactions: reactionsInfo ? {
-                        repo: giscusConfig.repo || '',
-                        repoId: giscusConfig.repo_id || '',
-                        categoryId: giscusConfig.category_id || '',
+                    // Masonry reactions config for the frontend client
+                    // Only includes config data; reaction counts are fetched live
+                    masonryReactions: hasGiscusReactions ? {
+                        repo: giscusConfig.repo,
+                        category: giscusConfig.category || 'General',
                         discussionTerm: `[masonry-reactions] ${pagePath}`,
-                        discussionNumber: reactionsInfo.discussionNumber,
-                        imageReactions: reactionsInfo.imageReactions,
+                        imageIds: imageIds,
                     } : null,
                 },
                 layout: 'page'
