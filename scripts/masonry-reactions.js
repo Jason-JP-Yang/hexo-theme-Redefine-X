@@ -307,7 +307,7 @@ async function lockDiscussion(pat, lockableId, log) {
         lockedRecord { locked }
       }
     }`,
-    { input: { lockableId, lockReason: "OFF_TOPIC" } },
+    { input: { lockableId } },
     log,
     "lock discussion"
   );
