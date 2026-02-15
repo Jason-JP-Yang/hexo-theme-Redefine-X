@@ -495,6 +495,7 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                         category: giscusConfig.category || 'General',
                         discussionTerm: `[masonry-reactions] ${pagePath}`,
                         imageIds: imageIds,
+                        giscusProxy: (giscusConfig.proxy || '').replace(/\/+$/, '') || null,
                     } : null,
                 },
                 layout: 'page'

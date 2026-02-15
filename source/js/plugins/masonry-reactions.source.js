@@ -5,9 +5,11 @@
  * heart reactions on masonry gallery pages.
  *
  * Architecture:
- * - Fetches reaction data from giscus.app/api/discussions (unauthenticated).
+ * - Fetches reaction data from giscus.app/api/discussions via CORS proxy.
+ *   giscus.app blocks cross-origin API requests (CORS whitelist: giscus.app only).
+ *   A Cloudflare Worker proxy forwards requests with proper CORS headers.
  *   This uses giscus's own GitHub App token — no user rate-limit consumption.
- *   The request NEVER sends an Authorization header to giscus.app (CORS issue).
+ * - Token exchange also goes through the CORS proxy (same restriction).
  * - For logged-in users, fetches viewerHasReacted via GitHub GraphQL API
  *   (GitHub's API properly supports CORS with Authorization headers).
  * - Toggling reactions uses GitHub GraphQL with the user's OAuth token.
@@ -61,10 +63,19 @@
             return null;
         }
     }
+    /**
+     * Get the API base URL for giscus requests.
+     * Uses the CORS proxy if configured, otherwise falls back to giscus.app directly.
+     * The proxy is needed because giscus.app only allows CORS from giscus.app origin.
+     */
+    function getGiscusApiBase() {
+        const config = getPageConfig();
+        return config?.giscusProxy || GISCUS_ORIGIN;
+    }
     /* ==================== Token Management ==================== */
     /**
      * Exchange giscus session for a GitHub OAuth token.
-     * Uses x-www-form-urlencoded → "simple" CORS request (no preflight).
+     * Routes through the CORS proxy to bypass giscus.app's restrictive CORS.
      */
     async function getGiscusToken() {
         const raw = localStorage.getItem(GISCUS_SESSION_KEY);
@@ -80,7 +91,8 @@
         if (!session)
             return null;
         try {
-            const res = await fetch(`${GISCUS_ORIGIN}/api/oauth/token`, {
+            const apiBase = getGiscusApiBase();
+            const res = await fetch(`${apiBase}/api/oauth/token`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: `session=${encodeURIComponent(session)}`,
@@ -101,14 +113,13 @@
         const redirectUri = encodeURIComponent(location.href);
         return `${GISCUS_ORIGIN}/api/oauth/authorize?redirect_uri=${redirectUri}`;
     }
-    /* ==================== Giscus API (Unauthenticated) ==================== */
+    /* ==================== Giscus API (via CORS Proxy) ==================== */
     /**
-     * Fetch discussion data from giscus.app API.
+     * Fetch discussion data from giscus.app API via CORS proxy.
      *
-     * IMPORTANT: This request NEVER includes an Authorization header.
-     * giscus.app's CORS only sets Access-Control-Allow-Origin but does NOT
-     * include "authorization" in Access-Control-Allow-Headers. Sending auth
-     * would trigger a CORS preflight that gets blocked.
+     * giscus.app blocks cross-origin requests (only allows giscus.app origin).
+     * The CORS proxy (Cloudflare Worker) forwards the request and adds proper
+     * Access-Control-Allow-Origin headers for our blog domain.
      *
      * giscus.app uses its own GitHub App token for unauthenticated requests,
      * so visitors don't burn their personal GitHub API rate limit.
@@ -125,8 +136,9 @@
         if (after)
             params.set("after", after);
         try {
-            // Simple GET — no custom headers — no CORS preflight
-            const res = await fetch(`${GISCUS_ORIGIN}/api/discussions?${params}`);
+            // Route through CORS proxy to bypass giscus.app's restrictive CORS
+            const apiBase = getGiscusApiBase();
+            const res = await fetch(`${apiBase}/api/discussions?${params}`);
             if (!res.ok) {
                 if (res.status === 404)
                     return null;
