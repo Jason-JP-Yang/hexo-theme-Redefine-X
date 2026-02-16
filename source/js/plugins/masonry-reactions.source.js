@@ -252,10 +252,23 @@
      * which GitHub renders as <code>masonry-image:IMAGE_ID</code>.
      * HTML comments (<!-- -->) are stripped by GitHub's markdown renderer.
      */
-    function parseImageId(bodyHTML) {
-        if (!bodyHTML)
+    function parseImageId(body) {
+        if (!body)
             return null;
-        const match = bodyHTML.match(/<code[^>]*>masonry-image:(.+?)<\/code>/);
+        // Raw markdown code format: `masonry-image:IMAGE_ID`
+        let match = body.match(/`masonry-image:(.+?)`/);
+        if (match)
+            return match[1].trim();
+        // HTML comment format: <!-- masonry-image:IMAGE_ID -->
+        match = body.match(/<!--\s*masonry-image:(.+?)\s*-->/);
+        if (match)
+            return match[1].trim();
+        // Legacy HTML comment format
+        match = body.match(/<!--\s*masonry-image-id:\s*(.+?)\s*-->/);
+        if (match)
+            return match[1].trim();
+        // Legacy visible code tag format
+        match = body.match(/<code[^>]*>masonry-image:(.+?)<\/code>/);
         return match ? match[1].trim() : null;
     }
     /* ==================== Cache ==================== */
@@ -383,21 +396,28 @@
      * The giscus API returns adapted comments with bodyHTML and reactions map.
      */
     function applyReactions(comments) {
+        const previous = imageReactions;
         imageReactions = {};
         for (const comment of comments) {
-            const imageId = parseImageId(comment.bodyHTML);
+            const rawBody = comment.body || comment.bodyHTML || "";
+            const imageId = parseImageId(rawBody);
             if (!imageId)
                 continue;
             // Giscus adapted format: reactions.HEART.count / .viewerHasReacted
             const heartCount = comment.reactions?.HEART?.count || 0;
             // viewerHasReacted from unauthenticated giscus API is always false
             const viewerHasReacted = comment.reactions?.HEART?.viewerHasReacted || false;
+            const preservedViewerHasReacted = previous[imageId]?.viewerHasReacted || viewerHasReacted;
+            const existing = imageReactions[imageId];
+            if (existing && existing.heartCount >= heartCount) {
+                continue;
+            }
             imageReactions[imageId] = {
                 commentId: comment.id,
                 heartCount,
-                viewerHasReacted,
+                viewerHasReacted: preservedViewerHasReacted,
             };
-            updateHeartButton(imageId, heartCount, viewerHasReacted);
+            updateHeartButton(imageId, heartCount, preservedViewerHasReacted);
         }
     }
     /**
@@ -624,6 +644,18 @@
         catch { }
         return false;
     }
+    async function refreshAuthenticatedState() {
+        const token = await getGiscusToken();
+        if (!token)
+            return;
+        userToken = token;
+        isAuthenticated = true;
+        const config = getPageConfig();
+        if (config) {
+            clearCache(config.discussionTerm);
+            fetchAndApplyLive(config);
+        }
+    }
     /* ==================== OAuth Sync with Giscus ==================== */
     /**
      * Listen for giscus session changes from other scripts/tabs.
@@ -633,17 +665,7 @@
             return;
         if (e.newValue) {
             // User logged in
-            getGiscusToken().then((token) => {
-                if (token) {
-                    userToken = token;
-                    isAuthenticated = true;
-                    const config = getPageConfig();
-                    if (config) {
-                        clearCache(config.discussionTerm);
-                        fetchAndApplyLive(config);
-                    }
-                }
-            });
+            refreshAuthenticatedState();
         }
         else {
             // User logged out
@@ -703,17 +725,7 @@
     // a new session. This handles the case where client loads AFTER us and
     // processes the OAuth callback.
     window.addEventListener('giscus:session-change', () => {
-        getGiscusToken().then((token) => {
-            if (token) {
-                userToken = token;
-                isAuthenticated = true;
-                const config = getPageConfig();
-                if (config) {
-                    clearCache(config.discussionTerm);
-                    fetchAndApplyLive(config);
-                }
-            }
-        });
+        refreshAuthenticatedState();
     });
     // Try registering Swup now (unlikely to succeed since swup.ejs loads later)
     tryRegisterSwup();

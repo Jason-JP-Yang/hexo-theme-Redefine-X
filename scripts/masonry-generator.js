@@ -466,7 +466,12 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   // Masonry reactions config: pass only config data for the frontend client.
   // All reaction data is fetched LIVE from giscus.app API by the client script.
   const giscusConfig = hexo.theme.config?.comment?.config?.giscus || {};
-  const hasGiscusReactions = commentEnabled && giscusConfig.repo && giscusConfig.category;
+  const hasGiscusReactions =
+    commentEnabled &&
+    giscusConfig.repo &&
+    giscusConfig.category &&
+    giscusConfig.proxy &&
+    giscusConfig.author_pat;
 
   categories.forEach(category => {
     category.list.forEach(item => {
