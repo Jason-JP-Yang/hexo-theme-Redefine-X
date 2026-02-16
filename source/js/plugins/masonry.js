@@ -1,109 +1,73 @@
+/**
+ * Masonry Gallery - CSS Columns Based Layout
+ * 
+ * Uses pure CSS columns for masonry layout.
+ * Images are lazy-loaded via lazyload.js with preloaders that maintain
+ * correct aspect ratios, so layout is stable from page load.
+ * No external masonry libraries needed.
+ * 
+ * Includes overlay overflow detection: if description is too long
+ * (overlaps with title or exceeds image bounds), switches to compact mode
+ * where only the title is shown centered at the bottom.
+ */
+
+/**
+ * Check masonry overlay overflow and apply compact mode if needed.
+ * Compact mode hides description and centers title at bottom.
+ */
+function checkMasonryOverflow(container) {
+  const items = container.querySelectorAll('.image-container');
+  items.forEach(item => {
+    const desc = item.querySelector('.image-description');
+    const title = item.querySelector('.image-title');
+    if (!desc || !title) return;
+
+    // Reset compact mode to re-measure
+    item.classList.remove('masonry-compact');
+
+    const containerH = item.offsetHeight;
+    if (containerH === 0) return; // Not rendered yet
+
+    const titleRect = title.getBoundingClientRect();
+    const descRect = desc.getBoundingClientRect();
+
+    // Check if title and description overlap vertically
+    const overlaps = titleRect.bottom > descRect.top && titleRect.top < descRect.bottom;
+
+    // Check if description is too tall relative to the image container
+    const tooTall = desc.offsetHeight > containerH * 0.3;
+
+    // Check if description exceeds container bounds
+    const containerRect = item.getBoundingClientRect();
+    const exceeds = descRect.bottom > containerRect.bottom + 2;
+
+    if (overlaps || tooTall || exceeds) {
+      item.classList.add('masonry-compact');
+    }
+  });
+}
+
 export function initMasonry() {
-  var loadingPlaceholder = document.querySelector(".loading-placeholder");
-  var masonryContainer = document.querySelector("#masonry-container");
-  if (!loadingPlaceholder || !masonryContainer) return;
+  const masonryContainer = document.querySelector("#masonry-container");
+  if (!masonryContainer) return;
 
-  loadingPlaceholder.style.display = "block";
-  masonryContainer.style.display = "none";
+  // Container is immediately visible with CSS columns layout
+  // Preloaders show with correct aspect ratios
+  // Images load progressively via lazyload.js (same as posts)
+  masonryContainer.classList.add("masonry-ready");
 
-  // Get both regular images and preloader divs
-  var images = document.querySelectorAll(
-    "#masonry-container .masonry-item img",
-  );
-  var preloaders = document.querySelectorAll(
-    "#masonry-container .masonry-item .img-preloader",
-  );
-  
-  var totalCount = images.length + preloaders.length;
-  var loadedCount = 0;
+  // Check overlay overflow after layout stabilizes
+  requestAnimationFrame(() => {
+    checkMasonryOverflow(masonryContainer);
+  });
 
-  function onItemReady() {
-    loadedCount++;
-    if (loadedCount === totalCount) {
-      initializeMasonryLayout();
-    }
-  }
-
-  // Handle regular images
-  for (var i = 0; i < images.length; i++) {
-    var img = images[i];
-    if (img.complete) {
-      onItemReady();
-    } else {
-      img.addEventListener("load", onItemReady);
-      img.addEventListener("error", onItemReady); // Also count errors to prevent blocking
-    }
-  }
-
-  // Handle preloaders - force load them and wait
-  if (preloaders.length > 0) {
-    import("../layouts/lazyload.js").then((module) => {
-      preloaders.forEach((preloader) => {
-        // If already loaded, count it
-        if (preloader.dataset.loaded === "true" || preloader.tagName === "IMG") {
-          onItemReady();
-        } else {
-          // Set up observer for when it gets replaced with an image
-          const observer = new MutationObserver((mutations, obs) => {
-            mutations.forEach((mutation) => {
-              mutation.addedNodes.forEach((node) => {
-                if (node.tagName === "IMG") {
-                  if (node.complete) {
-                    onItemReady();
-                  } else {
-                    node.addEventListener("load", onItemReady);
-                    node.addEventListener("error", onItemReady);
-                  }
-                  obs.disconnect();
-                }
-              });
-            });
-          });
-          
-          observer.observe(preloader.parentNode, { childList: true });
-          
-          // Force trigger the preloader to load
-          if (module.forceLoadAllPreloaders) {
-            module.forceLoadAllPreloaders();
-          }
-        }
-      });
-    }).catch(() => {
-      // Fallback: just count all preloaders as ready
-      preloaders.forEach(() => onItemReady());
-    });
-  }
-
-  // Handle case where there are no items
-  if (totalCount === 0) {
-    initializeMasonryLayout();
-  } else if (loadedCount === totalCount) {
-    initializeMasonryLayout();
-  }
-
-  function initializeMasonryLayout() {
-    loadingPlaceholder.style.opacity = 0;
-    setTimeout(() => {
-      loadingPlaceholder.style.display = "none";
-      masonryContainer.style.display = "block";
-      var screenWidth = window.innerWidth;
-      var baseWidth;
-      if (screenWidth >= 768) {
-        baseWidth = 255;
-      } else {
-        baseWidth = 150;
-      }
-      var masonry = new MiniMasonry({
-        baseWidth: baseWidth,
-        container: masonryContainer,
-        gutterX: 10,
-        gutterY: 10,
-        surroundingGutter: false,
-      });
-      masonry.layout();
-      masonryContainer.style.opacity = 1;
-    }, 100);
-  }
+  // Recheck on window resize (column layout may change)
+  let resizeTimer;
+  const handleResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => checkMasonryOverflow(masonryContainer), 200);
+  };
+  window.addEventListener('resize', handleResize);
 }
 
 if (data.masonry) {

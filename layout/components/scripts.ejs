@@ -56,10 +56,16 @@
 <% } %>
 
 <% if (theme.masonry || theme.photos || theme.gallery) { %>
-    <%- renderJS('libs/minimasonry.min.js') %>
+    <%# Masonry now uses CSS columns - no external library needed %>
     <%- renderJS('plugins/masonry.js', {
         module: true
     }) %>
+    <%# Masonry reactions: heart buttons for photos (loaded globally for Swup compatibility) %>
+    <% if (theme.comment && theme.comment.enable && theme.comment.system === 'giscus') { %>
+        <%- renderJS('plugins/masonry-reactions.js', {
+            module: false
+        }) %>
+    <% } %>
 <% } %>
 
 <% if (theme.global.preloader === false || theme.global.preloader.enable === false) { %>

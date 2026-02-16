@@ -8,7 +8,7 @@ if (hexo-config('page_templates.tags_style') == 'cloud')
 
   .tagcloud-header
     margin 6px 0 12px 0
-    font-size 3.2rem
+    font-size 2.2rem
     padding 0
     line-height 1
     font-weight bold
@@ -50,7 +50,7 @@ else
     // 定义数量是否显示
     .tag-list[data-show-value] a::after
       content attr(data-weight)
-      font-size 1.5rem
+      font-size 1.2rem
       background-color var(--third-background-color)
       padding 4px 8px
       min-width 35px
@@ -96,15 +96,15 @@ else
           &[data-weight='5']
             --blur 0
 
-          font-size 1.4rem
+          font-size 1.1rem
           opacity var(--opacity)
-          padding 0.9rem 1.4rem
+          padding 0.3rem 0.6rem
           display block
           position relative
           flex 1
-          border-radius $redefine-border-radius-large
+          border-radius $redefine-border-radius-medium
           box-shadow var(--redefine-box-shadow)
-          margin 10px
+          margin 8px
           color var(--default-text-color)
           filter blur(var(--blur))
           transform scaleX(1) scaleY(1)

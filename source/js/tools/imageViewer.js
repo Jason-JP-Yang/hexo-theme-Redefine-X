@@ -131,6 +131,86 @@ export default function imageViewer() {
     return document;
   };
 
+  /**
+   * Ensure a node is visible by expanding any ancestor containers that
+   * hide their content (folding blocks, tabs, code-block folds, etc.).
+   * Processes from outermost to innermost so that parent containers
+   * are revealed first, allowing inner containers to be measured correctly.
+   */
+  const ensureNodeVisible = (node) => {
+    if (!node || !node.parentElement) return;
+
+    // Walk from node up to root, collecting hidden containers
+    const containers = [];
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    while (el) {
+      // 1. Inactive tab-pane (display:none when not .active)
+      if (el.classList?.contains("tab-pane") && !el.classList.contains("active")) {
+        containers.push({ type: "tab", el });
+      }
+      // 2. Closed <details> (native folding block)
+      if (el.tagName === "DETAILS" && !el.open) {
+        containers.push({ type: "details", el });
+      }
+      // 3. Folded code block container
+      if (
+        (el.classList?.contains("highlight-container") || el.classList?.contains("code-container")) &&
+        el.classList.contains("folded")
+      ) {
+        containers.push({ type: "code-fold", el });
+      }
+      el = el.parentElement;
+    }
+
+    if (containers.length === 0) return;
+
+    // Process from outermost (last collected) to innermost (first collected)
+    containers.reverse();
+
+    for (const c of containers) {
+      switch (c.type) {
+        case "details":
+          c.el.open = true;
+          break;
+
+        case "tab": {
+          const tabPane = c.el;
+          const tabContent = tabPane.parentElement; // .tab-content
+          const tabsContainer = tabContent?.parentElement; // .tabs
+          if (!tabsContainer || !tabsContainer.classList.contains("tabs")) break;
+
+          // Deactivate current active tab & pane
+          tabsContainer.querySelector(".nav-tabs .tab.active")?.classList.remove("active");
+          tabsContainer.querySelector(".tab-content .tab-pane.active")?.classList.remove("active");
+
+          // Activate the target pane
+          tabPane.classList.add("active");
+
+          // Find & activate the corresponding nav tab
+          // The nav <a> has className "#<paneId>", so match by that
+          const paneId = tabPane.id;
+          if (paneId) {
+            const navLinks = tabsContainer.querySelectorAll(".nav-tabs .tab a");
+            for (const link of navLinks) {
+              if (link.className === "#" + paneId) {
+                link.parentElement.classList.add("active");
+                break;
+              }
+            }
+          }
+          break;
+        }
+
+        case "code-fold":
+          c.el.classList.remove("folded");
+          // Update fold button icon to reflect expanded state
+          const foldIcon = c.el.querySelector(".fold-button i");
+          if (foldIcon) foldIcon.className = "fa-solid fa-chevron-down";
+          break;
+      }
+    }
+  };
+
   const collectItems = (root) => {
     const nodes = Array.from((root || document).querySelectorAll(VIEWABLE_ITEM_SELECTOR));
     const items = [];
@@ -264,18 +344,26 @@ export default function imageViewer() {
    * The placeholder uses aspect-ratio to maintain responsive behavior like the original img.
    */
   const createPlaceholder = (img, saved) => {
-    const ph = document.createElement("span");
+    // Use div instead of span for better block-level behavior
+    const ph = document.createElement("div");
     ph.className = "image-viewer-placeholder";
     const cs = getComputedStyle(img);
+    const rect = img.getBoundingClientRect();
+    
     // Use aspect-ratio to maintain responsive sizing like the original img
     // This ensures placeholder resizes correctly if viewport changes
     const aspectRatio = (img.naturalWidth || 1) / (img.naturalHeight || 1);
+    
+    // For width/height: prefer actual rendered dimensions if available
+    const width = (rect.width > 0) ? `${rect.width}px` : cs.width;
+    const height = (rect.height > 0) ? `${rect.height}px` : 'auto';
+    
     ph.style.cssText = `
-      display:${cs.display};
-      width:${cs.width};
+      display:${cs.display === 'inline' ? 'block' : cs.display};
+      width:${width};
+      height:${height};
       max-width:${cs.maxWidth};
       max-height:${cs.maxHeight};
-      height:auto;
       aspect-ratio:${aspectRatio};
       margin:${cs.margin};
       padding:0;
@@ -476,15 +564,25 @@ export default function imageViewer() {
   };
 
   const createPlaceholderForNode = (node, aspectRatio) => {
-    const ph = document.createElement("span");
+    // Use div instead of span for better block-level behavior
+    const ph = document.createElement("div");
     ph.className = "image-viewer-placeholder";
+    
+    // Get both computed style AND actual rendered dimensions
     const cs = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    
+    // For width: prefer actual rendered width if available, fallback to computed style
+    // This ensures placeholder has correct dimensions even when computed width is 'auto'
+    const width = (rect.width > 0) ? `${rect.width}px` : cs.width;
+    const height = (rect.height > 0) ? `${rect.height}px` : 'auto';
+    
     ph.style.cssText = `
-      display:${cs.display};
-      width:${cs.width};
+      display:${cs.display === 'inline' ? 'block' : cs.display};
+      width:${width};
+      height:${height};
       max-width:${cs.maxWidth};
       max-height:${cs.maxHeight};
-      height:auto;
       aspect-ratio:${aspectRatio};
       margin:${cs.margin};
       padding:0;
@@ -1006,6 +1104,35 @@ export default function imageViewer() {
        }
     }
 
+    // Check for masonry EXIF template (hidden <template> with EXIF info card)
+    if (!hasInfo) {
+      const masonryItem = liveNode.closest(".masonry-item");
+      if (masonryItem) {
+        const exifTemplate = masonryItem.querySelector("template.masonry-exif-template");
+        if (exifTemplate && exifTemplate.content) {
+          const infoCard = exifTemplate.content.querySelector(".image-exif-info-card");
+          if (infoCard) {
+            const wrap = document.createElement("div");
+            wrap.className = "image-exif-container image-exif-block";
+            const clone = infoCard.cloneNode(true);
+            clone.classList.add("expanded");
+            clone.style.removeProperty("max-width");
+            clone.style.removeProperty("width");
+            clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
+            clone.querySelectorAll(".image-exif-data").forEach((data) => {
+              data.style.removeProperty("height");
+              data.style.removeProperty("opacity");
+              data.style.removeProperty("margin-top");
+              data.style.removeProperty("grid-template-columns");
+            });
+            wrap.appendChild(clone);
+            infoContent.appendChild(wrap);
+            hasInfo = true;
+          }
+        }
+      }
+    }
+
     if (!hasInfo) {
       const figure = liveNode.closest("figure.image-caption");
       if (figure) {
@@ -1480,6 +1607,11 @@ export default function imageViewer() {
       updateInfo();
 
       const liveNode = getLiveNodeForItem(nextItem);
+
+      // Ensure the target node is visible by expanding any hidden ancestor
+      // containers (folded blocks, inactive tabs, folded code blocks, etc.)
+      ensureNodeVisible(liveNode);
+
       const aspectRatio = getNodeAspectRatio(liveNode, nextItem);
       const viewerRect = (liveNode instanceof HTMLImageElement && liveNode.naturalWidth && liveNode.naturalHeight)
         ? computeViewerRect(liveNode)
