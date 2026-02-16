@@ -20,8 +20,9 @@ const defaultConfig = {
   silent: false,
 };
 
-const keySalt = textToArray("too young too simple");
-const ivSalt = textToArray("sometimes naive!");
+const PBKDF2_ITERATIONS = 131071;
+const KEY_SALT_BYTES = 32;
+const AES_CBC_IV_BYTES = 16;
 
 // As we can't detect the wrong password with AES-CBC,
 // so adding an empty tag and check it when decrption.
@@ -104,8 +105,9 @@ hexo.extend.filter.register(
     data.content = knownPrefix + data.content.trim();
     data.encrypt = true;
 
-    const key = crypto.pbkdf2Sync(password, keySalt, 1024, 32, "sha256");
-    const iv = crypto.pbkdf2Sync(password, ivSalt, 512, 16, "sha256");
+    const keySalt = crypto.randomBytes(KEY_SALT_BYTES);
+    const iv = crypto.randomBytes(AES_CBC_IV_BYTES);
+    const key = crypto.pbkdf2Sync(password, keySalt, PBKDF2_ITERATIONS, 32, "sha256");
 
     const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
     const hmac = crypto.createHmac("sha256", key);
@@ -118,6 +120,9 @@ hexo.extend.filter.register(
     data.content = template
       .replace(/{{hbeEncryptedData}}/g, encryptedData)
       .replace(/{{hbeHmacDigest}}/g, hmacDigest)
+      .replace(/{{hbeKeySalt}}/g, keySalt.toString("hex"))
+      .replace(/{{hbeIv}}/g, iv.toString("hex"))
+      .replace(/{{hbeKdfIterations}}/g, `${PBKDF2_ITERATIONS}`)
       .replace(/{{hbeWrongPassMessage}}/g, config.wrong_pass_message)
       .replace(/{{hbeWrongHashMessage}}/g, config.wrong_hash_message)
       .replace(/{{hbeMessage}}/g, config.message);
@@ -169,34 +174,3 @@ function dlog(level, x) {
   }
 }
 
-// Utils functions
-function textToArray(s) {
-  var i = s.length;
-  var n = 0;
-  var ba = new Array();
-
-  for (var j = 0; j < i; ) {
-    var c = s.codePointAt(j);
-    if (c < 128) {
-      ba[n++] = c;
-      j++;
-    } else if (c > 127 && c < 2048) {
-      ba[n++] = (c >> 6) | 192;
-      ba[n++] = (c & 63) | 128;
-      j++;
-    } else if (c > 2047 && c < 65536) {
-      ba[n++] = (c >> 12) | 224;
-      ba[n++] = ((c >> 6) & 63) | 128;
-      ba[n++] = (c & 63) | 128;
-      j++;
-    } else {
-      ba[n++] = (c >> 18) | 240;
-      ba[n++] = ((c >> 12) & 63) | 128;
-      ba[n++] = ((c >> 6) & 63) | 128;
-      ba[n++] = (c & 63) | 128;
-      j += 2;
-    }
-  }
-
-  return new Uint8Array(ba);
-}
