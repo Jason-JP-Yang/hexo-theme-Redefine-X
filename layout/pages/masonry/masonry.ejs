@@ -2,6 +2,7 @@
 // Define an array of images to display in the masonry layout
 const images = page.images || theme.masonry;
 const siteRoot = config.root || '/';
+const hasReactions = page.masonryReactions && page.masonryReactions.imageIds && page.masonryReactions.imageIds.length > 0;
 
 // Helper to build full image path
 function buildImagePath(imagePath) {
@@ -14,11 +15,14 @@ function buildImagePath(imagePath) {
     return siteRoot + 'masonry/' + imagePath;
 }
 
-// Determine container CSS class based on image metadata
+// Determine container CSS class based on image metadata and reactions mode
 function getContainerClass(image) {
     const classes = ['image-container'];
-    // Title-only mode: no description → title centered at bottom
-    if (image.title && !image.description) {
+    if (hasReactions) {
+        // Reactions mode: title always top-left, heart button bottom-right
+        classes.push('masonry-reactions-mode');
+    } else if (image.title && !image.description) {
+        // Title-only mode: no description → title centered at bottom
         classes.push('masonry-title-only');
     }
     return classes.join(' ');
@@ -29,15 +33,17 @@ function getContainerClass(image) {
 	<%- getPageTitle(page) %>
 </h1>
 
-<%# 
-Masonry layout using CSS columns. 
-Images are output as regular <img> tags which will be transformed to img-preloader 
+<%#
+Masonry layout using CSS columns.
+Images are output as regular <img> tags which will be transformed to img-preloader
 by lazyload-handle.js during hexo build (same as normal post images).
 The preloaders have correct aspect ratios so layout is stable from page load.
 
 EXIF support: images with data beyond just 'title' get a hidden <template> containing
 the EXIF info card HTML. The imageViewer picks this up when the image is opened.
-On the masonry grid, only title/description overlay is shown on hover.
+
+Reactions mode: when giscus comment is enabled and reactions data exists,
+images show title (top-left) and heart button (bottom-right) instead of description.
 %>
 <div id="masonry-container" class="markdown-body">
 	<% images.forEach(function(image) { %>
@@ -47,7 +53,7 @@ On the masonry grid, only title/description overlay is shown on hover.
 			<% if (image.title) { %>
 			<div class="image-title"><%- image.title %></div>
 			<% } %>
-			<% if (image.description) { %>
+			<% if (!hasReactions && image.description) { %>
 			<div class="image-description"><%- image.description %></div>
 			<% } %>
 			<% if (image.hasExifInfo && image.exifCardHtml) { %>
@@ -57,3 +63,11 @@ On the masonry grid, only title/description overlay is shown on hover.
 	</div>
 	<% }); %>
 </div>
+
+<% if (hasReactions) { %>
+<%# Embed reactions config as JSON for the frontend script (data fetched live via giscus API) %>
+<script type="application/json" id="masonry-reactions-data">
+<%- JSON.stringify(page.masonryReactions).replace(/</g, '\\u003c') %>
+</script>
+<%# masonry-reactions.js is loaded globally via scripts.ejs for Swup compatibility %>
+<% } %>

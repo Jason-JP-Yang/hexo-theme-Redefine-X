@@ -1,0 +1,97 @@
+name: Masonry Reactions Cleanup
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  discussions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete orphan and duplicate comments
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.MASONRY_REACTIONS_TOKEN || github.token }}
+          script: |
+            const [owner, name] = process.env.GITHUB_REPOSITORY.split("/");
+            const PREFIX = "[masonry-reactions] ";
+            const LIMIT = 500;
+            let deleted = 0;
+
+            function parseImageId(body) {
+              const m = body?.match(/`masonry-image:(.+?)`/);
+              return m ? m[1].trim() : null;
+            }
+
+            async function del(id) {
+              await github.graphql(
+                `mutation($i:DeleteDiscussionCommentInput!) {
+                  deleteDiscussionComment(input:$i) { clientMutationId }
+                }`,
+                { i: { id } }
+              );
+              if (++deleted >= LIMIT)
+                throw new Error(`Limit reached: deleted ${LIMIT} comments`);
+            }
+
+            // Find all masonry-reactions discussions
+            const discs = [];
+            let cur = null;
+            while (true) {
+              const r = await github.graphql(
+                `query($q:String!, $c:String) {
+                  search(type:DISCUSSION, query:$q, first:50, after:$c) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { ... on Discussion { number title } }
+                  }
+                }`,
+                {
+                  q: `"${PREFIX}" in:title repo:${process.env.GITHUB_REPOSITORY} is:discussion`,
+                  c: cur,
+                }
+              );
+              for (const d of r.search.nodes) {
+                if (d.title?.startsWith(PREFIX)) discs.push(d);
+              }
+              if (!r.search.pageInfo.hasNextPage) break;
+              cur = r.search.pageInfo.endCursor;
+            }
+
+            // For each discussion: delete orphans (no parseable ID) and duplicates
+            for (const disc of discs) {
+              const seen = new Set();
+              let cc = null;
+              while (true) {
+                const r = await github.graphql(
+                  `query($o:String!, $n:String!, $num:Int!, $c:String) {
+                    repository(owner:$o, name:$n) {
+                      discussion(number:$num) {
+                        comments(first:100, after:$c) {
+                          pageInfo { hasNextPage endCursor }
+                          nodes { id body }
+                        }
+                      }
+                    }
+                  }`,
+                  { o: owner, n: name, num: disc.number, c: cc }
+                );
+                const comments = r.repository.discussion.comments;
+                for (const c of comments.nodes) {
+                  const imgId = parseImageId(c.body);
+                  if (!imgId || seen.has(imgId)) {
+                    await del(c.id);
+                  } else {
+                    seen.add(imgId);
+                  }
+                }
+                if (!comments.pageInfo.hasNextPage) break;
+                cc = comments.pageInfo.endCursor;
+              }
+            }
+
+            core.info(`Done. Deleted ${deleted} comments.`);

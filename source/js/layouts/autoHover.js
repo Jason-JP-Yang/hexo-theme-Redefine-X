@@ -1,6 +1,7 @@
 export default function initAutoHover() {
   initHomeArticleAutoHover();
   initArticleMediaAutoHover();
+  initMasonryAutoHover();
 }
 
 function initHomeArticleAutoHover() {
@@ -356,6 +357,153 @@ function installGlobalListeners() {
     swup.hooks.on("page:view", () => {
       refreshCandidates();
       requestUpdate();
+    });
+  } catch (e) {}
+}
+
+/* ==================== Masonry Gallery Auto-Hover ==================== */
+// Multiple items can be active simultaneously.
+// Center band = 40% of viewport (top 10% to bottom 10% excluded).
+// Clicking outside masonry photos / heart buttons → 5 s cooldown.
+
+const mState = {
+  items: [],     // [{ el: HTMLElement, img: HTMLElement }]
+  actives: new Set(), // currently auto-hovered elements
+  ticking: false,
+  suspended: false,
+  suspendTimer: null,
+  inited: false,
+};
+
+function initMasonryAutoHover() {
+  const container = document.getElementById("masonry-container");
+  if (!container) return;
+
+  // Collect items
+  mRefreshItems();
+
+  if (!mState.inited) {
+    mState.inited = true;
+    mInstallListeners();
+  }
+
+  mRequestUpdate();
+}
+
+function mRefreshItems() {
+  const items = [];
+  document.querySelectorAll("#masonry-container .masonry-item .image-container").forEach((el) => {
+    const img = el.querySelector("img, .img-preloader");
+    if (img) items.push({ el, img });
+  });
+  mState.items = items;
+
+  // Remove auto-hover from elements no longer tracked
+  for (const el of mState.actives) {
+    if (!items.some((i) => i.el === el)) {
+      el.classList.remove("auto-hover");
+      mState.actives.delete(el);
+    }
+  }
+}
+
+function mIsInBand(imgRect, vh) {
+  // Image center must be within the central 40% (30%–70%) of viewport
+  const bandTop = vh * 0.3;
+  const bandBottom = vh * 0.7;
+  const imgCenter = imgRect.top + imgRect.height / 2;
+  return imgCenter >= bandTop && imgCenter <= bandBottom;
+}
+
+function mUpdate() {
+  mState.ticking = false;
+  if (!mState.items.length) return;
+
+  if (mState.suspended) {
+    // Remove all auto-hover during suspension
+    for (const el of mState.actives) el.classList.remove("auto-hover");
+    mState.actives.clear();
+    return;
+  }
+
+  const vh = window.innerHeight;
+  const nextActives = new Set();
+
+  for (const item of mState.items) {
+    // Re-acquire img ref if lazyload replaced it
+    if (!item.img.isConnected) {
+      const newImg = item.el.querySelector("img, .img-preloader");
+      if (newImg) item.img = newImg;
+      else continue;
+    }
+
+    const rect = item.img.getBoundingClientRect();
+    // Image must be fully visible in the viewport
+    if (rect.top < 0 || rect.bottom > vh) continue;
+    // Image center must be inside center 80% band
+    if (!mIsInBand(rect, vh)) continue;
+
+    nextActives.add(item.el);
+  }
+
+  // Remove no-longer-active
+  for (const el of mState.actives) {
+    if (!nextActives.has(el)) {
+      el.classList.remove("auto-hover");
+    }
+  }
+  // Add newly-active
+  for (const el of nextActives) {
+    if (!mState.actives.has(el)) {
+      el.classList.add("auto-hover");
+    }
+  }
+
+  mState.actives = nextActives;
+}
+
+function mRequestUpdate() {
+  if (mState.ticking) return;
+  mState.ticking = true;
+  requestAnimationFrame(mUpdate);
+}
+
+function mInstallListeners() {
+  window.addEventListener("scroll", mRequestUpdate, { passive: true });
+  window.addEventListener("resize", () => {
+    mRefreshItems();
+    mRequestUpdate();
+  });
+
+  // Click outside masonry photo / heart button → 5 s cooldown
+  document.addEventListener("click", (e) => {
+    if (!document.getElementById("masonry-container")) return;
+
+    const target = e.target;
+    if (!target || !target.closest) return;
+
+    // Clicks on masonry images or heart buttons are exempt
+    if (target.closest(".image-container") || target.closest(".masonry-heart-btn")) return;
+
+    // Suspend
+    mState.suspended = true;
+    for (const el of mState.actives) el.classList.remove("auto-hover");
+    mState.actives.clear();
+
+    if (mState.suspendTimer) clearTimeout(mState.suspendTimer);
+    mState.suspendTimer = setTimeout(() => {
+      mState.suspended = false;
+      mRequestUpdate();
+    }, 5000);
+  }, { passive: true });
+
+  // Swup page transitions
+  try {
+    swup.hooks.on("page:view", () => {
+      mState.suspended = false;
+      if (mState.suspendTimer) clearTimeout(mState.suspendTimer);
+      mRefreshItems();
+      mRequestUpdate();
     });
   } catch (e) {}
 }

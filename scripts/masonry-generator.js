@@ -463,12 +463,26 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   });
 
   // 3. Generate Individual Masonry Pages with EXIF processing
+  // Masonry reactions config: pass only config data for the frontend client.
+  // All reaction data is fetched LIVE from giscus.app API by the client script.
+  const giscusConfig = hexo.theme.config?.comment?.config?.giscus || {};
+  const hasGiscusReactions =
+    commentEnabled &&
+    giscusConfig.repo &&
+    giscusConfig.category &&
+    giscusConfig.proxy &&
+    giscusConfig.author_pat;
+
   categories.forEach(category => {
     category.list.forEach(item => {
         if (item.images && item.images.length > 0) {
             const pageTitle = item['page-title'] || item.name;
+            const pagePath = `masonry/${pageTitle}/`;
             const pageAutoExif = item['auto-exif'] || false;
             const processedImages = item.images.map(img => processImage(img, pageAutoExif));
+
+            // Collect image IDs for the frontend client
+            const imageIds = item.images.map(img => img.image).filter(Boolean);
 
             pages.push({
                 path: `masonry/${pageTitle}/index.html`,
@@ -478,7 +492,16 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                     images: processedImages,
                     content: '',
                     layout: 'page',
-                    comment: commentEnabled
+                    comment: commentEnabled,
+                    // Masonry reactions config for the frontend client
+                    // Only includes config data; reaction counts are fetched live
+                    masonryReactions: hasGiscusReactions ? {
+                        repo: giscusConfig.repo,
+                        category: giscusConfig.category || 'General',
+                        discussionTerm: `[masonry-reactions] ${pagePath}`,
+                        imageIds: imageIds,
+                        giscusProxy: (giscusConfig.proxy || '').replace(/\/+$/, '') || null,
+                    } : null,
                 },
                 layout: 'page'
             });
