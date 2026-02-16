@@ -190,6 +190,10 @@ $friend-link-item-border-radius = 9px
   .image-container:hover .image-title, .image-container:hover .image-description
     opacity 1
 
+  // Auto-hover (scroll-triggered) shows title and description
+  .image-container.auto-hover .image-title, .image-container.auto-hover .image-description
+    opacity 1
+
   // Masonry title-only mode: no description → title centered at bottom
   .image-container.masonry-title-only
     .image-title
@@ -224,6 +228,9 @@ $friend-link-item-border-radius = 9px
   .image-container:hover img
     box-shadow var(--redefine-box-shadow-hover)
 
+  .image-container.auto-hover img
+    box-shadow var(--redefine-box-shadow-hover)
+
   // ==================== Masonry Reactions Mode ====================
   // When giscus reactions are enabled, show title top-left and heart button bottom-right
   .image-container.masonry-reactions-mode
@@ -240,6 +247,9 @@ $friend-link-item-border-radius = 9px
       transition opacity 0.2s ease-out
 
     &:hover .image-title
+      opacity 1
+
+    &.auto-hover .image-title
       opacity 1
 
     // Hide description in reactions mode (requirements say show title only)
@@ -333,6 +343,13 @@ $friend-link-item-border-radius = 9px
   // Show heart button on hover
   .image-container.masonry-reactions-mode:hover .masonry-heart-btn
     opacity 1
+
+  // Show title and heart button via auto-hover (scroll-triggered)
+  .image-container.masonry-reactions-mode.auto-hover
+    .image-title
+      opacity 1
+    .masonry-heart-btn:not(.has-count):not(.is-reacted)
+      opacity 1
 
   // Always show heart button if user has reacted or count > 0
   .image-container.masonry-reactions-mode .masonry-heart-btn
