@@ -418,14 +418,8 @@
           opacity 1 !important
           margin-top 0.6rem !important
           display grid !important
-          grid-template-columns repeat(1, minmax(150px, 1fr)) !important
+          // Column count set by JS inline style; fallback to 1 column
           gap 0.5rem !important
-          
-          @media (min-width: 350px)
-             grid-template-columns repeat(2, minmax(150px, 1fr)) !important
-
-          @media (min-width: 700px)
-             grid-template-columns repeat(4, minmax(130px, 1fr)) !important
 
       :root.dark &
         .image-exif-info-card

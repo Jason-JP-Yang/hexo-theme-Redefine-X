@@ -1063,6 +1063,64 @@ export default function imageViewer() {
     }, INFO_TOTAL_MS);
   };
 
+  /**
+   * Compute and set viewer-optimised grid columns for EXIF data.
+   * Rules:
+   *   - columns must be a divisor of section count (symmetric layout)
+   *   - maximise columns to minimise height
+   *   - cap each column width to prevent over-stretching for few grids
+   */
+  const VIEWER_EXIF_MIN_COL = 140;
+  const VIEWER_EXIF_MAX_COL = 220;
+  const VIEWER_EXIF_GAP     = 10;
+
+  const computeViewerExifGrid = (dataEl) => {
+    if (!dataEl) return;
+    const sections = dataEl.querySelectorAll('.image-exif-section');
+    const n = sections.length;
+    if (n <= 0) return;
+
+    const maxAvail = Math.min(window.innerWidth * 0.9, 800) - 42; // card + outer padding
+    const divisors = [];
+    for (let i = 1; i <= n; i++) if (n % i === 0) divisors.push(i);
+
+    let cols = 1;
+    for (let i = divisors.length - 1; i >= 0; i--) {
+      const c = divisors[i];
+      if (c * VIEWER_EXIF_MIN_COL + Math.max(0, c - 1) * VIEWER_EXIF_GAP <= maxAvail) {
+        cols = c;
+        break;
+      }
+    }
+
+    dataEl.style.gridTemplateColumns = cols <= 1
+      ? `minmax(${VIEWER_EXIF_MIN_COL}px, ${VIEWER_EXIF_MAX_COL}px)`
+      : `repeat(${cols}, minmax(${VIEWER_EXIF_MIN_COL}px, ${VIEWER_EXIF_MAX_COL}px))`;
+  };
+
+  /** Prepare a cloned EXIF info-card for display inside the viewer info panel. */
+  const prepareViewerExifClone = (infoCard) => {
+    const wrap = document.createElement("div");
+    wrap.className = "image-exif-container image-exif-block";
+
+    const clone = infoCard.cloneNode(true);
+    clone.classList.add("expanded");
+    clone.style.removeProperty("max-width");
+    clone.style.removeProperty("width");
+
+    clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
+    clone.querySelectorAll(".image-exif-data").forEach((data) => {
+      data.style.removeProperty("height");
+      data.style.removeProperty("opacity");
+      data.style.removeProperty("margin-top");
+      data.style.removeProperty("grid-template-columns");
+      computeViewerExifGrid(data);
+    });
+
+    wrap.appendChild(clone);
+    return wrap;
+  };
+
   const updateInfo = () => {
     const wasOpen = infoTrigger.classList.contains("active") && !infoTrigger.classList.contains("closing");
     infoContent.innerHTML = "";
@@ -1081,25 +1139,7 @@ export default function imageViewer() {
     if (exifContainer) {
        const infoCard = exifContainer.querySelector(".image-exif-info-card");
        if (infoCard) {
-           const wrap = document.createElement("div");
-           wrap.className = "image-exif-container image-exif-block";
-
-           const clone = infoCard.cloneNode(true);
-           clone.classList.add("expanded");
-           
-           // Remove side/float mode specific restrictions
-           clone.style.removeProperty("max-width");
-           clone.style.removeProperty("width");
-           
-           clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
-           clone.querySelectorAll(".image-exif-data").forEach((data) => {
-             data.style.removeProperty("height");
-             data.style.removeProperty("opacity");
-             data.style.removeProperty("margin-top");
-             data.style.removeProperty("grid-template-columns");
-           });
-           wrap.appendChild(clone);
-           infoContent.appendChild(wrap);
+           infoContent.appendChild(prepareViewerExifClone(infoCard));
            hasInfo = true;
        }
     }
@@ -1112,21 +1152,7 @@ export default function imageViewer() {
         if (exifTemplate && exifTemplate.content) {
           const infoCard = exifTemplate.content.querySelector(".image-exif-info-card");
           if (infoCard) {
-            const wrap = document.createElement("div");
-            wrap.className = "image-exif-container image-exif-block";
-            const clone = infoCard.cloneNode(true);
-            clone.classList.add("expanded");
-            clone.style.removeProperty("max-width");
-            clone.style.removeProperty("width");
-            clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
-            clone.querySelectorAll(".image-exif-data").forEach((data) => {
-              data.style.removeProperty("height");
-              data.style.removeProperty("opacity");
-              data.style.removeProperty("margin-top");
-              data.style.removeProperty("grid-template-columns");
-            });
-            wrap.appendChild(clone);
-            infoContent.appendChild(wrap);
+            infoContent.appendChild(prepareViewerExifClone(infoCard));
             hasInfo = true;
           }
         }
