@@ -7,19 +7,23 @@ export function initHBE() {
   const storage = window.localStorage;
 
   const storageName = "hexo-blog-encrypt:#" + window.location.pathname;
-  const keySalt = textToArray("too young too simple");
-  const ivSalt = textToArray("sometimes naive!");
-
   // As we can't detect the wrong password with AES-CBC,
   // so adding an empty div and check it when decrption.
   const knownPrefix = "<hbe-prefix></hbe-prefix>";
-
   const mainElement = document.getElementById("hexo-blog-encrypt");
   const wrongPassMessage = mainElement.dataset["wpm"];
   const wrongHashMessage = mainElement.dataset["whm"];
   const dataElement = mainElement.getElementsByTagName("script")["hbeData"];
   const encryptedData = dataElement.innerText;
   const HmacDigist = dataElement.dataset["hmacdigest"];
+  const keySaltHex = dataElement.dataset["keysalt"] || "";
+  const ivHex = dataElement.dataset["iv"] || "";
+  const kdfIterationsRaw = Number.parseInt(dataElement.dataset["kdfiter"], 10);
+  const keySalt = hexToArray(keySaltHex);
+  const encryptedIv = hexToArray(ivHex).buffer;
+  const kdfIterations = Number.isFinite(kdfIterationsRaw)
+    ? kdfIterationsRaw
+    : 131071;
 
   function hexToArray(s) {
     return new Uint8Array(
@@ -29,35 +33,7 @@ export function initHBE() {
     );
   }
 
-  function textToArray(s) {
-    var i = s.length;
-    var n = 0;
-    var ba = new Array();
-
-    for (var j = 0; j < i; ) {
-      var c = s.codePointAt(j);
-      if (c < 128) {
-        ba[n++] = c;
-        j++;
-      } else if (c > 127 && c < 2048) {
-        ba[n++] = (c >> 6) | 192;
-        ba[n++] = (c & 63) | 128;
-        j++;
-      } else if (c > 2047 && c < 65536) {
-        ba[n++] = (c >> 12) | 224;
-        ba[n++] = ((c >> 6) & 63) | 128;
-        ba[n++] = (c & 63) | 128;
-        j++;
-      } else {
-        ba[n++] = (c >> 18) | 240;
-        ba[n++] = ((c >> 12) & 63) | 128;
-        ba[n++] = ((c >> 6) & 63) | 128;
-        ba[n++] = (c & 63) | 128;
-        j += 2;
-      }
-    }
-    return new Uint8Array(ba);
-  }
+  // Legacy text-to-array conversion removed (no longer used)
 
   function arrayBufferToHex(arrayBuffer) {
     if (
@@ -126,7 +102,7 @@ export function initHBE() {
         name: "PBKDF2",
         hash: "SHA-256",
         salt: keySalt.buffer,
-        iterations: 1024,
+        iterations: kdfIterations,
       },
       keyMaterial,
       {
@@ -145,7 +121,7 @@ export function initHBE() {
         name: "PBKDF2",
         hash: "SHA-256",
         salt: keySalt.buffer,
-        iterations: 1024,
+        iterations: kdfIterations,
       },
       keyMaterial,
       {
@@ -156,20 +132,7 @@ export function initHBE() {
       ["decrypt"],
     );
   }
-
-  function getIv(keyMaterial) {
-    return cryptoObj.subtle.deriveBits(
-      {
-        name: "PBKDF2",
-        hash: "SHA-256",
-        salt: ivSalt.buffer,
-        iterations: 512,
-      },
-      keyMaterial,
-      16 * 8,
-    );
-  }
-
+  
   async function verifyContent(key, content) {
     const encoder = new TextEncoder();
     const encoded = encoder.encode(content);
@@ -327,7 +290,7 @@ export function initHBE() {
         oldStorageData,
       );
 
-      const sIv = hexToArray(oldStorageData.iv).buffer;
+      const sIv = oldStorageData.iv ? hexToArray(oldStorageData.iv).buffer : null;
       const sDk = oldStorageData.dk;
       const sHmk = oldStorageData.hmk;
 
@@ -356,7 +319,7 @@ export function initHBE() {
               ["verify"],
             )
             .then((hmkCK) => {
-              decrypt(dkCK, sIv, hmkCK).then((result) => {
+              decrypt(dkCK, encryptedIv || sIv, hmkCK).then((result) => {
                 if (!result) {
                   storage.removeItem(storageName);
                 }
@@ -371,7 +334,7 @@ export function initHBE() {
         const keyMaterial = await getKeyMaterial(password);
         const hmacKey = await getHmacKey(keyMaterial);
         const decryptKey = await getDecryptKey(keyMaterial);
-        const iv = await getIv(keyMaterial);
+        const iv = encryptedIv || (await getLegacyIv(keyMaterial));
 
         decrypt(decryptKey, iv, hmacKey).then((result) => {
           console.log(`Decrypt result: ${result}`);

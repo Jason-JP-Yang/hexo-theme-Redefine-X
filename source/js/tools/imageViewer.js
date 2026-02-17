@@ -131,6 +131,86 @@ export default function imageViewer() {
     return document;
   };
 
+  /**
+   * Ensure a node is visible by expanding any ancestor containers that
+   * hide their content (folding blocks, tabs, code-block folds, etc.).
+   * Processes from outermost to innermost so that parent containers
+   * are revealed first, allowing inner containers to be measured correctly.
+   */
+  const ensureNodeVisible = (node) => {
+    if (!node || !node.parentElement) return;
+
+    // Walk from node up to root, collecting hidden containers
+    const containers = [];
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    while (el) {
+      // 1. Inactive tab-pane (display:none when not .active)
+      if (el.classList?.contains("tab-pane") && !el.classList.contains("active")) {
+        containers.push({ type: "tab", el });
+      }
+      // 2. Closed <details> (native folding block)
+      if (el.tagName === "DETAILS" && !el.open) {
+        containers.push({ type: "details", el });
+      }
+      // 3. Folded code block container
+      if (
+        (el.classList?.contains("highlight-container") || el.classList?.contains("code-container")) &&
+        el.classList.contains("folded")
+      ) {
+        containers.push({ type: "code-fold", el });
+      }
+      el = el.parentElement;
+    }
+
+    if (containers.length === 0) return;
+
+    // Process from outermost (last collected) to innermost (first collected)
+    containers.reverse();
+
+    for (const c of containers) {
+      switch (c.type) {
+        case "details":
+          c.el.open = true;
+          break;
+
+        case "tab": {
+          const tabPane = c.el;
+          const tabContent = tabPane.parentElement; // .tab-content
+          const tabsContainer = tabContent?.parentElement; // .tabs
+          if (!tabsContainer || !tabsContainer.classList.contains("tabs")) break;
+
+          // Deactivate current active tab & pane
+          tabsContainer.querySelector(".nav-tabs .tab.active")?.classList.remove("active");
+          tabsContainer.querySelector(".tab-content .tab-pane.active")?.classList.remove("active");
+
+          // Activate the target pane
+          tabPane.classList.add("active");
+
+          // Find & activate the corresponding nav tab
+          // The nav <a> has className "#<paneId>", so match by that
+          const paneId = tabPane.id;
+          if (paneId) {
+            const navLinks = tabsContainer.querySelectorAll(".nav-tabs .tab a");
+            for (const link of navLinks) {
+              if (link.className === "#" + paneId) {
+                link.parentElement.classList.add("active");
+                break;
+              }
+            }
+          }
+          break;
+        }
+
+        case "code-fold":
+          c.el.classList.remove("folded");
+          // Update fold button icon to reflect expanded state
+          const foldIcon = c.el.querySelector(".fold-button i");
+          if (foldIcon) foldIcon.className = "fa-solid fa-chevron-down";
+          break;
+      }
+    }
+  };
+
   const collectItems = (root) => {
     const nodes = Array.from((root || document).querySelectorAll(VIEWABLE_ITEM_SELECTOR));
     const items = [];
@@ -983,6 +1063,64 @@ export default function imageViewer() {
     }, INFO_TOTAL_MS);
   };
 
+  /**
+   * Compute and set viewer-optimised grid columns for EXIF data.
+   * Rules:
+   *   - columns must be a divisor of section count (symmetric layout)
+   *   - maximise columns to minimise height
+   *   - cap each column width to prevent over-stretching for few grids
+   */
+  const VIEWER_EXIF_MIN_COL = 140;
+  const VIEWER_EXIF_MAX_COL = 220;
+  const VIEWER_EXIF_GAP     = 10;
+
+  const computeViewerExifGrid = (dataEl) => {
+    if (!dataEl) return;
+    const sections = dataEl.querySelectorAll('.image-exif-section');
+    const n = sections.length;
+    if (n <= 0) return;
+
+    const maxAvail = Math.min(window.innerWidth * 0.9, 800) - 42; // card + outer padding
+    const divisors = [];
+    for (let i = 1; i <= n; i++) if (n % i === 0) divisors.push(i);
+
+    let cols = 1;
+    for (let i = divisors.length - 1; i >= 0; i--) {
+      const c = divisors[i];
+      if (c * VIEWER_EXIF_MIN_COL + Math.max(0, c - 1) * VIEWER_EXIF_GAP <= maxAvail) {
+        cols = c;
+        break;
+      }
+    }
+
+    dataEl.style.gridTemplateColumns = cols <= 1
+      ? `minmax(${VIEWER_EXIF_MIN_COL}px, ${VIEWER_EXIF_MAX_COL}px)`
+      : `repeat(${cols}, minmax(${VIEWER_EXIF_MIN_COL}px, ${VIEWER_EXIF_MAX_COL}px))`;
+  };
+
+  /** Prepare a cloned EXIF info-card for display inside the viewer info panel. */
+  const prepareViewerExifClone = (infoCard) => {
+    const wrap = document.createElement("div");
+    wrap.className = "image-exif-container image-exif-block";
+
+    const clone = infoCard.cloneNode(true);
+    clone.classList.add("expanded");
+    clone.style.removeProperty("max-width");
+    clone.style.removeProperty("width");
+
+    clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
+    clone.querySelectorAll(".image-exif-data").forEach((data) => {
+      data.style.removeProperty("height");
+      data.style.removeProperty("opacity");
+      data.style.removeProperty("margin-top");
+      data.style.removeProperty("grid-template-columns");
+      computeViewerExifGrid(data);
+    });
+
+    wrap.appendChild(clone);
+    return wrap;
+  };
+
   const updateInfo = () => {
     const wasOpen = infoTrigger.classList.contains("active") && !infoTrigger.classList.contains("closing");
     infoContent.innerHTML = "";
@@ -1001,27 +1139,24 @@ export default function imageViewer() {
     if (exifContainer) {
        const infoCard = exifContainer.querySelector(".image-exif-info-card");
        if (infoCard) {
-           const wrap = document.createElement("div");
-           wrap.className = "image-exif-container image-exif-block";
-
-           const clone = infoCard.cloneNode(true);
-           clone.classList.add("expanded");
-           
-           // Remove side/float mode specific restrictions
-           clone.style.removeProperty("max-width");
-           clone.style.removeProperty("width");
-           
-           clone.querySelectorAll(".image-exif-toggle-btn").forEach((btn) => btn.remove());
-           clone.querySelectorAll(".image-exif-data").forEach((data) => {
-             data.style.removeProperty("height");
-             data.style.removeProperty("opacity");
-             data.style.removeProperty("margin-top");
-             data.style.removeProperty("grid-template-columns");
-           });
-           wrap.appendChild(clone);
-           infoContent.appendChild(wrap);
+           infoContent.appendChild(prepareViewerExifClone(infoCard));
            hasInfo = true;
        }
+    }
+
+    // Check for masonry EXIF template (hidden <template> with EXIF info card)
+    if (!hasInfo) {
+      const masonryItem = liveNode.closest(".masonry-item");
+      if (masonryItem) {
+        const exifTemplate = masonryItem.querySelector("template.masonry-exif-template");
+        if (exifTemplate && exifTemplate.content) {
+          const infoCard = exifTemplate.content.querySelector(".image-exif-info-card");
+          if (infoCard) {
+            infoContent.appendChild(prepareViewerExifClone(infoCard));
+            hasInfo = true;
+          }
+        }
+      }
     }
 
     if (!hasInfo) {
@@ -1498,6 +1633,11 @@ export default function imageViewer() {
       updateInfo();
 
       const liveNode = getLiveNodeForItem(nextItem);
+
+      // Ensure the target node is visible by expanding any hidden ancestor
+      // containers (folded blocks, inactive tabs, folded code blocks, etc.)
+      ensureNodeVisible(liveNode);
+
       const aspectRatio = getNodeAspectRatio(liveNode, nextItem);
       const viewerRect = (liveNode instanceof HTMLImageElement && liveNode.naturalWidth && liveNode.naturalHeight)
         ? computeViewerRect(liveNode)

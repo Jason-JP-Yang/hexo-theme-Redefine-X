@@ -1,80 +1,71 @@
+// ===================================================================
+// Image EXIF Info Card Styles
+// Layouts: Float (overlay) | Block (below) | Side (beside)
+// Grid columns are computed and set by JS (inline grid-template-columns)
+// ===================================================================
+
 $image-exif-card-bg = var(--background-color)
 $image-exif-text-primary = var(--default-text-color)
 $image-exif-text-secondary = var(--third-text-color)
 $image-exif-text-label = var(--second-text-color)
 $image-exif-shadow = var(--redefine-box-shadow-flat)
 $image-exif-border-radius = $redefine-border-radius-medium
+$image-exif-card-padding = 0.65rem
+$image-exif-gap = 0.6rem
 
+// ===================================================================
+// 1. Base Styles (shared by all three modes)
+// ===================================================================
 .image-exif-container
   width 100%
   margin 1.25rem 0
   box-sizing border-box
 
+  // -- Image wrapper --
   .image-exif-image-wrapper
     position relative
     width 100%
     text-align center
 
-    .image-exif-img
-      display block
-      max-width 100%
-      max-height 80svh
-      width auto
-      height auto
-      border-radius $image-exif-border-radius
-      object-fit contain
-      margin 0 auto
-      
-      &.img-preloader .img-preloader-shim
-        max-height 80svh
+  // -- Image (or preloader placeholder) --
+  .image-exif-img
+    display block
+    max-width 100%
+    max-height 80svh
+    width auto
+    height auto
+    border-radius $image-exif-border-radius
+    object-fit contain
+    margin 0 auto
 
+    &.img-preloader .img-preloader-shim
+      max-height 80svh
+
+  // -- Info Card --
   .image-exif-info-card
     background $image-exif-card-bg
     border-radius $image-exif-border-radius
     box-shadow $image-exif-shadow
-    padding 0.65rem
+    padding $image-exif-card-padding
     box-sizing border-box
     overflow hidden
     transition all 0.3s ease
     text-align left
 
-  // Header Layout
+  // -- Header (title + description + toggle button) --
   .image-exif-header
     display flex
     justify-content space-between
     align-items flex-start
     gap 1rem
     text-align left
-    
+
   .image-exif-header-content
     flex 1
-    min-width 0 // Allow text truncation
+    min-width 0
     text-align left
 
-  // Toggle Button
-  .image-exif-toggle-btn
-    display none // Hidden by default (shown in block mode)
-    background transparent
-    border none
-    color $image-exif-text-primary
-    padding 0.2rem
-    cursor pointer
-    opacity 0.6
-    transition all 0.2s ease
-    
-    &:hover
-      opacity 1
-      border-radius 4px
-      
-    i
-      transition transform 0.3s ease
-      font-size 0.9rem
-
-  // Card Expanded State
-  .image-exif-info-card.expanded
-    .image-exif-toggle-btn i
-      transform rotate(180deg)
-
+  // -- Title --
   .image-exif-title
     font-size 0.95rem
     font-weight 600
@@ -82,26 +73,51 @@ $image-exif-border-radius = $redefine-border-radius-medium
     margin-bottom 0.4rem
     line-height 1.35
 
+  // -- Description --
   .image-exif-description
     font-size 0.82rem
     color $image-exif-text-secondary
     margin-bottom 0.3rem
     line-height 1.45
 
-  // EXIF Data Container
+  // -- Toggle Button (hidden by default, shown in block/fallback) --
+  .image-exif-toggle-btn
+    display none
+    background transparent
+    border none
+    color $image-exif-text-primary
+    padding 0.2rem
+    cursor pointer
+    opacity 0.6
+    transition all 0.2s ease
+
+    &:hover
+      opacity 1
+      border-radius 4px
+
+    i
+      transition transform 0.3s ease
+      font-size 0.9rem
+
+  // -- Expanded chevron rotation --
+  .image-exif-info-card.expanded
+    .image-exif-toggle-btn i
+      transform rotate(180deg)
+
+  // -- Data Grid (column count set by JS inline style) --
   .image-exif-data
     display grid
-    grid-template-columns repeat(auto-fit, minmax(170px, 1fr))
-    gap 0.6rem
-    height auto
+    grid-template-columns 1fr // fallback single column; JS overrides
+    gap $image-exif-gap
     overflow hidden
-    transition height 0.3s ease-in-out
 
-  // EXIF Section
+  // -- Section (each grid item: Cam / Lens / Expo / Other) --
   .image-exif-section
     background var(--third-background-color)
     border-radius $redefine-border-radius-small
     padding 0.5rem 0.6rem
+    border 2px solid var(--border-color)
+    box-shadow var(--shadow-1)
 
   .image-exif-section-title
     font-size 0.7rem
@@ -141,17 +157,17 @@ $image-exif-border-radius = $redefine-border-radius-medium
     word-break break-word
     font-weight 500
 
-  // Mode switching state (prevent transition flickering)
+  // -- Anti-flicker during mode switch --
   &.switching-mode
-    .image-exif-info-card
-    .image-exif-data
+    .image-exif-info-card,
+    .image-exif-data,
     .image-exif-toggle-btn
       transition none !important
 
-// ======================================================================
-// Mode 2: Float Layout (Hover overlay)
-// For float image-caption style
-// ======================================================================
+
+// ===================================================================
+// 2. Float Mode (hover overlay on image)
+// ===================================================================
 .image-exif-container.image-exif-float
   display block
   position relative
@@ -167,10 +183,11 @@ $image-exif-border-radius = $redefine-border-radius-medium
 
     .image-exif-img
       max-height 80svh
-      
+
       &.img-preloader .img-preloader-shim
         max-height 80svh
 
+  // -- Card: absolute overlay with glass morphism --
   .image-exif-info-card
     position absolute
     top 12px
@@ -180,72 +197,62 @@ $image-exif-border-radius = $redefine-border-radius-medium
     max-height calc(100% - 24px)
     overflow hidden
     z-index 2
-    
-    // Glass morphism effect
     background rgba(255, 255, 255, 0.75)
     backdrop-filter blur(16px) saturate(180%)
     -webkit-backdrop-filter blur(16px) saturate(180%)
     border 1px solid rgba(255, 255, 255, 0.3)
-    
-    // Hidden by default, show on hover
     opacity 0
     pointer-events none
     transition opacity 0.2s ease-out
     animation none
 
   .image-exif-toggle-btn
-    display none // Hidden by default (shown in block/fallback mode)
-    
+    display none
+
+  // Reveal on hover
   .image-exif-image-wrapper:hover .image-exif-info-card
     opacity 1
     pointer-events auto
 
+  // JS-triggered auto-hover reveal
   &:not(.image-exif-overflow-fallback).auto-hover
     .image-exif-info-card
       opacity 1
       pointer-events auto
 
-  .image-exif-data
-    // Override grid template to be controlled by JS in float mode
-    // We set a default here but JS will likely override it based on width
-    grid-template-columns repeat(auto-fit, minmax(180px, 1fr))
-
-  // Pure Float Mode Styles (NOT fallback)
+  // Float mode: data always visible (never collapsed)
   &:not(.image-exif-overflow-fallback)
     .image-exif-data
-      // Override collapsed state for float mode
       height auto !important
       opacity 1 !important
-      margin-top 0.1rem !important
+      margin-top $image-exif-gap !important
       display grid !important
-      // Remove default repeat(auto-fit) to avoid conflict with JS calculated columns
-      // JS will set specific grid-template-columns
-      
+
     .image-exif-toggle-btn
       display none !important
 
-  // Dark mode glass effect
+  // Dark mode glass
   :root.dark &
     .image-exif-info-card
       background rgba(32, 33, 36, 0.8)
       border 1px solid rgba(255, 255, 255, 0.1)
 
-  // Fallback to block mode if card overflows (handled by JS)
+  // -- Float → Block fallback (card overflows image height) --
   &.image-exif-overflow-fallback
     display flex
     flex-direction column
     align-items stretch
-    
+
     .image-exif-image-wrapper
       display block
       width 100%
       text-align center
       margin-bottom 0
-      
+
       .image-exif-img
         max-width 100%
         margin 0 auto
-        
+
     .image-exif-info-card
       position relative
       top auto
@@ -257,8 +264,6 @@ $image-exif-border-radius = $redefine-border-radius-medium
       margin-top 1rem !important
       opacity 1
       pointer-events auto
-      
-      // Reset glass effect
       background $image-exif-card-bg
       backdrop-filter none
       -webkit-backdrop-filter none
@@ -269,29 +274,20 @@ $image-exif-border-radius = $redefine-border-radius-medium
         display block
 
       .image-exif-data
-        height 0 // Reset to collapsed
+        height 0
         margin-top 0
         opacity 0
         transition all 0.3s ease
 
       &.expanded
         .image-exif-data
-          margin-top 0.6rem
+          margin-top $image-exif-gap
           opacity 1
-          // height is handled by JS for animation
-      
-    .image-exif-data
-      grid-template-columns repeat(auto-fit, minmax(130px, 1fr))
-      min-height 0 // Ensure transition works from 0
-      
-      @media (min-width: 1200px)
-        grid-template-columns repeat(4, minmax(0, 1fr))
 
 
-// ======================================================================
-// Mode 3: Block Layout (Below image)
-// Default for narrow screens and block image-caption style
-// ======================================================================
+// ===================================================================
+// 3. Block Mode (below image, collapsible)
+// ===================================================================
 .image-exif-container.image-exif-block
   display flex
   flex-direction column
@@ -307,7 +303,7 @@ $image-exif-border-radius = $redefine-border-radius-medium
     .image-exif-img
       max-height 80svh
       max-width 100%
-      
+
       &.img-preloader .img-preloader-shim
         max-height 80svh
 
@@ -320,38 +316,24 @@ $image-exif-border-radius = $redefine-border-radius-medium
       display block
 
     .image-exif-data
-      height 0 // Default collapsed in block mode
+      height 0
       margin-top 0
       opacity 0
       transition all 0.3s ease
-      
-      // Remove !important overrides from float mode inheritance
-      // This is crucial for block mode toggle to work
-      height 0 
-      opacity 0
-      margin-top 0
 
     &.expanded
       .image-exif-data
-        margin-top 0.6rem
+        margin-top $image-exif-gap
         opacity 1
-        height auto // Allow height transition
+        height auto
 
-  // EXIF data in block mode
-  .image-exif-data
-    grid-template-columns repeat(auto-fit, minmax(130px, 1fr))
 
-  @media (min-width: 1200px)
-    .image-exif-data
-      grid-template-columns repeat(4, minmax(0, 1fr))
-
-// ======================================================================
-// Mode 4: Side-by-Side Layout (Highest Priority)
-// Layout: Image Left | Info Right
-// ======================================================================
+// ===================================================================
+// 4. Side Mode (image left, info right)
+// ===================================================================
 .image-exif-container.image-exif-side
   width 100%
-  
+
   .image-exif-image-wrapper
     display flex !important
     flex-direction row !important
@@ -359,42 +341,37 @@ $image-exif-border-radius = $redefine-border-radius-medium
     justify-content center !important
     text-align left !important
     width 100%
-    
+
     .image-exif-img
       flex 0 0 auto
-      margin 0 !important // Reset margin: 0 auto
+      margin 0 !important
       max-height 80svh
       width auto
       max-width 100%
-      
+
+    // Card sits beside image
     .image-exif-info-card
       flex 1 1 auto
       width auto
       min-width 130px
-      // max-width is controlled by JS dynamically
-      max-width 400px 
-      margin 0 0 0 1.5rem !important // Left margin for spacing
+      max-width 400px // JS may override via inline style
+      margin 0 0 0 1.5rem !important
       height fit-content
-      
-      // Block style background (no glass)
       background $image-exif-card-bg
       border none
       backdrop-filter none
       -webkit-backdrop-filter none
       box-shadow $image-exif-shadow
-      
-      // Always visible & Position reset
       position static !important
       opacity 1 !important
       pointer-events auto !important
       transform none !important
-      
+
       .image-exif-toggle-btn
         display none !important
-        
+
       .image-exif-data
         height auto !important
         opacity 1 !important
-        margin-top 0.6rem !important
+        margin-top $image-exif-gap !important
         display grid !important
-        grid-template-columns repeat(auto-fit, minmax(130px, 1fr))

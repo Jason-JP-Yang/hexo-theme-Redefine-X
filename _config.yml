@@ -1,5 +1,5 @@
 # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# THEME REDEFINE-X CONFIGURATION FILE V2
+# THEME REDEFINE-X CONFIGURATION FILE V2.9.3
 # BY JASON-JP-YANG
 # GITHUB: https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X
 # DOCUMENTATION: https://redefine-x-docs.jason-yang.top/zh
@@ -386,6 +386,13 @@ comment:
       lang: en # Giscus language. e.g. en, zh-CN, zh-TW
       input_position: bottom # Place the comment box above/below the comments. e.g. top, bottom
       loading: lazy # Load the comments lazily
+
+      # Masonry Reactions Only Support for Giscus
+      # CORS Proxy for giscus API (required for masonry reactions)
+      # giscus.app blocks cross-origin API requests from non-giscus.app origins.
+      proxy: # https://giscus-cors-proxy.<your-subdomain>.workers.dev
+      # Personal Access Tokens from auther github account with read and write premission to the repo is REQUIRED
+      author_pat: 
 # COMMENT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # FOOTER >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start

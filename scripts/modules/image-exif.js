@@ -28,8 +28,6 @@
  * -->
  * {% endexifimage %}
  * 
- * NOTE: Uses HTML comment syntax (<!-- exif-info ... -->) instead of code blocks
- * to avoid Hexo's code block preprocessing which replaces them with placeholders.
  */
 
 const fs = require("fs");

@@ -8,7 +8,8 @@
     <script <%= theme.global.single_page === true && 'data-swup-reload-script' %> defer>
         async function loadGiscus() {
             const giscusConfig = {
-                'src': 'https://giscus.app/client.js',
+                'src': '<%- url_for("/js/plugins/giscus-client.js") %>',
+                'data-giscus-origin': 'https://giscus.app',
                 'data-repo': '<%= theme.comment.config.giscus.repo %>',
                 'data-repo-id': '<%= theme.comment.config.giscus.repo_id %>',
                 'data-category': '<%= theme.comment.config.giscus.category %>',
