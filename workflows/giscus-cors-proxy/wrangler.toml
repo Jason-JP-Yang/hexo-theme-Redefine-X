@@ -1,0 +1,6 @@
+name = "giscus-cors-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# After deploying, set the worker URL in your theme config:
+# _config.redefine-x.yml → comment.config.giscus.proxy: https://giscus-cors-proxy.<your-subdomain>.workers.dev
