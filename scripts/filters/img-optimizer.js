@@ -9,18 +9,121 @@ const { spawn } = require("child_process");
 // Configuration Management
 // ----------------------------------------------------------------------------
 
+/**
+ * User-facing config:
+ *   encoder: "sharp" | "libaom-av1" | "libsvtav1"  (default: "sharp")
+ *   quality: 0-100   (0 = smallest file / worst quality, 100 = best quality)
+ *   effort:  0-10    (0 = fastest / least CPU, 10 = slowest / best compression)
+ *
+ * Internally mapped to encoder-specific parameters.
+ */
 class ConfigManager {
   static get() {
     const config = hexo.theme.config.plugins?.minifier?.imagesOptimize || {};
+    const encoder = (config.encoder || "sharp").toLowerCase().trim();
+    const quality = Math.max(0, Math.min(100, config.quality ?? 65));
+    const effort = Math.max(0, Math.min(10, config.effort ?? 5));
+    const cpuCount = os.cpus().length || 4;
+
     return {
       ENABLE_AVIF: config.AVIF_COMPRESS ?? true,
       ENABLE_SVG: config.SVGO_COMPRESS ?? false,
-      MAX_PIXELS: config.IMG_MAX_PIXELS || 2073600, // 1920x1080 limit
-      TARGET_CRF: config.AVIF_TARGET_CRF || 25,
-      ENCODER_PRESET: config.ENCODER_PRESET || 4,
-      MAX_CONCURRENCY: Math.max(1, Math.floor((os.cpus().length || 2) / 2)),
-      EXCLUDE: (config.EXCLUDE || []).filter(p => typeof p === "string" && p.trim() !== "")
+      MAX_PIXELS: config.IMG_MAX_PIXELS || 2073600,
+      EXCLUDE: config.EXCLUDE || [],
+      encoder,
+      quality,
+      effort,
+      // Derived encoder-specific params
+      ...ConfigManager._deriveParams(encoder, quality, effort),
+      // Concurrency: use all CPUs for sharp; half for ffmpeg (ffmpeg processes use multiple threads internally)
+      MAX_CONCURRENCY: encoder === "sharp"
+        ? Math.max(1, cpuCount - 1)
+        : Math.max(1, Math.floor(cpuCount / 2)),
+      CPU_COUNT: cpuCount,
     };
+  }
+
+  /**
+   * Convert unified quality (0-100) and effort (0-10) to encoder-specific params.
+   */
+  static _deriveParams(encoder, quality, effort) {
+    switch (encoder) {
+      case "sharp":
+        return {
+          sharp_quality: quality,           // sharp avif quality: 1-100
+          sharp_effort: Math.round(effort * 0.9), // sharp effort: 0-9
+        };
+      case "libaom-av1": {
+        // CRF: quality 100 -> crf 0 (lossless-ish), quality 0 -> crf 63
+        const crf = Math.round(63 - (quality / 100) * 63);
+        // cpu-used: effort 0 -> 8 (fastest), effort 10 -> 0 (slowest/best)
+        const cpuUsed = Math.round(8 - (effort / 10) * 8);
+        return {
+          aom_crf: crf,
+          aom_cpuUsed: Math.max(0, Math.min(8, cpuUsed)),
+        };
+      }
+      case "libsvtav1": {
+        // CRF: quality 100 -> crf 0, quality 0 -> crf 63
+        const crf = Math.round(63 - (quality / 100) * 63);
+        // preset: effort 0 -> 12 (fastest), effort 10 -> 0 (slowest/best)
+        // svtav1 preset range: 0-13, practical: 0-12
+        const preset = Math.round(12 - (effort / 10) * 12);
+        return {
+          svt_crf: crf,
+          svt_preset: Math.max(0, Math.min(12, preset)),
+        };
+      }
+      default:
+        return {};
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Image Metadata Utilities
+// ----------------------------------------------------------------------------
+
+class ImageMeta {
+  /**
+   * Detect image properties using ffprobe: dimensions, pixel format, frame count.
+   */
+  static async probe(inputPath) {
+    return new Promise((resolve, reject) => {
+      const proc = spawn("ffprobe", [
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,pix_fmt,nb_frames,codec_name,r_frame_rate",
+        "-of", "json",
+        inputPath,
+      ], { shell: false });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d) => (stdout += d));
+      proc.stderr.on("data", (d) => (stderr += d));
+      proc.on("close", (code) => {
+        try {
+          const data = JSON.parse(stdout);
+          const s = data.streams?.[0];
+          if (!s) return reject(new Error("No video stream found"));
+          const nbFrames = parseInt(s.nb_frames, 10);
+          const isAnimated = nbFrames > 1;
+          const hasAlpha = /rgba|bgra|pal8|ya|gbrap|yuva/i.test(s.pix_fmt || "");
+          resolve({
+            width: s.width,
+            height: s.height,
+            pixFmt: s.pix_fmt,
+            codec: s.codec_name,
+            nbFrames: isNaN(nbFrames) ? 1 : nbFrames,
+            isAnimated,
+            hasAlpha,
+          });
+        } catch {
+          reject(new Error(`ffprobe parse error: ${stderr}`));
+        }
+      });
+      proc.on("error", (err) => reject(err));
+    });
   }
 }
 
@@ -30,17 +133,9 @@ class ConfigManager {
 
 class ImageProcessor {
   static async process(fileInfo) {
-    const {
-      absPath,
-      outputPath,
-      isBitmap,
-      isSvg
-    } = fileInfo;
+    const { absPath, outputPath, isBitmap, isSvg } = fileInfo;
     const outDir = path.dirname(outputPath);
-
-    await fs.promises.mkdir(outDir, {
-      recursive: true
-    });
+    await fs.promises.mkdir(outDir, { recursive: true });
 
     if (isBitmap) {
       return await this.processAvif(absPath, outputPath);
@@ -51,12 +146,189 @@ class ImageProcessor {
 
   static async processAvif(inputPath, outputPath) {
     const config = ConfigManager.get();
+    const meta = await ImageMeta.probe(inputPath);
 
-    // Use sharp for fast metadata detection (includes alpha channel info)
+    // Determine effective encoder with fallback logic
+    let encoder = config.encoder;
+
+    // libsvtav1 cannot encode alpha; fall back to libaom-av1
+    if (encoder === "libsvtav1" && meta.hasAlpha) {
+      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: libsvtav1 doesn't support alpha, falling back to libaom-av1`);
+      encoder = "libaom-av1";
+    }
+    // libsvtav1 cannot encode animated sequences; fall back to libaom-av1
+    if (encoder === "libsvtav1" && meta.isAnimated) {
+      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: libsvtav1 doesn't support animation, falling back to libaom-av1`);
+      encoder = "libaom-av1";
+    }
+    // sharp cannot encode animated images to AVIF; fall back to libaom-av1
+    if (encoder === "sharp" && meta.isAnimated) {
+      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: sharp doesn't support animated AVIF, falling back to libaom-av1`);
+      encoder = "libaom-av1";
+    }
+
+    let result;
+    if (encoder === "sharp") {
+      result = await this._encodeSharp(inputPath, outputPath, meta, config);
+    } else if (encoder === "libaom-av1") {
+      result = await this._encodeLibaom(inputPath, outputPath, meta, config);
+    } else {
+      // libsvtav1
+      result = await this._encodeSvtav1(inputPath, outputPath, meta, config);
+    }
+
+    // Validate output
+    if (!fs.existsSync(outputPath)) throw new Error("Output file not created");
+    const stat = await fs.promises.stat(outputPath);
+    if (stat.size === 0) {
+      await fs.promises.unlink(outputPath);
+      throw new Error("Output file is 0 bytes");
+    }
+    return { size: stat.size };
+  }
+
+  // --------------------------------------------------------------------------
+  // Sharp encoder
+  // --------------------------------------------------------------------------
+  static async _encodeSharp(inputPath, outputPath, meta, config) {
     const sharp = require("sharp");
-    const meta = await sharp(inputPath).metadata();
+    const { targetWidth, targetHeight } = this._calcScale(meta, config);
 
-    // Calculate scaling
+    let pipeline = sharp(inputPath);
+
+    // Resize if needed
+    if (targetWidth !== meta.width || targetHeight !== meta.height) {
+      pipeline = pipeline.resize(targetWidth, targetHeight, {
+        fit: "inside",
+        withoutEnlargement: true,
+        kernel: sharp.kernel.lanczos3,
+      });
+    }
+
+    const info = await pipeline
+      .avif({
+        quality: config.sharp_quality,
+        effort: config.sharp_effort,
+      })
+      .toFile(outputPath);
+
+    return { size: info.size };
+  }
+
+  // --------------------------------------------------------------------------
+  // libaom-av1 encoder (via ffmpeg)
+  // --------------------------------------------------------------------------
+  static async _encodeLibaom(inputPath, outputPath, meta, config) {
+    const { targetWidth, targetHeight } = this._calcScale(meta, config);
+    const cpuCount = config.CPU_COUNT;
+    const cpuUsed = config.aom_cpuUsed ?? 4;
+    const crf = config.aom_crf ?? 30;
+    // tiles: split across available cores
+    const tileCols = Math.min(4, Math.max(1, Math.floor(Math.log2(cpuCount))));
+    const tileRows = Math.min(4, Math.max(1, Math.floor(Math.log2(cpuCount / tileCols))));
+
+    const isStill = !meta.isAnimated;
+
+    if (meta.hasAlpha && !meta.isAnimated) {
+      // Alpha still image: dual-stream approach
+      const args = [
+        "-y", "-i", inputPath,
+        "-filter_complex",
+        `[0]scale=${targetWidth}:${targetHeight}:flags=lanczos,split=2[main][alpha];[alpha]alphaextract[alpha]`,
+        "-map", "[main]", "-map", "[alpha]",
+        "-c:v:0", "libaom-av1",
+        "-pix_fmt:0", "yuv420p",
+        "-crf:0", String(crf),
+        "-b:v:0", "0",
+        "-cpu-used:0", String(cpuUsed),
+        "-row-mt:0", "1",
+        "-tiles:0", `${tileCols}x${tileRows}`,
+        "-c:v:1", "libaom-av1",
+        "-pix_fmt:1", "gray",
+        "-crf:1", String(crf),
+        "-b:v:1", "0",
+        "-cpu-used:1", String(cpuUsed),
+        "-aom-params:1", "matrix-coefficients=bt709",
+        "-still-picture", "1",
+        outputPath,
+      ];
+      await this.runFfmpeg(args);
+    } else if (meta.hasAlpha && meta.isAnimated) {
+      // Animated with alpha: drop alpha (animated AVIF alpha dual-stream is unreliable)
+      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: animated + alpha, encoding without alpha`);
+      const args = [
+        "-y", "-i", inputPath,
+        "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
+        "-c:v", "libaom-av1",
+        "-pix_fmt", "yuv420p",
+        "-crf", String(crf),
+        "-b:v", "0",
+        "-cpu-used", String(cpuUsed),
+        "-row-mt", "1",
+        "-tiles", `${tileCols}x${tileRows}`,
+        outputPath,
+      ];
+      await this.runFfmpeg(args);
+    } else {
+      // No alpha
+      const scaleFilter = `scale=${targetWidth}:${targetHeight}:flags=lanczos`;
+      const args = [
+        "-y", "-i", inputPath,
+        "-vf", scaleFilter,
+        "-c:v", "libaom-av1",
+        "-pix_fmt", "yuv420p",
+        "-crf", String(crf),
+        "-b:v", "0",
+        "-cpu-used", String(cpuUsed),
+        "-row-mt", "1",
+        "-tiles", `${tileCols}x${tileRows}`,
+        ...(isStill ? ["-still-picture", "1"] : []),
+        outputPath,
+      ];
+      await this.runFfmpeg(args);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // libsvtav1 encoder (via ffmpeg) – no alpha, no animation
+  // --------------------------------------------------------------------------
+  static async _encodeSvtav1(inputPath, outputPath, meta, config) {
+    const { targetWidth, targetHeight } = this._calcScale(meta, config);
+    const cpuCount = config.CPU_COUNT;
+    const preset = config.svt_preset ?? 4;
+    const crf = config.svt_crf ?? 35;
+
+    // SVT-AV1 threading: controls parallelism via -svtav1-params
+    // lp = logical processors to use (pin-count); tile-rows/tile-columns for tiling
+    const tileCols = Math.min(4, Math.max(0, Math.floor(Math.log2(cpuCount))));
+    const tileRows = Math.min(4, Math.max(0, Math.floor(Math.log2(cpuCount / Math.max(1, 1 << tileCols)))));
+
+    const svtParams = [
+      "tune=0",
+      `lp=${Math.max(1, cpuCount)}`,
+      `tile-rows=${tileRows}`,
+      `tile-columns=${tileCols}`,
+    ].join(":");
+
+    // Use 8-bit yuv420p to reduce memory (the 10le was causing OOM on large images)
+    const args = [
+      "-y", "-i", inputPath,
+      "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
+      "-c:v", "libsvtav1",
+      "-crf", String(crf),
+      "-preset", String(preset),
+      "-pix_fmt", "yuv420p",
+      "-svtav1-params", svtParams,
+      outputPath,
+    ];
+
+    await this.runFfmpeg(args);
+  }
+
+  // --------------------------------------------------------------------------
+  // Dimension calculation
+  // --------------------------------------------------------------------------
+  static _calcScale(meta, config) {
     let targetWidth = meta.width;
     let targetHeight = meta.height;
     const pixels = meta.width * meta.height;
@@ -74,81 +346,24 @@ class ImageProcessor {
     targetWidth = Math.max(2, targetWidth);
     targetHeight = Math.max(2, targetHeight);
 
-    if (meta.hasAlpha) {
-      // Route to sharp-based encoder to preserve alpha channel.
-      // FFmpeg's libsvtav1/libaom-av1 do not support yuva pixel formats
-      // through the standard FFmpeg pixel format pipeline.
-      return await this.processAvifWithAlpha(inputPath, outputPath, targetWidth, targetHeight, config, sharp);
-    } else {
-      return await this.processAvifFfmpeg(inputPath, outputPath, targetWidth, targetHeight, config);
-    }
+    return { targetWidth, targetHeight };
   }
 
-  static async processAvifWithAlpha(inputPath, outputPath, targetWidth, targetHeight, config, sharp) {
-    // Map CRF (0-63, lower = better quality) to sharp quality (1-100, higher = better)
-    const quality = Math.round(100 - (config.TARGET_CRF / 63) * 99);
-    // Map SVT-AV1 preset (0=slowest, 8=fastest) to libaom effort (0=fastest, 9=slowest)
-    const effort = Math.max(0, Math.min(9, 9 - config.ENCODER_PRESET));
-
-    await sharp(inputPath)
-      .resize(targetWidth, targetHeight, { kernel: "lanczos3", fit: "fill" })
-      .avif({ quality, effort })
-      .toFile(outputPath);
-
-    if (!fs.existsSync(outputPath)) throw new Error("Output file not created");
-    const stat = await fs.promises.stat(outputPath);
-    if (stat.size === 0) {
-      await fs.promises.unlink(outputPath);
-      throw new Error("Output file is 0 bytes");
-    }
-
-    return { size: stat.size };
-  }
-
-  static async processAvifFfmpeg(inputPath, outputPath, targetWidth, targetHeight, config) {
-    const args = [
-      "-y",
-      "-i", inputPath,
-      "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
-      "-c:v", "libsvtav1",
-      "-crf", String(config.TARGET_CRF),
-      "-preset", String(config.ENCODER_PRESET),
-      "-pix_fmt", "yuv420p10le",
-      "-svtav1-params", "tune=0",
-      outputPath
-    ];
-
-    await this.runFfmpeg(args);
-
-    if (!fs.existsSync(outputPath)) throw new Error("Output file not created");
-    const stat = await fs.promises.stat(outputPath);
-    if (stat.size === 0) {
-      await fs.promises.unlink(outputPath);
-      throw new Error("Output file is 0 bytes");
-    }
-
-    return { size: stat.size };
-  }
-
+  // --------------------------------------------------------------------------
+  // SVG processing (unchanged)
+  // --------------------------------------------------------------------------
   static async processSvg(inputPath, outputPath) {
-    // Direct require as requested by user. 
-    // Note: 'svgo' package exports CommonJS entry point via "require" condition in package.json
-    const {
-      optimize
-    } = require("svgo");
-
+    const { optimize } = require("svgo");
     const svgData = await fs.promises.readFile(inputPath, "utf8");
 
     const result = optimize(svgData, {
       path: inputPath,
-      multipass: true, // Enable multipass for better compression
-      floatPrecision: 2, // Aggressive float precision
+      multipass: true,
+      floatPrecision: 2,
       plugins: [{
         name: "preset-default",
         params: {
           overrides: {
-            removeViewBox: false, // Keep viewBox to avoid scaling issues
-            // Aggressive cleanups
             cleanupIds: true,
             removeHiddenElems: true,
             removeEmptyText: true,
@@ -161,35 +376,31 @@ class ImageProcessor {
               transformPrecision: 2,
               makeArcs: undefined,
               noSpaceAfterFlags: true,
-              forceAbsolutePath: false
-            }
-          }
-        }
+              forceAbsolutePath: false,
+            },
+          },
+        },
       },
-        "removeDimensions", // Remove width/height if viewBox exists
-        "reusePaths", // Re-use paths for better compression
+        "removeDimensions",
+        "reusePaths",
         "removeOffCanvasPaths",
-        "removeScriptElement", // Security
-        "removeStyleElement" // Use attrs instead
-      ]
+        "removeScripts",
+      ],
     });
 
-    if (result.error) {
-      throw new Error(result.error);
-    }
+    if (result.error) throw new Error(result.error);
 
     await fs.promises.writeFile(outputPath, result.data);
     const stat = await fs.promises.stat(outputPath);
-    return {
-      size: stat.size
-    };
+    return { size: stat.size };
   }
 
+  // --------------------------------------------------------------------------
+  // FFmpeg runner
+  // --------------------------------------------------------------------------
   static runFfmpeg(args) {
     return new Promise((resolve, reject) => {
-      const proc = spawn("ffmpeg", args, {
-        shell: false
-      });
+      const proc = spawn("ffmpeg", args, { shell: false });
       let stderr = "";
       proc.stderr.on("data", (data) => (stderr += data));
       proc.on("close", (code) => {
@@ -197,27 +408,6 @@ class ImageProcessor {
         else reject(new Error(`FFmpeg failed with code ${code}: ${stderr}`));
       });
       proc.on("error", (err) => reject(err));
-    });
-  }
-
-  static async getImageMetadata(inputPath) {
-    return new Promise((resolve, reject) => {
-      const proc = spawn("ffmpeg", ["-i", inputPath], {
-        shell: false
-      });
-      let stderr = "";
-      proc.stderr.on("data", (data) => (stderr += data));
-      proc.on("close", () => {
-        const match = stderr.match(/Stream #\d+:\d+.*Video:.*?\s(\d+)x(\d+)/);
-        if (match) {
-          resolve({
-            width: parseInt(match[1], 10),
-            height: parseInt(match[2], 10)
-          });
-        } else {
-          reject(new Error("Could not determine image dimensions"));
-        }
-      });
     });
   }
 }
@@ -235,11 +425,7 @@ class TaskQueue {
 
   enqueue(taskFn) {
     return new Promise((resolve, reject) => {
-      this.queue.push({
-        taskFn,
-        resolve,
-        reject
-      });
+      this.queue.push({ taskFn, resolve, reject });
       this.processNext();
     });
   }
@@ -248,11 +434,7 @@ class TaskQueue {
     if (this.active >= this.concurrency || this.queue.length === 0) return;
 
     this.active++;
-    const {
-      taskFn,
-      resolve,
-      reject
-    } = this.queue.shift();
+    const { taskFn, resolve, reject } = this.queue.shift();
 
     try {
       const result = await taskFn();
@@ -357,24 +539,6 @@ class PathManager {
 }
 
 // ----------------------------------------------------------------------------
-// Exclude Checker
-// ----------------------------------------------------------------------------
-
-function isExcluded(relPath, excludePatterns) {
-  if (!excludePatterns || excludePatterns.length === 0) return false;
-  // Normalize to leading-slash path to match patterns like ^/images/important/.*
-  const checkPath = "/" + relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  return excludePatterns.some(pattern => {
-    try {
-      return new RegExp(pattern).test(checkPath);
-    } catch (e) {
-      hexo.log.warn(`[minifier] Invalid exclude pattern "${pattern}": ${e.message}`);
-      return false;
-    }
-  });
-}
-
-// ----------------------------------------------------------------------------
 // Main Plugin Logic
 // ----------------------------------------------------------------------------
 
@@ -389,6 +553,7 @@ async function scanAndProcessAllImages() {
   }
 
   queue.concurrency = config.MAX_CONCURRENCY;
+  hexo.log.info(`[minifier] Encoder: ${config.encoder} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
   hexo.log.debug("[minifier] Scanning images...");
 
   const files = await gatherFiles();
@@ -456,10 +621,22 @@ async function processFile(absPath, config) {
 
   if (relPath.startsWith("build/")) return;
 
-  // Exclusion check
-  if (isExcluded(relPath, config.EXCLUDE)) {
-    hexo.log.debug(`[minifier] Excluded from optimization: ${relPath}`);
-    return;
+  // Check EXCLUDE patterns
+  const excludePatterns = config.EXCLUDE || [];
+  const relPathWithSlash = "/" + relPath;
+  for (const pattern of excludePatterns) {
+    try {
+      if (new RegExp(pattern).test(relPathWithSlash)) {
+        hexo.log.debug(`[minifier] Excluded: ${relPath} (matched ${pattern})`);
+        return;
+      }
+    } catch {
+      // If pattern is not valid regex, do simple string match
+      if (relPathWithSlash.includes(pattern)) {
+        hexo.log.debug(`[minifier] Excluded: ${relPath} (matched ${pattern})`);
+        return;
+      }
+    }
   }
 
   const {
@@ -515,7 +692,7 @@ function cleanupRoutes() {
 
 function replaceImagesInHtml(str) {
   if (!str || typeof str !== "string" || str.length === 0) return str;
-  
+
   const config = ConfigManager.get();
 
   const processTag = (tagContent, attrName) => {
@@ -531,23 +708,20 @@ function replaceImagesInHtml(str) {
     const local = PathManager.resolveSourceImagePath(originalSrc.split("#")[0].split("?")[0]);
     if (!local) return null;
 
-    // Exclusion check: do not rewrite URL for excluded images
-    if (isExcluded(local.rel, config.EXCLUDE)) return null;
-
     // Optimistic check: based on config only, independent of processing state
     const ext = path.extname(local.rel).toLowerCase();
     const isBitmap = PathManager.isSupportedBitmap(ext);
     const isSvg = PathManager.isSupportedSvg(ext);
 
     if ((!isBitmap && !isSvg) ||
-        (isBitmap && !config.ENABLE_AVIF) ||
-        (isSvg && !config.ENABLE_SVG)) {
-        return null;
+      (isBitmap && !config.ENABLE_AVIF) ||
+      (isSvg && !config.ENABLE_SVG)) {
+      return null;
     }
 
     const { routePath } = PathManager.buildOptimizedPath(local.rel, isBitmap);
     const url = encodeURI(path.posix.join(hexo.config.root || "/", routePath));
-    
+
     // Inject data-original-src to preserve the link to the original image
     return tagContent.replace(match[0], `${attrName}="${url}" data-original-src="${originalSrc}"`);
   };
@@ -561,7 +735,7 @@ function replaceImagesInHtml(str) {
 
 // Register filters
 // 1. Run before img-handle (Priority 5)
-hexo.extend.filter.register("after_post_render", function(data) {
+hexo.extend.filter.register("after_post_render", function (data) {
   if (data.content) {
     data.content = replaceImagesInHtml(data.content);
   }
@@ -626,19 +800,4 @@ hexo.extend.filter.register("after_generate", function () {
     if (cleaned > 0) hexo.log.info(`[minifier] Cleaned ${cleaned} files from public.`);
     if (synced > 0) hexo.log.info(`[minifier] Synced ${synced} optimized files to public.`);
   }
-});
-
-hexo.extend.filter.register("after_clean", function () {
-  if (!hexo.env.args["include-minify"]) {
-    hexo.log.info("[minifier] Build cleanup skipped (use --include-minify).");
-    return;
-  }
-  const buildDir = path.join(hexo.source_dir || "", "build");
-  try {
-    fs.rmSync(buildDir, {
-      recursive: true,
-      force: true
-    });
-    hexo.log.info("[minifier] Cleaned build dir.");
-  } catch { }
 });
