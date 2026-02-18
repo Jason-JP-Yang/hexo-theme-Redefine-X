@@ -51,7 +51,10 @@ class ImageProcessor {
 
   static async processAvif(inputPath, outputPath) {
     const config = ConfigManager.get();
-    const meta = await this.getImageMetadata(inputPath);
+
+    // Use sharp for fast metadata detection (includes alpha channel info)
+    const sharp = require("sharp");
+    const meta = await sharp(inputPath).metadata();
 
     // Calculate scaling
     let targetWidth = meta.width;
@@ -71,6 +74,38 @@ class ImageProcessor {
     targetWidth = Math.max(2, targetWidth);
     targetHeight = Math.max(2, targetHeight);
 
+    if (meta.hasAlpha) {
+      // Route to sharp-based encoder to preserve alpha channel.
+      // FFmpeg's libsvtav1/libaom-av1 do not support yuva pixel formats
+      // through the standard FFmpeg pixel format pipeline.
+      return await this.processAvifWithAlpha(inputPath, outputPath, targetWidth, targetHeight, config, sharp);
+    } else {
+      return await this.processAvifFfmpeg(inputPath, outputPath, targetWidth, targetHeight, config);
+    }
+  }
+
+  static async processAvifWithAlpha(inputPath, outputPath, targetWidth, targetHeight, config, sharp) {
+    // Map CRF (0-63, lower = better quality) to sharp quality (1-100, higher = better)
+    const quality = Math.round(100 - (config.TARGET_CRF / 63) * 99);
+    // Map SVT-AV1 preset (0=slowest, 8=fastest) to libaom effort (0=fastest, 9=slowest)
+    const effort = Math.max(0, Math.min(9, 9 - config.ENCODER_PRESET));
+
+    await sharp(inputPath)
+      .resize(targetWidth, targetHeight, { kernel: "lanczos3", fit: "fill" })
+      .avif({ quality, effort })
+      .toFile(outputPath);
+
+    if (!fs.existsSync(outputPath)) throw new Error("Output file not created");
+    const stat = await fs.promises.stat(outputPath);
+    if (stat.size === 0) {
+      await fs.promises.unlink(outputPath);
+      throw new Error("Output file is 0 bytes");
+    }
+
+    return { size: stat.size };
+  }
+
+  static async processAvifFfmpeg(inputPath, outputPath, targetWidth, targetHeight, config) {
     const args = [
       "-y",
       "-i", inputPath,
@@ -92,9 +127,7 @@ class ImageProcessor {
       throw new Error("Output file is 0 bytes");
     }
 
-    return {
-      size: stat.size
-    };
+    return { size: stat.size };
   }
 
   static async processSvg(inputPath, outputPath) {
