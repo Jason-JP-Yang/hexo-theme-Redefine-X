@@ -231,10 +231,12 @@ class ImageProcessor {
 
     if (meta.hasAlpha && !meta.isAnimated) {
       // Alpha still image: dual-stream approach
-      const args = [
+      // IMPORTANT: "format=rgba" between scale and split prevents ffmpeg's
+      // auto-negotiation from stripping alpha before alphaextract can use it.
+      const alphaArgs = [
         "-y", "-i", inputPath,
         "-filter_complex",
-        `[0]scale=${targetWidth}:${targetHeight}:flags=lanczos,split=2[main][alpha];[alpha]alphaextract[alpha]`,
+        `[0]scale=${targetWidth}:${targetHeight}:flags=lanczos,format=rgba,split=2[main][alpha];[alpha]alphaextract[alpha]`,
         "-map", "[main]", "-map", "[alpha]",
         "-c:v:0", "libaom-av1",
         "-pix_fmt:0", "yuv420p",
@@ -252,7 +254,27 @@ class ImageProcessor {
         "-still-picture", "1",
         outputPath,
       ];
-      await this.runFfmpeg(args);
+      try {
+        await this.runFfmpeg(alphaArgs);
+      } catch (alphaErr) {
+        // Fallback: if alpha encoding fails, encode without alpha
+        hexo.log.debug(`[minifier] ${path.basename(inputPath)}: alpha encoding failed, retrying without alpha: ${alphaErr.message.split('\n')[0]}`);
+        try { await fs.promises.unlink(outputPath); } catch {}
+        const fallbackArgs = [
+          "-y", "-i", inputPath,
+          "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
+          "-c:v", "libaom-av1",
+          "-pix_fmt", "yuv420p",
+          "-crf", String(crf),
+          "-b:v", "0",
+          "-cpu-used", String(cpuUsed),
+          "-row-mt", "1",
+          "-tiles", `${tileCols}x${tileRows}`,
+          "-still-picture", "1",
+          outputPath,
+        ];
+        await this.runFfmpeg(fallbackArgs);
+      }
     } else if (meta.hasAlpha && meta.isAnimated) {
       // Animated with alpha: drop alpha (animated AVIF alpha dual-stream is unreliable)
       hexo.log.debug(`[minifier] ${path.basename(inputPath)}: animated + alpha, encoding without alpha`);
