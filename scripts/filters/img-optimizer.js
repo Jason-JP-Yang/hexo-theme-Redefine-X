@@ -18,7 +18,8 @@ class ConfigManager {
       MAX_PIXELS: config.IMG_MAX_PIXELS || 2073600, // 1920x1080 limit
       TARGET_CRF: config.AVIF_TARGET_CRF || 25,
       ENCODER_PRESET: config.ENCODER_PRESET || 4,
-      MAX_CONCURRENCY: Math.max(1, Math.floor((os.cpus().length || 2) / 2))
+      MAX_CONCURRENCY: Math.max(1, Math.floor((os.cpus().length || 2) / 2)),
+      EXCLUDE: (config.EXCLUDE || []).filter(p => typeof p === "string" && p.trim() !== "")
     };
   }
 }
@@ -323,6 +324,24 @@ class PathManager {
 }
 
 // ----------------------------------------------------------------------------
+// Exclude Checker
+// ----------------------------------------------------------------------------
+
+function isExcluded(relPath, excludePatterns) {
+  if (!excludePatterns || excludePatterns.length === 0) return false;
+  // Normalize to leading-slash path to match patterns like ^/images/important/.*
+  const checkPath = "/" + relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  return excludePatterns.some(pattern => {
+    try {
+      return new RegExp(pattern).test(checkPath);
+    } catch (e) {
+      hexo.log.warn(`[minifier] Invalid exclude pattern "${pattern}": ${e.message}`);
+      return false;
+    }
+  });
+}
+
+// ----------------------------------------------------------------------------
 // Main Plugin Logic
 // ----------------------------------------------------------------------------
 
@@ -404,6 +423,12 @@ async function processFile(absPath, config) {
 
   if (relPath.startsWith("build/")) return;
 
+  // Exclusion check
+  if (isExcluded(relPath, config.EXCLUDE)) {
+    hexo.log.debug(`[minifier] Excluded from optimization: ${relPath}`);
+    return;
+  }
+
   const {
     outputPath,
     routePath
@@ -472,6 +497,9 @@ function replaceImagesInHtml(str) {
 
     const local = PathManager.resolveSourceImagePath(originalSrc.split("#")[0].split("?")[0]);
     if (!local) return null;
+
+    // Exclusion check: do not rewrite URL for excluded images
+    if (isExcluded(local.rel, config.EXCLUDE)) return null;
 
     // Optimistic check: based on config only, independent of processing state
     const ext = path.extname(local.rel).toLowerCase();
