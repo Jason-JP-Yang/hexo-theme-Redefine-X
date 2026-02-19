@@ -438,13 +438,14 @@ plugins:
     # Whether to enable images optimize
     imagesOptimize: 
       # All bitmap images will be optimized to AVIF format
-      # Requires FFMPEG with LibSVTAV1 codec. See https://trac.ffmpeg.org/wiki/Encode/AV1
+      # Requires sharp (npm) or FFMPEG with libaom-av1/libsvtav1 codec
       # Delete the optimized images through hexo clean --include-minify
       # Please do remember delete the cached images after you change the config
       AVIF_COMPRESS: true # Convert JPEG, JPG, PNG, WEBP, GIF, Animated GIF to AVIF
+      encoder: sharp # Encoder: sharp | libaom-av1 | libsvtav1 (sharp doesn't support animated GIF; libsvtav1 doesn't support alpha/animated - auto fallback to libaom-av1)
+      quality: 65 # Compression quality 0-100 (0=smallest file, 100=best quality)
+      effort: 5 # Compression effort/precision 0-10 (0=fastest, 10=best compression)
       IMG_MAX_PIXELS: 2073600 # approx 1920*1080
-      AVIF_TARGET_CRF: 25 # AVIF compression quality, lower value means higher quality (0-63)
-      ENCODER_PRESET: 4 # Encoder preset, lower value means higher speed (3-10)
       # Whether to enable SVG compress. Requires SVGO
       SVGO_COMPRESS: true # Compress SVG
     jsOptimize: true # Whether to enable JS compress.
