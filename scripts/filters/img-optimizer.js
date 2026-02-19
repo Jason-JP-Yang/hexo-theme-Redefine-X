@@ -578,6 +578,9 @@ async function scanAndProcessAllImages() {
   hexo.log.info(`[img-optimizer] Encoder: ${config.encoder} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
   hexo.log.debug("[img-optimizer] Scanning images...");
 
+  // Remove stale optimized files whose source images have been deleted
+  await cleanupOrphanedBuildFiles();
+
   const files = await gatherFiles();
   hexo.log.info(`[img-optimizer] Found ${files.length} candidate files.`);
 
@@ -616,6 +619,102 @@ async function recursiveReadDir(dir) {
     }
   }
   return results;
+}
+
+/** List all files inside the build output directory (no directory skips). */
+async function recursiveListBuildFiles(dir) {
+  let results = [];
+  if (!fs.existsSync(dir)) return results;
+  const list = await fs.promises.readdir(dir);
+  for (const file of list) {
+    const filePath = path.join(dir, file);
+    const stat = await fs.promises.stat(filePath);
+    if (stat && stat.isDirectory()) {
+      results = results.concat(await recursiveListBuildFiles(filePath));
+    } else {
+      results.push(filePath);
+    }
+  }
+  return results;
+}
+
+/**
+ * Remove files from the build output directory whose source image no longer exists.
+ * Mapping: source/build/<rel>.<ext> -> source/<rel>.<srcExt> or theme/source/<rel>.<srcExt>
+ */
+async function cleanupOrphanedBuildFiles() {
+  const buildDir = path.join(hexo.source_dir, "build");
+  const buildFiles = await recursiveListBuildFiles(buildDir);
+  if (buildFiles.length === 0) return;
+
+  const bitmapExts = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
+  let removed = 0;
+
+  for (const buildFilePath of buildFiles) {
+    // relToBuild: the path relative to source/build/ (e.g. "images/foo.avif")
+    const relToBuild = buildFilePath
+      .slice(buildDir.length)
+      .replace(/\\/g, "/")
+      .replace(/^\//, "");
+
+    const ext = path.posix.extname(relToBuild).toLowerCase();
+    const baseRel = relToBuild.slice(0, relToBuild.length - ext.length); // strip extension
+
+    let candidateRels;
+    if (ext === ".avif") {
+      candidateRels = bitmapExts.map((e) => baseRel + e);
+    } else if (ext === ".svg") {
+      candidateRels = [baseRel + ".svg"];
+    } else {
+      // Unrecognised file in build/ — leave it alone
+      continue;
+    }
+
+    const sourceExists = candidateRels.some((srcRel) => {
+      if (fs.existsSync(path.join(hexo.source_dir, srcRel))) return true;
+      if (hexo.theme_dir && fs.existsSync(path.join(hexo.theme_dir, "source", srcRel))) return true;
+      return false;
+    });
+
+    if (!sourceExists) {
+      try {
+        await fs.promises.unlink(buildFilePath);
+        hexo.log.info(`[img-optimizer] Orphan removed: build/${relToBuild}`);
+        removed++;
+      } catch (e) {
+        hexo.log.warn(`[img-optimizer] Failed to remove orphan build/${relToBuild}: ${e.message}`);
+      }
+    }
+  }
+
+  // Remove empty directories left behind
+  await removeEmptyDirs(buildDir);
+
+  if (removed > 0) {
+    hexo.log.info(`[img-optimizer] Orphan cleanup: removed ${removed} stale build file(s).`);
+  } else {
+    hexo.log.debug("[img-optimizer] Orphan cleanup: no stale build files found.");
+  }
+}
+
+/** Recursively remove empty directories under rootDir (does not remove rootDir itself). */
+async function removeEmptyDirs(rootDir) {
+  if (!fs.existsSync(rootDir)) return;
+  const entries = await fs.promises.readdir(rootDir);
+  for (const entry of entries) {
+    const fullPath = path.join(rootDir, entry);
+    const stat = await fs.promises.stat(fullPath);
+    if (stat.isDirectory()) {
+      await removeEmptyDirs(fullPath);
+      const remaining = await fs.promises.readdir(fullPath);
+      if (remaining.length === 0) {
+        try {
+          await fs.promises.rmdir(fullPath);
+          hexo.log.debug(`[img-optimizer] Removed empty dir: ${fullPath}`);
+        } catch { }
+      }
+    }
+  }
 }
 
 async function processFile(absPath, config) {
