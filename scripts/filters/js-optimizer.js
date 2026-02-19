@@ -64,13 +64,13 @@ hexo.extend.filter.register('after_generate', function() {
         const result = UglifyJS.minify(str, minifyOptions);
         if (result.code) {
             const saved = ((str.length - result.code.length) / str.length * 100).toFixed(2);
-            log.info(`[minifier] Optimized: ${path} [${saved}% saved]`);
+            log.info(`[js-optimizer] Optimized: ${path} [${saved}% saved]`);
             route.set(path, result.code);
         } else if (result.error) {
-            log.warn(`[minifier] Cannot minify ${path}: ${result.error}`);
+            log.warn(`[js-optimizer] Cannot minify ${path}: ${result.error}`);
         }
     } catch (err) {
-        log.warn(`[minifier] Error processing ${path}: ${err.message}`);
+        log.warn(`[js-optimizer] Error processing ${path}: ${err.message}`);
     }
     resolve();
   }

@@ -2,7 +2,7 @@
 const htmlminifier = require('html-minifier-terser').minify;
 const minimatch = require('minimatch');
 
-function OptimizeHTML(str, data) {
+async function OptimizeHTML(str, data) {
   const hexo = this;
   const config = hexo.theme.config.plugins?.minifier;
 
@@ -35,14 +35,15 @@ function OptimizeHTML(str, data) {
   };
 
   try {
-    result = htmlminifier(str, options);
-    const saved = str.length === 0 ? 0 : ((str.length - result.length) / str.length * 100).toFixed(2);
+    result = await htmlminifier(str, options);
+    const optimized = typeof result === 'string' ? result : str;
+    const saved = str.length === 0 ? 0 : ((str.length - optimized.length) / str.length * 100).toFixed(2);
     log.info(`[html-optimizer] Optimized: ${path} [${saved}% saved]`);
+    return optimized;
   } catch (e) {
-      log.warn(`[html-optimizer] Error processing ${path}: ${e}`);
+    log.warn(`[html-optimizer] Error processing ${path}: ${e}`);
+    return str;
   }
-
-  return result;
 }
 
 hexo.extend.filter.register('after_render:html', OptimizeHTML);

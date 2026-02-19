@@ -153,17 +153,17 @@ class ImageProcessor {
 
     // libsvtav1 cannot encode alpha; fall back to libaom-av1
     if (encoder === "libsvtav1" && meta.hasAlpha) {
-      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: libsvtav1 doesn't support alpha, falling back to libaom-av1`);
+      hexo.log.debug(`[img-optimizer] ${path.basename(inputPath)}: libsvtav1 doesn't support alpha, falling back to libaom-av1`);
       encoder = "libaom-av1";
     }
     // libsvtav1 cannot encode animated sequences; fall back to libaom-av1
     if (encoder === "libsvtav1" && meta.isAnimated) {
-      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: libsvtav1 doesn't support animation, falling back to libaom-av1`);
+      hexo.log.debug(`[img-optimizer] ${path.basename(inputPath)}: libsvtav1 doesn't support animation, falling back to libaom-av1`);
       encoder = "libaom-av1";
     }
     // sharp cannot encode animated images to AVIF; fall back to libaom-av1
     if (encoder === "sharp" && meta.isAnimated) {
-      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: sharp doesn't support animated AVIF, falling back to libaom-av1`);
+      hexo.log.debug(`[img-optimizer] ${path.basename(inputPath)}: sharp doesn't support animated AVIF, falling back to libaom-av1`);
       encoder = "libaom-av1";
     }
 
@@ -258,7 +258,7 @@ class ImageProcessor {
         await this.runFfmpeg(alphaArgs);
       } catch (alphaErr) {
         // Fallback: if alpha encoding fails, encode without alpha
-        hexo.log.debug(`[minifier] ${path.basename(inputPath)}: alpha encoding failed, retrying without alpha: ${alphaErr.message.split('\n')[0]}`);
+        hexo.log.debug(`[img-optimizer] ${path.basename(inputPath)}: alpha encoding failed, retrying without alpha: ${alphaErr.message.split('\n')[0]}`);
         try { await fs.promises.unlink(outputPath); } catch {}
         const fallbackArgs = [
           "-y", "-i", inputPath,
@@ -277,7 +277,7 @@ class ImageProcessor {
       }
     } else if (meta.hasAlpha && meta.isAnimated) {
       // Animated with alpha: drop alpha (animated AVIF alpha dual-stream is unreliable)
-      hexo.log.debug(`[minifier] ${path.basename(inputPath)}: animated + alpha, encoding without alpha`);
+      hexo.log.debug(`[img-optimizer] ${path.basename(inputPath)}: animated + alpha, encoding without alpha`);
       const args = [
         "-y", "-i", inputPath,
         "-vf", `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
@@ -372,7 +372,7 @@ class ImageProcessor {
   }
 
   // --------------------------------------------------------------------------
-  // SVG processing (unchanged)
+  // SVG processing
   // --------------------------------------------------------------------------
   static async processSvg(inputPath, outputPath) {
     const { optimize } = require("svgo");
@@ -570,21 +570,21 @@ const queue = new TaskQueue(2);
 async function scanAndProcessAllImages() {
   const config = ConfigManager.get();
   if (!config.ENABLE_AVIF && !config.ENABLE_SVG) {
-    hexo.log.debug("[minifier] Image optimization disabled.");
+    hexo.log.debug("[img-optimizer] Image optimization disabled.");
     return;
   }
 
   queue.concurrency = config.MAX_CONCURRENCY;
-  hexo.log.info(`[minifier] Encoder: ${config.encoder} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
-  hexo.log.debug("[minifier] Scanning images...");
+  hexo.log.info(`[img-optimizer] Encoder: ${config.encoder} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
+  hexo.log.debug("[img-optimizer] Scanning images...");
 
   const files = await gatherFiles();
-  hexo.log.info(`[minifier] Found ${files.length} candidate files.`);
+  hexo.log.info(`[img-optimizer] Found ${files.length} candidate files.`);
 
   const tasks = files.map(absPath => processFile(absPath, config));
   await Promise.all(tasks);
 
-  hexo.log.info(`[minifier] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
+  hexo.log.info(`[img-optimizer] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
   cleanupRoutes();
 }
@@ -649,13 +649,13 @@ async function processFile(absPath, config) {
   for (const pattern of excludePatterns) {
     try {
       if (new RegExp(pattern).test(relPathWithSlash)) {
-        hexo.log.debug(`[minifier] Excluded: ${relPath} (matched ${pattern})`);
+        hexo.log.debug(`[img-optimizer] Excluded: ${relPath} (matched ${pattern})`);
         return;
       }
     } catch {
       // If pattern is not valid regex, do simple string match
       if (relPathWithSlash.includes(pattern)) {
-        hexo.log.debug(`[minifier] Excluded: ${relPath} (matched ${pattern})`);
+        hexo.log.debug(`[img-optimizer] Excluded: ${relPath} (matched ${pattern})`);
         return;
       }
     }
@@ -686,12 +686,12 @@ async function processFile(absPath, config) {
         isSvg
       });
 
-      hexo.log.info(`[minifier] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
+      hexo.log.info(`[img-optimizer] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
 
       hexo.route.set(routePath, () => fs.createReadStream(outputPath));
       successfulConversions.add(relPath);
     } catch (err) {
-      hexo.log.warn(`[minifier] Failed: ${relPath} -> ${err.message}`);
+      hexo.log.warn(`[img-optimizer] Failed: ${relPath} -> ${err.message}`);
     }
   });
 }
@@ -705,7 +705,7 @@ function cleanupRoutes() {
       removed++;
     }
   }
-  if (removed > 0) hexo.log.info(`[minifier] Removed ${removed} original images from routes.`);
+  if (removed > 0) hexo.log.info(`[img-optimizer] Removed ${removed} original images from routes.`);
 }
 
 // ----------------------------------------------------------------------------
@@ -782,7 +782,7 @@ hexo.extend.filter.register("after_generate", function () {
       toDelete.push(relPath);
     }
   }
-  if (toDelete.length > 0) hexo.log.debug(`[minifier] (Safety) Removed ${toDelete.length} originals.`);
+  if (toDelete.length > 0) hexo.log.debug(`[img-optimizer] (Safety) Removed ${toDelete.length} originals.`);
 
   if (hexo.public_dir) {
     let cleaned = 0,
@@ -815,11 +815,11 @@ hexo.extend.filter.register("after_generate", function () {
           fs.copyFileSync(outputPath, publicDest);
           synced++;
         } catch (e) {
-          hexo.log.warn(`[minifier] Sync failed: ${routePath} - ${e.message}`);
+          hexo.log.warn(`[img-optimizer] Sync failed: ${routePath} - ${e.message}`);
         }
       }
     }
-    if (cleaned > 0) hexo.log.info(`[minifier] Cleaned ${cleaned} files from public.`);
-    if (synced > 0) hexo.log.info(`[minifier] Synced ${synced} optimized files to public.`);
+    if (cleaned > 0) hexo.log.info(`[img-optimizer] Cleaned ${cleaned} files from public.`);
+    if (synced > 0) hexo.log.info(`[img-optimizer] Synced ${synced} optimized files to public.`);
   }
 });
