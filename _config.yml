@@ -474,6 +474,17 @@ plugins:
   mermaid:
     enable: false # enable mermaid or not
     version: "11.4.1" # default v11.4.1
+  # MathJax - Server-side TeX to SVG rendering
+  mathjax:
+    enable: true # Whether to enable MathJax support
+    every_page: false # If true, load MathJax on every page. If false, only pages with `mathjax: true` in front-matter.
+    single_dollars: true # Enable $...$ as inline math delimiters (disable if $ conflicts with other content)
+    # Equation tags/numbering: 'none' (no numbering), 'ams' (only \tag and environments like equation), 'all' (number all display math)
+    tags: "ams"
+    # CJK character relative width (0.0-1.0, default 0.9)
+    cjk_width: 0.9
+    # Normal (monospace) character relative width (0.0-1.0, default 0.6)
+    normal_width: 0.6
 # PLUGINS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # PAGE TEMPLATES >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start

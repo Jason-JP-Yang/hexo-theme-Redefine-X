@@ -55,6 +55,10 @@
     <%- renderJS('plugins/mermaid.js') %>
 <% } %>
 
+<% if (theme.plugins.mathjax && theme.plugins.mathjax.enable && (theme.plugins.mathjax.every_page || page.mathjax)) { %>
+    <%- renderJS('plugins/mathjax-scroll.js') %>
+<% } %>
+
 <% if (theme.masonry || theme.photos || theme.gallery) { %>
     <%# Masonry now uses CSS columns - no external library needed %>
     <%- renderJS('plugins/masonry.js', {
