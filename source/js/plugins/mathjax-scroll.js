@@ -11,8 +11,14 @@
  * Overflow detection checks wrapper.scrollWidth > wrapper.clientWidth.
  * Hints are absolutely positioned on the non-scrolling outer block so
  * they stay fixed while content scrolls beneath them.
+ *
+ * Exported as initMathJaxScroll() and called via main.refresh() so it
+ * integrates with the theme's Swup PJAX lifecycle automatically.
  */
-(function () {
+
+var _mjResizeBound = false;
+
+const initMathJaxScroll = () => {
   'use strict';
 
   var BLOCK   = '.mathjax-block';
@@ -129,50 +135,31 @@
     }
   }
 
-  // Delay-retry: SVGs may not have final dimensions immediately
+  // Delay-retry: defer measurements until after browser layout pass.
+  // On Swup page:view the DOM is freshly swapped — calling initAll()
+  // synchronously reads scrollWidth before layout is complete, causing
+  // every formula to appear overflowed.  rAF guarantees at least one
+  // layout/paint cycle has finished before we measure anything.
   function initWithRetry() {
-    initAll();
-    // Re-check after a short delay (SVG fonts/layout may settle)
-    setTimeout(initAll, 300);
-    setTimeout(initAll, 1000);
-  }
-
-  /* ---- Swup PJAX -------------------------------------------------- */
-
-  function trySwup() {
-    try {
-      var s = eval("typeof swup!=='undefined'?swup:null");
-      if (s && s.hooks) {
-        s.hooks.on('page:view', function () {
-          requestAnimationFrame(initWithRetry);
-        });
-        return true;
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  function scheduleSwup() {
-    if (trySwup()) return;
-    var n = 0;
-    var t = setInterval(function () {
-      if (trySwup() || ++n >= 30) clearInterval(t);
-    }, 100);
-  }
-
-  /* ---- Bootstrap --------------------------------------------------- */
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () {
-      initWithRetry();
-      scheduleSwup();
+    requestAnimationFrame(function () {
+      initAll();
+      // Additional retries in case SVG fonts shift dimensions later
+      setTimeout(initAll, 300);
+      setTimeout(initAll, 1000);
     });
-  } else {
-    initWithRetry();
-    scheduleSwup();
   }
 
-  window.addEventListener('resize', function () {
-    requestAnimationFrame(initAll);
-  });
-})();
+  // Called from main.refresh() which fires on DOMContentLoaded and
+  // every Swup page:view event.
+  initWithRetry();
+
+  // Register resize listener only once across Swup navigations
+  if (!_mjResizeBound) {
+    _mjResizeBound = true;
+    window.addEventListener('resize', function () {
+      requestAnimationFrame(initAll);
+    });
+  }
+};
+
+export default initMathJaxScroll;

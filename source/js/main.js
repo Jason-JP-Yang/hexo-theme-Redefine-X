@@ -8,6 +8,7 @@ import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
 import initLazyLoad from "./layouts/lazyload.js";
 import initAutoHover from "./layouts/autoHover.js";
+import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 
 export const main = {
   themeInfo: {
@@ -83,6 +84,8 @@ export const main = {
     }
 
     initAutoHover();
+    
+    initMathJaxScroll();
   },
 };
 
