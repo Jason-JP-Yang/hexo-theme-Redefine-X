@@ -183,6 +183,14 @@ home_banner:
     qrs:
       weixin:  # your Wechat QRcode image URL
       # ...... # you can add more
+  # Instant Notes (Instagram Notes style)
+  instant_notes:
+    # Whether to enable instant notes
+    enable: false
+    # API endpoint URL for fetching notes (Cloudflare Worker)
+    api_url: 
+    # Avatar image URL (independent from sidebar avatar)
+    avatar: /images/redefine-avatar.svg
 # HOME BANNER <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # NAVIGATION BAR >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start

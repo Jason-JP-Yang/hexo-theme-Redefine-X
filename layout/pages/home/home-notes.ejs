@@ -1,0 +1,12 @@
+<% if (theme.home_banner.instant_notes && theme.home_banner.instant_notes.enable) { %>
+<div id="instant-notes" class="instant-notes-panel">
+    <!-- Label -->
+    <span class="instant-notes-label">Instant Notes</span>
+    <!-- Avatar -->
+    <div class="instant-notes-avatar" id="instant-notes-avatar">
+        <img src="<%- url_for(theme.home_banner.instant_notes.avatar || theme.defaults.avatar) %>" alt="author-avatar" />
+    </div>
+    <!-- Bubble field — danmaku area -->
+    <div class="instant-notes-field" id="instant-notes-field"></div>
+</div>
+<% } %>

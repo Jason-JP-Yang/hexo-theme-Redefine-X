@@ -57,11 +57,12 @@
                 const justify = theme.home_banner.social_links.style === "center" ? "justify-center" : "justify-between";
                 const display = theme.home_banner.social_links.style === "center" ? "hidden" : "flex";
             %>
-            <div class="absolute bottom-0.5 flex <%- flexDirection %> <%- justify %> max-w-[1340px] items-center w-full px-8 sm:px-12">
-                <div class="<%- display %> home-banner-scroll-to-main p-3 bg-gray-300/50 dark:bg-gray-500/40 backdrop-blur-lg border border-white/20 dark:border-gray-500/30 group rounded-full cursor-pointer flex justify-center items-center aspect-square h-full shadow-redefine-flat hover:shadow-redefine-flat-hover transition-shadow">
+            <div class="home-banner-bottom absolute bottom-0.5 flex flex-row items-end max-w-[1340px] w-full px-8 sm:px-12 gap-3 flex-wrap sm:flex-nowrap justify-between">
+                <div class="<%- display %> home-banner-scroll-to-main banner-glass p-3 group rounded-full cursor-pointer flex justify-center items-center aspect-square shadow-redefine-flat hover:shadow-redefine-flat-hover transition-shadow shrink-0">
                     <i class="fa-solid fa-arrow-down fa-fw fa-lg group-hover:translate-y-1 transition-transform"></i>
                 </div>
-                <div class="social-contacts px-6 py-3 bg-gray-300/50 dark:bg-gray-500/40 backdrop-blur-lg border border-white/20 dark:border-gray-500/30 shadow-redefine-flat rounded-full flex flex-row gap-3 items-center">
+                <%- partial('pages/home/home-notes') %>
+                <div class="social-contacts banner-glass px-6 py-3 shadow-redefine-flat rounded-full flex flex-row gap-3 items-center shrink-0">
                     <% for (const key in theme.home_banner.social_links.links) { %>
                         <% if(theme.home_banner.social_links.links[key]) { %>
                             <% if(key === 'email') { %>

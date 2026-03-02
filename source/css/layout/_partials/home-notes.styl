@@ -1,0 +1,276 @@
+// ═══════════════════════════════════════════════════════════
+// Instant Notes – frosted glass panel in the home banner bottom bar
+// Sits between scroll-arrow (left) and social-contacts (right)
+// ═══════════════════════════════════════════════════════════
+@require '../../common/variables'
+
+// ─── Shared frosted glass style for all bottom-bar items ─
+.banner-glass
+  background rgba(255, 255, 255, 0.12)
+  backdrop-filter blur(20px) saturate(1.4)
+  -webkit-backdrop-filter blur(20px) saturate(1.4)
+  border 1px solid rgba(255, 255, 255, 0.22)
+  box-shadow 0 4px 24px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255,255,255,0.12)
+  // Ensure icons/text are visible on frosted glass
+  color rgba(255, 255, 255, 0.92)
+  i, a, span
+    color inherit
+  .dark &
+    background rgba(30, 30, 42, 0.35)
+    border-color rgba(255, 255, 255, 0.10)
+    box-shadow 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.05)
+
+// ─── Panel: flex item inside .home-banner-bottom ─────────
+.instant-notes-panel
+  position relative
+  flex 1 1 0%
+  min-width 200px
+  min-height 150px
+  // Actual height is set dynamically by JS based on content
+  background rgba(255, 255, 255, 0.12)
+  backdrop-filter blur(20px) saturate(1.4)
+  -webkit-backdrop-filter blur(20px) saturate(1.4)
+  border 1px solid rgba(255, 255, 255, 0.22)
+  border-radius $redefine-border-radius-large
+  overflow hidden
+  box-shadow 0 4px 24px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255,255,255,0.12)
+
+  // Hidden until JS reveals
+  opacity 0
+  transform translateY(14px)
+  transition opacity 0.5s ease, transform 0.55s cubic-bezier(0.16,1,0.3,1)
+
+  &.notes-visible
+    opacity 1
+    transform translateY(0)
+
+  .dark &
+    background rgba(30, 30, 42, 0.35)
+    border-color rgba(255, 255, 255, 0.10)
+    box-shadow 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.05)
+
+  +redefine-tablet()
+    min-height 100px
+    min-width 0
+    flex-basis 100%
+    order -1   // moves above scroll & social on mobile (flex-wrap)
+
+  @media screen and (max-width: 520px)
+    min-height 90px
+    border-radius $redefine-border-radius-medium
+
+// ─── Label: top-left ─────────────────────────────────────
+.instant-notes-label
+  position absolute
+  top 10px
+  left 14px
+  font-size 1rem
+  font-weight 700
+  letter-spacing 0.06em
+  text-transform uppercase
+  color rgba(255, 255, 255, 0.92)
+  pointer-events none
+  z-index 2
+  .dark &
+    color rgba(255, 255, 255, 0.80)
+
+// ─── Avatar: bottom-left ─────────────────────────────────
+.instant-notes-avatar
+  position absolute
+  bottom 12px
+  left 14px
+  width 64px
+  height 64px
+  border-radius $redefine-border-radius-medium
+  overflow hidden
+  border 2.5px solid rgba(255, 255, 255, 0.55)
+  box-shadow 0 3px 14px rgba(0, 0, 0, 0.16)
+  z-index 10
+  opacity 0
+  transform scale(0.5)
+  transition opacity 0.4s ease, transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1)
+  &.avatar-visible
+    opacity 1
+    transform scale(1)
+  img
+    width 100%
+    height 100%
+    object-fit cover
+  .dark &
+    border-color rgba(255, 255, 255, 0.28)
+
+  +redefine-tablet()
+    width 54px
+    height 54px
+    border-radius $redefine-border-radius-small
+
+  @media screen and (max-width: 520px)
+    width 46px
+    height 46px
+    border-radius $redefine-border-radius-small
+    bottom 10px
+    left 10px
+
+// ─── Bubble field — absolute positioning area ────────────
+.instant-notes-field
+  position absolute
+  top 0
+  left 0
+  right 0
+  bottom 0
+
+// ─── Individual bubble (wrapper) ─────────────────────────
+// The TAIL lives on this wrapper so the card's mask-image
+// for emoji cut-out doesn't clip it.
+.instant-note-bubble
+  position absolute
+  z-index 5
+  // Default tail colour (light mode)
+  --bubble-bg #ffffff
+  --bubble-border rgba(0, 0, 0, 0.07)
+
+  // Initial hidden state for animation
+  opacity 0
+  transform scale(0) translateY(10px)
+  filter blur(3px)
+  transition none
+
+  &.bubble-pop
+    animation noteBubblePop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards
+  &.bubble-newest
+    z-index 15
+
+  // ── Speech tail on wrapper ──────────────────────────────
+  // Straight-edged sharp triangle. Uses SVG mask so it
+  // scales at any responsive size without path changes.
+  $tail-svg = url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 14'%3E%3Cpath d='M0 0L18 0L0 14Z' fill='%23000'/%3E%3C/svg%3E")
+  &::after
+    content ''
+    position absolute
+    bottom -11px
+    left 8px
+    width 18px
+    height 14px
+    background var(--bubble-bg)
+    -webkit-mask-image $tail-svg
+    mask-image $tail-svg
+    -webkit-mask-size 100% 100%
+    mask-size 100% 100%
+    z-index 1
+    pointer-events none
+
+  .dark &
+    --bubble-bg #2d2d3a
+    --bubble-border rgba(255, 255, 255, 0.09)
+
+// ─── Bubble card — the visible box ───────────────────────
+// NO ::before / ::after here — tail is on the wrapper.
+.bubble-card
+  position relative
+  padding 8px 13px 6px 13px
+  border-radius $redefine-border-radius-large $redefine-border-radius-large $redefine-border-radius-large 4px
+  font-size 14px
+  line-height $default-line-height
+  white-space nowrap
+  box-shadow 0 2px 10px rgba(0, 0, 0, 0.08)
+  cursor default
+
+  // ── Default colours (auto light/dark) ────────────────
+  &.bubble-default
+    background #ffffff
+    color #1a1a1a
+    border 1px solid rgba(0, 0, 0, 0.07)
+    .dark &
+      background #2d2d3a
+      color #e8e8e8
+      border-color rgba(255, 255, 255, 0.09)
+
+  // ── Custom colour ─────────────────────────────────────
+  &.bubble-custom
+    border 1px solid rgba(255, 255, 255, 0.18)
+
+  // ── Emoji mask cut-out on card only ───────────────────
+  // The tail is on the wrapper so it won't be clipped.
+  &.has-emoji
+    padding-right 22px
+    mask-image radial-gradient(circle 18px at calc(100% - 1px) -1px, transparent 98%, black 100%)
+    -webkit-mask-image radial-gradient(circle 18px at calc(100% - 1px) -1px, transparent 98%, black 100%)
+
+// ─── Text & time (inline) ────────────────────────────────
+.instant-note-text
+  margin 0
+  display inline
+
+.instant-note-time
+  display inline
+  font-size ($default-font-size * 0.72)
+  font-weight 700
+  opacity 0.42
+  margin-left 5px
+
+// ─── Emoji badge ─────────────────────────────────────────
+.instant-note-emoji
+  position absolute
+  top -14px
+  right -10px
+  width 38px
+  height 38px
+  border-radius 50%
+  display flex
+  align-items center
+  justify-content center
+  font-size 20px
+  z-index 20
+  pointer-events none
+  &.emoji-default
+    background #ffffff
+    .dark &
+      background #2d2d3a
+
+// ─── Pop-in keyframe ─────────────────────────────────────
+@keyframes noteBubblePop
+  0%
+    opacity 0
+    transform scale(0) translateY(10px)
+    filter blur(3px) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
+  50%
+    opacity 1
+    filter blur(0) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
+    transform scale(1.08) translateY(-2px)
+  75%
+    transform scale(0.97) translateY(1px)
+  100%
+    opacity 1
+    transform scale(1) translateY(0)
+    filter blur(0) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
+
+// ─── Responsive bubble sizing ────────────────────────────
++redefine-tablet()
+  .bubble-card
+    font-size 13px
+    padding 7px 11px 5px 11px
+    border-radius $redefine-border-radius-medium $redefine-border-radius-medium $redefine-border-radius-medium 4px
+  .instant-note-emoji
+    width 32px
+    height 32px
+    font-size 17px
+  .bubble-card.has-emoji
+    padding-right 18px
+    mask-image radial-gradient(circle 15px at calc(100% - 1px) -1px, transparent 98%, black 100%)
+    -webkit-mask-image radial-gradient(circle 15px at calc(100% - 1px) -1px, transparent 98%, black 100%)
+  .instant-note-bubble::after
+    width 15px
+    height 11px
+    bottom -9px
+
+@media screen and (max-width: 520px)
+  .bubble-card
+    font-size 12px
+    padding 6px 9px 4px 9px
+    border-radius $redefine-border-radius-small $redefine-border-radius-small $redefine-border-radius-small 3px
+  .instant-note-bubble::after
+    width 13px
+    height 9px
+    bottom -7px
+    left 6px
+

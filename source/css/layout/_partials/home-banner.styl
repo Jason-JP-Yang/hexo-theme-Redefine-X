@@ -30,6 +30,8 @@ $home-banner-icon-size = 1.6rem
       font-size $title-font-size
       line-height $line-height
       color var(--home-banner-text-color)
+      // Smooth shift when instant-notes panel reveals
+      transition transform 0.6s cubic-bezier(0.16, 1, 0.3, 1)
 
       p
         margin 0
@@ -46,3 +48,7 @@ $home-banner-icon-size = 1.6rem
 
       +redefine-tablet()
         font-size: $title-font-size * 0.9
+
+  // When instant-notes is active, shift only title/subtitle upward
+  &.has-notes .content .description
+    transform translateY(calc(var(--notes-shift, 0px) * -1))

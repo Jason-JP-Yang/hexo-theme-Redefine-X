@@ -102,3 +102,9 @@
         module: true
     }) %>
 <% } %>
+
+<% if (theme.home_banner.instant_notes && theme.home_banner.instant_notes.enable) { %>
+    <%- renderJS('plugins/instantNotes.js', {
+        module: true
+    }) %>
+<% } %>
