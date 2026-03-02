@@ -1,0 +1,92 @@
+/* ==========================================================
+   MathJax display / inline math + scroll-hint styles
+   ========================================================== */
+
+/* ----- Display math outer wrapper (does NOT scroll) ----- */
+.mathjax-block
+  position relative
+  display block
+  margin 0 0 12px 0
+  padding 0
+  overflow hidden          /* clip the gradient hints to this box */
+
+/* ----- Inner scroll container ----- */
+.mathjax-scroll-wrapper
+  display flex
+  flex-direction row
+  justify-content flex-start   /* do NOT use center: overflowing centered items cut off left side and scrollLeft can't go negative */
+  align-items flex-start
+  overflow-x auto
+  overflow-y hidden
+  scrollbar-width none
+  -ms-overflow-style none
+
+  &::-webkit-scrollbar
+    display none
+
+  /*
+   * KEY FIX: mjx-container as a flex item with flex-shrink:0
+   * and margin:0 auto.
+   *
+   * flex-shrink:0  → item keeps full intrinsic (SVG) width; wrapper
+   *                   scrollWidth correctly reflects formula width.
+   * margin:0 auto  → centers the item when formula < wrapper width
+   *                   (auto margins share the remaining space).
+   *                   When formula ≥ wrapper width, auto margins
+   *                   collapse to 0, content starts at left edge,
+   *                   and scrollLeft scrolls rightward normally.
+   * justify-content:flex-start on parent is required: center would
+   *                   offset the item negatively when overflowing,
+   *                   permanently hiding the left portion.
+   */
+  mjx-container[jax="SVG"]
+    flex-shrink 0
+    margin 0 auto
+    max-width none !important
+    padding 0 !important
+    overflow visible !important
+
+  svg
+    display block
+    max-width none
+
+/* ----- MathJax SVG resets (inline math) ----- */
+.mathjax-inline
+  mjx-container[jax="SVG"]
+    margin 0 !important
+    padding 0 !important
+
+  svg
+    max-width none
+
+/* ----- Scroll hints (absolutely positioned on outer block) ----- */
+.mathjax-scroll-hint
+  position absolute
+  top 0
+  bottom 0
+  width 48px
+  display flex
+  align-items center
+  pointer-events none
+  opacity 0
+  transition opacity 0.25s ease
+  color var(--default-text-color)
+  z-index 2
+  font-size 13px
+
+  &.is-visible
+    opacity 0.92
+
+/* Left hint: caret pushed tight to left edge */
+.mathjax-scroll-hint--left
+  left 0
+  justify-content flex-start
+  padding-left 2px
+  background linear-gradient(to right, var(--background-color) 30%, transparent)
+
+/* Right hint: caret pushed tight to right edge */
+.mathjax-scroll-hint--right
+  right 0
+  justify-content flex-end
+  padding-right 2px
+  background linear-gradient(to left, var(--background-color) 30%, transparent)

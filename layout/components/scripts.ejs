@@ -55,6 +55,9 @@
     <%- renderJS('plugins/mermaid.js') %>
 <% } %>
 
+<% if (theme.plugins.mathjax && theme.plugins.mathjax.enable && (theme.plugins.mathjax.every_page || page.mathjax)) { %>
+<% } %>
+
 <% if (theme.masonry || theme.photos || theme.gallery) { %>
     <%# Masonry now uses CSS columns - no external library needed %>
     <%- renderJS('plugins/masonry.js', {
@@ -96,6 +99,12 @@
 
 <% if (theme.bookmarks && theme.bookmarks.length !== 0) { %>
     <%- renderJS('layouts/bookmarkNav.js', {
+        module: true
+    }) %>
+<% } %>
+
+<% if (theme.home_banner.instant_notes && theme.home_banner.instant_notes.enable) { %>
+    <%- renderJS('plugins/instantNotes.js', {
         module: true
     }) %>
 <% } %>

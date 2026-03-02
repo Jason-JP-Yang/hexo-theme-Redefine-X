@@ -52,6 +52,19 @@
         <div class="relative text-center lg:absolute lg:left-[20px] lg:top-1/2 lg:-translate-y-1/2 lg:text-left">
             <span class="lg:block text-sm"><%- __('powered_by', '<?xml version="1.0" encoding="utf-8"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg class="relative top-[2px] inline-block align-baseline" version="1.1" id="圖層_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="1rem" height="1rem" viewBox="0 0 512 512" enable-background="new 0 0 512 512" xml:space="preserve"><path fill="#0E83CD" d="M256.4,25.8l-200,115.5L56,371.5l199.6,114.7l200-115.5l0.4-230.2L256.4,25.8z M349,354.6l-18.4,10.7l-18.6-11V275H200v79.6l-18.4,10.7l-18.6-11v-197l18.5-10.6l18.5,10.8V237h112v-79.6l18.5-10.6l18.5,10.8V354.6z"/></svg><a target="_blank" class="text-base" href="https://hexo.io">Hexo</a>') %></span>
             <span class="text-sm lg:block"><%- __('theme') %>&nbsp;<a class="text-base" target="_blank" href="https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X">Redefine-X v<%- getThemeVersion() %></a></span>
+            <span id="redefine-version-check" class="text-sm lg:block text-emerald-600 dark:text-emerald-500" style="display: none;"></span>
+            <script>
+                fetch('https://redefine-x-version.jason-yang.top/api/v2/info')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success' && data.npmVersion !== '<%- getThemeVersion() %>') {
+                            const el = document.getElementById('redefine-version-check');
+                            el.innerHTML = 'UPDATE AVAILABLE <a class="text-base text-inherit" target="_blank" href="https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X/releases/tag/v' + data.npmVersion + '">Redefine-X v' + data.npmVersion + '</a>';
+                            el.style.display = 'block';
+                        }
+                    })
+                    .catch(() => {});
+            </script>
         </div>
         <% if (theme.footer.icp.enable && theme.footer.icp.hasOwnProperty('number')) { %>
             <div class="icp-info my-1"><a target="_blank" rel="nofollow" href="
