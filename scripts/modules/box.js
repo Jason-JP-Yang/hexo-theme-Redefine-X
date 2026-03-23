@@ -18,6 +18,8 @@ const PRESET_COLORS = new Set([
   "slate",
 ]);
 
+const MATHJAX_PLACEHOLDER_REGEX = /<!--mathjax:\d+:(?:display|inline)-->/g;
+
 function escapeText(content) {
   return content
     .replace(/&/g, "&amp;")
@@ -39,12 +41,38 @@ function normalizeColor(rawColor) {
   return "default";
 }
 
+function escapeTextPreservingMathjax(content) {
+  MATHJAX_PLACEHOLDER_REGEX.lastIndex = 0;
+  let result = "";
+  let lastIndex = 0;
+  let match;
+
+  while ((match = MATHJAX_PLACEHOLDER_REGEX.exec(content)) !== null) {
+    result += escapeText(content.slice(lastIndex, match.index));
+    result += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+
+  result += escapeText(content.slice(lastIndex));
+  return result;
+}
+
+function hasDisplayMathPlaceholder(content) {
+  return /<!--mathjax:\d+:display-->/.test(content);
+}
+
 function postBox(args, content) {
   const color = normalizeColor(args[0]);
-  const escaped = escapeText((content || "").trim());
+  const rawContent = (content || "").trim();
+  const escaped = escapeTextPreservingMathjax(rawContent);
   const textOnlyContent = escaped.replace(/\r?\n/g, "<br>");
+  const hasDisplayMath = hasDisplayMathPlaceholder(rawContent);
+  const tagName = hasDisplayMath ? "div" : "span";
+  const boxClass = hasDisplayMath
+    ? `post-box post-box-${color} post-box-display`
+    : `post-box post-box-${color}`;
 
-  return `<span class="post-box post-box-${color}" data-box-color="${color}">${textOnlyContent}</span>`;
+  return `<${tagName} class="${boxClass}" data-box-color="${color}">${textOnlyContent}</${tagName}>`;
 }
 
 hexo.extend.tag.register("box", postBox, { ends: true });
