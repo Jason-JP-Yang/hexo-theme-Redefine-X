@@ -1,20 +1,23 @@
 /**
- * Instant Notes – Danmaku-style chat bubbles on the home banner.
+ * Instant Notes – Instagram-Notes-style chat bubbles on the home banner.
  *
- * The panel (#instant-notes) is a flex item inside the bottom bar,
- * between the scroll arrow and social contacts.
+ * The panel (#instant-notes) is a flex item inside the banner bottom bar,
+ * between the scroll arrow (left) and the social contacts (right). It is
+ * therefore WIDE but SHORT.
  *
- * Layout inside the panel:
- *  ┌───────────────────────────────────────────────────┐
- *  │ Instant Notes                                     │
- *  │           [msg2]  ··  [msg3]  ···  [msg4]  [msg5] │
- *  │  [avatar][newest▸]                                │
- *  └───────────────────────────────────────────────────┘
+ *  • Avatar pinned bottom-left (CSS).
+ *  • Newest bubble anchored at the avatar's top-right; it is the ONLY bubble
+ *    with a speech tail, aimed at the avatar ("spoken by the user").
+ *  • Older bubbles are tail-less floating bubbles packed left→right, clustered
+ *    near the avatar (gravity) with a fresh random vertical scatter.
+ *  • Fit chain when content overflows: word-wrap → vertical stagger → grow
+ *    panel height (bounded) → drop the oldest that still cannot fit.
+ *  • Sparse content → the panel shrinks to its width and floats at screen centre.
  *
- *  • Bubbles are absolutely positioned in .instant-notes-field
- *  • Newest bubble overlaps avatar's top-right corner
- *  • Older bubbles spread rightward with vertical stagger
- *  • Tail at bottom-left of each card (CSS triangle pair)
+ * The bubble's RESTING visual state lives in the base `.instant-note-bubble`
+ * CSS rule (opacity 1, transform none, filter none). The pre-reveal HIDDEN
+ * state lives in the `.is-entering` modifier only. Resize never reverts a laid
+ * out bubble to the hidden state, so it can never get stuck blurred/shrunk.
  *
  * Timing: fetch starts immediately; reveal waits for preloader + 500 ms.
  */
@@ -48,6 +51,27 @@ function timeAgo(iso) {
   return `${hrs}h`;
 }
 
+// ─── Layout constants ──────────────────────────────────────
+const PAD = 8;             // inner panel padding
+const GAP_X = 6;           // horizontal gap between bubbles
+const GAP_Y = 8;           // vertical gap between lanes
+const LABEL_PAD = 28;      // reserve under the "Instant Notes" label
+const TAIL = 12;           // newest bubble's speech-tail height
+const AVATAR_OVERLAP = 10; // newest hugs the avatar's right edge by this much
+const EMOJI_TOP_MIN = 18;  // keep emoji badge from clipping the panel top
+const MIN_READABLE_W = 96; // never wrap a bubble narrower than this
+const MAX_BUBBLE_CAP = 280;// absolute max bubble width (px)
+const MAX_BUBBLE_FRAC = 0.46; // …or this fraction of the panel width
+const MAX_LANES = 4;       // hard cap on stacked lanes
+const MAX_JITTER = 8;      // bounded vertical jitter — organic but small gaps
+const EMOJI_RIGHT_EXTRA = 14; // extra right gap after an emoji bubble
+const COMPACT_RATIO = 0.80;   // shrink + center the panel below this content/strip ratio
+
+// Re-randomise the scatter on every visit, but avoid re-hitting the worker on
+// rapid swup navigations: cache the fetched notes briefly and re-run the layout.
+let _notesCache = null; // { data, ts }
+const NOTES_TTL = 60000;
+
 // ─── Entry point ───────────────────────────────────────────
 export default function initInstantNotes() {
   const panel = document.getElementById("instant-notes");
@@ -56,7 +80,15 @@ export default function initInstantNotes() {
   const apiUrl = theme.home_banner?.instant_notes?.api_url;
   if (!apiUrl) return;
 
-  fetchNotes(apiUrl).then((notes) => {
+  const fresh = _notesCache && Date.now() - _notesCache.ts < NOTES_TTL;
+  const notesPromise = fresh
+    ? Promise.resolve(_notesCache.data)
+    : fetchNotes(apiUrl).then((d) => {
+        _notesCache = { data: d, ts: Date.now() };
+        return d;
+      });
+
+  notesPromise.then((notes) => {
     if (!notes || notes.length === 0) return;
     buildDOM(notes.slice(0, 5), panel);
     waitForPreloader().then(() => {
@@ -101,14 +133,15 @@ function createBubble(note, isNewest) {
   const hasEmoji = !!note.emoji;
 
   const wrap = document.createElement("div");
-  wrap.className = "instant-note-bubble" + (isNewest ? " bubble-newest" : "");
+  // `.is-entering` holds the pre-reveal hidden state until the pop runs.
+  wrap.className =
+    "instant-note-bubble is-entering" + (isNewest ? " bubble-newest" : "");
 
-  // Set --bubble-bg on the wrapper so the tail ::after picks it up
+  // Set --bubble-bg on the wrapper so the newest bubble's tail ::after picks it up
   if (color) {
     wrap.style.setProperty("--bubble-bg", color);
     wrap.style.setProperty("--bubble-border", "rgba(255,255,255,0.18)");
   }
-  // Default colours are handled by CSS variables on .instant-note-bubble
 
   const card = document.createElement("div");
   card.className =
@@ -144,383 +177,286 @@ function createBubble(note, isNewest) {
   return wrap;
 }
 
-// ─── Build DOM & position bubbles ──────────────────────────
-//
-// Hybrid layout:
-//  1. Determine lane count and panel height using conservative
-//     "beside newest" spacing (newestR + GAP_X).
-//  2. After setting height, check which lanes are physically
-//     ABOVE the avatar/newest row. Those lanes get a wider
-//     startX (newestL + 15) for more horizontal space.
-//  3. Assign bubbles to lanes using lane-specific startX.
-//
+// ─── Wrap a bubble's card to a readable width ──────────────
+// Breaks at word boundaries; only hard-breaks a single token wider than target.
+function wrapCard(el, maxW) {
+  const card = el.querySelector(".bubble-card");
+  if (!card) return;
+  card.style.maxWidth = maxW + "px";
+  card.style.whiteSpace = "normal";
+  card.style.wordBreak = "normal";
+  card.style.overflowWrap = "break-word";
+}
+function clearWrap(el) {
+  const card = el.querySelector(".bubble-card");
+  if (!card) return;
+  card.style.maxWidth = "";
+  card.style.whiteSpace = "";
+  card.style.wordBreak = "";
+  card.style.overflowWrap = "";
+}
+
+// ─── Build DOM (create elements once) & first layout ───────
 function buildDOM(notes, panel) {
   const field = panel.querySelector("#instant-notes-field");
   if (!field) return;
   field.innerHTML = "";
 
   const bubbleEls = notes.map((n, i) => createBubble(n, i === 0));
-
-  // ── Neutralise transforms for measurement ─────────────
-  const origPanelTransform = panel.style.transform;
-  panel.style.transform = "none";
-  const avatarEl = panel.querySelector("#instant-notes-avatar");
-  const origAvatarTransform = avatarEl ? avatarEl.style.transform : "";
-  if (avatarEl) avatarEl.style.transform = "scale(1)";
-
   bubbleEls.forEach((b) => {
-    b.style.visibility = "hidden";
-    b.style.opacity = "0";
     b.style.position = "absolute";
-    b.style.transform = "scale(1) translateY(0)";
-    b.style.filter = "none";
     field.appendChild(b);
   });
 
-  // ── Measure ───────────────────────────────────────────
-  const W = panel.getBoundingClientRect().width;
-  const sizes = bubbleEls.map((b) => {
-    const r = b.getBoundingClientRect();
-    return { w: r.width, h: r.height };
+  panel._notes = notes;
+  panel._bubbleEls = bubbleEls;
+  panel._hasEmoji = notes.map((n) => !!n.emoji);
+
+  const plan = computeLayout(panel);
+  if (!plan) return;
+  applyFrame(panel, plan);
+  // Position the bubbles silently; they stay hidden via `.is-entering` until
+  // revealNotes() runs the staggered pop. Opacity/transform/filter come from
+  // the class + animation, so we only set left/top here.
+  plan.placed.forEach(({ i, left, top }) => {
+    const el = bubbleEls[i];
+    el.style.transition = "none";
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  });
+  panel._plan = plan;
+}
+
+// ─── computeLayout: measure + pack (no opacity/animation side effects) ─────
+// Returns { W, H, sizes, placed:[{i,left,top}] (clamped), dropped:[i],
+//           isCompact, compactWidth } or null.
+function computeLayout(panel) {
+  const field = panel.querySelector("#instant-notes-field");
+  const bubbleEls = panel._bubbleEls;
+  const hasEmojiArr = panel._hasEmoji;
+  if (!field || !bubbleEls || bubbleEls.length === 0) return null;
+
+  // Measure against the FULL strip width (drop any compact override first).
+  panel.classList.remove("is-compact");
+  panel.style.width = "";
+  panel.style.marginLeft = "";
+
+  const avatarEl = panel.querySelector("#instant-notes-avatar");
+  const origPanelTransform = panel.style.transform;
+  const origAvatarTransform = avatarEl ? avatarEl.style.transform : "";
+  panel.style.transform = "none";
+  if (avatarEl) avatarEl.style.transform = "scale(1)";
+
+  // Neutralise each bubble for measurement (visible, unscaled, unwrapped).
+  bubbleEls.forEach((b) => {
+    b.style.transition = "none";
+    b.style.display = "";
+    b.style.transform = "none";
+    b.style.filter = "none";
+    clearWrap(b);
   });
 
-  const TAIL = 14;
-  const GAP_X = 5;
-  const GAP_Y = 2;
-  const PAD = 6;
-  const EMOJI_TOP_MIN = 18;
-  const LABEL_PAD = 28;
-  const MAX_LANES = 3;
-  const maxH = Math.min(280, window.innerHeight * 0.35);
-
-  // Avatar geometry
-  const panelRectPre = panel.getBoundingClientRect();
-  let avL = 14, avW = 64, avH = 64;
+  const panelRect = panel.getBoundingClientRect();
+  const W = panelRect.width;
+  let avL = 14, avW = 64, avH = 64, avBottomGap = 12;
   if (avatarEl) {
     const ar = avatarEl.getBoundingClientRect();
-    avL = ar.left - panelRectPre.left;
+    avL = ar.left - panelRect.left;
     avW = ar.width;
     avH = ar.height;
+    avBottomGap = panelRect.bottom - ar.bottom;
   }
   const avR = avL + avW;
+  const aboveRightOffset = Math.round(avW * 0.55);
+  const MAX_BUBBLE_W = Math.max(MIN_READABLE_W, Math.min(W * MAX_BUBBLE_FRAC, MAX_BUBBLE_CAP));
 
-  const newestL = Math.min(avR - 6, W - sizes[0].w - PAD);
-  const newestR = newestL + (sizes[0]?.w || 0);
-  const besideStartX = newestR + GAP_X; // narrow start (beside newest)
-  const aboveStartX = newestL + 8;      // wider start (above newest)
+  const sizes = new Array(bubbleEls.length);
+  const measureAll = () => {
+    for (let i = 0; i < bubbleEls.length; i++) {
+      const r = bubbleEls[i].getBoundingClientRect();
+      sizes[i] = { w: r.width, h: r.height };
+    }
+  };
 
-  const olderSizes = sizes.slice(1);
-  if (olderSizes.length === 0) {
-    panel.style.transform = origPanelTransform;
-    if (avatarEl) avatarEl.style.transform = origAvatarTransform;
-    bubbleEls.forEach((b) => { b.style.visibility = ""; b.style.transform = ""; b.style.filter = ""; });
-    panel._dynamicH = 150;
-    return;
+  measureAll();
+  let wrappedAny = false;
+  for (let i = 0; i < bubbleEls.length; i++) {
+    if (sizes[i].w > MAX_BUBBLE_W) {
+      wrapCard(bubbleEls[i], MAX_BUBBLE_W);
+      wrappedAny = true;
+    }
   }
+  if (wrappedAny) measureAll();
 
-  const maxBH = olderSizes.reduce((m, s) => Math.max(m, s.h), 36);
-  const laneSlot = maxBH + TAIL + GAP_Y;
+  // Pack older bubbles into compact, equal-spaced lanes pulled down toward the
+  // newest (gravity), with bounded jitter for an organic, disordered feel.
+  const packAt = (H) => {
+    const bandTop = LABEL_PAD + PAD;
+    const bandBottom = H - PAD;
+    const avT = H - avBottomGap - avH;
 
-  // ── Phase 1: Determine lane count (vertical limit) ────
-  const verticalBudget = maxH - LABEL_PAD - PAD * 2;
-  const maxVertLanes = Math.max(1, Math.floor(verticalBudget / laneSlot));
-  const laneCount = Math.min(MAX_LANES, maxVertLanes, Math.max(1, olderSizes.length));
+    const w0 = sizes[0].w, h0 = sizes[0].h;
+    const newestLeft = clamp(avR - AVATAR_OVERLAP, PAD, Math.max(PAD, W - w0 - PAD));
+    const newestTop = clamp(avT - h0 - 2, bandTop, Math.max(bandTop, bandBottom - h0));
+    const newestRect = { left: newestLeft, top: newestTop, right: newestLeft + w0, bottom: newestTop + h0 };
 
-  // Needed height based on lane count
-  const neededH = LABEL_PAD + PAD * 2 + laneCount * laneSlot;
-  const dynamicH = Math.max(150, Math.min(Math.ceil(neededH), maxH));
+    const placed = [{ i: 0, left: newestLeft, top: newestTop }];
+    const dropped = [];
+    if (sizes.length === 1) return { placed, dropped, H };
 
-  // ── Phase 2: Set panel height ─────────────────────────
-  panel.style.height = `${dynamicH}px`;
-  const H = panel.getBoundingClientRect().height;
+    let maxBH = 0;
+    for (let i = 1; i < sizes.length; i++) maxBH = Math.max(maxBH, sizes[i].h);
+    const laneH = maxBH + GAP_Y;
+    const laneCount = clamp(Math.floor((bandBottom - bandTop) / laneH), 1, MAX_LANES);
 
-  // Calculate lane Y positions
-  const usableTop = LABEL_PAD + PAD;
-  const usableH = H - usableTop - PAD;
-  const laneY = [];
-  if (laneCount === 1) {
-    laneY.push(Math.round(usableTop + (usableH - maxBH - TAIL) / 2));
-  } else {
-    const span = usableH - maxBH - TAIL;
+    const blockBottom = bandTop + (laneCount - 1) * laneH + maxBH;
+    const desiredBottom = newestRect.top - GAP_Y;
+    const gravityShift = clamp(desiredBottom - blockBottom, 0, Math.max(0, bandBottom - blockBottom));
+
+    const besideStartX = newestRect.right + GAP_X;
+    const aboveStartX = newestLeft + aboveRightOffset;
+
+    const lanes = [];
     for (let l = 0; l < laneCount; l++) {
-      laneY.push(Math.round(usableTop + l * (span / (laneCount - 1))));
+      const top = bandTop + l * laneH + gravityShift;
+      const aboveNewest = top + maxBH <= newestRect.top + 2;
+      let leftStart = aboveNewest ? aboveStartX : besideStartX;
+      leftStart += (l % 2) * 10;
+      lanes.push({ top, cursor: leftStart });
     }
-  }
 
-  // ── Phase 3: Determine lane-specific startX ───────────
-  // Avatar is at bottom-left (CSS: bottom:12px).
-  let avT = H - 12 - avH;
-  if (avatarEl) {
-    const pRect = panel.getBoundingClientRect();
-    const ar2 = avatarEl.getBoundingClientRect();
-    avT = ar2.top - pRect.top;
-  }
-  // Newest bubble is roughly at avT - sizes[0].h * 0.9
-  const newestTop = Math.max(PAD, avT - sizes[0].h * 0.9);
-
-  // For each lane: if its bottom edge is above the newest bubble's top,
-  // it can use the wider "above" startX. Otherwise, "beside" startX.
-  const stagger = [0, 8, 4];
-  const laneStartX = [];
-  for (let l = 0; l < laneCount; l++) {
-    const laneBottom = laneY[l] + maxBH + TAIL;
-    if (laneBottom <= newestTop) {
-      // This lane is physically above the avatar/newest row → wider
-      laneStartX.push(aboveStartX + (stagger[l] || 0));
-    } else {
-      // Overlaps with avatar/newest → must start to the right
-      laneStartX.push(besideStartX + (stagger[l] || 0));
-    }
-  }
-
-  // ── Phase 4: Assign bubbles to lanes ──────────────────
-  let cursors = laneStartX.slice();
-  let assignments = [];
-  for (let i = 0; i < olderSizes.length; i++) {
-    const bw = olderSizes[i].w;
-    let best = 0, mc = cursors[0];
-    for (let l = 1; l < laneCount; l++) {
-      if (cursors[l] < mc) { mc = cursors[l]; best = l; }
-    }
-    if (cursors[best] + bw > W - PAD) {
-      assignments.push(null);
-    } else {
-      assignments.push({ lane: best, left: cursors[best] });
-      cursors[best] += bw + GAP_X;
-    }
-  }
-
-  // ── Phase 4a: Aggressive wrapping for overflows ────────
-  // If any bubbles overflow, calculate a per-lane target width
-  // (even distribution) and wrap ALL bubbles wider than that.
-  // This frees space so previously-overflowing bubbles can fit.
-  const overflowCount = assignments.filter((a) => !a).length;
-  if (overflowCount > 0) {
-    const maxLaneW = Math.max(...laneStartX.map((sx) => W - PAD - sx));
-    // Even distribution: each lane should hold ceil(total/lanes) bubbles
-    const bPerLane = Math.ceil(olderSizes.length / laneCount);
-    const targetW = Math.max(80, Math.floor((maxLaneW - (bPerLane - 1) * GAP_X) / bPerLane));
-    if (targetW < maxLaneW) {
-      const wrapCards = [];
-      for (let i = 0; i < olderSizes.length; i++) {
-        if (olderSizes[i].w > targetW) {
-          const card = bubbleEls[i + 1].querySelector(".bubble-card");
-          if (card) {
-            card.style.maxWidth = targetW + "px";
-            card.style.whiteSpace = "normal";
-            card.style.wordBreak = "break-word";
-            wrapCards.push({ card, idx: i });
-          }
+    for (let i = 1; i < sizes.length; i++) {
+      const w = sizes[i].w, h = sizes[i].h;
+      let best = -1, bestCur = Infinity;
+      for (let l = 0; l < laneCount; l++) {
+        if (lanes[l].cursor + w <= W - PAD && lanes[l].cursor < bestCur) {
+          bestCur = lanes[l].cursor;
+          best = l;
         }
       }
-
-      if (wrapCards.length > 0) {
-        // Re-measure all older bubbles
-        const newSizes = bubbleEls.slice(1).map((b) => {
-          const r = b.getBoundingClientRect();
-          return { w: r.width, h: r.height };
-        });
-
-        // Check if wrapping causes lane count to shrink (taller bubbles)
-        const newMaxBH = newSizes.reduce((m, s) => Math.max(m, s.h), 36);
-        const newSlot = newMaxBH + TAIL + GAP_Y;
-        const newMaxVLanes = Math.max(1, Math.floor(verticalBudget / newSlot));
-        const newLaneCount = Math.min(MAX_LANES, newMaxVLanes, Math.max(1, newSizes.length));
-
-        // Re-compute laneStartX for new lane count/height
-        const newNeededH = LABEL_PAD + PAD * 2 + newLaneCount * newSlot;
-        const newDynH = Math.max(150, Math.min(Math.ceil(newNeededH), maxH));
-        const newUsableH = newDynH - usableTop - PAD;
-        const newLaneY = [];
-        if (newLaneCount === 1) {
-          newLaneY.push(Math.round(usableTop + (newUsableH - newMaxBH - TAIL) / 2));
-        } else {
-          const sp = newUsableH - newMaxBH - TAIL;
-          for (let l = 0; l < newLaneCount; l++)
-            newLaneY.push(Math.round(usableTop + l * (sp / (newLaneCount - 1))));
-        }
-        const newNewestTop = Math.max(PAD, (newDynH - 12 - avH) - sizes[0].h * 0.9);
-        const newLSX = [];
-        for (let l = 0; l < newLaneCount; l++) {
-          const lb = newLaneY[l] + newMaxBH + TAIL;
-          newLSX.push(lb <= newNewestTop
-            ? aboveStartX + (stagger[l] || 0)
-            : besideStartX + (stagger[l] || 0));
-        }
-
-        // Re-assign
-        const newCursors = newLSX.slice();
-        const newAssign = [];
-        for (let i = 0; i < newSizes.length; i++) {
-          const bw = newSizes[i].w;
-          let best = 0, mc2 = newCursors[0];
-          for (let l = 1; l < newLaneCount; l++) {
-            if (newCursors[l] < mc2) { mc2 = newCursors[l]; best = l; }
-          }
-          if (newCursors[best] + bw > W - PAD) {
-            newAssign.push(null);
-          } else {
-            newAssign.push({ lane: best, left: newCursors[best] });
-            newCursors[best] += bw + GAP_X;
-          }
-        }
-
-        const newOverflows = newAssign.filter((a) => !a).length;
-        if (newOverflows <= overflowCount) {
-          // Accept wrapping — update everything
-          assignments = newAssign;
-          for (let i = 0; i < newSizes.length; i++) {
-            olderSizes[i] = newSizes[i];
-            sizes[i + 1] = newSizes[i];
-          }
-          // Update lane geometry for Phase 5
-          laneY.length = 0;
-          newLaneY.forEach((y) => laneY.push(y));
-          laneStartX.length = 0;
-          newLSX.forEach((x) => laneStartX.push(x));
-          panel.style.height = `${newDynH}px`;
-        } else {
-          // Reject — undo wrapping
-          wrapCards.forEach(({ card }) => {
-            card.style.maxWidth = "";
-            card.style.whiteSpace = "";
-            card.style.wordBreak = "";
-          });
-        }
-      }
+      if (best === -1) { dropped.push(i); continue; }
+      const lane = lanes[best];
+      const slack = Math.max(0, maxBH - h);
+      const jitter = slack > 2 ? Math.floor(Math.random() * Math.min(slack, MAX_JITTER)) : 0;
+      placed.push({ i, left: lane.cursor, top: lane.top + jitter });
+      lane.cursor += w + GAP_X + (hasEmojiArr[i] ? EMOJI_RIGHT_EXTRA : 0);
     }
+    return { placed, dropped, H };
+  };
+
+  // Height search: grow within bounds until everything fits.
+  let maxBH0 = 0;
+  for (let i = 1; i < sizes.length; i++) maxBH0 = Math.max(maxBH0, sizes[i].h);
+  const laneH0 = (maxBH0 || sizes[0].h) + GAP_Y;
+  const minForAvatar = avBottomGap + avH + LABEL_PAD;
+  const baseH = Math.max(minForAvatar, LABEL_PAD + PAD * 2 + 2 * laneH0);
+  const maxH = Math.max(baseH, Math.min(260, window.innerHeight * 0.32));
+  const step = Math.max(24, laneH0);
+
+  let best = null;
+  for (let H = baseH; H <= maxH + 0.5; H += step) {
+    const res = packAt(Math.min(H, maxH));
+    if (!best || res.dropped.length < best.dropped.length) best = res;
+    if (res.dropped.length === 0) break;
   }
 
-  // ── Phase 4c: Force-fit remaining overflows ─────────────
-  // Wrap still-overflowing bubbles to whatever space remains.
-  const effectiveLaneCount = laneY.length;
-  cursors = laneStartX.slice();
-  for (let i = 0; i < olderSizes.length; i++) {
-    if (assignments[i]) {
-      const l = assignments[i].lane;
-      const endX = assignments[i].left + olderSizes[i].w + GAP_X;
-      if (endX > cursors[l]) cursors[l] = endX;
-    }
-  }
-  for (let i = 0; i < olderSizes.length; i++) {
-    if (assignments[i]) continue;
-    let best = 0, bestSpace = (W - PAD) - cursors[0];
-    for (let l = 1; l < effectiveLaneCount; l++) {
-      const sp = (W - PAD) - cursors[l];
-      if (sp > bestSpace) { bestSpace = sp; best = l; }
-    }
-    if (bestSpace >= 60) {
-      const card = bubbleEls[i + 1].querySelector(".bubble-card");
-      if (card) {
-        card.style.maxWidth = bestSpace + "px";
-        card.style.whiteSpace = "normal";
-        card.style.wordBreak = "break-word";
-      }
-      const r = bubbleEls[i + 1].getBoundingClientRect();
-      olderSizes[i] = { w: r.width, h: r.height };
-      sizes[i + 1] = olderSizes[i];
-      assignments[i] = { lane: best, left: cursors[best] };
-      cursors[best] += olderSizes[i].w + GAP_X;
-    }
+  // Fit fallback: shrink still-dropped bubbles to readable min, retry once.
+  if (best.dropped.length > 0 && !wrappedAny) {
+    best.dropped.forEach((i) => wrapCard(bubbleEls[i], MIN_READABLE_W));
+    measureAll();
+    const retry = packAt(maxH);
+    if (retry.dropped.length < best.dropped.length) best = retry;
   }
 
-  // ── Phase 4d: Justify — spread bubbles within each lane ─
-  const laneGroups = {};
-  assignments.forEach((a, i) => {
-    if (a) {
-      if (!laneGroups[a.lane]) laneGroups[a.lane] = [];
-      laneGroups[a.lane].push(i);
-    }
-  });
-  for (const [lane, indices] of Object.entries(laneGroups)) {
-    if (indices.length <= 1) continue;
-    const lStart = laneStartX[+lane];
-    const totalBW = indices.reduce((s, i) => s + olderSizes[i].w, 0);
-    const available = (W - PAD) - lStart;
-    const idealGap = Math.min(GAP_X * 3, Math.max(GAP_X, (available - totalBW) / indices.length));
-    let x = lStart;
-    for (const idx of indices) {
-      assignments[idx].left = x;
-      x += olderSizes[idx].w + idealGap;
-    }
-  }
-
-  // ── Restore transforms ────────────────────────────────
+  // Restore transforms (positions/height applied by applyFrame + caller).
   panel.style.transform = origPanelTransform;
   if (avatarEl) avatarEl.style.transform = origAvatarTransform;
 
-  // ── Phase 5: Apply positions ──────────────────────────
-  const finalH = panel.getBoundingClientRect().height;
-
-  let finalAvT = finalH - 12 - avH;
-  if (avatarEl) {
-    const pRect = panel.getBoundingClientRect();
-    const ar2 = avatarEl.getBoundingClientRect();
-    finalAvT = ar2.top - pRect.top;
-  }
-
-  const positions = [];
-
-  // Newest bubble: overlap avatar top-right
-  let nT = Math.max(PAD, finalAvT - sizes[0].h * 0.9);
-  if (bubbleEls[0].querySelector(".instant-note-emoji")) nT = Math.max(EMOJI_TOP_MIN, nT);
-  positions.push({
-    left: newestL,
-    top: Math.max(PAD, Math.min(nT, finalH - sizes[0].h - TAIL - PAD)),
+  // Clamp placements into the panel and resolve compact mode.
+  const finalH = best.H;
+  const placed = best.placed.map(({ i, left, top }) => {
+    const { w, h } = sizes[i];
+    const minTop = hasEmojiArr[i] ? EMOJI_TOP_MIN : PAD;
+    const tail = i === 0 ? TAIL : 0;
+    const L = clamp(left, PAD, Math.max(PAD, W - w - PAD));
+    const T = clamp(top, minTop, Math.max(minTop, finalH - h - tail - PAD));
+    return { i, left: Math.round(L), top: Math.round(T) };
   });
 
-  // Older bubbles — add random Y jitter for shorter bubbles in the lane
-  const currentMaxBH = olderSizes.reduce((m, s) => Math.max(m, s.h), 36);
-  for (let i = 0; i < olderSizes.length; i++) {
-    const a = assignments[i];
-    if (!a) {
-      positions.push({ left: W + 100, top: 0 });
-    } else {
-      let top = laneY[a.lane];
-      // Random vertical offset for shorter bubbles within the lane
-      const slack = Math.max(0, currentMaxBH - olderSizes[i].h);
-      if (slack > 3) top += Math.floor(Math.random() * slack);
-      top = Math.max(PAD, Math.min(top, finalH - olderSizes[i].h - TAIL - PAD));
-      if (bubbleEls[i + 1].querySelector(".instant-note-emoji")) top = Math.max(EMOJI_TOP_MIN, top);
-      positions.push({ left: a.left, top });
-    }
-  }
+  let usedRight = 0;
+  placed.forEach(({ i, left }) => {
+    usedRight = Math.max(usedRight, left + sizes[i].w + (hasEmojiArr[i] ? EMOJI_RIGHT_EXTRA : 0));
+  });
+  const compactWidth = Math.ceil(usedRight + PAD);
+  const isCompact = compactWidth <= COMPACT_RATIO * W;
 
-  bubbleEls.forEach((b, i) => {
-    if (positions[i]) {
-      b.style.left = `${positions[i].left}px`;
-      b.style.top = `${positions[i].top}px`;
-    }
-    b.style.visibility = "";
-    b.style.transform = "";
-    b.style.filter = "";
+  return { W, H: best.H, sizes, placed, dropped: best.dropped, isCompact, compactWidth };
+}
+
+// ─── applyFrame: panel height + compact mode + show/hide bubbles ───────────
+function applyFrame(panel, plan) {
+  panel.style.height = `${Math.round(plan.H)}px`;
+
+  const droppedSet = new Set(plan.dropped);
+  panel._bubbleEls.forEach((b, i) => {
+    b.style.display = droppedSet.has(i) ? "none" : "";
   });
 
-  panel._dynamicH = finalH;
+  if (plan.isCompact) {
+    panel.classList.add("is-compact");
+    panel.style.width = `${plan.compactWidth}px`;
+    panel.style.marginLeft = `${-Math.round(plan.compactWidth / 2)}px`;
+  } else {
+    panel.classList.remove("is-compact");
+    panel.style.width = "";
+    panel.style.marginLeft = "";
+  }
+  panel._dynamicH = panel.getBoundingClientRect().height;
+}
+
+// ─── Small util ────────────────────────────────────────────
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 // ─── Reveal animation ──────────────────────────────────────
 function revealNotes(panel) {
-  // 1. Fade in glass panel
+  // 1. Fade in the frosted-glass panel
   panel.classList.add("notes-visible");
 
-  // 2. Shift title/subtitle upward to re-center above the taller bottom bar
-  const bannerContainer = document.querySelector(".home-banner-container");
-  if (bannerContainer && panel._dynamicH) {
-    // Shift by a fraction of the panel height (so title stays visually centered)
-    const shift = Math.round(Math.max(0, panel._dynamicH - 50) * 0.3);
-    bannerContainer.style.setProperty("--notes-shift", `${shift}px`);
-    bannerContainer.classList.add("has-notes");
+  // 1b. Glide the banner title/subtitle upward so it stays centred above the
+  //     revealed panel and isn't covered (smoothed by the .description CSS
+  //     transition). Shift scales with the final panel height.
+  const banner = document.querySelector(".home-banner-container");
+  if (banner && panel._dynamicH) {
+    const BASELINE_BAR_H = 56; // height of the plain button row (social pill)
+    const shift = clamp(Math.round(Math.max(0, panel._dynamicH - BASELINE_BAR_H) * 0.5), 0, 120);
+    banner.style.setProperty("--notes-shift", `${shift}px`);
+    banner.classList.add("has-notes");
   }
 
-  // 3. Avatar pop-in
+  // 2. Avatar pop-in
   const avatar = panel.querySelector("#instant-notes-avatar");
   setTimeout(() => avatar?.classList.add("avatar-visible"), 280);
 
-  // 4. Stagger-pop each bubble: newest first
-  const bubbles = panel.querySelectorAll(".instant-note-bubble");
+  // 3. Stagger-pop each visible bubble: newest first, then older ones. The pop
+  //    animation overrides the `.is-entering` hidden state;
+  const bubbles = Array.from(panel.querySelectorAll(".instant-note-bubble"))
+    .filter((b) => b.style.display !== "none");
   bubbles.forEach((b, i) => {
-    setTimeout(() => b.classList.add("bubble-pop"), 420 + i * 140);
+    setTimeout(() => {
+      b.classList.remove("is-entering");
+      b.classList.add("bubble-pop");
+      b.addEventListener(
+        "animationend",
+        () => {
+          b.classList.remove("bubble-pop");
+          b.style.opacity = "1";
+          b.style.transform = "none";
+          b.style.filter = "none";
+        },
+        { once: true },
+      );
+    }, 420 + i * 140);
   });
 }
-

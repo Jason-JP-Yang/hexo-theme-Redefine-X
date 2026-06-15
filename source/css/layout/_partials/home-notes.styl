@@ -44,6 +44,18 @@
     opacity 1
     transform translateY(0)
 
+  // Compact mode (sparse content): JS sets width + a negative margin-left and
+  // toggles this class. Going absolute drops the panel out of the flex flow so
+  // it floats at the bottom-bar's horizontal centre (≈ screen centre),
+  // independent of the scroll-arrow / social-pill. margin-left (not transform)
+  // does the centring, leaving `transform` free for the reveal animation.
+  &.is-compact
+    position absolute
+    left 50%
+    bottom 0
+    flex none
+    min-width 0
+
   .dark &
     background rgba(30, 30, 42, 0.35)
     border-color rgba(255, 255, 255, 0.10)
@@ -129,10 +141,10 @@
   --bubble-bg #ffffff
   --bubble-border rgba(0, 0, 0, 0.07)
 
-  // Initial hidden state for animation
+  // Initial hidden state for animation (gentle — small first jump)
   opacity 0
-  transform scale(0) translateY(10px)
-  filter blur(3px)
+  transform scale(0.86) translateY(6px)
+  filter blur(2px)
   transition none
 
   &.bubble-pop
@@ -140,15 +152,17 @@
   &.bubble-newest
     z-index 15
 
-  // ── Speech tail on wrapper ──────────────────────────────
-  // Straight-edged sharp triangle. Uses SVG mask so it
-  // scales at any responsive size without path changes.
+  // ── Speech tail — ONLY on the newest bubble ─────────────
+  // Straight-edged sharp triangle pointing down-left toward the
+  // avatar, so the newest note reads as "spoken" by the avatar.
+  // Older bubbles are tail-less floating bubbles.
+  // Uses an SVG mask so it scales at any responsive size.
   $tail-svg = url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 14'%3E%3Cpath d='M0 0L18 0L0 14Z' fill='%23000'/%3E%3C/svg%3E")
-  &::after
+  &.bubble-newest::after
     content ''
     position absolute
     bottom -11px
-    left 8px
+    left 10px
     width 18px
     height 14px
     background var(--bubble-bg)
@@ -231,14 +245,14 @@
 @keyframes noteBubblePop
   0%
     opacity 0
-    transform scale(0) translateY(10px)
-    filter blur(3px) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
-  50%
+    transform scale(0.86) translateY(6px)
+    filter blur(2px) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
+  55%
     opacity 1
     filter blur(0) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
-    transform scale(1.08) translateY(-2px)
-  75%
-    transform scale(0.97) translateY(1px)
+    transform scale(1.03) translateY(-1px)
+  78%
+    transform scale(0.99) translateY(0)
   100%
     opacity 1
     transform scale(1) translateY(0)
@@ -258,7 +272,7 @@
     padding-right 18px
     mask-image radial-gradient(circle 15px at calc(100% - 1px) -1px, transparent 98%, black 100%)
     -webkit-mask-image radial-gradient(circle 15px at calc(100% - 1px) -1px, transparent 98%, black 100%)
-  .instant-note-bubble::after
+  .instant-note-bubble.bubble-newest::after
     width 15px
     height 11px
     bottom -9px
@@ -268,9 +282,8 @@
     font-size 12px
     padding 6px 9px 4px 9px
     border-radius $redefine-border-radius-small $redefine-border-radius-small $redefine-border-radius-small 3px
-  .instant-note-bubble::after
+  .instant-note-bubble.bubble-newest::after
     width 13px
     height 9px
     bottom -7px
-    left 6px
-
+    left 8px
