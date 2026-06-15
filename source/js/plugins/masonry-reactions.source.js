@@ -9,13 +9,14 @@
  *   giscus.app blocks cross-origin API requests (CORS whitelist: giscus.app only).
  *   A Cloudflare Worker proxy forwards requests with proper CORS headers.
  *   This uses giscus's own GitHub App token — no user rate-limit consumption.
- * - Token exchange also goes through the CORS proxy (same restriction).
  * - For logged-in users, fetches viewerHasReacted via GitHub GraphQL API
  *   (GitHub's API properly supports CORS with Authorization headers).
  * - Toggling reactions uses GitHub GraphQL with the user's OAuth token.
- * - OAuth token synced with main giscus-client (shared localStorage key).
- *   On OAuth callback, this script reads the ?giscus= URL param directly
- *   (before giscus-client loads) to ensure immediate token availability.
+ * - Identity (GitHub OAuth token, login URL, session sync) is delegated to the
+ *   shared window.blogAuth component (source/js/tools/auth.js). This script
+ *   only reacts to its "blog:auth-change" event — no duplicated token/session
+ *   logic. blogAuth loads first (classic script) and handles the ?giscus= OAuth
+ *   callback, so window.blogAuth.getToken() is ready when init() runs.
  * - Clicking the heart button when not logged in → redirect to GitHub OAuth.
  *   Scroll position and the clicked heart are saved; after login callback,
  *   scroll is restored and the pending heart is auto-clicked.
@@ -33,7 +34,6 @@
  */
 (function () {
     "use strict";
-    const GISCUS_SESSION_KEY = "giscus-session";
     const GISCUS_ORIGIN = "https://giscus.app";
     const GITHUB_GRAPHQL_API = "https://api.github.com/graphql";
     const CACHE_KEY_PREFIX = "masonry-reactions-cache:";
@@ -73,46 +73,8 @@
         return config?.giscusProxy || GISCUS_ORIGIN;
     }
     /* ==================== Token Management ==================== */
-    /**
-     * Exchange giscus session for a GitHub OAuth token.
-     * Routes through the CORS proxy to bypass giscus.app's restrictive CORS.
-     */
-    async function getGiscusToken() {
-        const raw = localStorage.getItem(GISCUS_SESSION_KEY);
-        if (!raw)
-            return null;
-        let session;
-        try {
-            session = JSON.parse(raw);
-        }
-        catch {
-            return null;
-        }
-        if (!session)
-            return null;
-        try {
-            const apiBase = getGiscusApiBase();
-            const res = await fetch(`${apiBase}/api/oauth/token`, {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: `session=${encodeURIComponent(session)}`,
-            });
-            if (!res.ok)
-                return null;
-            const data = await res.json();
-            return data.token || null;
-        }
-        catch {
-            return null;
-        }
-    }
-    /**
-     * Build the GitHub OAuth login URL (same as giscus uses).
-     */
-    function getGiscusLoginUrl() {
-        const redirectUri = encodeURIComponent(location.href);
-        return `${GISCUS_ORIGIN}/api/oauth/authorize?redirect_uri=${redirectUri}`;
-    }
+    // Token exchange, login URL and OAuth-callback session sync live in the
+    // shared window.blogAuth component — see init()/handleHeartClick below.
     /* ==================== Giscus API (via CORS Proxy) ==================== */
     /**
      * Fetch discussion data from giscus.app API via CORS proxy.
@@ -449,7 +411,10 @@
             if (clickedImageId) {
                 sessionStorage.setItem(PENDING_HEART_KEY, clickedImageId);
             }
-            window.location.href = getGiscusLoginUrl();
+            if (window.blogAuth)
+                window.blogAuth.login();
+            else
+                window.location.href = `${GISCUS_ORIGIN}/api/oauth/authorize?redirect_uri=${encodeURIComponent(location.href)}`;
             return;
         }
         const imageId = btn.dataset.imageId;
@@ -517,9 +482,9 @@
                 });
             }
         }
-        // 3. Try to get auth token (synced with giscus-client)
+        // 3. Try to get auth token (from the shared window.blogAuth component)
         try {
-            userToken = await getGiscusToken();
+            userToken = window.blogAuth ? await window.blogAuth.getToken() : null;
             isAuthenticated = !!userToken;
         }
         catch {
@@ -644,89 +609,35 @@
         catch { }
         return false;
     }
-    async function refreshAuthenticatedState() {
-        const token = await getGiscusToken();
-        if (!token)
-            return;
-        userToken = token;
-        isAuthenticated = true;
-        const config = getPageConfig();
-        if (config) {
-            clearCache(config.discussionTerm);
-            fetchAndApplyLive(config);
-        }
-    }
-    /* ==================== OAuth Sync with Giscus ==================== */
+    /* ==================== Auth Sync (via window.blogAuth) ==================== */
     /**
-     * Listen for giscus session changes from other scripts/tabs.
+     * React to identity changes broadcast by the shared window.blogAuth
+     * component (login, logout, cross-tab/iframe sign-out, OAuth callback).
+     * blogAuth owns the giscus session/token/sync logic; we only refresh our
+     * reaction state to match.
      */
-    window.addEventListener("storage", (e) => {
-        if (e.key !== GISCUS_SESSION_KEY)
-            return;
-        if (e.newValue) {
-            // User logged in
-            refreshAuthenticatedState();
+    async function onAuthChange() {
+        userToken = window.blogAuth ? await window.blogAuth.getToken() : null;
+        isAuthenticated = !!userToken;
+        const config = getPageConfig();
+        if (config)
+            clearCache(config.discussionTerm);
+        if (isAuthenticated) {
+            if (config)
+                fetchAndApplyLive(config);
         }
         else {
-            // User logged out
-            userToken = null;
-            isAuthenticated = false;
+            // Logged out — clear the per-viewer "reacted" highlight.
             for (const [imageId, data] of Object.entries(imageReactions)) {
                 data.viewerHasReacted = false;
                 updateHeartButton(imageId, data.heartCount, false);
             }
-            const config = getPageConfig();
-            if (config)
-                clearCache(config.discussionTerm);
         }
-    });
-    /**
-     * Listen for giscus iframe sign-out messages.
-     */
-    window.addEventListener("message", (event) => {
-        if (event.origin !== GISCUS_ORIGIN)
-            return;
-        const { data } = event;
-        if (typeof data !== "object" || !data.giscus)
-            return;
-        if (data.giscus.signOut) {
-            userToken = null;
-            isAuthenticated = false;
-            for (const [imageId, reaction] of Object.entries(imageReactions)) {
-                reaction.viewerHasReacted = false;
-                updateHeartButton(imageId, reaction.heartCount, false);
-            }
-            const config = getPageConfig();
-            if (config)
-                clearCache(config.discussionTerm);
-        }
+    }
+    window.addEventListener("blog:auth-change", () => {
+        onAuthChange();
     });
     /* ==================== Boot ==================== */
-    // ====== OAuth Callback Session Sync ======
-    // When returning from GitHub OAuth, the URL contains ?giscus=SESSION.
-    // client-self-hosted.ts also processes this, but it loads later (via
-    // giscus.ejs with 1000ms delay). We sync the session here FIRST so
-    // that init() can immediately use it for authentication.
-    (function syncOAuthSession() {
-        try {
-            const url = new URL(location.href);
-            const giscusParam = url.searchParams.get('giscus');
-            if (giscusParam) {
-                // Save session to localStorage (same key & format as client-self-hosted.ts)
-                localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(giscusParam));
-                // Note: don't modify the URL here — client-self-hosted.ts needs the
-                // param to configure the giscus iframe session.
-            }
-        }
-        catch { }
-    })();
-    // ====== Listen for session changes from client-self-hosted.ts ======
-    // client-self-hosted.ts dispatches 'giscus:session-change' when it saves
-    // a new session. This handles the case where client loads AFTER us and
-    // processes the OAuth callback.
-    window.addEventListener('giscus:session-change', () => {
-        refreshAuthenticatedState();
-    });
     // Try registering Swup now (unlikely to succeed since swup.ejs loads later)
     tryRegisterSwup();
     if (document.readyState === "loading") {

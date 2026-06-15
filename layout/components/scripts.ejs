@@ -10,6 +10,14 @@
     module: true
 }) %>
 
+<%# Shared GitHub-OAuth identity component (window.blogAuth) — single login
+    source for comments, masonry likes, and admin. CLASSIC script so it runs
+    during parse, handles the ?giscus= OAuth callback, and is ready BEFORE the
+    masonry-reactions classic script (below) consumes it. %>
+<% if (theme.comment && theme.comment.system === 'giscus') { %>
+    <%- renderJS('tools/auth.js', { module: false }) %>
+<% } %>
+
 <% if (theme.navbar.search.enable) { %>
     <%- renderJS('tools/localSearch.js', {
         module: true

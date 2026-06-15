@@ -80,6 +80,9 @@ export default function initInstantNotes() {
   const apiUrl = theme.home_banner?.instant_notes?.api_url;
   if (!apiUrl) return;
 
+  // Admin-only post-note control (independent of whether notes exist yet).
+  initAdminControl(panel, apiUrl);
+
   const fresh = _notesCache && Date.now() - _notesCache.ts < NOTES_TTL;
   const notesPromise = fresh
     ? Promise.resolve(_notesCache.data)
@@ -459,4 +462,129 @@ function revealNotes(panel) {
       );
     }, 420 + i * 140);
   });
+}
+
+// ─── Admin: minimal post-note control (foundation validation) ──────────────
+// Rendered ONLY for the GitHub-OAuth-verified admin (window.blogAuth.isAdmin,
+// confirmed server-side). This is a bare-bones "post a note" affordance to
+// prove the auth → write loop end-to-end; the polished editor (edit / delete /
+// reorder / colour) is a deferred follow-up.
+function initAdminControl(panel, apiUrl) {
+  if (!window.blogAuth) return;
+
+  const render = async () => {
+    if (panel.querySelector(".instant-notes-admin")) return;
+    let session = null;
+    try {
+      session = await window.blogAuth.getSession();
+    } catch (e) {}
+    if (session && session.isAdmin) renderAdminControl(panel, apiUrl);
+  };
+  render();
+
+  // Re-evaluate if the user logs in/out after page load (fired by blogAuth).
+  if (!panel.dataset.adminWired) {
+    panel.dataset.adminWired = "1";
+    window.addEventListener("blog:auth-change", () => {
+      const p = document.getElementById("instant-notes");
+      const url = theme.home_banner?.instant_notes?.api_url;
+      if (p && url) initAdminControl(p, url);
+    });
+  }
+}
+
+function renderAdminControl(panel, apiUrl) {
+  if (panel.querySelector(".instant-notes-admin")) return;
+  if (getComputedStyle(panel).position === "static") panel.style.position = "relative";
+  // Reveal the (possibly empty) panel for the admin so the control is visible
+  // even before/without any notes — without disturbing the normal reveal flow.
+  if (!panel.querySelector(".instant-note-bubble")) panel.classList.add("notes-visible");
+
+  const wrap = document.createElement("div");
+  wrap.className = "instant-notes-admin";
+  wrap.style.cssText =
+    "position:absolute;top:6px;right:8px;z-index:5;display:flex;flex-direction:column;align-items:flex-end;gap:6px;";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.setAttribute("aria-label", "Post an instant note");
+  toggle.textContent = "+";
+  toggle.style.cssText =
+    "width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;font-size:18px;line-height:1;background:rgba(0,0,0,0.35);color:#fff;backdrop-filter:blur(6px);";
+
+  const form = document.createElement("form");
+  form.style.cssText =
+    "display:none;flex-direction:column;gap:6px;padding:8px;border-radius:10px;background:rgba(20,20,20,0.6);backdrop-filter:blur(10px);width:220px;";
+
+  const text = document.createElement("input");
+  text.type = "text";
+  text.maxLength = 200;
+  text.placeholder = "What's happening?";
+  text.style.cssText =
+    "padding:6px 8px;border-radius:6px;border:none;font-size:13px;width:100%;box-sizing:border-box;";
+
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:6px;";
+
+  const emoji = document.createElement("input");
+  emoji.type = "text";
+  emoji.maxLength = 4;
+  emoji.placeholder = "🙂";
+  emoji.style.cssText =
+    "width:48px;padding:6px;border-radius:6px;border:none;font-size:13px;text-align:center;";
+
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "Post";
+  submit.style.cssText =
+    "flex:1;padding:6px 8px;border:none;border-radius:6px;cursor:pointer;font-size:13px;background:#6c63ff;color:#fff;";
+
+  row.appendChild(emoji);
+  row.appendChild(submit);
+  form.appendChild(text);
+  form.appendChild(row);
+
+  toggle.addEventListener("click", () => {
+    const open = form.style.display !== "none";
+    form.style.display = open ? "none" : "flex";
+    if (!open) text.focus();
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = text.value.trim();
+    if (!body) return;
+    submit.disabled = true;
+    const prev = submit.textContent;
+    submit.textContent = "…";
+    try {
+      const token = await window.blogAuth.getSessionToken();
+      if (!token) throw new Error("Not authorized");
+      const res = await fetch(`${apiUrl}/api/admin/notes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: body, emoji: emoji.value.trim() }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      text.value = "";
+      emoji.value = "";
+      form.style.display = "none";
+      submit.textContent = prev;
+      _notesCache = null; // force refetch
+      initInstantNotes(); // rebuild + reveal with the new note
+    } catch (err) {
+      console.warn("[InstantNotes] post failed:", err);
+      submit.textContent = "Error";
+      setTimeout(() => (submit.textContent = prev), 1500);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  wrap.appendChild(toggle);
+  wrap.appendChild(form);
+  panel.appendChild(wrap);
 }
