@@ -213,8 +213,17 @@
     tokenCache = null;
     cachedSession = null;
     persist(null);
-    if (loggedIn) getSession(true).then(emit);
-    else emit();
+    if (loggedIn) {
+      getSession(true).then(emit);
+    } else {
+      // Definitive sign-out: clear the giscus session ourselves so getToken()
+      // reliably returns null before we emit. removeItem fires no storage event
+      // in-tab (no loop); harmless if already cleared (cross-tab) or removed twice.
+      try {
+        localStorage.removeItem(GISCUS_SESSION_KEY);
+      } catch (e) {}
+      emit();
+    }
   }
 
   window.addEventListener("storage", function (e) {

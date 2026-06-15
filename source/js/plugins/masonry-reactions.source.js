@@ -547,9 +547,16 @@
                 if (commentIds.length > 0) {
                     const viewerReactions = await checkViewerReactions(commentIds, userToken);
                     for (const [imageId, data] of Object.entries(imageReactions)) {
-                        if (viewerReactions[data.commentId]) {
-                            data.viewerHasReacted = true;
-                            updateHeartButton(imageId, data.heartCount, true);
+                        // GraphQL is authoritative for the logged-in viewer. Only act on
+                        // comments it actually checked (`in` guard) so a partial-batch
+                        // failure never clobbers a preserved value; then sync both ways so
+                        // a no-longer-reacted heart gets cleared, not just set.
+                        if (data.commentId in viewerReactions) {
+                            const reacted = viewerReactions[data.commentId];
+                            if (data.viewerHasReacted !== reacted) {
+                                data.viewerHasReacted = reacted;
+                                updateHeartButton(imageId, data.heartCount, reacted);
+                            }
                         }
                     }
                 }
