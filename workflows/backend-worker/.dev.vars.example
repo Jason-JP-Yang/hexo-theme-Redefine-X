@@ -1,0 +1,6 @@
+# Local-only secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored) and fill.
+# In production these are set with `wrangler secret put`, NOT from this file.
+
+# HMAC signing key for admin session tokens. Generate a random 32+ byte value, e.g.:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+SESSION_SECRET=replace-with-a-long-random-value

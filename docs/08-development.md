@@ -84,4 +84,6 @@ On `hexo` startup, [`events/welcome.js`](04-scripts.md#welcomejs) queries `redef
 | `themes/redefine-x-docs` | public documentation site source |
 | `themes/redefine-x-version-api` | version/CDN info API behind `welcome.js` |
 | `dev/giscus` | customized Giscus build for comments / masonry reactions |
-| `dev/instant-notes-worker` | Cloudflare Worker for `home_banner.instant_notes` |
+
+> The deployable backend Worker (instant-notes API, auth, and the giscus CORS
+> proxy) lives in-repo at `workflows/backend-worker` — see its own README.

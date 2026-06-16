@@ -111,7 +111,7 @@ home_banner:
     qrs:   { weixin, ... }      # QR-drawer image url per key
   instant_notes:                # Instagram-"Notes"-style bubbles on the banner
     enable: false
-    api_url:                    # Cloudflare Worker endpoint (see dev/instant-notes-worker)
+    api_url:                    # Cloudflare Worker endpoint (see workflows/backend-worker)
     avatar: /images/redefine-avatar.svg
 ```
 

@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+.dryrun/
+# Local/secret config — commit the *.example templates instead.
+.dev.vars
+wrangler.toml
