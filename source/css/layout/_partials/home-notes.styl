@@ -151,6 +151,10 @@
     animation noteBubblePop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards
   &.bubble-newest
     z-index 15
+  // Admin inline-edit: float the growing card above its neighbours so the brief
+  // reflow overlap (the card grows before siblings finish gliding) reads cleanly.
+  &.is-editing
+    z-index 18
 
   // ── Speech tail — ONLY on the newest bubble ─────────────
   // Straight-edged sharp triangle pointing down-left toward the
@@ -287,3 +291,291 @@
     height 9px
     bottom -7px
     left 8px
+
+// ═══════════════════════════════════════════════════════════
+// MORE / LESS button + EXPAND mode (chat-list view)
+// ═══════════════════════════════════════════════════════════
+
+// ─── More / Less pill (top-right of the panel) ───────────
+.instant-notes-more-btn
+  position absolute
+  top 8px
+  right 10px
+  z-index 30
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 5px 11px
+  border 1px solid rgba(255, 255, 255, 0.24)
+  border-radius 999px
+  cursor pointer
+  font-size 12px
+  font-weight 600
+  letter-spacing 0.02em
+  line-height 1
+  color rgba(255, 255, 255, 0.95)
+  background rgba(255, 255, 255, 0.16)
+  backdrop-filter blur(10px) saturate(1.3)
+  -webkit-backdrop-filter blur(10px) saturate(1.3)
+  box-shadow 0 2px 10px rgba(0, 0, 0, 0.12)
+  opacity 1
+  transform translateY(0)
+  transition opacity 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease
+  i
+    font-size 12px
+  &:hover
+    background rgba(255, 255, 255, 0.28)
+  &.is-hidden
+    opacity 0
+    transform translateY(-6px)
+    pointer-events none
+  .dark &
+    background rgba(40, 40, 54, 0.5)
+    border-color rgba(255, 255, 255, 0.12)
+    &:hover
+      background rgba(56, 56, 72, 0.6)
+
+// ─── Placeholder that holds the flex slot while expanded ──
+.instant-notes-placeholder
+  visibility hidden
+  pointer-events none
+
+// ─── Expanded panel frame (position/size are inline via JS) ─
+.instant-notes-panel.is-expanded
+  z-index 40
+  background rgba(255, 255, 255, 0.16)
+  box-shadow 0 14px 60px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.14)
+  .dark &
+    background rgba(22, 22, 32, 0.6)
+    box-shadow 0 14px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)
+
+  // Keep the "INSTANT NOTES" label above the scrolling bubbles (base label
+  // z-index 2 is BELOW bubbles 5/15, so bubbles would cover it).
+  .instant-notes-label
+    z-index 22
+
+  // The field is the OLDER-bubble scroll viewport (the newest is pinned as a
+  // panel child below it). Top fade = soft edge under the label. When it
+  // scrolls (`has-scroll`) a BOTTOM fade also hides older bubbles just above the
+  // pinned newest and hints there is more above.
+  .instant-notes-field
+    overflow-x hidden
+    -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+    mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+    scrollbar-width thin
+    scrollbar-color rgba(255, 255, 255, 0.35) transparent
+    &.has-scroll
+      -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 32px, #000 calc(100% - 26px), transparent 100%)
+      mask-image linear-gradient(to bottom, transparent 0, #000 32px, #000 calc(100% - 26px), transparent 100%)
+    // At the very bottom the bottom fade would needlessly dim the most-recent
+    // older bubble (nothing is hidden below it) — drop it, keep only the top fade.
+    &.has-scroll.at-bottom
+      -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+      mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+    &::-webkit-scrollbar
+      width 6px
+    &::-webkit-scrollbar-thumb
+      background rgba(255, 255, 255, 0.32)
+      border-radius 3px
+    &::-webkit-scrollbar-track
+      background transparent
+
+// Spacer is the only in-flow child of the field — it drives scrollHeight.
+.instant-notes-scroll-spacer
+  width 1px
+  pointer-events none
+  opacity 0
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN tools (input bubble + per-bubble edit/delete + status)
+// ═══════════════════════════════════════════════════════════
+
+// ─── Input bubble (compose a new note) ───────────────────
+.instant-notes-input-bubble
+  z-index 16
+  .input-card
+    display flex
+    flex-direction column
+    gap 6px
+    padding 8px
+    min-width 200px
+    white-space normal
+  .ni-input
+    width 100%
+    box-sizing border-box
+    border none
+    border-radius 8px
+    padding 6px 8px
+    font-size 13px
+    font-family inherit
+    line-height 1.35
+    resize none
+    background rgba(0, 0, 0, 0.06)
+    color inherit
+  .ni-input-row
+    display flex
+    align-items center
+    gap 6px
+  .ni-emoji
+    width 38px
+    box-sizing border-box
+    text-align center
+    border none
+    border-radius 8px
+    padding 5px
+    font-size 13px
+    background rgba(0, 0, 0, 0.06)
+    color inherit
+  .ni-color
+    width 26px
+    height 26px
+    border none
+    background none
+    padding 0
+    cursor pointer
+  .ni-color-default
+    display inline-flex
+    align-items center
+    gap 3px
+    font-size 11px
+    opacity 0.75
+    cursor pointer
+  .ni-post
+    margin-left auto
+    border none
+    border-radius 8px
+    padding 5px 13px
+    font-size 13px
+    font-weight 600
+    cursor pointer
+    background var(--primary-color, #6c63ff)
+    color #fff
+  .dark & .ni-input, .dark & .ni-emoji
+    background rgba(255, 255, 255, 0.10)
+
+// Inline edit reuses the same field styling inside an existing bubble card.
+.bubble-card .ni-edit
+  display flex
+  flex-direction column
+  gap 6px
+  white-space normal
+  .ni-input
+    width 100%
+    box-sizing border-box
+    border none
+    border-radius 8px
+    padding 6px 8px
+    font-size 13px
+    font-family inherit
+    line-height 1.35
+    resize none
+    background rgba(0, 0, 0, 0.06)
+    color inherit
+  .ni-input-row
+    display flex
+    align-items center
+    gap 6px
+  .ni-emoji
+    width 38px
+    box-sizing border-box
+    text-align center
+    border none
+    border-radius 8px
+    padding 5px
+    font-size 13px
+    background rgba(0, 0, 0, 0.06)
+    color inherit
+  .ni-color
+    width 26px
+    height 26px
+    border none
+    background none
+    padding 0
+    cursor pointer
+  .ni-color-default
+    display inline-flex
+    align-items center
+    gap 3px
+    font-size 11px
+    opacity 0.75
+    cursor pointer
+  .ni-save
+    margin-left auto
+    border none
+    border-radius 8px
+    padding 5px 13px
+    font-size 13px
+    font-weight 600
+    cursor pointer
+    background var(--primary-color, #6c63ff)
+    color #fff
+  .ni-cancel
+    border 1.5px solid var(--primary-color, #6c63ff)
+    border-radius 8px
+    padding 4px 12px
+    font-size 13px
+    font-weight 600
+    cursor pointer
+    background transparent
+    color var(--primary-color, #6c63ff)
+.dark .bubble-card .ni-edit
+  .ni-input, .ni-emoji
+    background rgba(255, 255, 255, 0.10)
+
+// ─── Per-bubble edit / delete (to the bubble's right) ────
+.instant-note-admin-actions
+  position absolute
+  left 100%
+  top 50%
+  transform translateY(-50%)
+  margin-left 8px
+  display flex
+  gap 4px
+  z-index 25
+  button
+    width 24px
+    height 24px
+    border none
+    border-radius 50%
+    cursor pointer
+    font-size 11px
+    display flex
+    align-items center
+    justify-content center
+    background rgba(20, 20, 20, 0.62)
+    color #fff
+    backdrop-filter blur(6px)
+    transition background 0.2s ease
+  .ina-edit:hover
+    background rgba(60, 60, 70, 0.8)
+  .ina-del:hover
+    background #e03e3e
+
+// ─── Active / expired badge (to the bubble's left) ───────
+.instant-note-status
+  position absolute
+  right 100%
+  top 50%
+  transform translateY(-50%)
+  margin-right 8px
+  font-size 9px
+  font-weight 700
+  letter-spacing 0.04em
+  text-transform uppercase
+  padding 2px 6px
+  border-radius 6px
+  white-space nowrap
+  background rgba(40, 180, 99, 0.92)
+  color #fff
+  pointer-events none
+  z-index 24
+  &.is-expired
+    background rgba(120, 120, 130, 0.92)
+
+// ═══════════════════════════════════════════════════════════
+// Reduced motion — make every Instant-Notes transition instant
+// ═══════════════════════════════════════════════════════════
+@media (prefers-reduced-motion: reduce)
+  .instant-notes-panel, .instant-notes-panel *, .instant-note-bubble, .bubble-card, .instant-notes-more-btn, .instant-notes-avatar
+    transition none !important
+    animation none !important
