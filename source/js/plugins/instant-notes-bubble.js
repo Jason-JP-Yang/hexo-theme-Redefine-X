@@ -115,17 +115,48 @@ export function placeBubble(el, left, top, cardMaxW) {
 
 // Like placeBubble but GLIDES to the new spot instead of jumping while invisible.
 // Used by admin inline-edit reflow so neighbours slide to make room.
-export function placeBubbleAnimated(el, left, top, cardMaxW) {
-  el.style.transition = prefersReducedMotion()
-    ? "none"
-    : `top ${FRAME_MS}ms ${GLIDE}, left ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}`;
+// Uses FLIP (transform) instead of top/left transition so the layout position
+// commits instantly — no layout-driven scroll-container jumps during animation.
+export function placeBubbleAnimated(el, left, top, cardMaxW, dur = FRAME_MS, delay = 0) {
+  const targetLeft = Math.round(left);
+  const targetTop = Math.round(top);
+
+  if (prefersReducedMotion()) {
+    el.style.transition = "none";
+    el.style.transform = "none";
+    el.style.left = `${targetLeft}px`;
+    el.style.top = `${targetTop}px`;
+    if (typeof cardMaxW === "number") {
+      if (el.classList.contains("instant-notes-input-bubble")) el.style.width = `${Math.round(cardMaxW)}px`;
+      else wrapCard(el, Math.round(cardMaxW));
+    }
+    return;
+  }
+
+  const currentLeft = parseFloat(el.style.left) || 0;
+  const currentTop = parseFloat(el.style.top) || 0;
+  const deltaX = currentLeft - targetLeft;
+  const deltaY = currentTop - targetTop;
+
+  // Commit final layout position + card width instantly (no top/left animation).
+  el.style.transition = "none";
   el.style.transform = "none";
-  el.style.left = `${Math.round(left)}px`;
-  el.style.top = `${Math.round(top)}px`;
+  el.style.left = `${targetLeft}px`;
+  el.style.top = `${targetTop}px`;
   if (typeof cardMaxW === "number") {
     if (el.classList.contains("instant-notes-input-bubble")) el.style.width = `${Math.round(cardMaxW)}px`;
     else wrapCard(el, Math.round(cardMaxW));
   }
+
+  if (deltaX === 0 && deltaY === 0) return;
+
+  // FLIP: invert to the old visual position, then animate transform → none.
+  // transform doesn't affect layout so the scroll container stays stable.
+  el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+  void el.offsetHeight; // force reflow to commit the starting transform
+  const d = delay ? ` ${delay}ms` : "";
+  el.style.transition = `transform ${dur}ms ${GLIDE}${d}`;
+  el.style.transform = "none";
 }
 
 export function fadeInBubbles(els) {

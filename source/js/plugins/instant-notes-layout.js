@@ -624,11 +624,13 @@ function currentCbOffset(panel) {
 }
 
 // Apply a fixed-frame rect to the panel (optionally animated).
-export function animateFrame(panel, t, animate) {
+// dur/delay allow callers to sync the panel resize with card-level expansion.
+export function animateFrame(panel, t, animate, dur = FRAME_MS, delay = 0) {
   const off = panel._cbOffset || { left: 0, top: 0 };
   const reduced = prefersReducedMotion();
+  const d = delay ? ` ${delay}ms` : "";
   panel.style.transition = animate && !reduced
-    ? `left ${FRAME_MS}ms ${GLIDE}, top ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}, height ${FRAME_MS}ms ${GLIDE}`
+    ? `left ${dur}ms ${GLIDE}${d}, top ${dur}ms ${GLIDE}${d}, width ${dur}ms ${GLIDE}${d}, height ${dur}ms ${GLIDE}${d}`
     : "none";
   panel.style.left = `${Math.round(t.left - off.left)}px`;
   panel.style.top = `${Math.round(t.top - off.top)}px`;
@@ -758,10 +760,13 @@ export function measureExpandedList(panel, slotWidth) {
 // Position the measured list inside a panel of height innerH. The BOTTOM slot
 // (newest / admin input) is PINNED as a panel child above the avatar (so it
 // never scrolls); the OLDER bubbles live in the field scroll region above it.
-export function positionExpandedList(panel, m, innerH, smooth) {
+// animDur/animDelay are forwarded to placeBubbleAnimated for sync with card expansion.
+export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_MS, animDelay = 0) {
   const field = panel.querySelector("#instant-notes-field");
   if (!field) return;
-  const place = smooth ? placeBubbleAnimated : placeBubble;
+  const place = smooth
+    ? (el, l, t, w) => placeBubbleAnimated(el, l, t, w, animDur, animDelay)
+    : placeBubble;
   const order = m.order;
   const am = avatarMetrics(panel);
   const avatarTop = innerH - am.avBottomGap - am.avH;
@@ -809,7 +814,9 @@ export function positionExpandedList(panel, m, innerH, smooth) {
     field.appendChild(spacer);
   }
   spacer.style.height = `${contentH}px`;
-  field.style.overflowY = fits ? "hidden" : "auto";
+  // Admin: keep overflow auto (paired with `scrollbar-gutter: stable` in CSS) so
+  // an inline-edit that overflows mid-animation never shifts content width.
+  field.style.overflowY = (panel._isAdmin || !fits) ? "auto" : "hidden";
   field.classList.toggle("has-scroll", !fits);
 
   // Older bubbles bottom-aligned (most recent just under the pinned slot).
@@ -864,7 +871,8 @@ export function relayoutExpanded(panel, animateFrameFlag) {
 
 // Re-fit the expanded list WITHOUT a cross-fade: bubbles GLIDE to their new
 // positions. Used for admin inline-edit start/cancel, preserving scroll position.
-export function relayoutExpandedReflow(panel) {
+// animDur/animDelay are forwarded so callers can sync neighbour motion with card expansion.
+export function relayoutExpandedReflow(panel, animDur = FRAME_MS, animDelay = 0) {
   if (!panel._expanded) return;
   const field = panel.querySelector("#instant-notes-field");
   const oldContentH = panel._listContentH || 0;
@@ -875,8 +883,10 @@ export function relayoutExpandedReflow(panel) {
   const measured = measureExpandedList(panel, slot.width);
   const finalH = adaptiveExpandHeight(panel, measured);
   const bottom = (panel._placeholder || panel).getBoundingClientRect().bottom;
-  animateFrame(panel, { left: slot.left, top: bottom - finalH, width: slot.width, height: finalH }, true);
-  positionExpandedList(panel, measured, finalH, true);
+  // Snap the panel frame instantly (not animated) to avoid continuous viewport-height
+  // changes that drift the scroll range while neighbour bubbles animate via FLIP.
+  animateFrame(panel, { left: slot.left, top: bottom - finalH, width: slot.width, height: finalH }, false);
+  positionExpandedList(panel, measured, finalH, true, animDur, animDelay);
 
   if (field) {
     // Content is bottom-aligned in the spacer: when it grows by Δ everything

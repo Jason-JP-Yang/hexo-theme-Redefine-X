@@ -21,10 +21,39 @@ import {
   relayoutExpanded, relayoutExpandedReflow, resetFieldExpansion,
 } from "./instant-notes-layout.js";
 import { createBubble, isNoteActive, clearWrap } from "./instant-notes-bubble.js";
+import { GLIDE, PAD, clamp, prefersReducedMotion } from "./instant-notes-utils.js";
 
 // Cache fetched public notes briefly so rapid swup navigations skip the worker.
 let _notesCache = null;
 const NOTES_TTL = 60000;
+
+// ─── Textarea auto-resize ─────────────────────────────────────────────────────
+function autoResizeTextarea(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = textarea.scrollHeight + "px";
+}
+
+// Wire the textarea to resize itself on input and smoothly reflow neighbours.
+// el is the bubble wrapper that contains the textarea (used for _heightAnimating guard).
+function wireTextareaAutoResize(panel, textarea, el) {
+  textarea.addEventListener("input", () => {
+    autoResizeTextarea(textarea);
+    if (!panel || !panel._expanded || el._heightAnimating) return;
+    if (isEditing(panel, el)) {
+      // Inline-edit: card grows DOWN naturally; recompute the shared edit layout
+      // so neighbours below slide to match (gaps constant) and the form stays in view.
+      const card = el.querySelector(".bubble-card");
+      el._editDelta = Math.max(0, card.offsetHeight - el._editBaseCardH);
+      layoutEditing(panel, 140, 0);
+      ensureEditVisible(panel, el, card.offsetHeight);
+    } else if (!panel._editing || panel._editing.length === 0) {
+      // Compose (pinned input) bubble: existing reflow path. Skipped while any
+      // inline edit is open — that reflow measures the expanded edit cards and
+      // would clobber the grow-down edit layout.
+      relayoutExpandedReflow(panel);
+    }
+  });
+}
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 export default function initInstantNotes() {
@@ -171,6 +200,31 @@ function reconcileAdminNotes(panel, notes) {
       el._note = note;
       el._active = isNoteActive(note);
       byId.delete(id);
+      // If this bubble was in edit mode (e.g. save just completed), rebuild its
+      // card so the edit form is replaced with fresh note content.
+      if (el.querySelector(".bubble-card .ni-edit")) {
+        if (el._editTimeout1) { clearTimeout(el._editTimeout1); el._editTimeout1 = null; }
+        if (el._editTimeout2) { clearTimeout(el._editTimeout2); el._editTimeout2 = null; }
+        if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
+        el.style.height = "";
+        el.style.transition = "";
+        el.style.transform = "";
+        el._editDelta = 0;
+        el._heightAnimating = false;
+        el._editing = false;
+        el.classList.remove("is-editing");
+        const card = el.querySelector(".bubble-card");
+        card.style.position = "";
+        card.style.height = "";
+        card.style.width = "";
+        card.style.overflow = "";
+        card.style.boxSizing = "";
+        card.style.transition = "";
+        const tmp = createBubble(note, false);
+        const freshCard = tmp.querySelector(".bubble-card");
+        card.className = freshCard.className;
+        card.innerHTML = freshCard.innerHTML;
+      }
     } else {
       el = createBubble(note, false);
       el.style.position = "absolute";
@@ -188,6 +242,9 @@ function reconcileAdminNotes(panel, notes) {
   panel._bubbleEls = newEls;
   panel._hasEmoji = notes.map((n) => !!n.emoji);
   panel._notes = notes;
+  // Any open edit forms were just rebuilt; clear the shared edit set (the
+  // following relayoutExpanded repositions every bubble from a clean base).
+  panel._editing = [];
 
   // The newest real note is no longer the tail-bearer in admin mode (the input
   // bubble is) — drop .bubble-newest so only the input shows the tail.
@@ -209,7 +266,7 @@ function ensureInputBubble(panel) {
   wrap.dataset.fresh = "1";
   wrap.innerHTML =
     '<div class="bubble-card bubble-default input-card">' +
-    '  <textarea class="ni-input" maxlength="200" rows="1" placeholder="What\'s happening?"></textarea>' +
+    '  <textarea class="ni-input" maxlength="200" placeholder="What\'s happening?"></textarea>' +
     '  <div class="ni-input-row">' +
     '    <input class="ni-emoji" type="text" maxlength="4" placeholder="🙂" />' +
     '    <input class="ni-color" type="color" value="#6c63ff" title="Bubble colour" />' +
@@ -219,6 +276,10 @@ function ensureInputBubble(panel) {
     "</div>";
   field.appendChild(wrap);
   panel._inputBubble = wrap;
+
+  const inputTextarea = wrap.querySelector(".ni-input");
+  autoResizeTextarea(inputTextarea);
+  wireTextareaAutoResize(panel, inputTextarea, wrap);
 
   wrap.querySelector(".ni-post").addEventListener("click", () => submitNewNote(panel, wrap));
   // Stop outside-click handler from collapsing while interacting.
@@ -290,6 +351,120 @@ function decorateAdminBubble(panel, el) {
   el.addEventListener("click", (e) => e.stopPropagation());
 }
 
+// Inline-edit grow-down animation.
+//
+// The card keeps its TOP anchored and unfolds DOWNWARD; the field bubbles below
+// it slide down in lockstep (same duration + curve) so the gaps between bubbles
+// stay exactly constant. The panel frame never resizes — the field scrolls
+// instead. Every size here is BORDER-BOX (Tailwind preflight sets
+// box-sizing:border-box globally), so offsetWidth/offsetHeight are the source of
+// truth and no padding/border math is needed.
+const EXPAND_DUR = 260;
+const CANCEL_DUR = 240;
+
+// Is `el` currently in the inline-edit set?
+function isEditing(panel, el) {
+  return !!(panel._editing && panel._editing.indexOf(el) !== -1);
+}
+
+// All visible bubbles living in the scroll field (the pinned newest/input slot
+// is a panel child, not a field child, so it is excluded).
+function fieldBubbles(panel) {
+  const field = panel.querySelector("#instant-notes-field");
+  if (!field) return [];
+  return (panel._bubbleEls || []).filter(
+    (b) => b.parentElement === field && b.style.display !== "none",
+  );
+}
+
+// Each editing bubble's downward growth (form height − base list height, ≥0).
+function editDelta(el) {
+  return Math.max(0, el._editDelta || 0);
+}
+
+// ── Single source of truth for inline-edit reflow ─────────────────────────────
+// Position EVERY field bubble at its clean base `top` (kept transform-free) plus
+// the summed growth of all bubbles being edited ABOVE it, and size the scroll
+// spacer to the total growth. Because it is recomputed from the WHOLE
+// `panel._editing` set on every call, any number of concurrent edits compose
+// correctly (deltas add, no transform stomping) and cancelling one bubble simply
+// drops it from the sum so the rest settle to the right place.
+function layoutEditing(panel, dur, delay) {
+  const field = panel.querySelector("#instant-notes-field");
+  if (!field) return;
+  const editing = panel._editing || [];
+  const d = delay ? ` ${delay}ms` : "";
+  const trans = dur ? `transform ${dur}ms ${GLIDE}${d}` : "none";
+
+  let total = 0;
+  editing.forEach((e) => { total += editDelta(e); });
+
+  fieldBubbles(panel).forEach((b) => {
+    const bTop = parseFloat(b.style.top) || 0;
+    let shift = 0;
+    editing.forEach((e) => {
+      if (e !== b && (parseFloat(e.style.top) || 0) < bTop) shift += editDelta(e);
+    });
+    b.style.transition = trans;
+    b.style.transform = shift ? `translateY(${shift}px)` : "none";
+  });
+
+  const spacer = field.querySelector(".instant-notes-scroll-spacer");
+  if (spacer) {
+    const base = panel._listContentH || parseFloat(spacer.style.height) || 0;
+    spacer.style.transition = dur ? `height ${dur}ms ${GLIDE}${d}` : "none";
+    spacer.style.height = `${base + total}px`;
+  }
+}
+
+// How far `el` is pushed down by edits above it (matches layoutEditing).
+function editShiftOf(panel, el) {
+  const editing = panel._editing || [];
+  const elTop = parseFloat(el.style.top) || 0;
+  let shift = 0;
+  editing.forEach((e) => {
+    if (e !== el && (parseFloat(e.style.top) || 0) < elTop) shift += editDelta(e);
+  });
+  return shift;
+}
+
+// Smooth-scroll the field just enough to keep the editing card fully visible,
+// accounting for the shift contributed by any edits above it.
+function ensureEditVisible(panel, el, cardH) {
+  const field = panel.querySelector("#instant-notes-field");
+  if (!field) return;
+  let total = 0;
+  (panel._editing || []).forEach((e) => { total += editDelta(e); });
+  const top = (parseFloat(el.style.top) || 0) + editShiftOf(panel, el);
+  const viewH = field.clientHeight;
+  const maxScroll = Math.max(0, (panel._listContentH || 0) + total - viewH);
+  const desired = clamp(top + cardH + PAD - viewH, field.scrollTop, maxScroll);
+  if (desired > field.scrollTop + 1) {
+    field.scrollTo({ top: desired, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  }
+}
+
+// Absolutely-positioned, non-reflowing snapshot of the original card. Pinned to a
+// fixed BORDER-BOX width so the old text wraps identically and never re-flows
+// while the live card animates its width/height underneath it.
+function makeCardSnapshot(el, borderBoxW) {
+  const clone = document.createElement("div");
+  clone.className = el._savedCardClass;
+  if (el._savedCardStyle) clone.setAttribute("style", el._savedCardStyle);
+  clone.style.position = "absolute";
+  clone.style.top = "0";
+  clone.style.left = "0";
+  clone.style.zIndex = "20";
+  clone.style.pointerEvents = "none";
+  clone.style.boxSizing = "border-box";
+  clone.style.maxWidth = "none";
+  clone.style.width = `${borderBoxW}px`;
+  clone.innerHTML = el._savedCardHTML || "";
+  el.appendChild(clone);
+  el._snapClone = clone;
+  return clone;
+}
+
 function startInlineEdit(panel, el) {
   if (el._editing) return;
   el._editing = true;
@@ -297,32 +472,199 @@ function startInlineEdit(panel, el) {
   const note = el._note || {};
   const card = el.querySelector(".bubble-card");
   el._savedCardHTML = card.innerHTML;
+  el._savedCardClass = card.className;
+  el._savedCardStyle = card.getAttribute("style") || "";
+
+  // ── 0: Capture current border-box geometry ───────────────────────────────
+  const w0 = card.offsetWidth;
+  const h0 = card.offsetHeight;
+  // listWidth = the full column width the edit form expands to (wrapCard's cap).
+  const listWidth = card.style.maxWidth ? Math.round(parseFloat(card.style.maxWidth)) : w0;
+  el._savedCardH = h0;
+  el._savedCardW = w0;
+
+  // ── 1: Build the edit-form markup ────────────────────────────────────────
   const isDefault = !note.color || note.color === "default";
-  card.innerHTML =
-    '<div class="ni-edit">' +
-    '  <textarea class="ni-input" maxlength="200" rows="1"></textarea>' +
-    '  <div class="ni-input-row">' +
-    '    <input class="ni-emoji" type="text" maxlength="4" />' +
-    `    <input class="ni-color" type="color" value="${isDefault ? "#6c63ff" : note.color}" />` +
-    `    <label class="ni-color-default"><input class="ni-color-toggle" type="checkbox" ${isDefault ? "checked" : ""}/>default</label>` +
-    '    <button type="button" class="ni-save">Save</button>' +
-    '    <button type="button" class="ni-cancel">Cancel</button>' +
-    "  </div>" +
+  const editInner =
+    '<textarea class="ni-input" maxlength="200" placeholder="Edit note…"></textarea>' +
+    '<div class="ni-input-row">' +
+    '  <input class="ni-emoji" type="text" maxlength="4" />' +
+    `  <input class="ni-color" type="color" value="${isDefault ? "#6c63ff" : note.color}" />` +
+    `  <label class="ni-color-default"><input class="ni-color-toggle" type="checkbox" ${isDefault ? "checked" : ""}/>default</label>` +
+    "  <button type='button' class='ni-save'>Save</button>" +
+    "  <button type='button' class='ni-cancel'>Cancel</button>" +
     "</div>";
-  card.querySelector(".ni-input").value = note.text || "";
-  card.querySelector(".ni-emoji").value = note.emoji || "";
-  card.querySelector(".ni-save").addEventListener("click", (e) => { e.stopPropagation(); saveInlineEdit(panel, el); });
-  card.querySelector(".ni-cancel").addEventListener("click", (e) => { e.stopPropagation(); cancelInlineEdit(panel, el); });
-  relayoutExpandedReflow(panel);
+
+  // ── 2: Off-screen probe — edit-form height at the final (listWidth) size ───
+  const probe = document.createElement("div");
+  probe.className = card.className;
+  probe.style.cssText =
+    `position:fixed;left:-9999px;top:0;width:${listWidth}px;` +
+    "visibility:hidden;pointer-events:none;white-space:normal;box-sizing:border-box;";
+  probe.innerHTML = `<div class="ni-edit">${editInner}</div>`;
+  document.body.appendChild(probe);
+  const probeTA = probe.querySelector(".ni-input");
+  probeTA.value = note.text || "";
+  autoResizeTextarea(probeTA);
+  const h1 = probe.offsetHeight;
+  document.body.removeChild(probe);
+
+  // ── 3: Snapshot the old card, then swap the live card to the edit form ─────
+  makeCardSnapshot(el, w0);
+
+  card.style.boxSizing = "border-box";
+  card.style.position = "relative";
+  card.style.width = `${w0}px`;
+  card.style.height = `${h0}px`;
+  card.style.overflow = "hidden";
+  card.innerHTML = `<div class="ni-edit" style="opacity:0">${editInner}</div>`;
+
+  const editDiv = card.querySelector(".ni-edit");
+  const textarea = editDiv.querySelector(".ni-input");
+  textarea.value = note.text || "";
+  editDiv.querySelector(".ni-emoji").value = note.emoji || "";
+  editDiv.querySelector(".ni-save").addEventListener("click", (e) => { e.stopPropagation(); saveInlineEdit(panel, el); });
+  editDiv.querySelector(".ni-cancel").addEventListener("click", (e) => { e.stopPropagation(); cancelInlineEdit(panel, el); });
+  wireTextareaAutoResize(panel, textarea, el);
+
+  // ── 4: Register this edit in the shared set ────────────────────────────────
+  el._editBaseCardH = h0;
+  el._editBaseCardW = w0;
+  el._editDelta = h1 - h0;
+  panel._editing = panel._editing || [];
+  if (panel._editing.indexOf(el) === -1) panel._editing.push(el);
+
+  el._heightAnimating = true;
+
+  // ── 5a: Reduced motion — jump straight to the edit state ───────────────────
+  if (prefersReducedMotion()) {
+    layoutEditing(panel, 0, 0);
+    card.style.transition = "none";
+    card.style.height = "";
+    card.style.width = `${listWidth}px`;
+    card.style.overflow = "";
+    card.style.position = "";
+    card.style.boxSizing = "";
+    if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
+    editDiv.style.opacity = "1";
+    el._heightAnimating = false;
+    autoResizeTextarea(textarea);
+    textarea.focus({ preventScroll: true });
+    return;
+  }
+
+  // ── 5b: Play — card unfolds DOWN, neighbours slide DOWN in perfect lockstep ─
+  void card.offsetWidth; // commit the pinned starting frame
+  const snap = el._snapClone;
+  snap.style.transition = "opacity 150ms ease";
+  snap.style.opacity = "0";
+  editDiv.style.transition = "opacity 200ms ease 70ms";
+  editDiv.style.opacity = "1";
+  card.style.transition = `height ${EXPAND_DUR}ms ${GLIDE}, width ${EXPAND_DUR}ms ${GLIDE}`;
+  card.style.height = `${h1}px`;
+  card.style.width = `${listWidth}px`;
+  layoutEditing(panel, EXPAND_DUR, 0);
+  ensureEditVisible(panel, el, h1);
+
+  el._editTimeout1 = setTimeout(() => {
+    el._editTimeout1 = null;
+    if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
+    // Release the height pin (natural height now) but KEEP the column width so
+    // the form doesn't collapse to shrink-to-fit; clear the rest.
+    card.style.transition = "";
+    card.style.height = "";
+    card.style.overflow = "";
+    card.style.position = "";
+    card.style.boxSizing = "";
+    editDiv.style.transition = "";
+    editDiv.style.opacity = "1";
+    el._heightAnimating = false;
+    autoResizeTextarea(textarea);
+    textarea.focus({ preventScroll: true });
+  }, EXPAND_DUR + 40);
 }
 
 function cancelInlineEdit(panel, el) {
   if (!el._editing) return;
+
+  const hadPendingExpand = !!el._editTimeout1;
+  if (el._editTimeout1) { clearTimeout(el._editTimeout1); el._editTimeout1 = null; }
+  if (el._editTimeout2) { clearTimeout(el._editTimeout2); el._editTimeout2 = null; }
+  if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
+
+  // Drop this bubble from the shared edit set so layoutEditing stops counting it.
+  if (panel && panel._editing) {
+    const i = panel._editing.indexOf(el);
+    if (i !== -1) panel._editing.splice(i, 1);
+  }
+  el._editDelta = 0;
+
+  const card = el.querySelector(".bubble-card");
+  // Restores only THIS bubble's card; neighbour positions + spacer are owned by
+  // layoutEditing (it already settled them to the remaining-edits composition).
+  const restoreCard = () => {
+    if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
+    if (el._savedCardHTML != null) card.innerHTML = el._savedCardHTML;
+    card.style.transition = "";
+    card.style.position = "";
+    card.style.height = "";
+    card.style.width = "";
+    card.style.overflow = "";
+    card.style.boxSizing = "";
+    el.style.height = "";
+    el.style.transition = "";
+    el._heightAnimating = false;
+    el._editing = false;
+    el.classList.remove("is-editing");
+  };
+
+  // Sync path: teardown, panel collapsing, or the open animation never started.
+  if (!panel || !panel._expanded || hadPendingExpand) {
+    if (panel && panel._expanded) layoutEditing(panel, 0, 0); // settle the rest instantly
+    restoreCard();
+    return;
+  }
+
+  // ── Animated reverse: card folds UP to base size; layoutEditing slides the
+  // neighbours back by exactly this bubble's delta. Same duration + curve as the
+  // card height shrink ⇒ gaps stay constant throughout. ─────────────────────────
   el._editing = false;
   el.classList.remove("is-editing");
-  const card = el.querySelector(".bubble-card");
-  if (el._savedCardHTML != null) card.innerHTML = el._savedCardHTML;
-  if (panel && panel._expanded) relayoutExpandedReflow(panel);
+  el._heightAnimating = true;
+
+  const editH = card.offsetHeight;
+  const editW = card.offsetWidth;
+  const savedCardH = el._savedCardH || editH;
+  const savedCardW = el._savedCardW || editW;
+
+  // Pin the card at its current edit size, overlay the original-content snapshot.
+  card.style.boxSizing = "border-box";
+  card.style.position = "relative";
+  card.style.width = `${editW}px`;
+  card.style.height = `${editH}px`;
+  card.style.overflow = "hidden";
+
+  const restoreClone = makeCardSnapshot(el, savedCardW);
+  restoreClone.style.opacity = "0";
+
+  const editDiv = card.querySelector(".ni-edit");
+  if (editDiv) {
+    editDiv.style.transition = "opacity 120ms ease";
+    editDiv.style.opacity = "0";
+  }
+
+  void card.offsetWidth; // commit the pinned starting frame
+  restoreClone.style.transition = "opacity 160ms ease 60ms";
+  restoreClone.style.opacity = "1";
+  card.style.transition = `height ${CANCEL_DUR}ms ${GLIDE}, width ${CANCEL_DUR}ms ${GLIDE}`;
+  card.style.height = `${savedCardH}px`;
+  card.style.width = `${savedCardW}px`;
+  layoutEditing(panel, CANCEL_DUR, 0);
+
+  el._editTimeout2 = setTimeout(() => {
+    el._editTimeout2 = null;
+    restoreCard();
+  }, CANCEL_DUR + 40);
 }
 
 async function saveInlineEdit(panel, el) {
@@ -376,6 +718,7 @@ function teardownAdminExpanded(panel) {
     panel._inputBubble.parentElement.removeChild(panel._inputBubble);
   }
   panel._inputBubble = null;
+  panel._editing = [];
   const keep = [];
   (panel._bubbleEls || []).forEach((el) => {
     const actions = el.querySelector(".instant-note-admin-actions");
@@ -383,6 +726,7 @@ function teardownAdminExpanded(panel) {
     const badge = el.querySelector(".instant-note-status");
     if (badge) badge.remove();
     if (el._editing) cancelInlineEdit(null, el);
+    el.style.transform = "";
     if (el._active) {
       keep.push(el);
     } else if (el.parentElement) {

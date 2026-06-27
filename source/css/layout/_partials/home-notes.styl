@@ -386,6 +386,12 @@
   pointer-events none
   opacity 0
 
+// Admin: reserve the scrollbar gutter permanently so an inline-edit that pushes
+// the list into overflow mid-animation never shifts content width (no text
+// re-wrap / no horizontal jump). Paired with overflow-y:auto set in JS.
+.instant-notes-panel.is-admin-expanded .instant-notes-field
+  scrollbar-gutter stable
+
 // ═══════════════════════════════════════════════════════════
 // ADMIN tools (input bubble + per-bubble edit/delete + status)
 // ═══════════════════════════════════════════════════════════
@@ -410,6 +416,8 @@
     font-family inherit
     line-height 1.35
     resize none
+    overflow hidden
+    min-height 36px
     background rgba(0, 0, 0, 0.06)
     color inherit
   .ni-input-row
@@ -469,6 +477,8 @@
     font-family inherit
     line-height 1.35
     resize none
+    overflow hidden
+    min-height 36px
     background rgba(0, 0, 0, 0.06)
     color inherit
   .ni-input-row
