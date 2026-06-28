@@ -343,11 +343,6 @@
 // ─── Expanded panel frame (position/size are inline via JS) ─
 .instant-notes-panel.is-expanded
   z-index 40
-  background rgba(255, 255, 255, 0.16)
-  box-shadow 0 14px 60px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.14)
-  .dark &
-    background rgba(22, 22, 32, 0.6)
-    box-shadow 0 14px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)
 
   // Keep the "INSTANT NOTES" label above the scrolling bubbles (base label
   // z-index 2 is BELOW bubbles 5/15, so bubbles would cover it).
@@ -379,6 +374,17 @@
       border-radius 3px
     &::-webkit-scrollbar-track
       background transparent
+
+// Elevated frosted glass for the expanded panel. Kept in a SEPARATE class from
+// `is-expanded` and toggled by JS only AFTER the frame transition is armed (the
+// inline transition includes background + box-shadow), so the glass morphs in
+// sync with the expand/collapse resize instead of popping. (Problem 2.)
+.instant-notes-panel.notes-elevated
+  background rgba(255, 255, 255, 0.16)
+  box-shadow 0 14px 60px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.14)
+  .dark &
+    background rgba(22, 22, 32, 0.6)
+    box-shadow 0 14px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)
 
 // Spacer is the only in-flow child of the field — it drives scrollHeight.
 .instant-notes-scroll-spacer

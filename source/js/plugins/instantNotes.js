@@ -21,7 +21,7 @@ import {
   relayoutExpanded, relayoutExpandedReflow, resetFieldExpansion,
 } from "./instant-notes-layout.js";
 import { createBubble, isNoteActive, clearWrap } from "./instant-notes-bubble.js";
-import { GLIDE, PAD, clamp, prefersReducedMotion } from "./instant-notes-utils.js";
+import { GLIDE, PAD, EMOJI_TOP_EXTRA, clamp, prefersReducedMotion } from "./instant-notes-utils.js";
 
 // Cache fetched public notes briefly so rapid swup navigations skip the worker.
 let _notesCache = null;
@@ -210,6 +210,8 @@ function reconcileAdminNotes(panel, notes) {
         el.style.transition = "";
         el.style.transform = "";
         el._editDelta = 0;
+        el._emojiDelta = 0;
+        el._editUp = false;
         el._heightAnimating = false;
         el._editing = false;
         el.classList.remove("is-editing");
@@ -377,18 +379,32 @@ function fieldBubbles(panel) {
   );
 }
 
-// Each editing bubble's downward growth (form height − base list height, ≥0).
+// Each editing bubble's height change vs. its base list height. SIGNED: a save
+// that shrinks the card below its original height yields a negative delta so the
+// neighbours below pull back UP (gaps stay constant throughout — see
+// animateEditClose). During an open edit the form is always taller, so it is
+// positive there.
 function editDelta(el) {
-  return Math.max(0, el._editDelta || 0);
+  return el._editDelta || 0;
+}
+
+// Change in the space RESERVED ABOVE a bubble for its emoji badge (which pokes up
+// past the card top). SIGNED: a save that ADDS an emoji yields +EMOJI_TOP_EXTRA
+// (room opens above), removing one yields −EMOJI_TOP_EXTRA. Unlike editDelta
+// (card grows DOWN, so it only moves bubbles below) this space is ABOVE the card,
+// so it slides the bubble ITSELF down as well as everything below it. (Problem 2.)
+function emojiDelta(el) {
+  return el._emojiDelta || 0;
 }
 
 // ── Single source of truth for inline-edit reflow ─────────────────────────────
 // Position EVERY field bubble at its clean base `top` (kept transform-free) plus
-// the summed growth of all bubbles being edited ABOVE it, and size the scroll
-// spacer to the total growth. Because it is recomputed from the WHOLE
-// `panel._editing` set on every call, any number of concurrent edits compose
-// correctly (deltas add, no transform stomping) and cancelling one bubble simply
-// drops it from the sum so the rest settle to the right place.
+// the contributions of all edits at/above it, and size the scroll spacer to the
+// total. Each edit contributes its card-height growth (editDelta — to bubbles
+// strictly BELOW) and its emoji top-space change (emojiDelta — to ITSELF and
+// everything below). Because it is recomputed from the WHOLE `panel._editing`
+// set on every call, any number of concurrent edits compose correctly (deltas
+// add, no transform stomping) and dropping one simply removes it from the sum.
 function layoutEditing(panel, dur, delay) {
   const field = panel.querySelector("#instant-notes-field");
   if (!field) return;
@@ -396,14 +412,28 @@ function layoutEditing(panel, dur, delay) {
   const d = delay ? ` ${delay}ms` : "";
   const trans = dur ? `transform ${dur}ms ${GLIDE}${d}` : "none";
 
+  // Only DOWN (top-anchored) edits grow the scroll content — they unfold into new
+  // space below. UP (bottom-anchored) edits grow into existing space above via pure
+  // transforms, leaving the layout/scroll height untouched. (Problem 3.)
   let total = 0;
-  editing.forEach((e) => { total += editDelta(e); });
+  editing.forEach((e) => { if (!e._editUp) total += editDelta(e) + emojiDelta(e); });
 
   fieldBubbles(panel).forEach((b) => {
     const bTop = parseFloat(b.style.top) || 0;
     let shift = 0;
     editing.forEach((e) => {
-      if (e !== b && (parseFloat(e.style.top) || 0) < bTop) shift += editDelta(e);
+      const gd = editDelta(e);
+      const ge = emojiDelta(e);
+      const eTop = parseFloat(e.style.top) || 0;
+      if (e._editUp) {
+        // Bottom-anchored: card grows UP, emoji-space opens further UP.
+        if (e === b) shift -= gd;                 // self rises by its card growth
+        else if (bTop < eTop) shift -= gd + ge;   // bubbles above rise by both
+      } else {
+        // Top-anchored: card grows DOWN; emoji-space pushes self + below DOWN.
+        if (e === b) shift += ge;
+        else if (bTop > eTop) shift += gd + ge;
+      }
     });
     b.style.transition = trans;
     b.style.transform = shift ? `translateY(${shift}px)` : "none";
@@ -429,8 +459,11 @@ function editShiftOf(panel, el) {
 }
 
 // Smooth-scroll the field just enough to keep the editing card fully visible,
-// accounting for the shift contributed by any edits above it.
+// accounting for the shift contributed by any edits above it. Bottom-anchored
+// (upward) edits unfold into the visible space above the bubble, so they need no
+// scroll — that is the whole point of expanding them upward. (Problem 3.)
 function ensureEditVisible(panel, el, cardH) {
+  if (el._editUp) return;
   const field = panel.querySelector("#instant-notes-field");
   if (!field) return;
   let total = 0;
@@ -444,13 +477,22 @@ function ensureEditVisible(panel, el, cardH) {
   }
 }
 
-// Absolutely-positioned, non-reflowing snapshot of the original card. Pinned to a
-// fixed BORDER-BOX width so the old text wraps identically and never re-flows
-// while the live card animates its width/height underneath it.
-function makeCardSnapshot(el, borderBoxW) {
+// Absolutely-positioned, non-reflowing snapshot of a card's content. Pinned to an
+// EXACT FRACTIONAL box width (`boxW`, from getBoundingClientRect — never the
+// rounded offsetWidth) so it wraps byte-for-byte identically to the committed
+// card, which shrink-wraps to that same width. Two traps this avoids:
+//   • Rounded offsetWidth is ~1px short of the true sub-pixel content width, so a
+//     fixed integer width forces the trailing time token ("9d") onto its own line
+//     for the final frame, then `commit` un-wraps it — the cancel "jump".
+//   • `width:max-content` (a previous attempt) is resolved by some engines
+//     against the abspos clone's containing block — here the wrapper `el`, whose
+//     width during the morph is the NARROW pinned/animating card — collapsing the
+//     clone far below its content width and wrapping it severely (overlapping the
+//     bubble below). A fixed fractional width depends on nothing external. (P1.)
+function makeCardSnapshot(el, html, cls, style, boxW) {
   const clone = document.createElement("div");
-  clone.className = el._savedCardClass;
-  if (el._savedCardStyle) clone.setAttribute("style", el._savedCardStyle);
+  clone.className = cls;
+  if (style) clone.setAttribute("style", style);
   clone.style.position = "absolute";
   clone.style.top = "0";
   clone.style.left = "0";
@@ -458,30 +500,66 @@ function makeCardSnapshot(el, borderBoxW) {
   clone.style.pointerEvents = "none";
   clone.style.boxSizing = "border-box";
   clone.style.maxWidth = "none";
-  clone.style.width = `${borderBoxW}px`;
-  clone.innerHTML = el._savedCardHTML || "";
+  clone.style.width = `${boxW}px`;
+  clone.style.whiteSpace = "normal";
+  clone.style.wordBreak = "normal";
+  clone.style.overflowWrap = "break-word";
+  clone.innerHTML = html || "";
   el.appendChild(clone);
   el._snapClone = clone;
   return clone;
+}
+
+// Off-screen probe: the border-box size a DISPLAY card (class `cls`, content
+// `html`) takes at wrap width `wrapW`. Used to pre-compute the post-save card
+// geometry BEFORE the morph animation so the close can target the exact final
+// width/height. (Problem 3.)
+function probeCardSize(cls, html, wrapW) {
+  const probe = document.createElement("div");
+  probe.className = cls;
+  probe.style.cssText =
+    `position:fixed;left:-9999px;top:0;max-width:${wrapW}px;visibility:hidden;` +
+    "pointer-events:none;white-space:normal;word-break:normal;overflow-wrap:break-word;box-sizing:border-box;";
+  probe.innerHTML = html;
+  document.body.appendChild(probe);
+  // Fractional (getBoundingClientRect), not rounded offsetWidth — the snapshot is
+  // pinned to this exact width and must reproduce the committed wrap. (Problem 1.)
+  const r = probe.getBoundingClientRect();
+  const size = { w: r.width, h: r.height };
+  document.body.removeChild(probe);
+  return size;
 }
 
 function startInlineEdit(panel, el) {
   if (el._editing) return;
   el._editing = true;
   el.classList.add("is-editing");
+
+  // Direction: the bottom-most TWO field bubbles unfold UPWARD (bottom edge fixed)
+  // so the taller edit form clears the pinned slot / avatar below and needs no
+  // extra scroll; every other bubble keeps the top-anchored downward unfold. (P3.)
+  const fbs = fieldBubbles(panel)
+    .slice()
+    .sort((a, b) => (parseFloat(b.style.top) || 0) - (parseFloat(a.style.top) || 0));
+  const rank = fbs.indexOf(el);
+  el._editUp = rank > -1 && rank < 2;
+
   const note = el._note || {};
   const card = el.querySelector(".bubble-card");
   el._savedCardHTML = card.innerHTML;
   el._savedCardClass = card.className;
   el._savedCardStyle = card.getAttribute("style") || "";
 
-  // ── 0: Capture current border-box geometry ───────────────────────────────
-  const w0 = card.offsetWidth;
-  const h0 = card.offsetHeight;
+  // ── 0: Capture current border-box geometry (FRACTIONAL — the snapshot pins to
+  // _savedCardW exactly and must reproduce the live card's wrap). ──────────────
+  const r0 = card.getBoundingClientRect();
+  const w0 = r0.width;
+  const h0 = r0.height;
   // listWidth = the full column width the edit form expands to (wrapCard's cap).
   const listWidth = card.style.maxWidth ? Math.round(parseFloat(card.style.maxWidth)) : w0;
   el._savedCardH = h0;
   el._savedCardW = w0;
+  el._savedWrapW = listWidth;
 
   // ── 1: Build the edit-form markup ────────────────────────────────────────
   const isDefault = !note.color || note.color === "default";
@@ -510,7 +588,7 @@ function startInlineEdit(panel, el) {
   document.body.removeChild(probe);
 
   // ── 3: Snapshot the old card, then swap the live card to the edit form ─────
-  makeCardSnapshot(el, w0);
+  makeCardSnapshot(el, el._savedCardHTML, el._savedCardClass, el._savedCardStyle, el._savedCardW);
 
   card.style.boxSizing = "border-box";
   card.style.position = "relative";
@@ -584,68 +662,82 @@ function startInlineEdit(panel, el) {
   }, EXPAND_DUR + 40);
 }
 
-function cancelInlineEdit(panel, el) {
-  if (!el._editing) return;
+// ── Shared inline-edit CLOSE engine (cancel + save) ───────────────────────────
+// Morphs the open edit card to a target content + size: cross-fades the form out
+// and a shrink-to-fit snapshot of the TARGET content in, animates the card
+// height/width, and slides neighbours via the declarative layout pass. The gap to
+// every neighbour stays constant the whole way because the card height h(t) and
+// each neighbour's shift s(t) animate on the same curve/duration from the same
+// start, giving s(t) − h(t) ≡ −baseH (a constant) for any target size or sign.
+//
+//   • cancel → target = the saved original content/size, delta returns to 0.
+//   • save   → target = the new note's content/size, delta is baked permanently
+//              into the list so dropping the bubble from the editing set leaves
+//              the neighbours exactly where they are (no cross-fade reflow).
+function animateEditClose(panel, el, opts) {
+  const card = el.querySelector(".bubble-card");
+  const baseH = el._editBaseCardH || card.offsetHeight;
+  const dur = opts.dur || CANCEL_DUR;
 
-  const hadPendingExpand = !!el._editTimeout1;
   if (el._editTimeout1) { clearTimeout(el._editTimeout1); el._editTimeout1 = null; }
   if (el._editTimeout2) { clearTimeout(el._editTimeout2); el._editTimeout2 = null; }
   if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
 
-  // Drop this bubble from the shared edit set so layoutEditing stops counting it.
-  if (panel && panel._editing) {
-    const i = panel._editing.indexOf(el);
-    if (i !== -1) panel._editing.splice(i, 1);
-  }
-  el._editDelta = 0;
-
-  const card = el.querySelector(".bubble-card");
-  // Restores only THIS bubble's card; neighbour positions + spacer are owned by
-  // layoutEditing (it already settled them to the remaining-edits composition).
-  const restoreCard = () => {
+  const commit = () => {
     if (el._snapClone) { el._snapClone.remove(); el._snapClone = null; }
-    if (el._savedCardHTML != null) card.innerHTML = el._savedCardHTML;
-    card.style.transition = "";
-    card.style.position = "";
-    card.style.height = "";
-    card.style.width = "";
-    card.style.overflow = "";
-    card.style.boxSizing = "";
-    el.style.height = "";
+    card.setAttribute("style", opts.cardStyle || "");
+    card.className = opts.cls;
+    card.innerHTML = opts.html;
+    card.style.maxWidth = `${opts.wrapW}px`;
+    card.style.whiteSpace = "normal";
+    card.style.wordBreak = "normal";
+    card.style.overflowWrap = "break-word";
+    if (opts.bake) applyMorphMeta(panel, el, opts.note);
     el.style.transition = "";
+    el.style.height = "";
     el._heightAnimating = false;
     el._editing = false;
     el.classList.remove("is-editing");
+
+    const cardDelta = opts.bake ? (opts.targetH - baseH) : 0;
+    const emojiD = opts.bake ? (opts.emojiDelta || 0) : 0;
+    const up = !!el._editUp;
+    if (panel && panel._editing) {
+      const i = panel._editing.indexOf(el);
+      if (i !== -1) panel._editing.splice(i, 1);
+    }
+    if (panel && panel._expanded && opts.bake && (cardDelta || emojiD)) {
+      bakeEdit(panel, el, cardDelta, emojiD, up);
+    }
+    el._editDelta = 0;
+    el._emojiDelta = 0;
+    el._editUp = false;
+    if (panel && panel._expanded) layoutEditing(panel, 0, 0);
   };
 
-  // Sync path: teardown, panel collapsing, or the open animation never started.
-  if (!panel || !panel._expanded || hadPendingExpand) {
-    if (panel && panel._expanded) layoutEditing(panel, 0, 0); // settle the rest instantly
-    restoreCard();
+  // Sync path: teardown, collapsed panel, or reduced motion → jump to final state.
+  if (!panel || !panel._expanded || prefersReducedMotion()) {
+    commit();
     return;
   }
 
-  // ── Animated reverse: card folds UP to base size; layoutEditing slides the
-  // neighbours back by exactly this bubble's delta. Same duration + curve as the
-  // card height shrink ⇒ gaps stay constant throughout. ─────────────────────────
   el._editing = false;
   el.classList.remove("is-editing");
   el._heightAnimating = true;
 
   const editH = card.offsetHeight;
   const editW = card.offsetWidth;
-  const savedCardH = el._savedCardH || editH;
-  const savedCardW = el._savedCardW || editW;
 
-  // Pin the card at its current edit size, overlay the original-content snapshot.
+  // Pin the card at its current edit size; overlay a snapshot of the TARGET
+  // content (shrink-to-fit at wrapW ⇒ wraps exactly like the committed card).
   card.style.boxSizing = "border-box";
   card.style.position = "relative";
   card.style.width = `${editW}px`;
   card.style.height = `${editH}px`;
   card.style.overflow = "hidden";
 
-  const restoreClone = makeCardSnapshot(el, savedCardW);
-  restoreClone.style.opacity = "0";
+  const snap = makeCardSnapshot(el, opts.html, opts.cls, opts.cardStyle, opts.targetW);
+  snap.style.opacity = "0";
 
   const editDiv = card.querySelector(".ni-edit");
   if (editDiv) {
@@ -653,18 +745,160 @@ function cancelInlineEdit(panel, el) {
     editDiv.style.opacity = "0";
   }
 
+  // Fade the emoji badge in/out (added/removed by this save) as the space above
+  // opens/closes, so it doesn't pop or float over the closing gap. (Problem 2.)
+  if (opts.bake) transitionEmoji(el, opts.note);
+
+  // Neighbours track the card-height change (editDelta) AND the emoji top-space
+  // change (emojiDelta — slides this bubble itself down as well). (Problem 2.)
+  el._editDelta = opts.targetH - baseH;
+  el._emojiDelta = opts.emojiDelta || 0;
+
   void card.offsetWidth; // commit the pinned starting frame
-  restoreClone.style.transition = "opacity 160ms ease 60ms";
-  restoreClone.style.opacity = "1";
-  card.style.transition = `height ${CANCEL_DUR}ms ${GLIDE}, width ${CANCEL_DUR}ms ${GLIDE}`;
-  card.style.height = `${savedCardH}px`;
-  card.style.width = `${savedCardW}px`;
-  layoutEditing(panel, CANCEL_DUR, 0);
+  snap.style.transition = "opacity 160ms ease 60ms";
+  snap.style.opacity = "1";
+  card.style.transition = `height ${dur}ms ${GLIDE}, width ${dur}ms ${GLIDE}`;
+  card.style.height = `${opts.targetH}px`;
+  card.style.width = `${opts.targetW}px`;
+  layoutEditing(panel, dur, 0);
 
   el._editTimeout2 = setTimeout(() => {
     el._editTimeout2 = null;
-    restoreCard();
-  }, CANCEL_DUR + 40);
+    commit();
+  }, dur + 40);
+}
+
+// Permanently fold an edited bubble's footprint change into the list so dropping
+// it from the editing set leaves everything visually unmoved (its transform,
+// recomputed without it, drops by the same amount).
+//
+//   DOWN (top-anchored): the bubble slid down by its emoji-space (`emojiD`); every
+//   bubble below absorbed emoji-space + card growth (`cardDelta + emojiD`); the
+//   scroll spacer grows by the sum (new space unfolded below).
+//   UP (bottom-anchored): the bubble rose by its card growth; every bubble ABOVE
+//   rose by card growth + emoji-space. Layout height is unchanged (it grew into
+//   existing space above); if that pushed a bubble past the field's top padding,
+//   slide the whole field down + grow the spacer + hold scroll so nothing jumps.
+function bakeEdit(panel, el, cardDelta, emojiD, up) {
+  const field = panel.querySelector("#instant-notes-field");
+  const elTop = parseFloat(el.style.top) || 0;
+  const total = cardDelta + emojiD;
+  if (up) {
+    el.style.transition = "none";
+    el.style.top = `${elTop - cardDelta}px`;
+    fieldBubbles(panel).forEach((b) => {
+      if (b === el) return;
+      if ((parseFloat(b.style.top) || 0) < elTop) {
+        b.style.transition = "none";
+        b.style.top = `${(parseFloat(b.style.top) || 0) - total}px`;
+      }
+    });
+    let minTop = Infinity;
+    fieldBubbles(panel).forEach((b) => { minTop = Math.min(minTop, parseFloat(b.style.top) || 0); });
+    if (minTop < PAD) {
+      const down = PAD - minTop;
+      fieldBubbles(panel).forEach((b) => {
+        b.style.transition = "none";
+        b.style.top = `${(parseFloat(b.style.top) || 0) + down}px`;
+      });
+      panel._listContentH = (panel._listContentH || 0) + down;
+      if (field) field.scrollTop = (field.scrollTop || 0) + down;
+    }
+  } else {
+    fieldBubbles(panel).forEach((b) => {
+      if (b === el) {
+        if (emojiD) { b.style.transition = "none"; b.style.top = `${elTop + emojiD}px`; }
+        return;
+      }
+      if ((parseFloat(b.style.top) || 0) > elTop) {
+        b.style.transition = "none";
+        b.style.top = `${(parseFloat(b.style.top) || 0) + total}px`;
+      }
+    });
+    panel._listContentH = (panel._listContentH || 0) + total;
+  }
+  const spacer = field && field.querySelector(".instant-notes-scroll-spacer");
+  if (spacer) { spacer.style.transition = "none"; spacer.style.height = `${panel._listContentH}px`; }
+}
+
+// Fade the emoji badge in / out on a save morph so it appears/disappears in step
+// with the space opening/closing above the bubble (driven by emojiDelta). Called
+// at the START of the animated path; applyMorphMeta settles the final state.
+function transitionEmoji(el, note) {
+  const reduced = prefersReducedMotion();
+  const color = note.color && note.color !== "default" ? note.color : null;
+  const existing = el.querySelector(".instant-note-emoji");
+  const want = !!note.emoji;
+  if (want && !existing) {
+    const emo = document.createElement("span");
+    emo.className = "instant-note-emoji" + (color ? "" : " emoji-default");
+    emo.style.background = color || "";
+    emo.textContent = note.emoji;
+    el.appendChild(emo);
+    if (!reduced) {
+      emo.style.opacity = "0";
+      emo.style.transform = "scale(0.5)";
+      void emo.offsetWidth;
+      emo.style.transition = "opacity 200ms ease, transform 240ms cubic-bezier(0.34,1.56,0.64,1)";
+      emo.style.opacity = "1";
+      emo.style.transform = "scale(1)";
+    }
+  } else if (!want && existing) {
+    if (reduced) { existing.remove(); return; }
+    existing.style.transition = "opacity 160ms ease, transform 180ms ease";
+    existing.style.opacity = "0";
+    existing.style.transform = "scale(0.5)";
+    setTimeout(() => existing.remove(), 200);
+  } else if (want && existing) {
+    existing.className = "instant-note-emoji" + (color ? "" : " emoji-default");
+    existing.style.background = color || "";
+    existing.textContent = note.emoji;
+  }
+}
+
+// Sync an admin bubble's wrapper-level state (colour vars, emoji badge, status)
+// to a new note after a save morph — the snapshot only carries the card body.
+// Idempotent: the animated path already faded the badge via transitionEmoji, so
+// this just settles the final emoji state (clearing the fade's inline leftovers);
+// the sync/reduced path relies on it to add/remove the badge outright.
+function applyMorphMeta(panel, el, note) {
+  el._note = note;
+  el._active = isNoteActive(note);
+  const color = note.color && note.color !== "default" ? note.color : null;
+  if (color) {
+    el.style.setProperty("--bubble-bg", color);
+    el.style.setProperty("--bubble-border", "rgba(255,255,255,0.18)");
+  } else {
+    el.style.removeProperty("--bubble-bg");
+    el.style.removeProperty("--bubble-border");
+  }
+  const existing = el.querySelector(".instant-note-emoji");
+  if (note.emoji) {
+    const emo = existing || document.createElement("span");
+    emo.className = "instant-note-emoji" + (color ? "" : " emoji-default");
+    emo.style.background = color || "";
+    emo.textContent = note.emoji;
+    emo.style.transition = "";
+    emo.style.opacity = "";
+    emo.style.transform = "";
+    if (!existing) el.appendChild(emo);
+  } else if (existing) {
+    existing.remove();
+  }
+  if (panel) decorateAdminBubble(panel, el);
+}
+
+function cancelInlineEdit(panel, el) {
+  if (!el._editing) return;
+  animateEditClose(panel, el, {
+    html: el._savedCardHTML,
+    cls: el._savedCardClass,
+    cardStyle: el._savedCardStyle,
+    wrapW: el._savedWrapW || el._savedCardW || 0,
+    targetW: el._savedCardW || 0,
+    targetH: el._savedCardH || 0,
+    bake: false,
+  });
 }
 
 async function saveInlineEdit(panel, el) {
@@ -680,19 +914,37 @@ async function saveInlineEdit(panel, el) {
   save.textContent = "…";
   try {
     await adminFetch(panel, "PUT", `/api/admin/notes/${id}`, { text, emoji, color });
-    el._editing = false;
-    el.classList.remove("is-editing");
-    const all = await adminFetch(panel, "GET", "/api/admin/notes");
-    reconcileAdminNotes(panel, Array.isArray(all) ? all : []);
-    relayoutExpanded(panel, true);
     _notesCache = null;
   } catch (e) {
     console.warn("[InstantNotes] edit failed:", e);
     save.textContent = "Error";
     setTimeout(() => (save.textContent = "Save"), 1500);
-  } finally {
     save.disabled = false;
+    return;
   }
+
+  // No full reflow / cross-fade: build the note's new display state locally,
+  // pre-measure the post-save card, then morph the card from the edit form to
+  // that exact size while neighbours glide and the change is baked in. (Problem 3.)
+  const oldHasEmoji = !!(el._note && el._note.emoji);
+  const note = Object.assign({}, el._note, { text, emoji, color });
+  const fresh = createBubble(note, false).querySelector(".bubble-card");
+  const wrapW = el._savedWrapW || card.offsetWidth;
+  const size = probeCardSize(fresh.className, fresh.innerHTML, wrapW);
+  // Gaining/losing the emoji badge changes the space reserved ABOVE the bubble. (Problem 2.)
+  const emojiDelta = ((note.emoji ? 1 : 0) - (oldHasEmoji ? 1 : 0)) * EMOJI_TOP_EXTRA;
+
+  animateEditClose(panel, el, {
+    html: fresh.innerHTML,
+    cls: fresh.className,
+    cardStyle: fresh.getAttribute("style") || "",
+    wrapW,
+    targetW: size.w,
+    targetH: size.h,
+    emojiDelta,
+    bake: true,
+    note,
+  });
 }
 
 async function deleteNote(panel, el) {

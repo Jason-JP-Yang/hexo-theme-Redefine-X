@@ -485,6 +485,9 @@ async function expandPanel(panel) {
   const finalH = adaptiveExpandHeight(panel, measured);
   const bottom = (panel._placeholder || panel).getBoundingClientRect().bottom;
   animateFrame(panel, { left: slot.left, top: bottom - finalH, width: slot.width, height: finalH }, true);
+  // Arm the elevated glass AFTER the frame transition is set so background +
+  // box-shadow animate together with the resize. (Problem 2.)
+  panel.classList.add("notes-elevated");
 
   positionExpandedList(panel, measured, finalH);
   wireCloseListeners(panel);
@@ -629,8 +632,11 @@ export function animateFrame(panel, t, animate, dur = FRAME_MS, delay = 0) {
   const off = panel._cbOffset || { left: 0, top: 0 };
   const reduced = prefersReducedMotion();
   const d = delay ? ` ${delay}ms` : "";
+  // Background + box-shadow ride the same transition so the `notes-elevated`
+  // glass (toggled right after this call on expand) morphs IN SYNC with the frame
+  // resize instead of popping. (Problem 2.)
   panel.style.transition = animate && !reduced
-    ? `left ${dur}ms ${GLIDE}${d}, top ${dur}ms ${GLIDE}${d}, width ${dur}ms ${GLIDE}${d}, height ${dur}ms ${GLIDE}${d}`
+    ? `left ${dur}ms ${GLIDE}${d}, top ${dur}ms ${GLIDE}${d}, width ${dur}ms ${GLIDE}${d}, height ${dur}ms ${GLIDE}${d}, background ${dur}ms ${GLIDE}${d}, box-shadow ${dur}ms ${GLIDE}${d}`
     : "none";
   panel.style.left = `${Math.round(t.left - off.left)}px`;
   panel.style.top = `${Math.round(t.top - off.top)}px`;
@@ -645,13 +651,17 @@ function collapseFixed(panel, reduced, done) {
   const target = ph ? ph.getBoundingClientRect() : panel.getBoundingClientRect();
   panel.style.transition = reduced
     ? "none"
-    : `left ${FRAME_MS}ms ${GLIDE}, top ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}, height ${FRAME_MS}ms ${GLIDE}`;
+    : `left ${FRAME_MS}ms ${GLIDE}, top ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}, height ${FRAME_MS}ms ${GLIDE}, background ${FRAME_MS}ms ${GLIDE}, box-shadow ${FRAME_MS}ms ${GLIDE}`;
+  // Drop the elevated glass under the same transition so it fades back to the
+  // compact panel style while the frame shrinks. (Problem 2.)
+  panel.classList.remove("notes-elevated");
   panel.style.left = `${target.left - off.left}px`;
   panel.style.top = `${target.top - off.top}px`;
   panel.style.width = `${target.width}px`;
   panel.style.height = `${target.height}px`;
 
   const finish = () => {
+    panel.classList.remove("notes-elevated");
     panel.style.transition = "";
     panel.style.position = "";
     panel.style.margin = "";
@@ -733,6 +743,11 @@ export function measureExpandedList(panel, slotWidth) {
   );
   const maxW = Math.max(MIN_READABLE_W, Math.min(LIST_MAX_W, slotWidth - leftEdge - rightGutter));
 
+  // The pinned bottom slot (newest note / admin input) hugs the avatar and never
+  // shifts right for the admin status badge — only the OLDER badge-bearing bubbles
+  // indent to `leftEdge` to keep their active/expired span on-panel. (Problem 4.)
+  const pinnedLeft = clamp(Math.round(am.avR - AVATAR_OVERLAP), PAD, leftEdge);
+
   const order = expandedOrder(panel);
   const widths = order.map((el) =>
     Math.round(bubbleHasEmoji(el) ? Math.max(MIN_READABLE_W, maxW - EMOJI_W_PAD) : maxW),
@@ -744,8 +759,16 @@ export function measureExpandedList(panel, slotWidth) {
     if (el.classList.contains("instant-notes-input-bubble")) el.style.width = `${widths[i]}px`;
     else wrapCard(el, widths[i]);
   });
+  // Measure heights with the panel TEMPORARILY at the final expanded width. During
+  // expand the panel is still at its narrow compact size (enterFixed), so the field
+  // would constrain wide cards, wrapping them more, inflating measured heights and
+  // reserving extra vertical gaps that vary with the compact width. Restored right
+  // after so animateFrame can still glide from the compact frame. (Problem 2.)
+  const prevPanelW = panel.style.width;
+  panel.style.width = `${slotWidth}px`;
   if (field) void field.offsetWidth;
   const heights = order.map((el) => el.getBoundingClientRect().height);
+  panel.style.width = prevPanelW;
 
   let stackH = 0;
   heights.forEach((h, i) => {
@@ -754,7 +777,7 @@ export function measureExpandedList(panel, slotWidth) {
     if (bubbleHasEmoji(order[i])) stackH += EMOJI_TOP_EXTRA;
   });
 
-  return { order, heights, widths, leftEdge, topPad, avatarReserve, stackH };
+  return { order, heights, widths, leftEdge, pinnedLeft, topPad, avatarReserve, stackH };
 }
 
 // Position the measured list inside a panel of height innerH. The BOTTOM slot
@@ -778,7 +801,7 @@ export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_M
   if (pinnedEl.parentElement !== panel) panel.appendChild(pinnedEl);
   pinnedEl.classList.add("is-pinned");
   pinnedEl.style.zIndex = "16";
-  place(pinnedEl, m.leftEdge, pinnedTop, m.widths[0]);
+  place(pinnedEl, m.pinnedLeft != null ? m.pinnedLeft : m.leftEdge, pinnedTop, m.widths[0]);
 
   // ── Scroll region (older bubbles) above the pinned slot ───────────────────
   const older = order.slice(1);
