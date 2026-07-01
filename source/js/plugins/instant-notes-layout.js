@@ -17,7 +17,7 @@ import {
   EMOJI_RIGHT_EXTRA, COMPACT_RATIO, WRAP_QUERY,
   BAND_GAP, EXPAND_GAP_TOP, EXPAND_GAP_SIDE,
   LIST_GAP_Y, LIST_MAX_W, STATUS_LEFT_RESERVE, EMOJI_TOP_EXTRA, EMOJI_W_PAD,
-  FRAME_MS, GLIDE, FADE_OUT_MS, FADE_BLUR, MIN_PANEL_W,
+  FRAME_MS, GLIDE, FADE_OUT_MS, MIN_PANEL_W,
   clamp, prefersReducedMotion,
 } from "./instant-notes-utils.js";
 import {
@@ -575,11 +575,10 @@ async function expandPanel(panel) {
   if (panel._expanded || panel._animating) return;
   panel._animating = true;
   panel._expanded = true;
-  // Button shows "Loading…" (not "Less") and timestamps fade out the moment the
-  // expand starts; the timestamps stay hidden until the collapse transition fully
-  // ends. (Problems 1 + 3.)
+  // Button shows "Loading…" (not "Less") until the history has loaded and the expand
+  // transition is armed. Timestamps are NOT hidden by expand/collapse — they ride
+  // along with the bubbles; only inline-edit hides them. (Problem 3.)
   setMoreButtonLoading(panel);
-  panel.classList.add("notes-time-hidden");
 
   // Admin: pull the full history (active + expired) then add the input bubble.
   // Admin functions are injected via panel._adminHooks at init time to avoid a
@@ -657,7 +656,6 @@ async function expandPanel(panel) {
       scrollListToBottom(panel);
       // Simple fade-in — no pop/cascade — same as every other expand path. (Problem 2.)
       fadeInBubbles(history);
-      panel.classList.remove("notes-time-hidden");
       panel._animating = false;
     };
     if (prefersReducedMotion()) done();
@@ -675,28 +673,22 @@ async function expandPanel(panel) {
   const done = () => {
     fadeInBubbles(measured.order);
     scrollListToBottom(panel);
-    // Expand transition finished — fade the timestamps back in (they are visible in
-    // the settled expanded state; only the transition itself hides them). (Problem 1.)
-    panel.classList.remove("notes-time-hidden");
     panel._animating = false;
   };
   if (prefersReducedMotion()) done();
   else setTimeout(done, FRAME_MS + 30);
 }
 
-// ─── Collapse: a true whole-panel FLIP back to the compact layout ─────────────
-// The compact layout is computed EXACTLY ONCE, in the bar, so the frame's final
-// geometry is the real flex layout (no stale-placeholder jump) and every surviving
-// bubble glides continuously from its expanded spot to its recomputed compact spot
-// (no cross-fade). The compose card glides its width too. computeLayout is never
-// run twice per collapse — its jitter is random, so a second pass would land the
-// bubbles elsewhere and re-introduce a jump. (Collapse refactor.)
+// ─── Collapse: fade everything out, shrink the empty frame, reveal compact ────
+// Symmetric with expand. Every bubble disappears UP-FRONT — before the frame moves —
+// so nothing slides or flickers during the resize; the panel simply shrinks as an
+// empty glass box, then the compact bubbles fade in at their final spots. The exact
+// compact frame is computed once (buildCollapseTarget) so the shrink lands jump-free. (Problem 2.)
 function collapsePanel(panel) {
   if (!panel._expanded || panel._animating) return;
   panel._animating = true;
   panel._expanded = false;
   setMoreButtonState(panel, false);
-  panel.classList.add("notes-time-hidden");
   unwireCloseListeners(panel);
 
   const banner = document.querySelector(".home-banner-container");
@@ -709,103 +701,49 @@ function collapsePanel(panel) {
   const compose = !!panel._isAdmin &&
     (panel._bubbleEls || []).filter((b) => b._active).length === 0;
 
-  const input = panel._inputBubble;
-  const order = expandedOrder(panel).filter(Boolean);
-  // Survivors glide into the compact view; everything else (the input in a normal
-  // collapse, expired notes, history in a compose collapse) fades out and is dropped.
-  const survivors = compose
-    ? (input ? [input] : [])
-    : order.filter((el) => el !== input && el._active);
-  const leaving = order.filter((el) => survivors.indexOf(el) === -1);
+  // (1) Every bubble vanishes before the frame animates.
+  fadeOutBubbles(expandedOrder(panel).filter(Boolean));
 
-  // Snapshot survivor screen rects (expanded) for the FLIP, BEFORE any teardown.
-  const startRects = new Map();
-  survivors.forEach((el) => startRects.set(el, el.getBoundingClientRect()));
+  const run = () => {
+    // (2) Reduce to the final compact DOM + capture the compact frame; the panel is
+    //     re-lifted to the overlay so the empty frame can glide expanded → compact.
+    const target = buildCollapseTarget(panel, compose, container);
 
-  const finish = () => {
-    panel.classList.remove("notes-time-hidden");
-    updateTitleShift(panel);
-    evaluateMoreButton(panel);
-    panel._animating = false;
+    // Force the collapsed content hidden for the whole resize — some layout paths
+    // (e.g. the compose card) reset opacity to 1. It is revealed only at settle.
+    const content = (panel._bubbleEls || []).slice();
+    if (panel._inputBubble) content.push(panel._inputBubble);
+    content.forEach((el) => { el.style.transition = "none"; el.style.opacity = "0"; });
+
+    const settle = () => {
+      settleCollapse(panel, compose, target, []);
+      // (3) Reveal the compact bubbles once the box has finished shrinking.
+      const reveal = (panel._bubbleEls || []).filter((b) => b.style.display !== "none");
+      if (panel._inputBubble) reveal.push(panel._inputBubble);
+      fadeInBubbles(reveal);
+      updateTitleShift(panel);
+      evaluateMoreButton(panel);
+      panel._animating = false;
+    };
+
+    if (reduced || !target) { settle(); return; }
+    void panel.offsetWidth;
+    animateFrame(panel, target.frame, true);
+    panel.classList.remove("notes-elevated");
+    setTimeout(settle, FRAME_MS + 30);
   };
 
-  if (reduced) {
-    leaving.forEach((el) => { el.style.opacity = "0"; });
-    const target = buildCollapseTarget(panel, compose, container);
-    settleCollapse(panel, compose, target, survivors);
-    finish();
-    return;
-  }
-
-  // Fade the leaving elements out via container-level clones (the originals are
-  // removed synchronously by the teardown inside buildCollapseTarget, so a clone is
-  // what actually fades over the collapse).
-  fadeOutClones(leaving, container);
-
-  // Build the EXACT final compact layout, capture its frame + re-lift to the overlay.
-  const target = buildCollapseTarget(panel, compose, container);
-
-  // Invert every survivor to its expanded screen position (FLIP first frame).
-  survivors.forEach((el) => {
-    const s = startRects.get(el);
-    const now = el.getBoundingClientRect();
-    el.style.transition = "none";
-    el.style.transform =
-      `translate(${Math.round(s.left - now.left)}px, ${Math.round(s.top - now.top)}px)`;
-    if (compose && el === input) el.style.width = `${Math.round(s.width)}px`;
-  });
-  void panel.offsetWidth;
-
-  // Play: the frame glides to the true compact target, survivors glide with it, and
-  // the elevated glass fades out under the same frame transition.
-  animateFrame(panel, target.frame, true);
-  panel.classList.remove("notes-elevated");
-  survivors.forEach((el) => {
-    const wTrans = (compose && el === input) ? `, width ${FRAME_MS}ms ${GLIDE}` : "";
-    el.style.transition = `transform ${FRAME_MS}ms ${GLIDE}${wTrans}`;
-    el.style.transform = "none";
-    if (compose && el === input) el.style.width = `${Math.round(target.composeW)}px`;
-  });
-
-  setTimeout(() => {
-    settleCollapse(panel, compose, target, survivors);
-    finish();
-  }, FRAME_MS + 30);
-}
-
-// Fade `els` out as absolute clones parked in the container at their current screen
-// position — used for elements a collapse teardown is about to remove synchronously,
-// so their disappearance still reads as a fade rather than a pop.
-function fadeOutClones(els, container) {
-  if (!els.length) return;
-  const cRect = container.getBoundingClientRect();
-  els.forEach((el) => {
-    const r = el.getBoundingClientRect();
-    if (!r.width) return;
-    const clone = el.cloneNode(true);
-    clone.style.position = "absolute";
-    clone.style.margin = "0";
-    clone.style.left = `${Math.round(r.left - cRect.left)}px`;
-    clone.style.top = `${Math.round(r.top - cRect.top)}px`;
-    clone.style.width = `${Math.round(r.width)}px`;
-    clone.style.height = `${Math.round(r.height)}px`;
-    clone.style.transform = "none";
-    clone.style.transition = "none";
-    clone.style.zIndex = "41";
-    clone.style.pointerEvents = "none";
-    container.appendChild(clone);
-    void clone.offsetWidth;
-    clone.style.transition = `opacity ${FADE_OUT_MS}ms ease, filter ${FADE_OUT_MS}ms ease`;
-    clone.style.opacity = "0";
-    clone.style.filter = FADE_BLUR;
-    setTimeout(() => { if (clone.parentElement) clone.parentElement.removeChild(clone); }, FADE_OUT_MS + 80);
-  });
+  // Let the fade-out complete first, so the frame only starts shrinking once every
+  // bubble is gone. Reduced motion collapses instantly.
+  if (reduced) run();
+  else setTimeout(run, FADE_OUT_MS);
 }
 
 // Reduce the panel to its FINAL compact DOM in the bar, capture the exact compact
 // frame (container coords) + cache the layout plan, then re-lift the panel to the
-// expanded overlay so the caller can FLIP-glide from expanded → compact. Leaves the
-// survivors sitting at their compact LOCAL positions inside the re-lifted panel.
+// expanded overlay so the caller can animate the (empty) frame from expanded →
+// compact. Bubbles sit — hidden — at their compact LOCAL positions in the re-lifted
+// panel, ready to be revealed once the resize lands.
 function buildCollapseTarget(panel, compose, container) {
   const ph = panel._placeholder;
   const bar = ph ? ph.parentElement : panel.closest(".home-banner-bottom");
@@ -992,14 +930,18 @@ function enterOverlay(panel) {
   void panel.offsetWidth;
 }
 
-// Stable navbar height — the LAYOUT height (offsetHeight), not a viewport rect
-// whose `.bottom` shifts as the page scrolls under a fixed navbar.
+// The FULL (expanded) navbar height — NOT the live measured height. The panel lives
+// at the TOP of the page, where the navbar is always in its expanded state; the
+// navbar SHRINKS on scroll (body.navbar-shrink → ~0.72×). If we sized the expanded
+// panel against the shrunk height, scrolling back to the top — where the navbar grows
+// again — would make the panel overlap it. Read the `--navbar-height` CSS var off
+// <html>: `.navbar-shrink` only overrides that var on <body>, so :root keeps the full
+// value regardless of scroll position. (Problem: navbar overlap on scroll-to-top.)
 function navbarHeight() {
-  const nav =
-    document.querySelector(".navbar-content") ||
-    document.querySelector(".navbar-container");
-  if (nav && nav.offsetHeight > 0) return nav.offsetHeight;
-  return 70; // $navbar-height fallback
+  const raw = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--navbar-height"),
+  );
+  return raw > 0 ? raw : 70; // $navbar-height fallback
 }
 
 // The expanded frame, expressed ENTIRELY in the banner container's coordinate

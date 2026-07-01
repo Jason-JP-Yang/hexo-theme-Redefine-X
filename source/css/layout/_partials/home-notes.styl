@@ -83,11 +83,12 @@
   font-weight 700
   letter-spacing 0.06em
   text-transform uppercase
-  color rgba(255, 255, 255, 0.92)
+  // Theme text colour (near-black in light mode, near-white in dark) instead of a
+  // hardcoded white, so the label reads correctly over a light banner. Adapts to
+  // both modes on its own — no separate .dark override needed.
+  color var(--first-text-color)
   pointer-events none
   z-index 2
-  .dark &
-    color rgba(255, 255, 255, 0.80)
 
 // ─── Avatar: bottom-left ─────────────────────────────────
 .instant-notes-avatar
@@ -228,12 +229,13 @@
   font-weight 700
   opacity 0.42
   margin-left 5px
-  // Hidden for the whole expanded session: fades out as the expand transition
-  // starts and back in only after the collapse transition fully ends (the panel
-  // carries `.notes-time-hidden` between those two moments). (Problem 1.)
+  // Faded out ONLY on the bubble currently being edited (it carries `.is-editing`);
+  // its own "5m ago" tag would otherwise linger in the edit snapshot while the card
+  // morphs. Every OTHER bubble keeps its timestamp, and expand/collapse never hide
+  // them. (Problem 1.)
   transition opacity 0.2s ease
 
-.instant-notes-panel.notes-time-hidden .instant-note-time
+.instant-note-bubble.is-editing .instant-note-time
   opacity 0
 
 // ─── Emoji badge ─────────────────────────────────────────
@@ -323,7 +325,11 @@
   font-weight 600
   letter-spacing 0.02em
   line-height 1
-  color rgba(255, 255, 255, 0.95)
+  // Theme text colour (near-black in light, near-white in dark) — not hardcoded
+  // white — so the pill's label + chevron stay legible in light mode. (Matches the
+  // panel label.) The dark override below only touches background/border, so this
+  // one declaration covers both modes.
+  color var(--first-text-color)
   background rgba(255, 255, 255, 0.16)
   backdrop-filter blur(10px) saturate(1.3)
   -webkit-backdrop-filter blur(10px) saturate(1.3)
@@ -398,16 +404,17 @@
     &::-webkit-scrollbar-track
       background transparent
 
-// Elevated frosted glass for the expanded panel. Kept in a SEPARATE class from
-// `is-expanded` and toggled by JS only AFTER the frame transition is armed (the
-// inline transition includes background + box-shadow), so the glass morphs in
-// sync with the expand/collapse resize instead of popping. (Problem 2.)
+// The expanded panel keeps the EXACT same frosted glass + shadow as the collapsed
+// panel — and as the rest of the bottom bar (arrow / social pill). Expanding must
+// change the panel's SIZE, never its depth/elevation. Same values as the base
+// .instant-notes-panel, kept as an explicit class so the frame's animated
+// background/box-shadow transition has a matching (no-op) target. (Problem 1.)
 .instant-notes-panel.notes-elevated
-  background rgba(255, 255, 255, 0.16)
-  box-shadow 0 14px 60px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.14)
+  background rgba(255, 255, 255, 0.12)
+  box-shadow 0 4px 24px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255,255,255,0.12)
   .dark &
-    background rgba(22, 22, 32, 0.6)
-    box-shadow 0 14px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)
+    background rgba(30, 30, 42, 0.35)
+    box-shadow 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.05)
 
 // Spacer is the only in-flow child of the field — it drives scrollHeight.
 .instant-notes-scroll-spacer
