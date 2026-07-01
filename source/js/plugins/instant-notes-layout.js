@@ -17,7 +17,7 @@ import {
   EMOJI_RIGHT_EXTRA, COMPACT_RATIO, WRAP_QUERY,
   BAND_GAP, EXPAND_GAP_TOP, EXPAND_GAP_SIDE,
   LIST_GAP_Y, LIST_MAX_W, STATUS_LEFT_RESERVE, EMOJI_TOP_EXTRA, EMOJI_W_PAD,
-  FRAME_MS, GLIDE, FADE_OUT_MS, MIN_PANEL_W,
+  FRAME_MS, GLIDE, FADE_OUT_MS, FADE_BLUR, MIN_PANEL_W,
   clamp, prefersReducedMotion,
 } from "./instant-notes-utils.js";
 import {
@@ -684,13 +684,18 @@ async function expandPanel(panel) {
   else setTimeout(done, FRAME_MS + 30);
 }
 
+// ─── Collapse: a true whole-panel FLIP back to the compact layout ─────────────
+// The compact layout is computed EXACTLY ONCE, in the bar, so the frame's final
+// geometry is the real flex layout (no stale-placeholder jump) and every surviving
+// bubble glides continuously from its expanded spot to its recomputed compact spot
+// (no cross-fade). The compose card glides its width too. computeLayout is never
+// run twice per collapse — its jitter is random, so a second pass would land the
+// bubbles elsewhere and re-introduce a jump. (Collapse refactor.)
 function collapsePanel(panel) {
   if (!panel._expanded || panel._animating) return;
   panel._animating = true;
   panel._expanded = false;
   setMoreButtonState(panel, false);
-  // Fade the timestamps out as the collapse transition starts; they fade back in
-  // once it fully ends (see the done callback below). (Problem 1.)
   panel.classList.add("notes-time-hidden");
   unwireCloseListeners(panel);
 
@@ -698,75 +703,252 @@ function collapsePanel(panel) {
   if (banner) banner.classList.remove("notes-expanded");
 
   const reduced = prefersReducedMotion();
-
-  // If the compact view will be empty (admin, no active notes) collapse back to the
-  // compose-only state: history simply fades out (same plain cross-fade as every
-  // other collapse) and the compose card rides the shrinking frame, staying beside
-  // the avatar. (Problem 1.3, 2.)
-  const willBeEmpty = !!panel._isAdmin &&
+  const container = panel._container || panel.closest(".home-banner-container");
+  // Compose-only compact state: admin, zero active notes → the compact view is just
+  // the input card. Otherwise the compact view is the active bubbles.
+  const compose = !!panel._isAdmin &&
     (panel._bubbleEls || []).filter((b) => b._active).length === 0;
-  if (willBeEmpty) {
-    const input = panel._inputBubble;
-    const history = expandedOrder(panel).filter((el) => el && el !== input);
-    const compactH = panel._placeholder ? panel._placeholder.getBoundingClientRect().height : 0;
-    const fH = panel._expandedRect ? panel._expandedRect.height : panel.getBoundingClientRect().height;
-    fadeOutBubbles(history);
-    collapseOverlay(panel, reduced, () => {
-      panel._adminHooks?.teardownToCompose();   // drop history, KEEP the input
-      panel.classList.remove("is-expanded");
-      layoutCompactCompose(panel);              // settle the compose-only compact state
-      panel.classList.remove("notes-time-hidden");
-      panel._animating = false;
-    });
-    if (input && !reduced) {
-      // Cancel the frame-height change so the compose card stays beside the avatar;
-      // narrow it to natural width up front so it never overflows the shrinking panel.
-      input.style.width = "";
-      input.style.transition = `transform ${FRAME_MS}ms ${GLIDE}`;
-      void input.offsetWidth;
-      input.style.transform = `translateY(${-(fH - compactH)}px)`;
-    }
+
+  const input = panel._inputBubble;
+  const order = expandedOrder(panel).filter(Boolean);
+  // Survivors glide into the compact view; everything else (the input in a normal
+  // collapse, expired notes, history in a compose collapse) fades out and is dropped.
+  const survivors = compose
+    ? (input ? [input] : [])
+    : order.filter((el) => el !== input && el._active);
+  const leaving = order.filter((el) => survivors.indexOf(el) === -1);
+
+  // Snapshot survivor screen rects (expanded) for the FLIP, BEFORE any teardown.
+  const startRects = new Map();
+  survivors.forEach((el) => startRects.set(el, el.getBoundingClientRect()));
+
+  const finish = () => {
+    panel.classList.remove("notes-time-hidden");
+    updateTitleShift(panel);
+    evaluateMoreButton(panel);
+    panel._animating = false;
+  };
+
+  if (reduced) {
+    leaving.forEach((el) => { el.style.opacity = "0"; });
+    const target = buildCollapseTarget(panel, compose, container);
+    settleCollapse(panel, compose, target, survivors);
+    finish();
     return;
   }
 
-  fadeOutBubbles(expandedOrder(panel).filter(Boolean));
+  // Fade the leaving elements out via container-level clones (the originals are
+  // removed synchronously by the teardown inside buildCollapseTarget, so a clone is
+  // what actually fades over the collapse).
+  fadeOutClones(leaving, container);
 
-  collapseOverlay(panel, reduced, () => {
-    if (panel.classList.contains("is-admin-expanded")) {
-      // Admin teardown (remove input bubble, expired notes, decorations) is
-      // handled by the injected hook to keep admin logic out of this module.
-      panel._adminHooks?.teardown();
-    } else {
-      resetFieldExpansion(panel);
-    }
-    panel.classList.remove("is-expanded");
-    ensureBubblesInField(panel);
+  // Build the EXACT final compact layout, capture its frame + re-lift to the overlay.
+  const target = buildCollapseTarget(panel, compose, container);
 
-    const plan = computeLayout(panel);
+  // Invert every survivor to its expanded screen position (FLIP first frame).
+  survivors.forEach((el) => {
+    const s = startRects.get(el);
+    const now = el.getBoundingClientRect();
+    el.style.transition = "none";
+    el.style.transform =
+      `translate(${Math.round(s.left - now.left)}px, ${Math.round(s.top - now.top)}px)`;
+    if (compose && el === input) el.style.width = `${Math.round(s.width)}px`;
+  });
+  void panel.offsetWidth;
+
+  // Play: the frame glides to the true compact target, survivors glide with it, and
+  // the elevated glass fades out under the same frame transition.
+  animateFrame(panel, target.frame, true);
+  panel.classList.remove("notes-elevated");
+  survivors.forEach((el) => {
+    const wTrans = (compose && el === input) ? `, width ${FRAME_MS}ms ${GLIDE}` : "";
+    el.style.transition = `transform ${FRAME_MS}ms ${GLIDE}${wTrans}`;
+    el.style.transform = "none";
+    if (compose && el === input) el.style.width = `${Math.round(target.composeW)}px`;
+  });
+
+  setTimeout(() => {
+    settleCollapse(panel, compose, target, survivors);
+    finish();
+  }, FRAME_MS + 30);
+}
+
+// Fade `els` out as absolute clones parked in the container at their current screen
+// position — used for elements a collapse teardown is about to remove synchronously,
+// so their disappearance still reads as a fade rather than a pop.
+function fadeOutClones(els, container) {
+  if (!els.length) return;
+  const cRect = container.getBoundingClientRect();
+  els.forEach((el) => {
+    const r = el.getBoundingClientRect();
+    if (!r.width) return;
+    const clone = el.cloneNode(true);
+    clone.style.position = "absolute";
+    clone.style.margin = "0";
+    clone.style.left = `${Math.round(r.left - cRect.left)}px`;
+    clone.style.top = `${Math.round(r.top - cRect.top)}px`;
+    clone.style.width = `${Math.round(r.width)}px`;
+    clone.style.height = `${Math.round(r.height)}px`;
+    clone.style.transform = "none";
+    clone.style.transition = "none";
+    clone.style.zIndex = "41";
+    clone.style.pointerEvents = "none";
+    container.appendChild(clone);
+    void clone.offsetWidth;
+    clone.style.transition = `opacity ${FADE_OUT_MS}ms ease, filter ${FADE_OUT_MS}ms ease`;
+    clone.style.opacity = "0";
+    clone.style.filter = FADE_BLUR;
+    setTimeout(() => { if (clone.parentElement) clone.parentElement.removeChild(clone); }, FADE_OUT_MS + 80);
+  });
+}
+
+// Reduce the panel to its FINAL compact DOM in the bar, capture the exact compact
+// frame (container coords) + cache the layout plan, then re-lift the panel to the
+// expanded overlay so the caller can FLIP-glide from expanded → compact. Leaves the
+// survivors sitting at their compact LOCAL positions inside the re-lifted panel.
+function buildCollapseTarget(panel, compose, container) {
+  const ph = panel._placeholder;
+  const bar = ph ? ph.parentElement : panel.closest(".home-banner-bottom");
+  const expandedRect = panel._expandedRect
+    ? { ...panel._expandedRect }
+    : (() => {
+        const c = container.getBoundingClientRect();
+        const p = panel.getBoundingClientRect();
+        return { left: p.left - c.left, top: p.top - c.top, width: p.width, height: p.height };
+      })();
+
+  // Put the panel back into the bar's flex slot and strip the overlay styles.
+  if (ph && ph.parentElement) {
+    ph.parentElement.insertBefore(panel, ph);
+    ph.parentElement.removeChild(ph);
+  }
+  panel._placeholder = null;
+  panel.classList.remove("is-expanded", "notes-elevated");
+  panel.style.position = "";
+  panel.style.margin = "";
+  panel.style.left = "";
+  panel.style.top = "";
+  panel.style.width = "";
+  panel.style.height = "";
+  panel.style.zIndex = "";
+  panel.style.transition = "none";
+
+  // Reduce to the compact bubble set (drops the input / expired / history).
+  if (compose) {
+    panel._adminHooks?.teardownToCompose();
+  } else if (panel.classList.contains("is-admin-expanded")) {
+    panel._adminHooks?.teardown();
+  } else {
+    resetFieldExpansion(panel);
+  }
+  ensureBubblesInField(panel);
+
+  // Compute + apply the exact compact layout ONCE, and cache the plan.
+  let plan = null;
+  let composeW = 0;
+  if (compose) {
+    layoutCompactCompose(panel);
+    if (panel._inputBubble) composeW = panel._inputBubble.getBoundingClientRect().width;
+  } else {
+    plan = computeLayout(panel);
     if (plan) {
       applyFrame(panel, plan);
       panel._plan = plan;
-      const placed = [];
       plan.placed.forEach(({ i, left, top }) => {
         const el = panel._bubbleEls[i];
         el.classList.remove("in-list");
         el.style.width = "";
         placeBubble(el, left, top);
-        placed.push(el);
       });
-      fadeInBubbles(placed);
     } else {
       panel.style.height = "";
       panel._plan = null;
     }
+  }
 
-    // Collapse transition is fully done and bubbles are re-placed + fading in —
-    // now fade the timestamps back in. (Problem 1.)
-    panel.classList.remove("notes-time-hidden");
-    updateTitleShift(panel);
-    evaluateMoreButton(panel);
-    panel._animating = false;
+  // Capture the compact frame in CONTAINER coords — the true final geometry.
+  const cRect = container.getBoundingClientRect();
+  const pRect = panel.getBoundingClientRect();
+  const frame = {
+    left: pRect.left - cRect.left,
+    top: pRect.top - cRect.top,
+    width: pRect.width,
+    height: pRect.height,
+  };
+  const isCompact = panel.classList.contains("is-compact");
+
+  // Re-lift to the expanded overlay for the FLIP. Mark the flex slot with a
+  // placeholder: sized + in-flow when the compact panel occupies a slot, or
+  // display:none (a pure DOM marker) when it is is-compact (absolute, out of flow).
+  const newPh = document.createElement("div");
+  newPh.className = "instant-notes-placeholder";
+  if (isCompact) {
+    newPh.style.display = "none";
+  } else {
+    newPh.style.width = `${pRect.width}px`;
+    newPh.style.height = `${pRect.height}px`;
+    newPh.style.flex = "0 0 auto";
+    if (isWrapMode(panel)) newPh.style.order = "-1";
+  }
+  bar.insertBefore(newPh, panel);
+  panel._placeholder = newPh;
+
+  container.appendChild(panel);
+  panel._container = container;
+  panel.classList.remove("is-compact");
+  panel.classList.add("is-expanded", "notes-elevated");
+  panel.style.position = "absolute";
+  panel.style.margin = "0";
+  panel.style.zIndex = "40";
+  panel.style.transition = "none";
+  panel.style.left = `${expandedRect.left}px`;
+  panel.style.top = `${expandedRect.top}px`;
+  panel.style.width = `${expandedRect.width}px`;
+  panel.style.height = `${expandedRect.height}px`;
+  panel._expandedRect = expandedRect;
+
+  return { frame, plan, isCompact, composeW };
+}
+
+// Land the panel in its compact slot at the end of the collapse glide. The panel is
+// already animated to `target.frame` (== the flex layout), so re-parenting to the bar
+// and re-applying the CACHED plan is jump-free (no recompute → deterministic).
+function settleCollapse(panel, compose, target, survivors) {
+  const ph = panel._placeholder;
+  if (ph && ph.parentElement) {
+    ph.parentElement.insertBefore(panel, ph);
+    ph.parentElement.removeChild(ph);
+  }
+  panel._placeholder = null;
+  panel._container = null;
+  panel._expandedRect = null;
+  panel._bannerGeom = null;
+  panel.classList.remove("is-expanded", "notes-elevated");
+  panel.style.position = "";
+  panel.style.margin = "";
+  panel.style.left = "";
+  panel.style.top = "";
+  panel.style.width = "";
+  panel.style.height = "";
+  panel.style.zIndex = "";
+  panel.style.transition = "";
+
+  (survivors || []).forEach((el) => {
+    el.style.transition = "";
+    el.style.transform = "none";
+    el.style.opacity = "1";
+    if (compose) el.style.width = "";
   });
+
+  if (compose) {
+    layoutCompactCompose(panel);        // deterministic (no jitter) — re-settles the card
+  } else if (target && target.plan) {
+    applyFrame(panel, target.plan);     // re-applies is-compact / width / left / height
+    panel._plan = target.plan;
+  } else {
+    panel.style.height = "";
+    panel._plan = null;
+  }
 }
 
 // ─── Banner-anchored overlay (flex slot ↔ absolute overlay in the banner) ─────
@@ -891,65 +1073,6 @@ export function animateFrame(panel, t, animate, dur = FRAME_MS, delay = 0) {
   panel.style.width = `${Math.round(t.width)}px`;
   panel.style.height = `${Math.round(t.height)}px`;
   panel._expandedRect = { left: t.left, top: t.top, width: t.width, height: t.height };
-}
-
-function collapseOverlay(panel, reduced, done) {
-  const ph = panel._placeholder;
-  const container = panel._container;
-  const cRect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
-  const phRect = ph ? ph.getBoundingClientRect() : panel.getBoundingClientRect();
-  const target = {
-    left: phRect.left - cRect.left,
-    top: phRect.top - cRect.top,
-    width: phRect.width,
-    height: phRect.height,
-  };
-  panel.style.transition = reduced
-    ? "none"
-    : `left ${FRAME_MS}ms ${GLIDE}, top ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}, height ${FRAME_MS}ms ${GLIDE}, background ${FRAME_MS}ms ${GLIDE}, box-shadow ${FRAME_MS}ms ${GLIDE}`;
-  // Drop the elevated glass under the same transition so it fades back to the
-  // compact panel style while the frame shrinks. (Problem 2.)
-  panel.classList.remove("notes-elevated");
-  panel.style.left = `${target.left}px`;
-  panel.style.top = `${target.top}px`;
-  panel.style.width = `${target.width}px`;
-  panel.style.height = `${target.height}px`;
-
-  const finish = () => {
-    panel.classList.remove("notes-elevated");
-    // Return the panel to its flex slot in the bottom bar, then drop the placeholder.
-    if (ph && ph.parentElement) {
-      ph.parentElement.insertBefore(panel, ph);
-      ph.parentElement.removeChild(ph);
-    }
-    panel.style.transition = "";
-    panel.style.position = "";
-    panel.style.margin = "";
-    panel.style.left = "";
-    panel.style.top = "";
-    panel.style.width = "";
-    panel.style.height = "";
-    panel.style.zIndex = "";
-    panel._placeholder = null;
-    panel._container = null;
-    panel._expandedRect = null;
-    panel._bannerGeom = null;
-    done && done();
-  };
-
-  if (reduced) { finish(); return; }
-  let called = false;
-  const onEnd = (e) => {
-    if (e.target !== panel || e.propertyName !== "height") return;
-    if (called) return;
-    called = true;
-    panel.removeEventListener("transitionend", onEnd);
-    finish();
-  };
-  panel.addEventListener("transitionend", onEnd);
-  setTimeout(() => {
-    if (!called) { called = true; panel.removeEventListener("transitionend", onEnd); finish(); }
-  }, FRAME_MS + 120);
 }
 
 // ════════════════════════════════════════════════════════════
