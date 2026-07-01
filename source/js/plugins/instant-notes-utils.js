@@ -50,6 +50,7 @@ export const TAIL = 12;
 export const AVATAR_OVERLAP = 10;
 export const EMOJI_TOP_MIN = 18;
 export const MIN_READABLE_W = 96;
+export const MIN_PANEL_W = 300;        // floor for the panel width, compact + normal + expanded
 export const MAX_BUBBLE_CAP = 280;
 export const MAX_BUBBLE_FRAC = 0.46;
 export const MAX_LANES = 4;

@@ -19,9 +19,14 @@ import {
   buildDOM, wireResize, revealNotes,
   ensureMoreButton, evaluateMoreButton,
   relayoutExpanded, relayoutExpandedReflow, resetFieldExpansion,
+  repositionExpandedListInstant, expandedOrder,
+  layoutCompactCompose, rebuildCompactWithFade,
 } from "./instant-notes-layout.js";
 import { createBubble, isNoteActive, clearWrap } from "./instant-notes-bubble.js";
-import { GLIDE, PAD, EMOJI_TOP_EXTRA, clamp, prefersReducedMotion } from "./instant-notes-utils.js";
+import {
+  GLIDE, PAD, EMOJI_TOP_EXTRA, FRAME_MS, FADE_OUT_MS, FADE_IN_MS, FADE_BLUR,
+  clamp, prefersReducedMotion,
+} from "./instant-notes-utils.js";
 
 // Cache fetched public notes briefly so rapid swup navigations skip the worker.
 let _notesCache = null;
@@ -33,9 +38,34 @@ function autoResizeTextarea(textarea) {
   textarea.style.height = textarea.scrollHeight + "px";
 }
 
+// Block manual line breaks: the backend stores/renders notes as single-line text,
+// so the only wrapping that may ever happen is passive (width-constrained) reflow —
+// never a user-inserted newline. Enter is swallowed outright; a paste containing
+// line breaks is sanitised (newlines → spaces) instead of inserted verbatim. (Problem 1.)
+function wireNoNewlines(textarea) {
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") e.preventDefault();
+  });
+  textarea.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const raw = (e.clipboardData || window.clipboardData).getData("text");
+    const clean = raw.replace(/[\r\n]+/g, " ");
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const max = textarea.maxLength > 0 ? textarea.maxLength : Infinity;
+    let next = textarea.value.slice(0, start) + clean + textarea.value.slice(end);
+    if (next.length > max) next = next.slice(0, max);
+    textarea.value = next;
+    const pos = Math.min(start + clean.length, max);
+    textarea.setSelectionRange(pos, pos);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 // Wire the textarea to resize itself on input and smoothly reflow neighbours.
 // el is the bubble wrapper that contains the textarea (used for _heightAnimating guard).
 function wireTextareaAutoResize(panel, textarea, el) {
+  wireNoNewlines(textarea);
   textarea.addEventListener("input", () => {
     autoResizeTextarea(textarea);
     if (!panel || !panel._expanded || el._heightAnimating) return;
@@ -67,10 +97,11 @@ export default function initInstantNotes() {
   // Inject admin function references so the layout module can call them during
   // expand/collapse without importing this module (which would be circular).
   panel._adminHooks = {
-    reconcile:   (notes) => reconcileAdminNotes(panel, notes),
-    ensureInput: ()      => ensureInputBubble(panel),
-    teardown:    ()      => teardownAdminExpanded(panel),
-    fetchAll:    ()      => adminFetch(panel, "GET", "/api/admin/notes"),
+    reconcile:        (notes) => reconcileAdminNotes(panel, notes),
+    ensureInput:      ()      => ensureInputBubble(panel),
+    teardown:         ()      => teardownAdminExpanded(panel),
+    teardownToCompose:()      => teardownToCompose(panel),
+    fetchAll:         ()      => adminFetch(panel, "GET", "/api/admin/notes"),
   };
 
   wireResize(panel);
@@ -92,13 +123,14 @@ export default function initInstantNotes() {
         setTimeout(() => revealNotes(panel), 500);
       });
     }
-    // Resolve admin status (controls the More button + admin tools). For an
-    // admin with no notes yet, still reveal the panel so they can post.
+    // Resolve admin status (controls the More button + admin tools). An admin with
+    // no active notes sees the compose card sitting on the avatar (not an empty
+    // panel) so they can post straight away. (Problem 1.)
     refreshAdminState(panel).then(() => {
       if (panel._isAdmin && list.length === 0) {
-        panel.classList.add("notes-visible");
-        ensureMoreButton(panel);
-        evaluateMoreButton(panel);
+        waitForPreloader().then(() =>
+          setTimeout(() => layoutCompactCompose(panel, { reveal: true }), 400),
+        );
       }
     });
   });
@@ -305,8 +337,19 @@ async function submitNewNote(panel, wrap) {
     wrap.querySelector(".ni-emoji").value = "";
     post.textContent = prev;
     const all = await adminFetch(panel, "GET", "/api/admin/notes");
-    reconcileAdminNotes(panel, Array.isArray(all) ? all : []);
-    relayoutExpanded(panel, true);
+    const list = Array.isArray(all) ? all : [];
+    if (panel._composeCompact && !panel._expanded) {
+      // Compose-only compact state: fade the compose card out, then fade the new
+      // bubble in. No global reflow. (Problem 1.1.)
+      animateComposePost(panel, list);
+    } else if (panel._expanded && !prefersReducedMotion()) {
+      // Seamless insert: the new bubble pops up from the bottom of the list while
+      // the existing bubbles glide up — no global cross-fade reflow. (Problem 2.1.)
+      animatePostNote(panel, list);
+    } else {
+      reconcileAdminNotes(panel, list);
+      relayoutExpanded(panel, true);
+    }
     _notesCache = null;
   } catch (e) {
     console.warn("[InstantNotes] post failed:", e);
@@ -954,13 +997,143 @@ async function deleteNote(panel, el) {
   try {
     await adminFetch(panel, "DELETE", `/api/admin/notes/${id}`);
     const all = await adminFetch(panel, "GET", "/api/admin/notes");
-    reconcileAdminNotes(panel, Array.isArray(all) ? all : []);
-    relayoutExpanded(panel, true);
+    const list = Array.isArray(all) ? all : [];
+    // Seamless removal: the target fades out, then the bubbles above it glide
+    // down to fill the gap — no global cross-fade reflow. (Problem 2.2.)
+    if (panel._expanded && !prefersReducedMotion()) animateDeleteNote(panel, el, list);
+    else { reconcileAdminNotes(panel, list); relayoutExpanded(panel, true); }
     _notesCache = null;
   } catch (e) {
     console.warn("[InstantNotes] delete failed:", e);
     el.style.opacity = "1";
   }
+}
+
+// ── Seamless post / delete animations (no global cross-fade) ───────────────────
+// Shared FLIP using the SAME glide formula (GLIDE curve, FRAME_MS) the expand and
+// inline-edit animations use, so every bubble moves identically:
+//   1. capture each surviving bubble's SCREEN rect (getBoundingClientRect),
+//   2. mutate + re-flow the list INSTANTLY inside the unchanged panel frame
+//      (repositionExpandedListInstant — keeping the frame fixed means no
+//      coordinate-origin jump that would break a top/left-based FLIP),
+//   3. invert (translate back to the old screen spot) and play (animate to none).
+
+// Snapshot every expanded bubble's current viewport rect, keyed by element.
+function captureBubbleRects(panel) {
+  const rects = new Map();
+  expandedOrder(panel).forEach((el) => { if (el) rects.set(el, el.getBoundingClientRect()); });
+  return rects;
+}
+
+// Glide every still-present bubble from its pre-mutation screen rect (`before`) to
+// where it now sits, on the shared GLIDE curve. Batched: one reflow commits all
+// inverted starts, then all play together so they stay in perfect lockstep.
+function flipBubbles(panel, before) {
+  const moved = [];
+  expandedOrder(panel).forEach((el) => {
+    if (!el) return;
+    const first = before.get(el);
+    if (!first) return; // freshly added bubble — animated separately by popInBubble
+    const last = el.getBoundingClientRect();
+    const dx = first.left - last.left;
+    const dy = first.top - last.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    el.style.transition = "none";
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    moved.push(el);
+  });
+  if (!moved.length) return;
+  void panel.offsetWidth; // single reflow commits every inverted start position
+  moved.forEach((el) => {
+    el.style.transition = `transform ${FRAME_MS}ms ${GLIDE}`;
+    el.style.transform = "none";
+  });
+}
+
+// Pop a freshly posted bubble up into its slot from just below, fading + scaling in
+// on the same curve/timings as the surrounding glide. (Problem 2.1.)
+function popInBubble(el) {
+  el.style.transition = "none";
+  el.style.transform = "translateY(18px) scale(0.92)";
+  el.style.opacity = "0";
+  el.style.filter = FADE_BLUR;
+  void el.offsetWidth;
+  el.style.transition =
+    `transform ${FRAME_MS}ms ${GLIDE}, opacity ${FADE_IN_MS}ms ease, filter ${FADE_IN_MS}ms ease`;
+  el.style.transform = "none";
+  el.style.opacity = "1";
+  el.style.filter = "none";
+}
+
+// New note: existing bubbles glide up keeping constant gaps, the new one pops in at
+// the bottom of the older stack. (Problem 2.1.)
+function animatePostNote(panel, notes) {
+  const newId = notes.length ? String(notes[0].id) : null;
+  const before = captureBubbleRects(panel);
+  reconcileAdminNotes(panel, notes);
+  const field = repositionExpandedListInstant(panel);
+  // Reveal the newest note at the bottom before measuring final spots, so the glide
+  // already accounts for any scroll-to-bottom.
+  if (field) field.scrollTop = field.scrollHeight;
+  flipBubbles(panel, before);
+  const newEl = newId && (panel._bubbleEls || []).find((b) => b.dataset.noteId === newId);
+  if (newEl) popInBubble(newEl);
+}
+
+// Compose-only compact post: the compose card fades out, then the new bubble fades
+// in (compact layout rebuilt for the now-active notes) — a plain cross-fade, same as
+// every other expand/reveal. No reflow. (Problem 1.1, 2.)
+function animateComposePost(panel, notes) {
+  const input = panel._inputBubble;
+  const active = (notes || []).filter(isNoteActive).slice(0, 5);
+  panel._inputBubble = null;
+  panel._composeCompact = false;
+  const finish = () => {
+    if (input && input.parentElement) input.parentElement.removeChild(input);
+    if (active.length === 0) { layoutCompactCompose(panel, { reveal: true }); return; }
+    rebuildCompactWithFade(panel, active);
+  };
+  if (input && !prefersReducedMotion()) {
+    input.style.transition =
+      `opacity ${FADE_OUT_MS}ms ease, transform ${FADE_OUT_MS}ms ease, filter ${FADE_OUT_MS}ms ease`;
+    input.style.opacity = "0";
+    input.style.transform = "scale(0.9)";
+    input.style.filter = FADE_BLUR;
+    setTimeout(finish, FADE_OUT_MS);
+  } else {
+    finish();
+  }
+}
+
+// Delete: the target fades out first, then it is removed and the bubbles above it
+// glide down to fill the freed space. (Problem 2.2.)
+function animateDeleteNote(panel, el, notes) {
+  el.style.transition =
+    `opacity ${FADE_OUT_MS}ms ease, filter ${FADE_OUT_MS}ms ease, transform ${FADE_OUT_MS}ms ease`;
+  el.style.opacity = "0";
+  el.style.filter = FADE_BLUR;
+  el.style.transform = "scale(0.9)";
+  setTimeout(() => {
+    const before = captureBubbleRects(panel);
+    reconcileAdminNotes(panel, notes);
+    repositionExpandedListInstant(panel);
+    flipBubbles(panel, before);
+  }, FADE_OUT_MS);
+}
+
+// Collapse from expanded back to the compose-only compact state: drop every
+// history bubble but KEEP the persistent input card (it stays as the compose card
+// on the avatar). layoutCompactCompose then positions it. (Problem 1.3.)
+function teardownToCompose(panel) {
+  panel.classList.remove("is-admin-expanded");
+  panel._editing = [];
+  (panel._bubbleEls || []).forEach((el) => {
+    if (el._editing) cancelInlineEdit(null, el);
+    if (el.parentElement) el.parentElement.removeChild(el);
+  });
+  panel._bubbleEls = [];
+  panel._hasEmoji = [];
+  panel._notes = [];
 }
 
 // Remove admin-only artefacts when collapsing back to the compact view.

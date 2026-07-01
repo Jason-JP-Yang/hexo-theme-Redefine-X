@@ -17,7 +17,7 @@ import {
   EMOJI_RIGHT_EXTRA, COMPACT_RATIO, WRAP_QUERY,
   BAND_GAP, EXPAND_GAP_TOP, EXPAND_GAP_SIDE,
   LIST_GAP_Y, LIST_MAX_W, STATUS_LEFT_RESERVE, EMOJI_TOP_EXTRA, EMOJI_W_PAD,
-  EXPAND_FILL_RATIO, FRAME_MS, GLIDE, FADE_OUT_MS,
+  FRAME_MS, GLIDE, FADE_OUT_MS, MIN_PANEL_W,
   clamp, prefersReducedMotion,
 } from "./instant-notes-utils.js";
 import {
@@ -233,7 +233,10 @@ export function computeLayout(panel) {
   placed.forEach(({ i, left }) => {
     usedRight = Math.max(usedRight, left + sizes[i].w + (hasEmojiArr[i] ? EMOJI_RIGHT_EXTRA : 0));
   });
-  const compactWidth = Math.ceil(usedRight + PAD);
+  // Floor the compact width at MIN_PANEL_W so the panel keeps a consistent minimum
+  // footprint (matched by the normal + expanded slots); never exceed the available
+  // strip width W on very narrow viewports. (Problem 3.)
+  const compactWidth = clamp(Math.ceil(usedRight + PAD), Math.min(MIN_PANEL_W, W), W);
   // No compact mode while wrapped (mobile): the panel stays a full-width row.
   const isCompact = !isWrapMode(panel) && compactWidth <= COMPACT_RATIO * W;
 
@@ -341,16 +344,114 @@ export function revealNotes(panel) {
   }, PANEL_DELAY + 400);
 }
 
+// Admin + no active notes → show the compose card where the newest bubble would sit
+// (just above the avatar) instead of an empty panel. It is the SAME input bubble
+// used in expand, positioned at the pinned slot's viewport location, so More keeps
+// it visually in place while history fades in above it. (Problem 1.)
+export function layoutCompactCompose(panel, opts = {}) {
+  const field = panel.querySelector("#instant-notes-field");
+  const avatarEl = panel.querySelector("#instant-notes-avatar");
+  if (!field || !panel._adminHooks) return;
+  const input = panel._adminHooks.ensureInput();
+  if (!input) return;
+  if (!panel._bubbleEls) panel._bubbleEls = [];
+
+  panel._composeCompact = true;
+  panel.classList.add("notes-visible");
+  panel.classList.remove("is-expanded", "is-admin-expanded", "notes-elevated");
+  if (avatarEl) avatarEl.classList.add("avatar-visible");
+
+  // Measure at the full strip width (drop any compact override + scroll state).
+  panel.classList.remove("is-compact");
+  panel.style.width = "";
+  panel.style.left = "";
+  panel.style.marginLeft = "";
+  resetFieldExpansion(panel);
+
+  // Make the compose card a measurable field child at its natural size.
+  if (input.parentElement !== field) field.appendChild(input);
+  input.classList.remove("is-pinned");
+  input.style.zIndex = "16";
+  input.style.position = "absolute";
+  input.style.display = "";
+  input.style.opacity = "1";
+  input.style.filter = "none";
+  input.style.transition = "none";
+  input.style.transform = "none";
+  input.style.width = "";
+
+  void field.offsetWidth;
+  const cardRect = input.getBoundingClientRect();
+  const composeH = cardRect.height;
+  let composeW = cardRect.width;
+
+  const panelRect = panel.getBoundingClientRect();
+  const W = panelRect.width;
+  let avW = 64, avH = 64, avL = 14, avBottomGap = 12;
+  if (avatarEl) {
+    const ar = avatarEl.getBoundingClientRect();
+    avW = ar.width; avH = ar.height;
+    avL = ar.left - panelRect.left;
+    avBottomGap = panelRect.bottom - ar.bottom;
+  }
+  const avR = avL + avW;
+  const bandTop = LABEL_PAD + PAD;
+
+  const composeLeft = clamp(
+    Math.round(avR - AVATAR_OVERLAP), PAD, Math.max(PAD, W - PAD - MIN_READABLE_W),
+  );
+  const maxW = Math.max(MIN_READABLE_W, W - composeLeft - PAD);
+  if (composeW > maxW) { input.style.width = `${Math.round(maxW)}px`; composeW = maxW; }
+
+  // Frame: compose card stacked just above the avatar (newest-bubble slot).
+  const H = Math.round(bandTop + composeH + 2 + avBottomGap + avH);
+  const composeTop = bandTop;
+  const composeRight = composeLeft + composeW;
+
+  const compactWidth = clamp(Math.ceil(composeRight + PAD), Math.min(MIN_PANEL_W, W), W);
+  const isCompact = !isWrapMode(panel) && compactWidth <= COMPACT_RATIO * W;
+  applyFrame(panel, { W, H, sizes: [], placed: [], dropped: [], isCompact, compactWidth });
+  panel._plan = null;
+
+  input.style.left = `${composeLeft}px`;
+  input.style.top = `${composeTop}px`;
+
+  ensureMoreButton(panel);
+  evaluateMoreButton(panel);
+  updateTitleShift(panel);
+
+  if (opts.reveal) fadeInBubbles([input]);
+}
+
+// Rebuild the COMPACT layout for a fresh set of active notes and fade them in (used
+// right after a compose-mode post, once the compose card has faded out). Expand/
+// collapse/reveal all share the SAME simple cross-fade — no pop/cascade animation. (P1.1, P2.)
+export function rebuildCompactWithFade(panel, notes) {
+  panel._composeCompact = false;
+  buildDOM(notes, panel);
+  fadeInBubbles((panel._bubbleEls || []).filter((b) => b.style.display !== "none"));
+  ensureMoreButton(panel);
+  evaluateMoreButton(panel);
+  updateTitleShift(panel);
+}
+
 // ─── Debounced resize ─────────────────────────────────────────────────────────
 export function wireResize(panel) {
   if (panel.dataset.resizeWired) return;
   panel.dataset.resizeWired = "1";
+  panel._lastWinW = window.innerWidth;
   let t = null;
   const handler = () => {
     clearTimeout(t);
     t = setTimeout(() => {
       if (panel._animating) return;
+      // Reflow ONLY when the window WIDTH changes. Height-only resizes leave every
+      // bubble exactly where it is (no scroll/position disruption). (Problem 2.)
+      const w = window.innerWidth;
+      if (w === panel._lastWinW) return;
+      panel._lastWinW = w;
       if (panel._expanded) relayoutExpanded(panel, false);
+      else if (panel._composeCompact) layoutCompactCompose(panel);
       else relayoutCompact(panel);
     }, 150);
   };
@@ -438,11 +539,27 @@ export function evaluateMoreButton(panel) {
 function setMoreButtonState(panel, expanded) {
   const btn = panel._moreBtn;
   if (!btn) return;
+  btn.classList.remove("is-loading");
+  btn.removeAttribute("aria-busy");
   btn.classList.toggle("is-expanded", expanded);
   btn.setAttribute("aria-expanded", expanded ? "true" : "false");
   btn.innerHTML = expanded
     ? '<i class="fa-solid fa-angle-down"></i><span class="more-label">Less</span>'
     : '<i class="fa-solid fa-angle-up"></i><span class="more-label">More</span>';
+}
+
+// Transitional state shown the instant More is pressed: the panel keeps the
+// compact view while the (admin) history loads. JS swaps to "Less" only right
+// before the expand transition begins, so the label never claims "Less" while the
+// panel is still visually compact. (Problem 3.)
+function setMoreButtonLoading(panel) {
+  const btn = panel._moreBtn;
+  if (!btn) return;
+  btn.classList.add("is-loading");
+  btn.setAttribute("aria-busy", "true");
+  btn.setAttribute("aria-expanded", "true");
+  btn.innerHTML =
+    '<i class="fa-solid fa-circle-notch fa-spin"></i><span class="more-label">Loading…</span>';
 }
 
 // ════════════════════════════════════════════════════════════
@@ -458,7 +575,11 @@ async function expandPanel(panel) {
   if (panel._expanded || panel._animating) return;
   panel._animating = true;
   panel._expanded = true;
-  setMoreButtonState(panel, true);
+  // Button shows "Loading…" (not "Less") and timestamps fade out the moment the
+  // expand starts; the timestamps stay hidden until the collapse transition fully
+  // ends. (Problems 1 + 3.)
+  setMoreButtonLoading(panel);
+  panel.classList.add("notes-time-hidden");
 
   // Admin: pull the full history (active + expired) then add the input bubble.
   // Admin functions are injected via panel._adminHooks at init time to avoid a
@@ -476,15 +597,75 @@ async function expandPanel(panel) {
 
   const banner = document.querySelector(".home-banner-container");
   if (banner) banner.classList.add("notes-expanded");
-  fadeOutBubbles(panel._bubbleEls.filter((b) => b.style.display !== "none"));
+  const composeMode = !!panel._composeCompact;
+  // Capture the compose card's COMPACT width NOW — before enterOverlay/measure
+  // overwrite it with the expanded width. It is the START of the card's width
+  // transition; captured any later it would already equal the end (→ no glide). (Problem 2.)
+  const composeStartW = composeMode && panel._inputBubble
+    ? panel._inputBubble.getBoundingClientRect().width : 0;
+  // Active bubbles cross-fade out (reflow is allowed here). In compose mode there
+  // are none — the compose card stays put and history fades in instead. (Problem 1.)
+  if (!composeMode) {
+    fadeOutBubbles((panel._bubbleEls || []).filter((b) => b.style.display !== "none"));
+  }
 
-  enterFixed(panel);
+  enterOverlay(panel);
 
-  const slot = normalSlot(panel);
-  const measured = measureExpandedList(panel, slot.width);
-  const finalH = adaptiveExpandHeight(panel, measured);
-  const bottom = (panel._placeholder || panel).getBoundingClientRect().bottom;
-  animateFrame(panel, { left: slot.left, top: bottom - finalH, width: slot.width, height: finalH }, true);
+  const geom = bannerExpandGeom(panel);
+  const measured = measureExpandedList(panel, geom.width);
+  const finalH = expandedHeight(measured, geom.maxHeight);
+  const frame = { left: geom.left, top: geom.bottomInContainer - finalH, width: geom.width, height: finalH };
+  // Loading is done — swap "Loading…" → "Less" exactly as the expand transition is armed. (Problem 3.)
+  setMoreButtonState(panel, true);
+
+  if (composeMode) {
+    // ── Compose expand: the compose card rides with the (stationary) avatar via an
+    // analytic transform (no reflow); history simply fades in once the frame has
+    // grown — the SAME plain cross-fade every expand path uses. (Problem 1.2, 2.)
+    panel._composeCompact = false;
+    const input = panel._inputBubble;
+    const compactH = panel._placeholder
+      ? panel._placeholder.getBoundingClientRect().height : finalH;
+    const r0w = composeStartW; // the card's compact width, captured before measurement
+
+    positionExpandedList(panel, measured, finalH); // panel still compact-height here
+    const history = measured.order.filter((el) => el !== input);
+    history.forEach((el) => { el.style.transition = "none"; el.style.opacity = "0"; });
+
+    if (input && !prefersReducedMotion()) {
+      const w1 = input.offsetWidth; // list width set by positionExpandedList
+      // Bottom edge is fixed and the avatar doesn't move vertically as the panel
+      // grows upward; a transform that exactly cancels the height change keeps the
+      // top-anchored compose card pinned beside the avatar. (Problem 1.2.)
+      input.style.transition = "none";
+      input.style.transform = `translateY(${-(finalH - compactH)}px)`;
+      input.style.width = `${r0w}px`;
+      void input.offsetWidth;
+      animateFrame(panel, frame, true);
+      panel.classList.add("notes-elevated");
+      input.style.transition = `transform ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}`;
+      input.style.transform = "none";
+      input.style.width = `${w1}px`;
+    } else {
+      animateFrame(panel, frame, true);
+      panel.classList.add("notes-elevated");
+      if (input) input.style.opacity = "1";
+    }
+    wireCloseListeners(panel);
+
+    const done = () => {
+      scrollListToBottom(panel);
+      // Simple fade-in — no pop/cascade — same as every other expand path. (Problem 2.)
+      fadeInBubbles(history);
+      panel.classList.remove("notes-time-hidden");
+      panel._animating = false;
+    };
+    if (prefersReducedMotion()) done();
+    else setTimeout(done, FRAME_MS + 30);
+    return;
+  }
+
+  animateFrame(panel, frame, true);
   // Arm the elevated glass AFTER the frame transition is set so background +
   // box-shadow animate together with the resize. (Problem 2.)
   panel.classList.add("notes-elevated");
@@ -494,20 +675,13 @@ async function expandPanel(panel) {
   const done = () => {
     fadeInBubbles(measured.order);
     scrollListToBottom(panel);
+    // Expand transition finished — fade the timestamps back in (they are visible in
+    // the settled expanded state; only the transition itself hides them). (Problem 1.)
+    panel.classList.remove("notes-time-hidden");
     panel._animating = false;
   };
   if (prefersReducedMotion()) done();
   else setTimeout(done, FRAME_MS + 30);
-}
-
-// maxAvail = normal-bottom → just below the navbar. Use the content's natural
-// height, but fill to max once it needs ≥ 80% of the available space.
-function adaptiveExpandHeight(panel, measured) {
-  const bottom = (panel._placeholder || panel).getBoundingClientRect().bottom;
-  const maxAvail = Math.max(160, bottom - (getNavbarBottom() + EXPAND_GAP_TOP));
-  const contentNeeded = measured.topPad + measured.stackH + measured.avatarReserve;
-  let h = contentNeeded >= EXPAND_FILL_RATIO * maxAvail ? maxAvail : contentNeeded;
-  return clamp(h, Math.min(maxAvail, 140), maxAvail);
 }
 
 function collapsePanel(panel) {
@@ -515,6 +689,9 @@ function collapsePanel(panel) {
   panel._animating = true;
   panel._expanded = false;
   setMoreButtonState(panel, false);
+  // Fade the timestamps out as the collapse transition starts; they fade back in
+  // once it fully ends (see the done callback below). (Problem 1.)
+  panel.classList.add("notes-time-hidden");
   unwireCloseListeners(panel);
 
   const banner = document.querySelector(".home-banner-container");
@@ -522,9 +699,39 @@ function collapsePanel(panel) {
 
   const reduced = prefersReducedMotion();
 
+  // If the compact view will be empty (admin, no active notes) collapse back to the
+  // compose-only state: history simply fades out (same plain cross-fade as every
+  // other collapse) and the compose card rides the shrinking frame, staying beside
+  // the avatar. (Problem 1.3, 2.)
+  const willBeEmpty = !!panel._isAdmin &&
+    (panel._bubbleEls || []).filter((b) => b._active).length === 0;
+  if (willBeEmpty) {
+    const input = panel._inputBubble;
+    const history = expandedOrder(panel).filter((el) => el && el !== input);
+    const compactH = panel._placeholder ? panel._placeholder.getBoundingClientRect().height : 0;
+    const fH = panel._expandedRect ? panel._expandedRect.height : panel.getBoundingClientRect().height;
+    fadeOutBubbles(history);
+    collapseOverlay(panel, reduced, () => {
+      panel._adminHooks?.teardownToCompose();   // drop history, KEEP the input
+      panel.classList.remove("is-expanded");
+      layoutCompactCompose(panel);              // settle the compose-only compact state
+      panel.classList.remove("notes-time-hidden");
+      panel._animating = false;
+    });
+    if (input && !reduced) {
+      // Cancel the frame-height change so the compose card stays beside the avatar;
+      // narrow it to natural width up front so it never overflows the shrinking panel.
+      input.style.width = "";
+      input.style.transition = `transform ${FRAME_MS}ms ${GLIDE}`;
+      void input.offsetWidth;
+      input.style.transform = `translateY(${-(fH - compactH)}px)`;
+    }
+    return;
+  }
+
   fadeOutBubbles(expandedOrder(panel).filter(Boolean));
 
-  collapseFixed(panel, reduced, () => {
+  collapseOverlay(panel, reduced, () => {
     if (panel.classList.contains("is-admin-expanded")) {
       // Admin teardown (remove input bubble, expired notes, decorations) is
       // handled by the injected hook to keep admin logic out of this module.
@@ -553,15 +760,30 @@ function collapsePanel(panel) {
       panel._plan = null;
     }
 
+    // Collapse transition is fully done and bubbles are re-placed + fading in —
+    // now fade the timestamps back in. (Problem 1.)
+    panel.classList.remove("notes-time-hidden");
     updateTitleShift(panel);
     evaluateMoreButton(panel);
     panel._animating = false;
   });
 }
 
-// ─── Fixed-positioning FLIP (flex/absolute ↔ fixed overlay) ──────────────────
-function enterFixed(panel) {
+// ─── Banner-anchored overlay (flex slot ↔ absolute overlay in the banner) ─────
+// The expanded panel is an ABSOLUTE child of `.home-banner-container` — a stable
+// box (min-height:100svh) that scrolls WITH the page. All geometry is derived from
+// that container's box and from scroll-invariant rect DIFFERENCES, never from live
+// viewport quantities (window.innerHeight, the navbar's viewport rect, …). So
+// scrolling, the mobile URL bar, the on-screen keyboard, or devtools resizing the
+// viewport never move or reshape the panel: its size is a pure function of the
+// banner box and its own content. (Banner-anchored expand rewrite.)
+function enterOverlay(panel) {
   const rect = panel.getBoundingClientRect();
+  const container = panel.closest(".home-banner-container");
+  const cRect = container.getBoundingClientRect();
+
+  // Placeholder holds the panel's flex slot in the bottom bar so the arrow/social
+  // don't reflow while the panel is lifted out.
   const ph = document.createElement("div");
   ph.className = "instant-notes-placeholder";
   ph.style.width = `${rect.width}px`;
@@ -570,66 +792,92 @@ function enterFixed(panel) {
   if (isWrapMode(panel)) ph.style.order = "-1";
   panel.parentElement.insertBefore(ph, panel);
   panel._placeholder = ph;
+  panel._container = container;
 
   panel.classList.remove("is-compact");
   panel.classList.add("is-expanded");
-  panel.style.position = "fixed";
+  // Lift the panel out of the bar's flex row into the banner container, positioned
+  // absolutely in the CONTAINER's own coordinate space (container is position:relative).
+  container.appendChild(panel);
+  panel.style.position = "absolute";
   panel.style.margin = "0";
   panel.style.transition = "none";
   panel.style.zIndex = "40";
-
-  // A banner ancestor with `transform: translateY(0)` is the fixed containing
-  // block, not the viewport — probe its viewport origin and offset every
-  // placement by it so the panel renders at the correct position.
-  panel.style.left = "0px";
-  panel.style.top = "0px";
-  const cb = panel.getBoundingClientRect();
-  panel._cbOffset = { left: cb.left, top: cb.top };
-
-  panel.style.left = `${rect.left - cb.left}px`;
-  panel.style.top = `${rect.top - cb.top}px`;
+  panel.style.left = `${rect.left - cRect.left}px`;
+  panel.style.top = `${rect.top - cRect.top}px`;
   panel.style.width = `${rect.width}px`;
   panel.style.height = `${rect.height}px`;
   void panel.offsetWidth;
 }
 
-// The panel's NORMAL horizontal slot (viewport coords) — never full-bleed.
-//   Desktop: middle slot between scroll-arrow and social pill.
-//   Mobile/wrap: bar's CONTENT box (inset by padding) so bar padding stays as margin.
-function normalSlot(panel) {
-  const bar = panel.closest(".home-banner-bottom");
-  if (!bar) {
-    const r = (panel._placeholder || panel).getBoundingClientRect();
-    return { left: r.left, width: r.width };
-  }
-  const barRect = bar.getBoundingClientRect();
-  const cs = getComputedStyle(bar);
-  let left = barRect.left + (parseFloat(cs.paddingLeft) || 0);
-  let right = barRect.right - (parseFloat(cs.paddingRight) || 0);
-  if (!isWrapMode(panel)) {
+// Stable navbar height — the LAYOUT height (offsetHeight), not a viewport rect
+// whose `.bottom` shifts as the page scrolls under a fixed navbar.
+function navbarHeight() {
+  const nav =
+    document.querySelector(".navbar-content") ||
+    document.querySelector(".navbar-container");
+  if (nav && nav.offsetHeight > 0) return nav.offsetHeight;
+  return 70; // $navbar-height fallback
+}
+
+// The expanded frame, expressed ENTIRELY in the banner container's coordinate
+// space and from scroll-invariant rect DIFFERENCES:
+//   • left / width      — the band between the scroll-arrow and the social pill
+//                         (or, in wrap/mobile mode, the bottom bar's content box).
+//   • bottomInContainer — the collapsed panel's bottom edge; the panel grows UP.
+//   • maxHeight         — from that bottom up to just below the (fixed) navbar.
+// Cached on the panel as _bannerGeom so every later reflow reuses the identical
+// band + bottom anchor + cap, and only the content-driven height ever moves. (Problem 3.)
+function bannerExpandGeom(panel) {
+  const container = panel._container || panel.closest(".home-banner-container");
+  const cRect = container.getBoundingClientRect();
+  const ph = panel._placeholder;
+  const phRect = (ph || panel).getBoundingClientRect();
+  const bar = ph ? ph.parentElement : panel.closest(".home-banner-bottom");
+
+  let left = phRect.left - cRect.left;
+  let right = phRect.right - cRect.left;
+  if (bar && !isWrapMode(panel)) {
     const arrow = bar.querySelector(".home-banner-scroll-to-main");
     const social = bar.querySelector(".social-contacts");
     if (arrow && getComputedStyle(arrow).display !== "none")
-      left = arrow.getBoundingClientRect().right + EXPAND_GAP_SIDE;
+      left = arrow.getBoundingClientRect().right - cRect.left + EXPAND_GAP_SIDE;
     if (social && getComputedStyle(social).display !== "none")
-      right = social.getBoundingClientRect().left - EXPAND_GAP_SIDE;
+      right = social.getBoundingClientRect().left - cRect.left - EXPAND_GAP_SIDE;
+  } else if (bar) {
+    const barRect = bar.getBoundingClientRect();
+    const cs = getComputedStyle(bar);
+    left = barRect.left - cRect.left + (parseFloat(cs.paddingLeft) || 0);
+    right = barRect.right - cRect.left - (parseFloat(cs.paddingRight) || 0);
   }
-  return { left, width: Math.max(220, right - left) };
+
+  const bottomInContainer = phRect.bottom - cRect.top;
+  // The container's TOP in page coords is scroll-invariant; the fixed navbar sits at
+  // page top. So the highest the panel top may reach, in container coords, is the
+  // navbar's bottom minus the container's page offset. All constants / stable.
+  const cTopPage = cRect.top + window.scrollY;
+  const topBound = navbarHeight() + EXPAND_GAP_TOP - cTopPage;
+  const maxHeight = Math.max(160, bottomInContainer - topBound);
+
+  const geom = { left, width: Math.max(220, right - left), bottomInContainer, maxHeight };
+  panel._bannerGeom = geom;
+  return geom;
 }
 
-// Derive the fixed containing-block origin WITHOUT moving the panel.
-function currentCbOffset(panel) {
-  const r = panel.getBoundingClientRect();
-  return {
-    left: r.left - (parseFloat(panel.style.left) || 0),
-    top: r.top - (parseFloat(panel.style.top) || 0),
-  };
+// Content-adaptive expanded height: exactly as tall as the list needs, capped by
+// the banner region. NO "fill to available" threshold — so when the compose input
+// grows by Δ the panel grows by exactly Δ, the scroll viewport
+// (panelH − fieldTop − fieldBottom) is invariant, and the older bubbles do not
+// move at all. This is the root fix for the gap-jump-on-typing bug. (Problem 3.)
+function expandedHeight(measured, maxHeight) {
+  const contentNeeded =
+    measured.fieldTop + Math.ceil(measured.stackHOlder + PAD * 2) + measured.fieldBottom;
+  return clamp(Math.round(contentNeeded), Math.min(maxHeight, 140), maxHeight);
 }
 
-// Apply a fixed-frame rect to the panel (optionally animated).
+// Apply an absolute (container-coords) frame to the panel, optionally animated.
 // dur/delay allow callers to sync the panel resize with card-level expansion.
 export function animateFrame(panel, t, animate, dur = FRAME_MS, delay = 0) {
-  const off = panel._cbOffset || { left: 0, top: 0 };
   const reduced = prefersReducedMotion();
   const d = delay ? ` ${delay}ms` : "";
   // Background + box-shadow ride the same transition so the `notes-elevated`
@@ -638,30 +886,42 @@ export function animateFrame(panel, t, animate, dur = FRAME_MS, delay = 0) {
   panel.style.transition = animate && !reduced
     ? `left ${dur}ms ${GLIDE}${d}, top ${dur}ms ${GLIDE}${d}, width ${dur}ms ${GLIDE}${d}, height ${dur}ms ${GLIDE}${d}, background ${dur}ms ${GLIDE}${d}, box-shadow ${dur}ms ${GLIDE}${d}`
     : "none";
-  panel.style.left = `${Math.round(t.left - off.left)}px`;
-  panel.style.top = `${Math.round(t.top - off.top)}px`;
+  panel.style.left = `${Math.round(t.left)}px`;
+  panel.style.top = `${Math.round(t.top)}px`;
   panel.style.width = `${Math.round(t.width)}px`;
   panel.style.height = `${Math.round(t.height)}px`;
   panel._expandedRect = { left: t.left, top: t.top, width: t.width, height: t.height };
 }
 
-function collapseFixed(panel, reduced, done) {
+function collapseOverlay(panel, reduced, done) {
   const ph = panel._placeholder;
-  const off = panel._cbOffset || { left: 0, top: 0 };
-  const target = ph ? ph.getBoundingClientRect() : panel.getBoundingClientRect();
+  const container = panel._container;
+  const cRect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
+  const phRect = ph ? ph.getBoundingClientRect() : panel.getBoundingClientRect();
+  const target = {
+    left: phRect.left - cRect.left,
+    top: phRect.top - cRect.top,
+    width: phRect.width,
+    height: phRect.height,
+  };
   panel.style.transition = reduced
     ? "none"
     : `left ${FRAME_MS}ms ${GLIDE}, top ${FRAME_MS}ms ${GLIDE}, width ${FRAME_MS}ms ${GLIDE}, height ${FRAME_MS}ms ${GLIDE}, background ${FRAME_MS}ms ${GLIDE}, box-shadow ${FRAME_MS}ms ${GLIDE}`;
   // Drop the elevated glass under the same transition so it fades back to the
   // compact panel style while the frame shrinks. (Problem 2.)
   panel.classList.remove("notes-elevated");
-  panel.style.left = `${target.left - off.left}px`;
-  panel.style.top = `${target.top - off.top}px`;
+  panel.style.left = `${target.left}px`;
+  panel.style.top = `${target.top}px`;
   panel.style.width = `${target.width}px`;
   panel.style.height = `${target.height}px`;
 
   const finish = () => {
     panel.classList.remove("notes-elevated");
+    // Return the panel to its flex slot in the bottom bar, then drop the placeholder.
+    if (ph && ph.parentElement) {
+      ph.parentElement.insertBefore(panel, ph);
+      ph.parentElement.removeChild(ph);
+    }
     panel.style.transition = "";
     panel.style.position = "";
     panel.style.margin = "";
@@ -670,10 +930,10 @@ function collapseFixed(panel, reduced, done) {
     panel.style.width = "";
     panel.style.height = "";
     panel.style.zIndex = "";
-    if (ph && ph.parentElement) ph.parentElement.removeChild(ph);
     panel._placeholder = null;
+    panel._container = null;
     panel._expandedRect = null;
-    panel._cbOffset = null;
+    panel._bannerGeom = null;
     done && done();
   };
 
@@ -690,17 +950,6 @@ function collapseFixed(panel, reduced, done) {
   setTimeout(() => {
     if (!called) { called = true; panel.removeEventListener("transitionend", onEnd); finish(); }
   }, FRAME_MS + 120);
-}
-
-function getNavbarBottom() {
-  const nav =
-    document.querySelector(".navbar-content") ||
-    document.querySelector(".navbar-container");
-  if (nav) {
-    const r = nav.getBoundingClientRect();
-    if (r.height > 0) return r.bottom;
-  }
-  return 70; // $navbar-height fallback
 }
 
 // ════════════════════════════════════════════════════════════
@@ -726,41 +975,75 @@ function avatarMetrics(panel) {
 
 // Measure the list at a given (normal) width. Sets each bubble's list width
 // and reads its reflowed height — does NOT position or change opacity.
-export function measureExpandedList(panel, slotWidth) {
+//
+// keepGeom: FREEZE the horizontal layout (per-bubble width, leftEdge, pinnedLeft)
+// and reuse the values cached at the last width-establishing pass instead of
+// re-deriving them from slotWidth/avatarMetrics. Typing in the compose input and
+// adding/removing a bubble change only the VERTICAL layout (input height, stack
+// height) — they must never re-run the width math, because re-deriving it against
+// a frame that is momentarily mid-resize yields a slightly different maxW and
+// re-wraps every bubble, so their width (and the gaps that follow from wrapping)
+// visibly jump. The width geometry is therefore computed ONCE on expand and again
+// only on a real width trigger (window-width resize), and every intermediate
+// reflow reuses it verbatim. (Problem 3.)
+export function measureExpandedList(panel, slotWidth, keepGeom) {
   const field = panel.querySelector("#instant-notes-field");
   const am = avatarMetrics(panel);
 
-  const topPad = LABEL_PAD + PAD;
-  const avatarReserve = am.avBottomGap + am.avH - AVATAR_OVERLAP;
-  const rightGutter = panel._isAdmin ? 76 : PAD;
-  // Admin bubbles wear an active/expired badge to their LEFT. Reserve a left
-  // gutter so the badge stays on-panel on narrow viewports.
-  const leftGutter = panel._isAdmin ? STATUS_LEFT_RESERVE : PAD;
-  const leftEdge = clamp(
-    Math.round(am.avR - AVATAR_OVERLAP),
-    leftGutter,
-    slotWidth - MIN_READABLE_W - rightGutter,
-  );
-  const maxW = Math.max(MIN_READABLE_W, Math.min(LIST_MAX_W, slotWidth - leftEdge - rightGutter));
-
-  // The pinned bottom slot (newest note / admin input) hugs the avatar and never
-  // shifts right for the admin status badge — only the OLDER badge-bearing bubbles
-  // indent to `leftEdge` to keep their active/expired span on-panel. (Problem 4.)
-  const pinnedLeft = clamp(Math.round(am.avR - AVATAR_OVERLAP), PAD, leftEdge);
+  let leftEdge, pinnedLeft, maxW;
+  if (keepGeom && typeof panel._listLeftEdge === "number") {
+    leftEdge = panel._listLeftEdge;
+    pinnedLeft = panel._listPinnedLeft;
+    maxW = panel._listMaxW;
+  } else {
+    const rightGutter = panel._isAdmin ? 76 : PAD;
+    // Admin bubbles wear an active/expired badge to their LEFT. Reserve a left
+    // gutter so the badge stays on-panel on narrow viewports.
+    const leftGutter = panel._isAdmin ? STATUS_LEFT_RESERVE : PAD;
+    leftEdge = clamp(
+      Math.round(am.avR - AVATAR_OVERLAP),
+      leftGutter,
+      slotWidth - MIN_READABLE_W - rightGutter,
+    );
+    maxW = Math.max(MIN_READABLE_W, Math.min(LIST_MAX_W, slotWidth - leftEdge - rightGutter));
+    // The pinned bottom slot (newest note / admin input) hugs the avatar and never
+    // shifts right for the admin status badge — only the OLDER badge-bearing bubbles
+    // indent to `leftEdge` to keep their active/expired span on-panel. (Problem 4.)
+    pinnedLeft = clamp(Math.round(am.avR - AVATAR_OVERLAP), PAD, leftEdge);
+    panel._listLeftEdge = leftEdge;
+    panel._listPinnedLeft = pinnedLeft;
+    panel._listMaxW = maxW;
+  }
 
   const order = expandedOrder(panel);
-  const widths = order.map((el) =>
-    Math.round(bubbleHasEmoji(el) ? Math.max(MIN_READABLE_W, maxW - EMOJI_W_PAD) : maxW),
-  );
+  const widths = order.map((el) => {
+    // Reuse the frozen width when keeping geometry; a freshly-added bubble (post)
+    // has no cached width yet, so it is sized once here and cached like the rest.
+    if (keepGeom && typeof el._listWidth === "number") return el._listWidth;
+    const w = Math.round(bubbleHasEmoji(el) ? Math.max(MIN_READABLE_W, maxW - EMOJI_W_PAD) : maxW);
+    el._listWidth = w;
+    return w;
+  });
   order.forEach((el, i) => {
     el.style.transition = "none";
     el.style.display = "";
+    // Neutralise the entrance transform/blur BEFORE measuring — identical to what
+    // computeLayout does for the compact path. The base `.instant-note-bubble` rule
+    // carries `transform: scale(0.86)`, and a freshly-reconciled admin history bubble
+    // has no inline transform yet, so measuring it here would return a height 14% too
+    // SHORT. The first expand then packs the list too tightly; the reflow on the first
+    // keystroke re-measures at full scale (placeBubble having since cleared the
+    // transform) and the gaps jump OUT to their correct size. Zeroing the transform
+    // here makes both measurements identical, so the gap is right from frame one —
+    // this is the single measurement path both use now. (Problem 3.)
+    el.style.transform = "none";
+    el.style.filter = "none";
     el.classList.add("in-list");
     if (el.classList.contains("instant-notes-input-bubble")) el.style.width = `${widths[i]}px`;
     else wrapCard(el, widths[i]);
   });
   // Measure heights with the panel TEMPORARILY at the final expanded width. During
-  // expand the panel is still at its narrow compact size (enterFixed), so the field
+  // expand the panel is still at its narrow compact size (enterOverlay), so the field
   // would constrain wide cards, wrapping them more, inflating measured heights and
   // reserving extra vertical gaps that vary with the compact width. Restored right
   // after so animateFrame can still glide from the compact frame. (Problem 2.)
@@ -769,15 +1052,33 @@ export function measureExpandedList(panel, slotWidth) {
   if (field) void field.offsetWidth;
   const heights = order.map((el) => el.getBoundingClientRect().height);
   panel.style.width = prevPanelW;
+  // Re-flush layout at the RESTORED width. The height measurement above left the
+  // browser's last committed layout at `slotWidth`; without this flush, a following
+  // animated animateFrame() would take that stale slotWidth as the width-transition
+  // START — equal to its END — so width would SNAP to full instantly (the panel
+  // appears to pop out from the side) while only height/top glide. Flushing here
+  // pins the true (compact) width as the baseline so width glides in step. (Problem 2.)
+  if (field) void field.offsetWidth;
 
-  let stackH = 0;
-  heights.forEach((h, i) => {
-    stackH += h;
-    if (i > 0) stackH += LIST_GAP_Y;
-    if (bubbleHasEmoji(order[i])) stackH += EMOJI_TOP_EXTRA;
-  });
+  // ── Single source of truth for every top/bottom reservation ────────────────
+  // expandedHeight (sizes the frame) and positionExpandedList (places the bubbles)
+  // both read fieldTop/fieldBottom/stackHOlder from HERE, so the frame's height and
+  // the list's layout are always built from the identical numbers. Any drift between
+  // "how tall the frame is" and "where the bubbles sit" is structurally impossible —
+  // which is what keeps the scroll viewport (and thus the gaps) rock-steady. (Problem 3.)
+  const fieldTop = LABEL_PAD + PAD;
+  const pinnedClear = bubbleHasEmoji(order[0]) ? EMOJI_TOP_EXTRA : 0;
+  const fieldBottom = Math.max(
+    PAD, Math.round(am.avBottomGap + am.avH + heights[0] + pinnedClear + LIST_GAP_Y + 2),
+  );
+  let stackHOlder = 0;
+  for (let i = 1; i < order.length; i++) {
+    if (i > 1) stackHOlder += LIST_GAP_Y;
+    stackHOlder += heights[i];
+    if (bubbleHasEmoji(order[i])) stackHOlder += EMOJI_TOP_EXTRA;
+  }
 
-  return { order, heights, widths, leftEdge, pinnedLeft, topPad, avatarReserve, stackH };
+  return { order, heights, widths, leftEdge, pinnedLeft, fieldTop, fieldBottom, stackHOlder };
 }
 
 // Position the measured list inside a panel of height innerH. The BOTTOM slot
@@ -808,9 +1109,12 @@ export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_M
   const olderH = m.heights.slice(1);
   const olderW = m.widths.slice(1);
 
-  const fieldTop = LABEL_PAD;
-  const pinnedClear = bubbleHasEmoji(pinnedEl) ? EMOJI_TOP_EXTRA : 0;
-  const fieldBottom = Math.max(PAD, Math.round(innerH - (pinnedTop - pinnedClear) + LIST_GAP_Y));
+  // fieldTop/fieldBottom come from measureExpandedList — the SAME values
+  // expandedHeight sized the frame with, so the scroll viewport always has exactly
+  // the room the frame was built for (no more silently-diverging copies of this
+  // math — see measureExpandedList). (Problem 3.)
+  const fieldTop = m.fieldTop;
+  const fieldBottom = m.fieldBottom;
   field.style.top = `${fieldTop}px`;
   field.style.bottom = `${fieldBottom}px`;
   const viewportH = Math.max(40, innerH - fieldTop - fieldBottom);
@@ -821,12 +1125,7 @@ export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_M
     if (el.parentElement !== field) field.appendChild(el);
   });
 
-  let stackH = 0;
-  olderH.forEach((h, i) => {
-    stackH += h;
-    if (i > 0) stackH += LIST_GAP_Y;
-    if (bubbleHasEmoji(older[i])) stackH += EMOJI_TOP_EXTRA;
-  });
+  const stackH = m.stackHOlder;
   const fits = stackH <= viewportH - PAD * 2;
   const contentH = fits ? viewportH : Math.ceil(stackH + PAD * 2);
 
@@ -875,15 +1174,15 @@ export function ensureBubblesInField(panel) {
 }
 
 // Re-fit the expanded panel (resize, or after an admin write). Cross-fades.
+// Recomputes the banner geometry fresh (this IS the path for a real width change),
+// re-establishing the cached band + cap.
 export function relayoutExpanded(panel, animateFrameFlag) {
   fadeOutBubbles(expandedOrder(panel).filter(Boolean));
   const run = () => {
-    panel._cbOffset = currentCbOffset(panel);
-    const slot = normalSlot(panel);
-    const measured = measureExpandedList(panel, slot.width);
-    const finalH = adaptiveExpandHeight(panel, measured);
-    const bottom = (panel._placeholder || panel).getBoundingClientRect().bottom;
-    animateFrame(panel, { left: slot.left, top: bottom - finalH, width: slot.width, height: finalH }, !!animateFrameFlag);
+    const geom = bannerExpandGeom(panel);
+    const measured = measureExpandedList(panel, geom.width);
+    const finalH = expandedHeight(measured, geom.maxHeight);
+    animateFrame(panel, { left: geom.left, top: geom.bottomInContainer - finalH, width: geom.width, height: finalH }, !!animateFrameFlag);
     positionExpandedList(panel, measured, finalH);
     fadeInBubbles(measured.order);
     scrollListToBottom(panel);
@@ -901,14 +1200,15 @@ export function relayoutExpandedReflow(panel, animDur = FRAME_MS, animDelay = 0)
   const oldContentH = panel._listContentH || 0;
   const prevScroll = field ? field.scrollTop : 0;
 
-  panel._cbOffset = currentCbOffset(panel);
-  const slot = normalSlot(panel);
-  const measured = measureExpandedList(panel, slot.width);
-  const finalH = adaptiveExpandHeight(panel, measured);
-  const bottom = (panel._placeholder || panel).getBoundingClientRect().bottom;
-  // Snap the panel frame instantly (not animated) to avoid continuous viewport-height
-  // changes that drift the scroll range while neighbour bubbles animate via FLIP.
-  animateFrame(panel, { left: slot.left, top: bottom - finalH, width: slot.width, height: finalH }, false);
+  // Reuse the CACHED banner geometry — this reflow is driven by the input growing
+  // TALLER, never wider. The band (left/width) and the bottom anchor stay frozen;
+  // only the content-adaptive height changes, and it grows by exactly the input's
+  // delta, so the scroll viewport is invariant and older bubbles do not move. (Problem 3.)
+  const geom = panel._bannerGeom || bannerExpandGeom(panel);
+  const measured = measureExpandedList(panel, geom.width, true);
+  const finalH = expandedHeight(measured, geom.maxHeight);
+  // Snap instantly (not animated); the frame's left/width/bottom are all fixed.
+  animateFrame(panel, { left: geom.left, top: geom.bottomInContainer - finalH, width: geom.width, height: finalH }, false);
   positionExpandedList(panel, measured, finalH, true, animDur, animDelay);
 
   if (field) {
@@ -918,6 +1218,25 @@ export function relayoutExpandedReflow(panel, animDur = FRAME_MS, animDelay = 0)
     field.scrollTop = Math.max(0, prevScroll + (newContentH - oldContentH));
     updateScrollFade(panel);
   }
+}
+
+// Re-flow the expanded list INSTANTLY inside the CURRENT panel frame — no frame
+// resize, no cross-fade, no per-bubble animation. Re-measures widths/heights and
+// snaps every bubble to its new top/left. The caller (admin add/remove) captures
+// each surviving bubble's screen rect BEFORE this and FLIP-glides them afterwards,
+// so keeping the frame fixed means the glide starts from the true on-screen spot
+// (no coordinate-origin jump). Returns the field element. (Problem 2.)
+export function repositionExpandedListInstant(panel) {
+  if (!panel._expanded) return null;
+  const geom = panel._bannerGeom || bannerExpandGeom(panel);
+  // keepGeom: surviving bubbles keep their frozen width; only a freshly-posted
+  // bubble is sized (it has no cached width yet). Add/remove is a VERTICAL change. (Problem 3.)
+  const measured = measureExpandedList(panel, geom.width, true);
+  const innerH = panel._expandedRect
+    ? panel._expandedRect.height
+    : panel.getBoundingClientRect().height;
+  positionExpandedList(panel, measured, innerH, false);
+  return panel.querySelector("#instant-notes-field");
 }
 
 // Build the bottom→top element order for the expanded list.

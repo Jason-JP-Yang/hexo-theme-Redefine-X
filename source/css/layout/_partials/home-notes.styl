@@ -24,7 +24,10 @@
 .instant-notes-panel
   position relative
   flex 1 1 0%
-  min-width 200px
+  // Consistent 300px minimum for the COLLAPSED normal layout. Compact gets the same
+  // floor via JS (computeLayout clamps compactWidth); expanded is sized entirely by
+  // JS and opts out below; tablet/phone reset to 0 (full-width row). (Problem 3.)
+  min-width 300px
   min-height 150px
   // Actual height is set dynamically by JS based on content
   background rgba(255, 255, 255, 0.12)
@@ -225,6 +228,13 @@
   font-weight 700
   opacity 0.42
   margin-left 5px
+  // Hidden for the whole expanded session: fades out as the expand transition
+  // starts and back in only after the collapse transition fully ends (the panel
+  // carries `.notes-time-hidden` between those two moments). (Problem 1.)
+  transition opacity 0.2s ease
+
+.instant-notes-panel.notes-time-hidden .instant-note-time
+  opacity 0
 
 // ─── Emoji badge ─────────────────────────────────────────
 .instant-note-emoji
@@ -325,6 +335,11 @@
     font-size 12px
   &:hover
     background rgba(255, 255, 255, 0.28)
+  // Transitional "Loading…" state between pressing More and the expand transition
+  // (admin history is being fetched). (Problem 3.)
+  &.is-loading
+    cursor progress
+    opacity 0.85
   &.is-hidden
     opacity 0
     transform translateY(-6px)
@@ -340,9 +355,17 @@
   visibility hidden
   pointer-events none
 
-// ─── Expanded panel frame (position/size are inline via JS) ─
+// ─── Expanded panel frame ────────────────────────────────
+// When expanded the panel is lifted out of the bottom-bar flex row and re-parented
+// as an ABSOLUTE child of .home-banner-container (a stable min-height:100svh box).
+// position/left/top/width/height are all set inline by JS in the container's own
+// coordinate space, derived from that box — never from the live viewport — so it is
+// immune to scroll / URL-bar / keyboard / devtools viewport changes.
 .instant-notes-panel.is-expanded
   z-index 40
+  // The expanded frame is sized to the band by JS — drop the collapsed 300px floor
+  // so it never overflows a narrow band. (Problem 3.)
+  min-width 0
 
   // Keep the "INSTANT NOTES" label above the scrolling bubbles (base label
   // z-index 2 is BELOW bubbles 5/15, so bubbles would cover it).
