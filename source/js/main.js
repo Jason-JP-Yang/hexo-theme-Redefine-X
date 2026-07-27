@@ -10,6 +10,7 @@ import initLazyLoad from "./layouts/lazyload.js";
 import initAutoHover from "./layouts/autoHover.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 import initInstantNotes from "./plugins/instantNotes.js";
+import { initNotoAnim } from "./plugins/noto-anim.js";
 
 export const main = {
   themeInfo: {
@@ -85,8 +86,12 @@ export const main = {
     }
 
     initAutoHover();
-    
+
     initMathJaxScroll();
+
+    // Noto animated emoji: wire post-content emoji spans for viewport-scoped
+    // animation (static Noto text until visible; see plugins/noto-anim.js).
+    initNotoAnim();
 
     // Instant Notes (Instagram-style bubbles on home banner)
     if (

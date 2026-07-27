@@ -25,6 +25,23 @@ const initMathJaxScroll = () => {
   var WRAPPER = '.mathjax-scroll-wrapper';
   var THRESH  = 2;
 
+  function resolveBackgroundColor(block) {
+    var node = block;
+    while (node && node.nodeType === 1) {
+      var color = window.getComputedStyle(node).backgroundColor;
+      if (color && color !== 'transparent' && !/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)$/i.test(color)) {
+        return color;
+      }
+      node = node.parentElement;
+    }
+    return window.getComputedStyle(document.body).backgroundColor;
+  }
+
+  function syncHintBackground(block) {
+    var bg = resolveBackgroundColor(block);
+    block.style.setProperty('--mathjax-scroll-bg-color', bg);
+  }
+
   /* ---- DOM helpers ------------------------------------------------ */
 
   function mkHint(side) {
@@ -77,6 +94,8 @@ const initMathJaxScroll = () => {
   /* ---- Overflow check & hint toggle ------------------------------- */
 
   function refresh(block) {
+    syncHintBackground(block);
+
     var w = block.querySelector(WRAPPER);
     if (!w) return;
 

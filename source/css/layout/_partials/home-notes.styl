@@ -24,7 +24,10 @@
 .instant-notes-panel
   position relative
   flex 1 1 0%
-  min-width 200px
+  // Consistent 300px minimum for the COLLAPSED normal layout. Compact gets the same
+  // floor via JS (computeLayout clamps compactWidth); expanded is sized entirely by
+  // JS and opts out below; tablet/phone reset to 0 (full-width row). (Problem 3.)
+  min-width 300px
   min-height 150px
   // Actual height is set dynamically by JS based on content
   background rgba(255, 255, 255, 0.12)
@@ -43,6 +46,18 @@
   &.notes-visible
     opacity 1
     transform translateY(0)
+
+  // Compact mode (sparse content): JS sets width + a negative margin-left and
+  // toggles this class. Going absolute drops the panel out of the flex flow so
+  // it floats at the bottom-bar's horizontal centre (≈ screen centre),
+  // independent of the scroll-arrow / social-pill. margin-left (not transform)
+  // does the centring, leaving `transform` free for the reveal animation.
+  &.is-compact
+    position absolute
+    left 50%
+    bottom 0
+    flex none
+    min-width 0
 
   .dark &
     background rgba(30, 30, 42, 0.35)
@@ -68,11 +83,12 @@
   font-weight 700
   letter-spacing 0.06em
   text-transform uppercase
-  color rgba(255, 255, 255, 0.92)
+  // Theme text colour (near-black in light mode, near-white in dark) instead of a
+  // hardcoded white, so the label reads correctly over a light banner. Adapts to
+  // both modes on its own — no separate .dark override needed.
+  color var(--first-text-color)
   pointer-events none
   z-index 2
-  .dark &
-    color rgba(255, 255, 255, 0.80)
 
 // ─── Avatar: bottom-left ─────────────────────────────────
 .instant-notes-avatar
@@ -118,6 +134,9 @@
   left 0
   right 0
   bottom 0
+  // Never let the browser's scroll anchoring re-adjust scrollTop mid-animation
+  // (it fights the FLIP glides and reads as jitter).
+  overflow-anchor none
 
 // ─── Individual bubble (wrapper) ─────────────────────────
 // The TAIL lives on this wrapper so the card's mask-image
@@ -129,26 +148,32 @@
   --bubble-bg #ffffff
   --bubble-border rgba(0, 0, 0, 0.07)
 
-  // Initial hidden state for animation
+  // Initial hidden state for animation (gentle — small first jump)
   opacity 0
-  transform scale(0) translateY(10px)
-  filter blur(3px)
+  transform scale(0.86) translateY(6px)
+  filter blur(2px)
   transition none
 
   &.bubble-pop
     animation noteBubblePop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards
   &.bubble-newest
     z-index 15
+  // Admin inline-edit: float the growing card above its neighbours so the brief
+  // reflow overlap (the card grows before siblings finish gliding) reads cleanly.
+  &.is-editing
+    z-index 18
 
-  // ── Speech tail on wrapper ──────────────────────────────
-  // Straight-edged sharp triangle. Uses SVG mask so it
-  // scales at any responsive size without path changes.
+  // ── Speech tail — ONLY on the newest bubble ─────────────
+  // Straight-edged sharp triangle pointing down-left toward the
+  // avatar, so the newest note reads as "spoken" by the avatar.
+  // Older bubbles are tail-less floating bubbles.
+  // Uses an SVG mask so it scales at any responsive size.
   $tail-svg = url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 14'%3E%3Cpath d='M0 0L18 0L0 14Z' fill='%23000'/%3E%3C/svg%3E")
-  &::after
+  &.bubble-newest::after
     content ''
     position absolute
     bottom -11px
-    left 8px
+    left 10px
     width 18px
     height 14px
     background var(--bubble-bg)
@@ -207,6 +232,14 @@
   font-weight 700
   opacity 0.42
   margin-left 5px
+  // Faded out ONLY on the bubble currently being edited (it carries `.is-editing`);
+  // its own "5m ago" tag would otherwise linger in the edit snapshot while the card
+  // morphs. Every OTHER bubble keeps its timestamp, and expand/collapse never hide
+  // them. (Problem 1.)
+  transition opacity 0.2s ease
+
+.instant-note-bubble.is-editing .instant-note-time
+  opacity 0
 
 // ─── Emoji badge ─────────────────────────────────────────
 .instant-note-emoji
@@ -222,6 +255,9 @@
   font-size 20px
   z-index 20
   pointer-events none
+  // The animated Noto overlay needs no sizing here: the shared runtime anchors
+  // it to the static glyph's own baseline/art board (see css/common/basic.styl),
+  // so it tracks this badge's responsive font-size automatically.
   &.emoji-default
     background #ffffff
     .dark &
@@ -231,14 +267,14 @@
 @keyframes noteBubblePop
   0%
     opacity 0
-    transform scale(0) translateY(10px)
-    filter blur(3px) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
-  50%
+    transform scale(0.86) translateY(6px)
+    filter blur(2px) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
+  55%
     opacity 1
     filter blur(0) drop-shadow(0 2px 8px rgba(0,0,0,0.08))
-    transform scale(1.08) translateY(-2px)
-  75%
-    transform scale(0.97) translateY(1px)
+    transform scale(1.03) translateY(-1px)
+  78%
+    transform scale(0.99) translateY(0)
   100%
     opacity 1
     transform scale(1) translateY(0)
@@ -258,7 +294,7 @@
     padding-right 18px
     mask-image radial-gradient(circle 15px at calc(100% - 1px) -1px, transparent 98%, black 100%)
     -webkit-mask-image radial-gradient(circle 15px at calc(100% - 1px) -1px, transparent 98%, black 100%)
-  .instant-note-bubble::after
+  .instant-note-bubble.bubble-newest::after
     width 15px
     height 11px
     bottom -9px
@@ -268,9 +304,470 @@
     font-size 12px
     padding 6px 9px 4px 9px
     border-radius $redefine-border-radius-small $redefine-border-radius-small $redefine-border-radius-small 3px
-  .instant-note-bubble::after
+  .instant-note-bubble.bubble-newest::after
     width 13px
     height 9px
     bottom -7px
-    left 6px
+    left 8px
 
+// ═══════════════════════════════════════════════════════════
+// MORE / LESS button + EXPAND mode (chat-list view)
+// ═══════════════════════════════════════════════════════════
+
+// ─── More / Less pill (top-right of the panel) ───────────
+.instant-notes-more-btn
+  position absolute
+  top 8px
+  right 10px
+  z-index 30
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 5px 11px
+  border 1px solid rgba(255, 255, 255, 0.24)
+  border-radius 999px
+  cursor pointer
+  font-size 12px
+  font-weight 600
+  letter-spacing 0.02em
+  line-height 1
+  // Theme text colour (near-black in light, near-white in dark) — not hardcoded
+  // white — so the pill's label + chevron stay legible in light mode. (Matches the
+  // panel label.) The dark override below only touches background/border, so this
+  // one declaration covers both modes.
+  color var(--first-text-color)
+  background rgba(255, 255, 255, 0.16)
+  backdrop-filter blur(10px) saturate(1.3)
+  -webkit-backdrop-filter blur(10px) saturate(1.3)
+  box-shadow 0 2px 10px rgba(0, 0, 0, 0.12)
+  opacity 1
+  transform translateY(0)
+  transition opacity 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease
+  i
+    font-size 12px
+  &:hover
+    background rgba(255, 255, 255, 0.28)
+  // Transitional "Loading…" state between pressing More and the expand transition
+  // (admin history is being fetched). (Problem 3.)
+  &.is-loading
+    cursor progress
+    opacity 0.85
+  &.is-hidden
+    opacity 0
+    transform translateY(-6px)
+    pointer-events none
+  .dark &
+    background rgba(40, 40, 54, 0.5)
+    border-color rgba(255, 255, 255, 0.12)
+    &:hover
+      background rgba(56, 56, 72, 0.6)
+
+// ─── Placeholder that holds the flex slot while expanded ──
+.instant-notes-placeholder
+  visibility hidden
+  pointer-events none
+
+// ─── Expanded panel frame ────────────────────────────────
+// When expanded the panel is lifted out of the bottom-bar flex row and re-parented
+// as an ABSOLUTE child of .home-banner-container (a stable min-height:100svh box).
+// position/left/top/width/height are all set inline by JS in the container's own
+// coordinate space, derived from that box — never from the live viewport — so it is
+// immune to scroll / URL-bar / keyboard / devtools viewport changes.
+.instant-notes-panel.is-expanded
+  z-index 40
+  // The expanded frame is sized to the band by JS — drop the collapsed 300px floor
+  // so it never overflows a narrow band. (Problem 3.)
+  min-width 0
+
+  // Keep the "INSTANT NOTES" label above the scrolling bubbles (base label
+  // z-index 2 is BELOW bubbles 5/15, so bubbles would cover it).
+  .instant-notes-label
+    z-index 22
+
+  // The field is the OLDER-bubble scroll viewport (the newest is pinned as a
+  // panel child below it). Top fade = soft edge under the label. When it
+  // scrolls (`has-scroll`) a BOTTOM fade also hides older bubbles just above the
+  // pinned newest and hints there is more above.
+  .instant-notes-field
+    overflow-x hidden
+    -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+    mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+    scrollbar-width thin
+    scrollbar-color rgba(255, 255, 255, 0.35) transparent
+    &.has-scroll
+      -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 32px, #000 calc(100% - 26px), transparent 100%)
+      mask-image linear-gradient(to bottom, transparent 0, #000 32px, #000 calc(100% - 26px), transparent 100%)
+    // At the very bottom the bottom fade would needlessly dim the most-recent
+    // older bubble (nothing is hidden below it) — drop it, keep only the top fade.
+    &.has-scroll.at-bottom
+      -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+      mask-image linear-gradient(to bottom, transparent 0, #000 32px)
+    &::-webkit-scrollbar
+      width 6px
+    &::-webkit-scrollbar-thumb
+      background rgba(255, 255, 255, 0.32)
+      border-radius 3px
+    &::-webkit-scrollbar-track
+      background transparent
+
+// While the panel frame + bubbles are gliding (expand / collapse / refit) the
+// field's scroll-fade mask is suppressed: gliding bubbles would flicker crossing
+// the fade band while the masked layer re-rasterises every frame. Restored on
+// settle (`notes-anim` is removed).
+.instant-notes-panel.is-expanded.notes-anim .instant-notes-field
+  -webkit-mask-image none !important
+  mask-image none !important
+
+// The expanded panel keeps the EXACT same frosted glass + shadow as the collapsed
+// panel — and as the rest of the bottom bar (arrow / social pill). Expanding must
+// change the panel's SIZE, never its depth/elevation. Same values as the base
+// .instant-notes-panel, kept as an explicit class so the frame's animated
+// background/box-shadow transition has a matching (no-op) target. (Problem 1.)
+.instant-notes-panel.notes-elevated
+  background rgba(255, 255, 255, 0.12)
+  box-shadow 0 4px 24px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255,255,255,0.12)
+  .dark &
+    background rgba(30, 30, 42, 0.35)
+    box-shadow 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.05)
+
+// Spacer is the only in-flow child of the field — it drives scrollHeight.
+.instant-notes-scroll-spacer
+  width 1px
+  pointer-events none
+  opacity 0
+
+// Admin: reserve the scrollbar gutter permanently so an inline-edit that pushes
+// the list into overflow mid-animation never shifts content width (no text
+// re-wrap / no horizontal jump). Paired with overflow-y:auto set in JS.
+.instant-notes-panel.is-admin-expanded .instant-notes-field
+  scrollbar-gutter stable
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN tools (input bubble + per-bubble edit/delete + status)
+// ═══════════════════════════════════════════════════════════
+
+// ─── Input bubble (compose a new note) ───────────────────
+.instant-notes-input-bubble
+  z-index 16
+  .input-card
+    display flex
+    flex-direction column
+    gap 6px
+    padding 8px
+    min-width 200px
+    white-space normal
+  .ni-input
+    width 100%
+    box-sizing border-box
+    border none
+    border-radius 8px
+    padding 6px 8px
+    font-size 13px
+    font-family inherit
+    line-height 1.35
+    resize none
+    overflow hidden
+    min-height 36px
+    background rgba(0, 0, 0, 0.06)
+    color inherit
+  .ni-input-row
+    display flex
+    align-items center
+    gap 6px
+  .ni-post
+    margin-left auto
+    border none
+    border-radius 8px
+    padding 5px 13px
+    font-size 13px
+    font-weight 600
+    cursor pointer
+    background var(--primary-color, #6c63ff)
+    color #fff
+  .dark & .ni-input
+    background rgba(255, 255, 255, 0.10)
+
+// Inline edit reuses the same field styling inside an existing bubble card.
+.bubble-card .ni-edit
+  display flex
+  flex-direction column
+  gap 6px
+  white-space normal
+  .ni-input
+    width 100%
+    box-sizing border-box
+    border none
+    border-radius 8px
+    padding 6px 8px
+    font-size 13px
+    font-family inherit
+    line-height 1.35
+    resize none
+    overflow hidden
+    min-height 36px
+    background rgba(0, 0, 0, 0.06)
+    color inherit
+  .ni-input-row
+    display flex
+    align-items center
+    gap 6px
+  .ni-save
+    margin-left auto
+    border none
+    border-radius 8px
+    padding 5px 13px
+    font-size 13px
+    font-weight 600
+    cursor pointer
+    background var(--primary-color, #6c63ff)
+    color #fff
+  .ni-cancel
+    border 1.5px solid var(--primary-color, #6c63ff)
+    border-radius 8px
+    padding 4px 12px
+    font-size 13px
+    font-weight 600
+    cursor pointer
+    background transparent
+    color var(--primary-color, #6c63ff)
+.dark .bubble-card .ni-edit
+  .ni-input
+    background rgba(255, 255, 255, 0.10)
+
+// ─── Emoji / colour selector triggers (compose card + inline edit) ──────
+.instant-notes-panel .ni-pick
+  position relative
+  width 30px
+  height 30px
+  box-sizing border-box
+  display inline-flex
+  align-items center
+  justify-content center
+  flex none
+  border none
+  border-radius 8px
+  padding 0
+  font-size 15px
+  cursor pointer
+  background rgba(0, 0, 0, 0.06)
+  color inherit
+  transition background 0.2s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)
+  &:hover
+    background rgba(0, 0, 0, 0.12)
+    transform translateY(-1px)
+  // The picked emoji plays its Noto animation right on the trigger. No sizing
+  // here on purpose: the shared runtime anchors the overlay to this button's own
+  // static glyph, so animated and static are the same size in the same place.
+.dark .instant-notes-panel .ni-pick
+  background rgba(255, 255, 255, 0.10)
+  &:hover
+    background rgba(255, 255, 255, 0.18)
+
+// Colour trigger dot: solid selected colour, or a hue ring in "default" mode.
+.instant-notes-panel .ni-color-dot
+  width 18px
+  height 18px
+  border-radius 50%
+  display block
+  border 2px solid rgba(255, 255, 255, 0.75)
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.18)
+  background conic-gradient(#f47067, #f5a623, #43b581, #5a9cf8, #9b59b6, #f47067)
+
+// ─── Selector popup — frosted-glass shell shared by both pickers ────────
+// Anchored absolutely in .home-banner-container (same coordinate space as the
+// expanded panel); opens with the bubbles' fade + blur + glide language.
+.ni-popup
+  position absolute
+  z-index 60
+  padding 10px
+  border-radius 14px
+  background rgba(255, 255, 255, 0.60)
+  backdrop-filter blur(24px) saturate(1.5)
+  -webkit-backdrop-filter blur(24px) saturate(1.5)
+  border 1px solid rgba(255, 255, 255, 0.40)
+  box-shadow 0 12px 40px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.30)
+  color var(--first-text-color)
+  .dark &
+    background rgba(24, 24, 34, 0.75)
+    border-color rgba(255, 255, 255, 0.10)
+    box-shadow 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)
+
+// Emoji popup: the picker IS the popup — no inner chrome, no visible second
+// layer. The shell only provides the glass, radius clipping and the open/close
+// animation; the picker's own background is transparent (injected shadow CSS)
+// and its "Default — no emoji" action lives INSIDE the picker (noneOption).
+// NOTE: never override em-emoji-picker's display — its internal scroll region
+// relies on the :host{display:flex} column layout for a bounded height.
+.ni-popup-emoji
+  padding 0
+  overflow hidden
+
+.ni-pop-loading
+  display flex
+  align-items center
+  justify-content center
+  width 240px
+  height 120px
+  font-size 18px
+  opacity 0.6
+
+// ─── Colour picker internals ─────────────────────────────────────────────
+.ni-popup-color
+  width 248px
+  box-sizing border-box
+
+.ni-cp-sv
+  position relative
+  width 100%
+  height 140px
+  border-radius 10px
+  cursor crosshair
+  touch-action none
+
+.ni-cp-hue
+  position relative
+  width 100%
+  height 12px
+  border-radius 6px
+  margin-top 12px
+  cursor pointer
+  touch-action none
+  background linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%)
+
+.ni-cp-thumb
+  position absolute
+  width 14px
+  height 14px
+  border-radius 50%
+  border 2.5px solid #fff
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.35)
+  transform translate(-50%, -50%)
+  pointer-events none
+.ni-cp-hue-thumb
+  top 50%
+
+.ni-cp-row
+  display flex
+  align-items center
+  gap 8px
+  margin-top 12px
+
+.ni-cp-preview
+  width 26px
+  height 26px
+  border-radius 8px
+  flex none
+  border 1px solid rgba(0, 0, 0, 0.12)
+
+.ni-cp-hex
+  flex 1
+  min-width 0
+  border none
+  border-radius 8px
+  padding 6px 8px
+  font-size 13px
+  font-family GeistMono, ui-monospace, monospace
+  background rgba(0, 0, 0, 0.06)
+  color inherit
+  .dark &
+    background rgba(255, 255, 255, 0.10)
+
+.ni-cp-apply
+  border none
+  border-radius 8px
+  padding 6px 12px
+  font-size 12.5px
+  font-weight 600
+  cursor pointer
+  background var(--primary-color, #6c63ff)
+  color #fff
+
+.ni-cp-presets
+  display grid
+  grid-template-columns repeat(6, 1fr)
+  gap 8px
+  margin-top 12px
+  button
+    width 100%
+    aspect-ratio 1
+    border-radius 8px
+    border 1px solid rgba(0, 0, 0, 0.10)
+    cursor pointer
+    padding 0
+    transition transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)
+    &:hover
+      transform scale(1.12)
+  .ni-cp-default
+    background transparent
+    display flex
+    align-items center
+    justify-content center
+    font-size 12px
+    color inherit
+    border 1.5px dashed rgba(127, 127, 127, 0.55)
+
+@media screen and (max-width: 520px)
+  .ni-popup
+    max-width calc(100vw - 24px)
+  .ni-popup-color
+    // unquote: emit the literal CSS min() — Stylus otherwise treats min() as its
+    // own numeric built-in and fails to coerce the calc() argument.
+    width unquote("min(248px, calc(100vw - 24px))")
+
+// ─── Per-bubble edit / delete (to the bubble's right) ────
+.instant-note-admin-actions
+  position absolute
+  left 100%
+  top 50%
+  transform translateY(-50%)
+  margin-left 8px
+  display flex
+  gap 4px
+  z-index 25
+  button
+    width 24px
+    height 24px
+    border none
+    border-radius 50%
+    cursor pointer
+    font-size 11px
+    display flex
+    align-items center
+    justify-content center
+    background rgba(20, 20, 20, 0.62)
+    color #fff
+    backdrop-filter blur(6px)
+    transition background 0.2s ease
+  .ina-edit:hover
+    background rgba(60, 60, 70, 0.8)
+  .ina-del:hover
+    background #e03e3e
+
+// ─── Active / expired badge (to the bubble's left) ───────
+.instant-note-status
+  position absolute
+  right 100%
+  top 50%
+  transform translateY(-50%)
+  margin-right 8px
+  font-size 9px
+  font-weight 700
+  letter-spacing 0.04em
+  text-transform uppercase
+  padding 2px 6px
+  border-radius 6px
+  white-space nowrap
+  background rgba(40, 180, 99, 0.92)
+  color #fff
+  pointer-events none
+  z-index 24
+  &.is-expired
+    background rgba(120, 120, 130, 0.92)
+
+// ═══════════════════════════════════════════════════════════
+// Reduced motion — make every Instant-Notes transition instant
+// ═══════════════════════════════════════════════════════════
+@media (prefers-reduced-motion: reduce)
+  .instant-notes-panel, .instant-notes-panel *, .instant-note-bubble, .bubble-card, .instant-notes-more-btn, .instant-notes-avatar
+    transition none !important
+    animation none !important

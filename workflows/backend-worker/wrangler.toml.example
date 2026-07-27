@@ -1,0 +1,30 @@
+# Copy to `wrangler.toml` (gitignored) and fill in your own values.
+
+name = "your-backend-worker"          # Cloudflare Worker name
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+
+# ─── Custom domain (optional) ───────────────────────────────
+# One domain fronts the whole API. `wrangler deploy` provisions the domain +
+# DNS automatically when the zone is on Cloudflare. Omit this block to use the
+# default <name>.<subdomain>.workers.dev URL instead.
+# [[routes]]
+# pattern = "backend.example.com"
+# custom_domain = true
+
+# ─── D1 Database Binding ────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "your-notes-db"
+database_id = "RUN: wrangler d1 create your-notes-db"   # paste the returned id
+
+# ─── Environment Variables (non-secret) ─────────────────────
+[vars]
+# CORS allowlist — your blog origin(s), comma-separated. localhost is always allowed.
+ALLOWED_ORIGIN = "https://your-blog-domain.example"
+# Admin allowlist — GitHub NUMERIC id(s) (immutable) preferred; login names also work.
+ADMIN_LOGINS = "your-github-id-or-login"
+
+# ─── Secrets (NEVER commit; set out-of-band) ────────────────
+# HMAC signing key for admin session tokens:
+#   wrangler secret put SESSION_SECRET

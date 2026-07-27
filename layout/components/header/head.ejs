@@ -178,6 +178,9 @@
 
     <%- renderCSS('fonts/GeistMono/geist-mono.css') %>
     <%- renderCSS('fonts/Geist/geist.css') %>
+    <!-- Noto Color Emoji: every unicode emoji site-wide renders in the Noto style
+         (the animated Noto set used by instant-notes/posts is the same family) -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap" rel="stylesheet">
     <!--- Font Part-->
     <% if (theme.home_banner.custom_font.enable) { %>
         <link href="<%- theme.home_banner.custom_font.url %>" rel="stylesheet">

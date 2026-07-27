@@ -9,6 +9,7 @@
   margin 0 0 12px 0
   padding 0
   overflow hidden          /* clip the gradient hints to this box */
+  --mathjax-scroll-bg-color var(--background-color)
 
 /* ----- Inner scroll container ----- */
 .mathjax-scroll-wrapper
@@ -16,6 +17,7 @@
   flex-direction row
   justify-content flex-start   /* do NOT use center: overflowing centered items cut off left side and scrollLeft can't go negative */
   align-items flex-start
+  background-color var(--mathjax-scroll-bg-color)
   overflow-x auto
   overflow-y hidden
   scrollbar-width none
@@ -82,11 +84,11 @@
   left 0
   justify-content flex-start
   padding-left 2px
-  background linear-gradient(to right, var(--background-color) 30%, transparent)
+  background linear-gradient(to right, var(--mathjax-scroll-bg-color) 30%, transparent)
 
 /* Right hint: caret pushed tight to right edge */
 .mathjax-scroll-hint--right
   right 0
   justify-content flex-end
   padding-right 2px
-  background linear-gradient(to left, var(--background-color) 30%, transparent)
+  background linear-gradient(to left, var(--mathjax-scroll-bg-color) 30%, transparent)
