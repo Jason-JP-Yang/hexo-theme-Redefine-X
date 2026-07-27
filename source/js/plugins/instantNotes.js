@@ -24,6 +24,10 @@ import {
 } from "./instant-notes-layout.js";
 import { createBubble, isNoteActive, clearWrap } from "./instant-notes-bubble.js";
 import {
+  wireSelector, refreshSelectorButtons, preloadEmojiMart,
+} from "./instant-notes-pickers.js";
+import { initNotoAnim } from "./noto-anim.js";
+import {
   GLIDE, PAD, EMOJI_TOP_EXTRA, FRAME_MS, FADE_OUT_MS, FADE_IN_MS, FADE_BLUR,
   clamp, prefersReducedMotion,
 } from "./instant-notes-utils.js";
@@ -107,6 +111,10 @@ export default function initInstantNotes() {
   wireResize(panel);
   wireAuthChange(panel);
 
+  // Emoji picker assets load eagerly for EVERYONE (admin or not) so opening
+  // the selector later is instant.
+  preloadEmojiMart();
+
   const fresh = _notesCache && Date.now() - _notesCache.ts < NOTES_TTL;
   const notesPromise = fresh
     ? Promise.resolve(_notesCache.data)
@@ -119,6 +127,9 @@ export default function initInstantNotes() {
     const list = (notes || []).slice(0, 5);
     if (list.length > 0) {
       buildDOM(list, panel);
+      // Bubbles were built AFTER the page-level emoji scan — re-scan so emoji
+      // inside note TEXT animate in-viewport too (idempotent).
+      initNotoAnim();
       waitForPreloader().then(() => {
         setTimeout(() => revealNotes(panel), 500);
       });
@@ -286,6 +297,10 @@ function reconcileAdminNotes(panel, notes) {
     el.classList.toggle("bubble-newest", false);
     decorateAdminBubble(panel, el);
   });
+
+  // Freshly created history bubbles: wire their note-text emoji for in-viewport
+  // animation (idempotent page re-scan).
+  initNotoAnim();
 }
 
 function ensureInputBubble(panel) {
@@ -302,14 +317,15 @@ function ensureInputBubble(panel) {
     '<div class="bubble-card bubble-default input-card">' +
     '  <textarea class="ni-input" maxlength="200" placeholder="What\'s happening?"></textarea>' +
     '  <div class="ni-input-row">' +
-    '    <input class="ni-emoji" type="text" maxlength="4" placeholder="🙂" />' +
-    '    <input class="ni-color" type="color" value="#6c63ff" title="Bubble colour" />' +
-    '    <label class="ni-color-default"><input class="ni-color-toggle" type="checkbox" checked />default</label>' +
+    '    <button type="button" class="ni-pick ni-emoji-btn" title="Emoji"></button>' +
+    '    <button type="button" class="ni-pick ni-color-btn" title="Bubble colour"></button>' +
     '    <button type="button" class="ni-post">Post</button>' +
     '  </div>' +
     "</div>";
   field.appendChild(wrap);
   panel._inputBubble = wrap;
+  // Emoji + colour selector triggers (popup pickers) — state on the wrap itself.
+  wireSelector(panel, wrap, wrap, { emoji: "", color: "default" });
 
   const inputTextarea = wrap.querySelector(".ni-input");
   autoResizeTextarea(inputTextarea);
@@ -323,9 +339,8 @@ function ensureInputBubble(panel) {
 
 async function submitNewNote(panel, wrap) {
   const text = wrap.querySelector(".ni-input").value.trim();
-  const emoji = wrap.querySelector(".ni-emoji").value.trim();
-  const useDefault = wrap.querySelector(".ni-color-toggle").checked;
-  const color = useDefault ? "default" : wrap.querySelector(".ni-color").value;
+  const emoji = wrap._selEmoji || "";
+  const color = wrap._selColor || "default";
   if (!text) return;
   const post = wrap.querySelector(".ni-post");
   post.disabled = true;
@@ -334,7 +349,9 @@ async function submitNewNote(panel, wrap) {
   try {
     await adminFetch(panel, "POST", "/api/admin/notes", { text, emoji, color });
     wrap.querySelector(".ni-input").value = "";
-    wrap.querySelector(".ni-emoji").value = "";
+    wrap._selEmoji = "";
+    wrap._selColor = "default";
+    refreshSelectorButtons(wrap);
     post.textContent = prev;
     const all = await adminFetch(panel, "GET", "/api/admin/notes");
     const list = Array.isArray(all) ? all : [];
@@ -348,7 +365,7 @@ async function submitNewNote(panel, wrap) {
       animatePostNote(panel, list);
     } else {
       reconcileAdminNotes(panel, list);
-      relayoutExpanded(panel, true);
+      relayoutExpanded(panel);
     }
     _notesCache = null;
   } catch (e) {
@@ -605,13 +622,11 @@ function startInlineEdit(panel, el) {
   el._savedWrapW = listWidth;
 
   // ── 1: Build the edit-form markup ────────────────────────────────────────
-  const isDefault = !note.color || note.color === "default";
   const editInner =
     '<textarea class="ni-input" maxlength="200" placeholder="Edit note…"></textarea>' +
     '<div class="ni-input-row">' +
-    '  <input class="ni-emoji" type="text" maxlength="4" />' +
-    `  <input class="ni-color" type="color" value="${isDefault ? "#6c63ff" : note.color}" />` +
-    `  <label class="ni-color-default"><input class="ni-color-toggle" type="checkbox" ${isDefault ? "checked" : ""}/>default</label>` +
+    '  <button type="button" class="ni-pick ni-emoji-btn" title="Emoji"></button>' +
+    '  <button type="button" class="ni-pick ni-color-btn" title="Bubble colour"></button>' +
     "  <button type='button' class='ni-save'>Save</button>" +
     "  <button type='button' class='ni-cancel'>Cancel</button>" +
     "</div>";
@@ -643,7 +658,11 @@ function startInlineEdit(panel, el) {
   const editDiv = card.querySelector(".ni-edit");
   const textarea = editDiv.querySelector(".ni-input");
   textarea.value = note.text || "";
-  editDiv.querySelector(".ni-emoji").value = note.emoji || "";
+  // Emoji + colour selector triggers — state lives on the bubble element.
+  wireSelector(panel, editDiv, el, {
+    emoji: note.emoji || "",
+    color: note.color || "default",
+  });
   editDiv.querySelector(".ni-save").addEventListener("click", (e) => { e.stopPropagation(); saveInlineEdit(panel, el); });
   editDiv.querySelector(".ni-cancel").addEventListener("click", (e) => { e.stopPropagation(); cancelInlineEdit(panel, el); });
   wireTextareaAutoResize(panel, textarea, el);
@@ -947,9 +966,8 @@ function cancelInlineEdit(panel, el) {
 async function saveInlineEdit(panel, el) {
   const card = el.querySelector(".bubble-card");
   const text = card.querySelector(".ni-input").value.trim();
-  const emoji = card.querySelector(".ni-emoji").value.trim();
-  const useDefault = card.querySelector(".ni-color-toggle").checked;
-  const color = useDefault ? "default" : card.querySelector(".ni-color").value;
+  const emoji = (el._selEmoji || "").trim();
+  const color = el._selColor || "default";
   if (!text) return;
   const id = el.dataset.noteId;
   const save = card.querySelector(".ni-save");
@@ -1001,7 +1019,7 @@ async function deleteNote(panel, el) {
     // Seamless removal: the target fades out, then the bubbles above it glide
     // down to fill the gap — no global cross-fade reflow. (Problem 2.2.)
     if (panel._expanded && !prefersReducedMotion()) animateDeleteNote(panel, el, list);
-    else { reconcileAdminNotes(panel, list); relayoutExpanded(panel, true); }
+    else { reconcileAdminNotes(panel, list); relayoutExpanded(panel); }
     _notesCache = null;
   } catch (e) {
     console.warn("[InstantNotes] delete failed:", e);

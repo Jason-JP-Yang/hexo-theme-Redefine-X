@@ -6,7 +6,7 @@ $logo-image-box-width = 34px
 @require '../../common/variables'
 
 .navbar-container
-  font-family 'Chillax-Variable', sans-serif
+  font-family 'Chillax-Variable', 'Noto Color Emoji', sans-serif
   width 100%
   height 100%
   box-sizing border-box
@@ -74,7 +74,7 @@ $logo-image-box-width = 34px
         color var(--first-text-color)
         transform translateY(1px)
         if hexo-config('global.fonts.title.enable') {
-          font-family hexo-config('global.fonts.title.family')
+          font-family hexo-config('global.fonts.title.family'), 'Noto Color Emoji', sans-serif
         }
 
         h1

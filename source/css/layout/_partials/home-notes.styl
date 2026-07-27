@@ -134,6 +134,9 @@
   left 0
   right 0
   bottom 0
+  // Never let the browser's scroll anchoring re-adjust scrollTop mid-animation
+  // (it fights the FLIP glides and reads as jitter).
+  overflow-anchor none
 
 // ─── Individual bubble (wrapper) ─────────────────────────
 // The TAIL lives on this wrapper so the card's mask-image
@@ -252,6 +255,9 @@
   font-size 20px
   z-index 20
   pointer-events none
+  // The animated Noto overlay needs no sizing here: the shared runtime anchors
+  // it to the static glyph's own baseline/art board (see css/common/basic.styl),
+  // so it tracks this badge's responsive font-size automatically.
   &.emoji-default
     background #ffffff
     .dark &
@@ -404,6 +410,14 @@
     &::-webkit-scrollbar-track
       background transparent
 
+// While the panel frame + bubbles are gliding (expand / collapse / refit) the
+// field's scroll-fade mask is suppressed: gliding bubbles would flicker crossing
+// the fade band while the masked layer re-rasterises every frame. Restored on
+// settle (`notes-anim` is removed).
+.instant-notes-panel.is-expanded.notes-anim .instant-notes-field
+  -webkit-mask-image none !important
+  mask-image none !important
+
 // The expanded panel keeps the EXACT same frosted glass + shadow as the collapsed
 // panel — and as the rest of the bottom bar (arrow / social pill). Expanding must
 // change the panel's SIZE, never its depth/elevation. Same values as the base
@@ -460,30 +474,6 @@
     display flex
     align-items center
     gap 6px
-  .ni-emoji
-    width 38px
-    box-sizing border-box
-    text-align center
-    border none
-    border-radius 8px
-    padding 5px
-    font-size 13px
-    background rgba(0, 0, 0, 0.06)
-    color inherit
-  .ni-color
-    width 26px
-    height 26px
-    border none
-    background none
-    padding 0
-    cursor pointer
-  .ni-color-default
-    display inline-flex
-    align-items center
-    gap 3px
-    font-size 11px
-    opacity 0.75
-    cursor pointer
   .ni-post
     margin-left auto
     border none
@@ -494,7 +484,7 @@
     cursor pointer
     background var(--primary-color, #6c63ff)
     color #fff
-  .dark & .ni-input, .dark & .ni-emoji
+  .dark & .ni-input
     background rgba(255, 255, 255, 0.10)
 
 // Inline edit reuses the same field styling inside an existing bubble card.
@@ -521,30 +511,6 @@
     display flex
     align-items center
     gap 6px
-  .ni-emoji
-    width 38px
-    box-sizing border-box
-    text-align center
-    border none
-    border-radius 8px
-    padding 5px
-    font-size 13px
-    background rgba(0, 0, 0, 0.06)
-    color inherit
-  .ni-color
-    width 26px
-    height 26px
-    border none
-    background none
-    padding 0
-    cursor pointer
-  .ni-color-default
-    display inline-flex
-    align-items center
-    gap 3px
-    font-size 11px
-    opacity 0.75
-    cursor pointer
   .ni-save
     margin-left auto
     border none
@@ -565,8 +531,188 @@
     background transparent
     color var(--primary-color, #6c63ff)
 .dark .bubble-card .ni-edit
-  .ni-input, .ni-emoji
+  .ni-input
     background rgba(255, 255, 255, 0.10)
+
+// ─── Emoji / colour selector triggers (compose card + inline edit) ──────
+.instant-notes-panel .ni-pick
+  position relative
+  width 30px
+  height 30px
+  box-sizing border-box
+  display inline-flex
+  align-items center
+  justify-content center
+  flex none
+  border none
+  border-radius 8px
+  padding 0
+  font-size 15px
+  cursor pointer
+  background rgba(0, 0, 0, 0.06)
+  color inherit
+  transition background 0.2s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)
+  &:hover
+    background rgba(0, 0, 0, 0.12)
+    transform translateY(-1px)
+  // The picked emoji plays its Noto animation right on the trigger. No sizing
+  // here on purpose: the shared runtime anchors the overlay to this button's own
+  // static glyph, so animated and static are the same size in the same place.
+.dark .instant-notes-panel .ni-pick
+  background rgba(255, 255, 255, 0.10)
+  &:hover
+    background rgba(255, 255, 255, 0.18)
+
+// Colour trigger dot: solid selected colour, or a hue ring in "default" mode.
+.instant-notes-panel .ni-color-dot
+  width 18px
+  height 18px
+  border-radius 50%
+  display block
+  border 2px solid rgba(255, 255, 255, 0.75)
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.18)
+  background conic-gradient(#f47067, #f5a623, #43b581, #5a9cf8, #9b59b6, #f47067)
+
+// ─── Selector popup — frosted-glass shell shared by both pickers ────────
+// Anchored absolutely in .home-banner-container (same coordinate space as the
+// expanded panel); opens with the bubbles' fade + blur + glide language.
+.ni-popup
+  position absolute
+  z-index 60
+  padding 10px
+  border-radius 14px
+  background rgba(255, 255, 255, 0.60)
+  backdrop-filter blur(24px) saturate(1.5)
+  -webkit-backdrop-filter blur(24px) saturate(1.5)
+  border 1px solid rgba(255, 255, 255, 0.40)
+  box-shadow 0 12px 40px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.30)
+  color var(--first-text-color)
+  .dark &
+    background rgba(24, 24, 34, 0.75)
+    border-color rgba(255, 255, 255, 0.10)
+    box-shadow 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)
+
+// Emoji popup: the picker IS the popup — no inner chrome, no visible second
+// layer. The shell only provides the glass, radius clipping and the open/close
+// animation; the picker's own background is transparent (injected shadow CSS)
+// and its "Default — no emoji" action lives INSIDE the picker (noneOption).
+// NOTE: never override em-emoji-picker's display — its internal scroll region
+// relies on the :host{display:flex} column layout for a bounded height.
+.ni-popup-emoji
+  padding 0
+  overflow hidden
+
+.ni-pop-loading
+  display flex
+  align-items center
+  justify-content center
+  width 240px
+  height 120px
+  font-size 18px
+  opacity 0.6
+
+// ─── Colour picker internals ─────────────────────────────────────────────
+.ni-popup-color
+  width 248px
+  box-sizing border-box
+
+.ni-cp-sv
+  position relative
+  width 100%
+  height 140px
+  border-radius 10px
+  cursor crosshair
+  touch-action none
+
+.ni-cp-hue
+  position relative
+  width 100%
+  height 12px
+  border-radius 6px
+  margin-top 12px
+  cursor pointer
+  touch-action none
+  background linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%)
+
+.ni-cp-thumb
+  position absolute
+  width 14px
+  height 14px
+  border-radius 50%
+  border 2.5px solid #fff
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.35)
+  transform translate(-50%, -50%)
+  pointer-events none
+.ni-cp-hue-thumb
+  top 50%
+
+.ni-cp-row
+  display flex
+  align-items center
+  gap 8px
+  margin-top 12px
+
+.ni-cp-preview
+  width 26px
+  height 26px
+  border-radius 8px
+  flex none
+  border 1px solid rgba(0, 0, 0, 0.12)
+
+.ni-cp-hex
+  flex 1
+  min-width 0
+  border none
+  border-radius 8px
+  padding 6px 8px
+  font-size 13px
+  font-family GeistMono, ui-monospace, monospace
+  background rgba(0, 0, 0, 0.06)
+  color inherit
+  .dark &
+    background rgba(255, 255, 255, 0.10)
+
+.ni-cp-apply
+  border none
+  border-radius 8px
+  padding 6px 12px
+  font-size 12.5px
+  font-weight 600
+  cursor pointer
+  background var(--primary-color, #6c63ff)
+  color #fff
+
+.ni-cp-presets
+  display grid
+  grid-template-columns repeat(6, 1fr)
+  gap 8px
+  margin-top 12px
+  button
+    width 100%
+    aspect-ratio 1
+    border-radius 8px
+    border 1px solid rgba(0, 0, 0, 0.10)
+    cursor pointer
+    padding 0
+    transition transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)
+    &:hover
+      transform scale(1.12)
+  .ni-cp-default
+    background transparent
+    display flex
+    align-items center
+    justify-content center
+    font-size 12px
+    color inherit
+    border 1.5px dashed rgba(127, 127, 127, 0.55)
+
+@media screen and (max-width: 520px)
+  .ni-popup
+    max-width calc(100vw - 24px)
+  .ni-popup-color
+    // unquote: emit the literal CSS min() — Stylus otherwise treats min() as its
+    // own numeric built-in and fails to coerce the calc() argument.
+    width unquote("min(248px, calc(100vw - 24px))")
 
 // ─── Per-bubble edit / delete (to the bubble's right) ────
 .instant-note-admin-actions

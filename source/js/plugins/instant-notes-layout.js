@@ -17,7 +17,7 @@ import {
   EMOJI_RIGHT_EXTRA, COMPACT_RATIO, WRAP_QUERY,
   BAND_GAP, EXPAND_GAP_TOP, EXPAND_GAP_SIDE,
   LIST_GAP_Y, LIST_MAX_W, STATUS_LEFT_RESERVE, EMOJI_TOP_EXTRA, EMOJI_W_PAD,
-  FRAME_MS, GLIDE, FADE_OUT_MS, MIN_PANEL_W,
+  FRAME_MS, GLIDE, FADE_OUT_MS, FADE_BLUR, MIN_PANEL_W,
   clamp, prefersReducedMotion,
 } from "./instant-notes-utils.js";
 import {
@@ -28,6 +28,9 @@ import {
 // ════════════════════════════════════════════════════════════
 //  COMPACT LAYOUT
 // ════════════════════════════════════════════════════════════
+
+// Width cap for the compose card in the COMPACT (collapsed) view.
+const COMPOSE_MAX_W = 400;
 
 // ─── Create DOM elements and run the first layout ─────────
 export function buildDOM(notes, panel) {
@@ -400,8 +403,11 @@ export function layoutCompactCompose(panel, opts = {}) {
   const composeLeft = clamp(
     Math.round(avR - AVATAR_OVERLAP), PAD, Math.max(PAD, W - PAD - MIN_READABLE_W),
   );
-  const maxW = Math.max(MIN_READABLE_W, W - composeLeft - PAD);
-  if (composeW > maxW) { input.style.width = `${Math.round(maxW)}px`; composeW = maxW; }
+  // Generous fixed target width for the compact compose card: up to
+  // COMPOSE_MAX_W (400px), bounded by the strip space actually available.
+  const maxW = Math.max(MIN_READABLE_W, Math.min(COMPOSE_MAX_W, W - composeLeft - PAD));
+  input.style.width = `${Math.round(maxW)}px`;
+  composeW = maxW;
 
   // Frame: compose card stacked just above the avatar (newest-bubble slot).
   const H = Math.round(bandTop + composeH + 2 + avBottomGap + avH);
@@ -450,7 +456,7 @@ export function wireResize(panel) {
       const w = window.innerWidth;
       if (w === panel._lastWinW) return;
       panel._lastWinW = w;
-      if (panel._expanded) relayoutExpanded(panel, false);
+      if (panel._expanded) relayoutExpanded(panel);
       else if (panel._composeCompact) layoutCompactCompose(panel);
       else relayoutCompact(panel);
     }, 150);
@@ -459,38 +465,57 @@ export function wireResize(panel) {
   panel._resizeHandler = handler;
 }
 
-// Re-run the compact layout, cross-fading bubbles to their new spots.
+// Re-run the compact layout: surviving bubbles GLIDE to their new spots (FLIP),
+// bubbles the new pack drops fade out in place, newly-fitting ones fade in, and
+// the frame's own box glides on the same curve. No cross-fade, no reflow flash.
 export function relayoutCompact(panel) {
   if (!panel._bubbleEls || panel._bubbleEls.length === 0 || panel._expanded) return;
-  const revealed = panel._bubbleEls.filter(
+  const els = panel._bubbleEls;
+  const preVisible = els.filter(
     (b) => b.style.display !== "none" && !b.classList.contains("is-entering"),
   );
-  fadeOutBubbles(revealed);
+  const snap = snapshotBubbles(preVisible);
+  const preRect = panel.getBoundingClientRect();
+  const preCompact = panel.classList.contains("is-compact");
 
-  const run = () => {
-    const plan = computeLayout(panel);
-    if (!plan) return;
-    applyFrame(panel, plan);
-    panel._plan = plan;
-    const placed = [];
-    plan.placed.forEach(({ i, left, top }) => {
-      const el = panel._bubbleEls[i];
-      if (el.classList.contains("is-entering")) {
-        el.style.transition = "none";
-        el.style.left = `${left}px`;
-        el.style.top = `${top}px`;
-        return;
-      }
-      placeBubble(el, left, top);
-      placed.push(el);
-    });
-    fadeInBubbles(placed);
+  const plan = computeLayout(panel);
+  if (!plan) return;
+  applyFrame(panel, plan);
+  panel._plan = plan;
+
+  const movers = [];
+  const entering = [];
+  plan.placed.forEach(({ i, left, top }) => {
+    const el = els[i];
+    placeBubble(el, left, top);
+    if (el.classList.contains("is-entering")) return; // awaits revealNotes
+    if (snap.has(el)) movers.push(el);
+    else entering.push(el);
+  });
+  const leaving = preVisible.filter((el) => el.style.display === "none");
+
+  if (prefersReducedMotion()) {
+    entering.forEach((el) => { el.style.opacity = "1"; });
     updateTitleShift(panel);
     evaluateMoreButton(panel);
-  };
+    return;
+  }
 
-  if (prefersReducedMotion()) run();
-  else setTimeout(run, FADE_OUT_MS);
+  // PIN the frame at its pre-mutation box FIRST — bubble inversions (and the
+  // dropped-bubble fades) below measure against this t=0 box. Frame FLIP only
+  // while the panel stays in the same (compact/normal) mode — a mode switch flips
+  // position semantics, so it snaps instead.
+  const framePlay =
+    preCompact === plan.isCompact ? flipFrameBox(panel, preRect, FRAME_MS) : null;
+  entering.forEach((el) => { el.style.transition = "none"; el.style.opacity = "0"; });
+  leaving.forEach((el) => fadeOutDropped(el, snap.get(el)));
+  const flip = armFlip(snap, movers, FRAME_MS);
+  if (framePlay) framePlay();
+  flip.play();
+  fadeInBubbles(entering);
+  setTimeout(() => flip.settle(), FRAME_MS + 30);
+  updateTitleShift(panel);
+  evaluateMoreButton(panel);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -563,6 +588,278 @@ function setMoreButtonLoading(panel) {
 }
 
 // ════════════════════════════════════════════════════════════
+//  FLIP GLIDE ENGINE
+// ════════════════════════════════════════════════════════════
+// Every layout change (expand / collapse / resize refit) is animated the same way:
+// bubbles that exist on BOTH sides of the change GLIDE (transform + card-width
+// morph), bubbles that appear fade in, bubbles that disappear fade out. Layout is
+// always committed in ONE synchronous mutation (no intermediate paint), so nothing
+// ever flickers at the start or end of a move, and no path fades everything out to
+// recompute from scratch any more.
+
+// Capture screen rect + rendered card width for every visible bubble BEFORE a
+// layout mutation.
+function snapshotBubbles(els) {
+  const snap = new Map();
+  els.forEach((el) => {
+    if (!el || el.style.display === "none") return;
+    const card = el.querySelector(".bubble-card");
+    const cardRect = (card || el).getBoundingClientRect();
+    snap.set(el, {
+      rect: el.getBoundingClientRect(),
+      cardW: cardRect.width,
+      cardH: cardRect.height,
+    });
+  });
+  return snap;
+}
+
+// AFTER a mutation has committed the FINAL layout, invert every surviving bubble
+// back to its snapshotted screen position and rendered width — same synchronous
+// task, so frame 0 is pixel-identical to the pre-mutation state. play() arms all
+// transitions in one style recalc; because bubbles and the panel frame share the
+// same duration + curve, a bubble's on-screen path is the exact linear blend
+// old→new even while its animating parent frame moves under it. settle() clears
+// the temporary width pins once landed.
+function armFlip(snap, els, dur = FRAME_MS) {
+  const moves = [];
+  els.forEach((el) => {
+    const s = snap.get(el);
+    if (!s || el.style.display === "none") return;
+    const isInput = el.classList.contains("instant-notes-input-bubble");
+    const card = el.querySelector(".bubble-card");
+    const finalW = (isInput ? el : card || el).getBoundingClientRect().width;
+    let widthMove = null;
+    if (card && Math.abs(finalW - s.cardW) > 0.5) {
+      // ── Size morph WITHOUT per-frame text rewrap ──────────────────────────
+      // Animating max-width re-wraps the text on EVERY frame — words jump
+      // between lines for the whole flight and all bubbles visibly vibrate.
+      // Instead: (1) FREEZE the live content at its FINAL wrap inside a
+      // fixed-width inner wrapper — the text is laid out exactly once; (2) pin
+      // the card's border box at the OLD size with overflow:hidden and tween
+      // width/height to the final box — the box only clips/reveals the frozen
+      // content; (3) overlay a clone re-wrapped at the OLD width and fade it
+      // out quickly, masking the single wrap change. Nothing reflows
+      // mid-flight, so nothing shakes.
+      const cardRect = card.getBoundingClientRect(); // FINAL box (post-mutation)
+      const cs = getComputedStyle(card);
+      const innerW =
+        cardRect.width -
+        (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) -
+        (parseFloat(cs.borderLeftWidth) || 0) - (parseFloat(cs.borderRightWidth) || 0);
+
+      // Old-wrap snapshot (clone BEFORE freezing). Skipped for the input card:
+      // cloning a textarea drops its live value, and the compose card has no
+      // wrapped prose to mask anyway.
+      let snapEl = null;
+      if (!isInput) {
+        snapEl = card.cloneNode(true);
+        snapEl.style.position = "absolute";
+        snapEl.style.top = "0";
+        snapEl.style.left = "0";
+        snapEl.style.margin = "0";
+        snapEl.style.boxSizing = "border-box";
+        snapEl.style.width = `${s.cardW}px`;
+        snapEl.style.maxWidth = "none";
+        snapEl.style.whiteSpace = "normal";
+        snapEl.style.wordBreak = "normal";
+        snapEl.style.overflowWrap = "break-word";
+        snapEl.style.pointerEvents = "none";
+        snapEl.style.zIndex = "3";
+        snapEl.style.transition = "none";
+      }
+
+      const freeze = document.createElement("div");
+      freeze.style.width = `${Math.max(0, Math.round(innerW))}px`;
+      while (card.firstChild) freeze.appendChild(card.firstChild);
+      card.appendChild(freeze);
+      if (snapEl) card.appendChild(snapEl);
+
+      widthMove = {
+        isInput,
+        toW: Math.round(cardRect.width),
+        toH: Math.round(cardRect.height),
+        restoreMax: card.style.maxWidth,
+        snapEl,
+        freeze,
+      };
+
+      card.style.transition = "none";
+      card.style.boxSizing = "border-box";
+      card.style.position = "relative";
+      card.style.overflow = "hidden";
+      card.style.maxWidth = "none"; // must not cap the pinned/tweened width
+      card.style.width = `${Math.round(s.cardW)}px`;
+      card.style.height = `${Math.round(s.cardH)}px`;
+      if (isInput) el.style.width = `${Math.round(s.cardW)}px`;
+    }
+    el.style.transition = "none";
+    if (card) card.style.transition = "none";
+    const now = el.getBoundingClientRect();
+    const dx = Math.round(s.rect.left - now.left);
+    const dy = Math.round(s.rect.top - now.top);
+    el.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : "none";
+    moves.push({ el, card, widthMove });
+  });
+  // Commit every inversion NOW. Transitions animate from the last COMMITTED
+  // style; the transform written above is otherwise never flushed before play()
+  // rewrites it, so the browser would see inverted→final as a single no-op change
+  // and every bubble would SNAP to its final spot the instant the animation
+  // starts (the "jump to the edge / outside the panel" bug).
+  if (moves.length) void moves[moves.length - 1].el.offsetWidth;
+  return {
+    play() {
+      moves.forEach(({ el, card, widthMove }) => {
+        const w = widthMove && widthMove.isInput ? `, width ${dur}ms ${GLIDE}` : "";
+        el.style.transition = `transform ${dur}ms ${GLIDE}${w}`;
+        el.style.transform = "none";
+        if (widthMove) {
+          card.style.transition = `width ${dur}ms ${GLIDE}, height ${dur}ms ${GLIDE}`;
+          card.style.width = `${widthMove.toW}px`;
+          card.style.height = `${widthMove.toH}px`;
+          if (widthMove.isInput) el.style.width = `${widthMove.toW}px`;
+          if (widthMove.snapEl) {
+            widthMove.snapEl.style.transition = "opacity 160ms ease";
+            widthMove.snapEl.style.opacity = "0";
+          }
+        }
+      });
+    },
+    settle() {
+      moves.forEach(({ el, card, widthMove }) => {
+        el.style.transition = "";
+        if (card) card.style.transition = "";
+        if (!widthMove) return;
+        if (widthMove.snapEl) widthMove.snapEl.remove();
+        const f = widthMove.freeze;
+        while (f.firstChild) card.insertBefore(f.firstChild, f);
+        f.remove();
+        card.style.width = "";
+        card.style.height = "";
+        card.style.overflow = "";
+        card.style.position = "";
+        card.style.boxSizing = "";
+        card.style.maxWidth = widthMove.restoreMax || "";
+        if (!widthMove.restoreMax) {
+          // Final state was an UNWRAPPED card — drop the wrap helpers entirely.
+          card.style.whiteSpace = "";
+          card.style.wordBreak = "";
+          card.style.overflowWrap = "";
+        }
+      });
+    },
+  };
+}
+
+// A bubble the new layout DROPPED (display:none): bring it back at its old screen
+// spot (transform against its stale layout position) and fade it out in place.
+function fadeOutDropped(el, s) {
+  if (!s) return;
+  el.style.display = "";
+  el.style.transition = "none";
+  const now = el.getBoundingClientRect();
+  el.style.transform =
+    `translate(${Math.round(s.rect.left - now.left)}px, ${Math.round(s.rect.top - now.top)}px)`;
+  void el.offsetWidth;
+  el.style.transition = `opacity ${FADE_OUT_MS}ms ease, filter ${FADE_OUT_MS}ms ease`;
+  el.style.opacity = "0";
+  el.style.filter = FADE_BLUR;
+  setTimeout(() => {
+    el.style.display = "none";
+    el.style.transform = "none";
+    el.style.filter = "none";
+    el.style.transition = "none";
+  }, FADE_OUT_MS + 20);
+}
+
+// The expanded list's OLDER bubbles live inside `#instant-notes-field`, which is
+// a clipping scroll viewport (`overflow-x:hidden` + an inline `overflow-y`).
+// While the frame is still growing, that viewport is only a sliver — the panel is
+// at its COMPACT height, so the field is `panelH − fieldTop − fieldBottom` tall —
+// and a FLIP-inverted bubble, parked at its old compact spot, lands OUTSIDE the
+// field's box and is clipped away: instead of gliding it simply vanishes and pops
+// into place when the frame lands. Only the newest note escaped this, being
+// pinned as a direct child of the panel — which is exactly the "with ≥2 notes the
+// ones in the scroll area don't move" bug.
+//
+// So: un-clip the field for the flight. Turning `overflow` off also zeroes the
+// scroll offset, so fold the current scrollTop into each bubble's inline `top`
+// while it is off. The returned restore() puts positions, overflow AND scrollTop
+// back in ONE synchronous mutation — no intermediate paint, so the landing frame
+// is pixel-identical to the animation's last frame.
+//
+// Nothing that should stay hidden becomes visible meanwhile: bubbles that land
+// scrolled out of the list are the older history ones, and those are `entering`
+// — held at opacity 0 for the whole flight and only revealed after clipping is
+// restored. Survivors always land in the bottom-anchored, in-view part of the
+// list, because the compact view can only ever show the newest few notes.
+function unclipFieldForFlip(panel, els) {
+  const field = panel.querySelector("#instant-notes-field");
+  if (!field) return () => {};
+  // The offset to fold in is the one the list will END at — NOT field.scrollTop,
+  // which is still measured against the compact (sliver) viewport at this point
+  // and is therefore wildly too large. Both numbers come from the layout pass
+  // that just ran, and the list is always scrolled to the bottom here.
+  const contentH = panel._listContentH || 0;
+  const viewportH = panel._listViewportH || 0;
+  const scrollTop = Math.max(0, Math.round(contentH - viewportH));
+  const prevOverflowX = field.style.overflowX;
+  const prevOverflowY = field.style.overflowY;
+  const tops = new Map();
+  if (scrollTop) {
+    (els || []).forEach((el) => {
+      if (!el || el.parentElement !== field) return;
+      tops.set(el, el.style.top);
+      el.style.top = `${Math.round((parseFloat(el.style.top) || 0) - scrollTop)}px`;
+    });
+  }
+  field.style.overflowX = "visible";
+  field.style.overflowY = "visible";
+  return () => {
+    tops.forEach((top, el) => { el.style.top = top; });
+    field.style.overflowX = prevOverflowX;
+    field.style.overflowY = prevOverflowY;
+    // The panel is at its full height now, so this lands on the real bottom.
+    scrollListToBottom(panel);
+  };
+}
+
+// FLIP the panel's own box across a compact re-layout (height always; left/width
+// too while it stays in is-compact mode, where they are inline-driven).
+//
+// PIN phase runs immediately (frame back at its pre-mutation box, transition
+// none) and MUST happen BEFORE armFlip measures the bubbles: a bubble's inversion
+// is computed against its parent frame's t=0 box, so pinning after measuring
+// would offset every start position by the frame's own delta (a start jump).
+// The returned play() arms the frame transition to the final box — call it in
+// the same tick as flip.play() so frame + bubbles share one timeline.
+function flipFrameBox(panel, preRect, dur = FRAME_MS) {
+  const isCompact = panel.classList.contains("is-compact");
+  const post = { left: panel.style.left, width: panel.style.width, height: panel.style.height };
+  const postRect = panel.getBoundingClientRect();
+  if (
+    Math.abs(postRect.height - preRect.height) < 1 &&
+    Math.abs(postRect.left - preRect.left) < 1 &&
+    Math.abs(postRect.width - preRect.width) < 1
+  ) return null;
+  panel.style.transition = "none";
+  panel.style.height = `${Math.round(preRect.height)}px`;
+  if (isCompact) {
+    panel.style.width = `${Math.round(preRect.width)}px`;
+    panel.style.left = `${Math.round((parseFloat(post.left) || 0) + (preRect.left - postRect.left))}px`;
+  }
+  return () => {
+    panel.style.transition = `left ${dur}ms ${GLIDE}, width ${dur}ms ${GLIDE}, height ${dur}ms ${GLIDE}`;
+    panel.style.height = post.height;
+    if (isCompact) {
+      panel.style.width = post.width;
+      panel.style.left = post.left;
+    }
+    setTimeout(() => { panel.style.transition = ""; }, dur + 30);
+  };
+}
+
+// ════════════════════════════════════════════════════════════
 //  EXPAND / COLLAPSE
 // ════════════════════════════════════════════════════════════
 function toggleExpand(panel) {
@@ -602,11 +899,12 @@ async function expandPanel(panel) {
   // transition; captured any later it would already equal the end (→ no glide). (Problem 2.)
   const composeStartW = composeMode && panel._inputBubble
     ? panel._inputBubble.getBoundingClientRect().width : 0;
-  // Active bubbles cross-fade out (reflow is allowed here). In compose mode there
-  // are none — the compose card stays put and history fades in instead. (Problem 1.)
-  if (!composeMode) {
-    fadeOutBubbles((panel._bubbleEls || []).filter((b) => b.style.display !== "none"));
-  }
+  // Snapshot the visible compact bubbles BEFORE anything moves: they survive into
+  // the expanded list and GLIDE there (FLIP) — never fade-out/re-fade-in.
+  const preVisible = composeMode ? [] : (panel._bubbleEls || []).filter(
+    (b) => b.style.display !== "none" && !b.classList.contains("is-entering"),
+  );
+  const snap = snapshotBubbles(preVisible);
 
   enterOverlay(panel);
 
@@ -663,27 +961,51 @@ async function expandPanel(panel) {
     return;
   }
 
-  animateFrame(panel, frame, true);
-  // Arm the elevated glass AFTER the frame transition is set so background +
-  // box-shadow animate together with the resize. (Problem 2.)
-  panel.classList.add("notes-elevated");
-
+  // Commit the FINAL list layout instantly, then FLIP: surviving compact bubbles
+  // are inverted to their old screen spots and glide (transform + card width) on
+  // the same curve/duration as the growing frame — they track it exactly. Newly
+  // added bubbles (admin history, input) fade in once the frame lands.
+  panel.classList.add("notes-anim");
   positionExpandedList(panel, measured, finalH);
+  scrollListToBottom(panel);
+  const entering = measured.order.filter((el) => !snap.has(el));
+  const movers = measured.order.filter((el) => snap.has(el));
   wireCloseListeners(panel);
-  const done = () => {
-    fadeInBubbles(measured.order);
-    scrollListToBottom(panel);
+
+  if (prefersReducedMotion()) {
+    animateFrame(panel, frame, false);
+    panel.classList.add("notes-elevated");
+    fadeInBubbles(entering);
+    panel.classList.remove("notes-anim");
     panel._animating = false;
-  };
-  if (prefersReducedMotion()) done();
-  else setTimeout(done, FRAME_MS + 30);
+    return;
+  }
+
+  entering.forEach((el) => { el.style.transition = "none"; el.style.opacity = "0"; });
+  // BEFORE armFlip measures: un-clipping shifts the field's bubbles, and the
+  // inversion has to be computed against the positions they will actually fly from.
+  const reclip = unclipFieldForFlip(panel, measured.order);
+  const flip = armFlip(snap, movers, FRAME_MS);
+  animateFrame(panel, frame, true);
+  // Elevated glass AFTER the frame transition is armed so background + box-shadow
+  // morph with the resize. (Problem 2.)
+  panel.classList.add("notes-elevated");
+  flip.play();
+  setTimeout(() => {
+    flip.settle();
+    reclip();
+    fadeInBubbles(entering);
+    panel.classList.remove("notes-anim");
+    panel._animating = false;
+  }, FRAME_MS + 30);
 }
 
-// ─── Collapse: fade everything out, shrink the empty frame, reveal compact ────
-// Symmetric with expand. Every bubble disappears UP-FRONT — before the frame moves —
-// so nothing slides or flickers during the resize; the panel simply shrinks as an
-// empty glass box, then the compact bubbles fade in at their final spots. The exact
-// compact frame is computed once (buildCollapseTarget) so the shrink lands jump-free. (Problem 2.)
+// ─── Collapse: departing bubbles fade, survivors GLIDE home (panel FLIP) ──────
+// (1) The input / history / expired bubbles fade out first; (2) the exact compact
+// layout is computed ONCE (buildCollapseTarget) and the frame plus every surviving
+// bubble FLIP-glide from expanded to that precomputed target — landing jump-free
+// because the animation's end state IS the real final state. No cross-fade of
+// survivors, no recompute-from-scratch reflow.
 function collapsePanel(panel) {
   if (!panel._expanded || panel._animating) return;
   panel._animating = true;
@@ -701,42 +1023,56 @@ function collapsePanel(panel) {
   const compose = !!panel._isAdmin &&
     (panel._bubbleEls || []).filter((b) => b._active).length === 0;
 
-  // (1) Every bubble vanishes before the frame animates.
-  fadeOutBubbles(expandedOrder(panel).filter(Boolean));
+  const input = panel._inputBubble;
+  const order = expandedOrder(panel).filter(Boolean);
+  const keep = compose
+    ? (input ? [input] : [])
+    : order.filter((el) => el !== input && el._active);
+  const leaving = order.filter((el) => keep.indexOf(el) === -1);
 
-  const run = () => {
-    // (2) Reduce to the final compact DOM + capture the compact frame; the panel is
-    //     re-lifted to the overlay so the empty frame can glide expanded → compact.
-    const target = buildCollapseTarget(panel, compose, container);
-
-    // Force the collapsed content hidden for the whole resize — some layout paths
-    // (e.g. the compose card) reset opacity to 1. It is revealed only at settle.
-    const content = (panel._bubbleEls || []).slice();
-    if (panel._inputBubble) content.push(panel._inputBubble);
-    content.forEach((el) => { el.style.transition = "none"; el.style.opacity = "0"; });
-
-    const settle = () => {
-      settleCollapse(panel, compose, target, []);
-      // (3) Reveal the compact bubbles once the box has finished shrinking.
-      const reveal = (panel._bubbleEls || []).filter((b) => b.style.display !== "none");
-      if (panel._inputBubble) reveal.push(panel._inputBubble);
-      fadeInBubbles(reveal);
-      updateTitleShift(panel);
-      evaluateMoreButton(panel);
-      panel._animating = false;
-    };
-
-    if (reduced || !target) { settle(); return; }
-    void panel.offsetWidth;
-    animateFrame(panel, target.frame, true);
-    panel.classList.remove("notes-elevated");
-    setTimeout(settle, FRAME_MS + 30);
+  const finish = () => {
+    panel.classList.remove("notes-anim");
+    updateTitleShift(panel);
+    evaluateMoreButton(panel);
+    panel._animating = false;
   };
 
-  // Let the fade-out complete first, so the frame only starts shrinking once every
-  // bubble is gone. Reduced motion collapses instantly.
-  if (reduced) run();
-  else setTimeout(run, FADE_OUT_MS);
+  if (reduced) {
+    leaving.forEach((el) => { el.style.opacity = "0"; });
+    const target = buildCollapseTarget(panel, compose, container);
+    settleCollapse(panel, compose, target, keep);
+    finish();
+    return;
+  }
+
+  panel.classList.add("notes-anim");
+  // (1) Departing bubbles fade out — the teardown below removes them for real.
+  fadeOutBubbles(leaving);
+
+  setTimeout(() => {
+    // (2) Snapshot survivors, reduce to the exact compact target, then FLIP.
+    const snap = snapshotBubbles(keep);
+    const target = buildCollapseTarget(panel, compose, container);
+
+    const movers = [];
+    keep.forEach((el) => {
+      // A survivor the compact pack DROPPED (no room) departs too: fade it out at
+      // its old spot instead of gliding.
+      if (el.style.display === "none") fadeOutDropped(el, snap.get(el));
+      else movers.push(el);
+    });
+
+    const flip = armFlip(snap, movers, FRAME_MS);
+    animateFrame(panel, target.frame, true);
+    panel.classList.remove("notes-elevated");
+    flip.play();
+
+    setTimeout(() => {
+      flip.settle();
+      settleCollapse(panel, compose, target, movers);
+      finish();
+    }, FRAME_MS + 30);
+  }, FADE_OUT_MS);
 }
 
 // Reduce the panel to its FINAL compact DOM in the bar, capture the exact compact
@@ -903,16 +1239,19 @@ function enterOverlay(panel) {
   const cRect = container.getBoundingClientRect();
 
   // Placeholder holds the panel's flex slot in the bottom bar so the arrow/social
-  // don't reflow while the panel is lifted out.
+  // don't reflow while the panel is lifted out. It mimics the panel's own FLEX
+  // behaviour per mode (never a frozen px width): a breakpoint change while
+  // expanded then re-lays the bar exactly as if the collapsed panel were still in
+  // it — desktop keeps arrow|slot|social on one row, mobile keeps the full-width
+  // slot row ABOVE the arrow/social row. Height is frozen for bar-height
+  // stability. (Mobile↔desktop-while-expanded layout fix.)
   const ph = document.createElement("div");
   ph.className = "instant-notes-placeholder";
-  ph.style.width = `${rect.width}px`;
   ph.style.height = `${rect.height}px`;
-  ph.style.flex = "0 0 auto";
-  if (isWrapMode(panel)) ph.style.order = "-1";
   panel.parentElement.insertBefore(ph, panel);
   panel._placeholder = ph;
   panel._container = container;
+  syncPlaceholderMode(panel);
 
   panel.classList.remove("is-compact");
   panel.classList.add("is-expanded");
@@ -928,6 +1267,27 @@ function enterOverlay(panel) {
   panel.style.width = `${rect.width}px`;
   panel.style.height = `${rect.height}px`;
   void panel.offsetWidth;
+}
+
+// Match the expanded-state placeholder to the CURRENT wrap mode. The collapsed
+// panel is `flex 1 1 0%; min-width 300px` on desktop and a full-width `order:-1`
+// row on tablet/mobile — the placeholder mirrors whichever applies NOW, so
+// crossing the breakpoint while expanded keeps the bottom bar's real layout
+// (and therefore bannerExpandGeom's band) correct in both directions.
+function syncPlaceholderMode(panel) {
+  const ph = panel._placeholder;
+  if (!ph) return;
+  if (isWrapMode(panel)) {
+    ph.style.order = "-1";
+    ph.style.flex = "0 0 100%";
+    ph.style.width = "auto";
+    ph.style.minWidth = "";
+  } else {
+    ph.style.order = "";
+    ph.style.flex = "1 1 0%";
+    ph.style.width = "auto";
+    ph.style.minWidth = "300px";
+  }
 }
 
 // The FULL (expanded) navbar height — NOT the live measured height. The panel lives
@@ -1222,6 +1582,7 @@ export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_M
   });
 
   panel._listContentH = contentH;
+  panel._listViewportH = viewportH;
   panel._listFits = fits;
   wireFieldScroll(panel);
   updateScrollFade(panel);
@@ -1238,22 +1599,57 @@ export function ensureBubblesInField(panel) {
   });
 }
 
-// Re-fit the expanded panel (resize, or after an admin write). Cross-fades.
-// Recomputes the banner geometry fresh (this IS the path for a real width change),
-// re-establishing the cached band + cap.
-export function relayoutExpanded(panel, animateFrameFlag) {
-  fadeOutBubbles(expandedOrder(panel).filter(Boolean));
-  const run = () => {
-    const geom = bannerExpandGeom(panel);
-    const measured = measureExpandedList(panel, geom.width);
-    const finalH = expandedHeight(measured, geom.maxHeight);
-    animateFrame(panel, { left: geom.left, top: geom.bottomInContainer - finalH, width: geom.width, height: finalH }, !!animateFrameFlag);
-    positionExpandedList(panel, measured, finalH);
-    fadeInBubbles(measured.order);
-    scrollListToBottom(panel);
+// Re-fit the expanded panel (resize, or after an admin write): every surviving
+// bubble GLIDES (FLIP) to its re-measured spot while the frame moves with it; new
+// bubbles fade in. Recomputes the banner geometry fresh (this IS the path for a
+// real width change), re-establishing the cached band + cap.
+export function relayoutExpanded(panel) {
+  // A viewport-width change may have crossed the wrap (mobile↔desktop)
+  // breakpoint: re-sync the flex placeholder FIRST so the bottom bar re-lays
+  // itself for the new mode and the geometry below measures the real band.
+  syncPlaceholderMode(panel);
+
+  const order = expandedOrder(panel).filter(Boolean);
+  const snap = snapshotBubbles(order.filter((el) => el.style.display !== "none"));
+
+  const geom = bannerExpandGeom(panel);
+  const measured = measureExpandedList(panel, geom.width);
+  const finalH = expandedHeight(measured, geom.maxHeight);
+  const frame = {
+    left: geom.left, top: geom.bottomInContainer - finalH,
+    width: geom.width, height: finalH,
   };
-  if (prefersReducedMotion()) run();
-  else setTimeout(run, FADE_OUT_MS);
+  positionExpandedList(panel, measured, finalH);
+  scrollListToBottom(panel);
+
+  const entering = measured.order.filter((el) => !snap.has(el));
+  const movers = measured.order.filter((el) => snap.has(el));
+
+  if (prefersReducedMotion()) {
+    animateFrame(panel, frame, false);
+    fadeInBubbles(entering);
+    return;
+  }
+
+  panel.classList.add("notes-anim");
+  entering.forEach((el) => { el.style.transition = "none"; el.style.opacity = "0"; });
+  // Same reason as in expandPanel: the scroll viewport must not clip bubbles that
+  // are mid-flight between the old and the new box.
+  const reclip = unclipFieldForFlip(panel, measured.order);
+  const flip = armFlip(snap, movers, FRAME_MS);
+  // The frame ALWAYS glides on the same curve/duration as the bubbles: their
+  // inversion was measured against the OLD frame box, so a snapped frame would
+  // shift every start position by the frame's delta (a start jump).
+  animateFrame(panel, frame, true);
+  flip.play();
+  setTimeout(() => {
+    flip.settle();
+    reclip();
+    // Revealed only once the field clips again, so a bubble that lands scrolled
+    // out of the list can never flash outside it. (Same order as expandPanel.)
+    fadeInBubbles(entering);
+    panel.classList.remove("notes-anim");
+  }, FRAME_MS + 30);
 }
 
 // Re-fit the expanded list WITHOUT a cross-fade: bubbles GLIDE to their new
@@ -1350,6 +1746,16 @@ function wireCloseListeners(panel) {
     if (!panel._expanded) return;
     if (panel.contains(e.target)) return;
     if (panel._moreBtn && panel._moreBtn.contains(e.target)) return;
+    // Clicks that ORIGINATED inside a picker popup must never collapse the
+    // panel. composedPath() is checked (not just panel._pickerPop.contains):
+    // selecting an emoji closes the popup SYNCHRONOUSLY during this same
+    // click's dispatch — by the time this bubble-phase listener runs, the
+    // popup ref is already null — and it also sees through the picker's
+    // shadow DOM. The path was captured at dispatch, so it still names the
+    // popup shell.
+    const path = e.composedPath ? e.composedPath() : [];
+    if (path.some((n) => n && n.classList && n.classList.contains("ni-popup"))) return;
+    if (panel._pickerPop && panel._pickerPop.contains(e.target)) return;
     collapsePanel(panel);
   };
   document.addEventListener("keydown", panel._onKey);

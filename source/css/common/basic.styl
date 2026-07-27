@@ -32,6 +32,11 @@ html, body
 
   --navbar-height: $navbar-height
 
+  // Tailwind's preflight font token lists the PLATFORM emoji fonts (Segoe UI
+  // Emoji / Apple Color Emoji) ahead of Noto — override it so every
+  // tailwind-fonted element resolves emoji to the Noto Color Emoji webfont.
+  --font-sans: 'Geist Variable', 'Noto Sans SC', 'Noto Color Emoji', ui-sans-serif, system-ui, sans-serif
+
   // When scroll_progress.bar is enabled, hide system scrollbar but keep scroll functionality
   // This prevents scrollbar width changes when image-viewer opens/closes
   if (hexo-config('global.scroll_progress.bar') == true)
@@ -249,3 +254,58 @@ button
 // ======================================================================
 .clear
   clear both
+
+// ======================================================================
+// Noto animated emoji runtime (plugins/noto-anim.js).
+//
+// `.noto-anim > .noto-anim-box` holds the plain emoji TEXT (static Noto via the
+// font stack — indistinguishable from normal text). While the emoji is in the
+// viewport the runtime drops the animated WebP into that same box as an absolutely
+// positioned overlay: no text node is removed, no layout ever changes.
+//
+// ── Geometry: no offsets, same box, centred ───────────────────────────────
+// `line-height: 1` on the box makes its content area exactly 1em tall, and Noto's
+// own metrics then place the emoji artwork centred in it — so "centre of the box"
+// and "centre of the glyph" are the same point, both horizontally (the artwork is
+// centred on its advance) and vertically. The overlay therefore just centres
+// itself in the box: nothing to offset, nothing that can drift.
+//
+// --noto-art-size only matches the artwork's SIZE: the animated WebP carries
+// transparent padding around its art (the 512px frame is the emoji's art board),
+// so it has to be drawn slightly larger than 1em for its artwork to come out the
+// same size as the glyph's.
+// ======================================================================
+:root
+  --noto-art-size 1.179em
+  --noto-fade 180ms
+
+.noto-anim
+  .noto-anim-box
+    position relative
+    display inline-block
+    line-height 1
+  img.noto-anim-img
+    position absolute
+    left 50%
+    top 50%
+    width var(--noto-art-size)
+    height var(--noto-art-size)
+    transform translate(-50%, -50%)
+    max-width none
+    margin 0
+    pointer-events none
+    user-select none
+    // Survives the box being hidden underneath a fully-opaque overlay.
+    visibility visible
+    opacity 0
+    transition opacity var(--noto-fade) linear
+  // Fades in ON TOP of the still-opaque static glyph …
+  &.is-anim img.noto-anim-img
+    opacity 1
+  // … which is only hidden once the overlay fully covers it.
+  &.anim-on .noto-anim-box
+    visibility hidden
+
+@media (prefers-reduced-motion: reduce)
+  .noto-anim img.noto-anim-img
+    transition none

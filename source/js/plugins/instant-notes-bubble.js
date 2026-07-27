@@ -2,6 +2,7 @@ import {
   ACTIVE_WINDOW_MS, FADE_OUT_MS, FADE_BLUR, FRAME_MS, GLIDE, FADE_IN_MS,
   contrastTextColor, timeAgo, prefersReducedMotion,
 } from "./instant-notes-utils.js";
+import { attachNotoEmoji, detachNotoEmoji } from "./noto-anim.js";
 
 // ─── Bubble state helpers ─────────────────────────────────────────────────────
 export function isNoteActive(note) {
@@ -11,6 +12,18 @@ export function isNoteActive(note) {
 
 export function bubbleHasEmoji(el) {
   return !!el.querySelector(".instant-note-emoji");
+}
+
+// Render an emoji: static Noto Color Emoji text IMMEDIATELY (site font stack —
+// zero requests), upgraded to the animated Noto WebP only while it is in the
+// viewport and only once decoded, via the shared site-wide runtime.
+export function setNotoEmoji(el, native) {
+  attachNotoEmoji(el, native);
+}
+
+// The host stops showing an emoji entirely — release the animation with it.
+export function clearNotoEmoji(el) {
+  detachNotoEmoji(el);
 }
 
 // ─── Bubble DOM creation ──────────────────────────────────────────────────────
@@ -58,7 +71,7 @@ export function createBubble(note, isNewest) {
     const emo = document.createElement("span");
     emo.className = "instant-note-emoji" + (color ? "" : " emoji-default");
     if (color) emo.style.background = color;
-    emo.textContent = note.emoji;
+    setNotoEmoji(emo, note.emoji);
     wrap.appendChild(emo);
   }
 
