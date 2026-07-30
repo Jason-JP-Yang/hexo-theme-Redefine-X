@@ -1,97 +1,123 @@
+import { onScroll, requestScrollPass } from "../tools/scrollScheduler.js";
+
 export default function initAutoHover() {
   initHomeArticleAutoHover();
   initArticleMediaAutoHover();
   initMasonryAutoHover();
 }
 
+// ==================== Home Article Auto-Hover ====================
+// The whole feature ran on its own scroll listener + its own rAF. It now shares
+// the theme-wide scroll pass, so a frame that touches home articles, media
+// figures, the masonry grid, the TOC and the progress bar costs ONE rAF and ONE
+// layout instead of five interleaved read/write cycles.
+//
+// The document-level pointer listeners are installed once for the session. They
+// used to be re-added on every home-page visit: `.home-article-list` is inside
+// #swup so it is a brand-new node each time, the `dataset.autoHoverInit` guard
+// therefore always passed, and two more permanent listeners piled up per visit.
+const hState = {
+  list: null,
+  items: [],
+  activeItem: null,
+  pendingItem: null,
+  userHoveringInteractive: false,
+  globalWired: false,
+  scrollWired: false,
+};
+
+const homeInteractiveSelector =
+  "a,button,input,textarea,select,summary,[role='button'],[tabindex]:not([tabindex='-1']),.home-article-item";
+
 function initHomeArticleAutoHover() {
   const list = document.querySelector(".home-article-list");
-  if (!list || list.dataset.autoHoverInit === "1") return;
-  list.dataset.autoHoverInit = "1";
+  if (!list) {
+    hState.list = null;
+    hState.items = [];
+    hState.activeItem = null;
+    return;
+  }
+  if (list === hState.list) return;
 
-  const items = Array.from(list.querySelectorAll(".home-article-item"));
-  if (!items.length) return;
+  hState.list = list;
+  hState.items = Array.from(list.querySelectorAll(".home-article-item"));
+  hState.activeItem = null;
+  hState.pendingItem = null;
+  if (!hState.items.length) return;
 
-  let activeItem = null;
-  let ticking = false;
-  let userHoveringInteractive = false;
+  if (!hState.globalWired) {
+    hState.globalWired = true;
+    document.addEventListener(
+      "pointerover",
+      (event) => {
+        if (event.target && event.target.closest(homeInteractiveSelector)) {
+          hSetUserHover(true);
+        }
+      },
+      { passive: true },
+    );
+    document.addEventListener(
+      "pointerout",
+      (event) => {
+        const related = event.relatedTarget;
+        if (related && related.closest && related.closest(homeInteractiveSelector)) return;
+        hSetUserHover(false);
+      },
+      { passive: true },
+    );
+    window.addEventListener("resize", requestScrollPass, { passive: true });
+  }
 
-  const interactiveSelector =
-    "a,button,input,textarea,select,summary,[role='button'],[tabindex]:not([tabindex='-1']),.home-article-item";
+  if (!hState.scrollWired) {
+    hState.scrollWired = true;
+    onScroll(hRead, hWrite, "autoHover/homeArticles");
+  }
 
-  const isListInView = () => {
-    const rect = list.getBoundingClientRect();
-    return rect.bottom > 0 && rect.top < window.innerHeight;
-  };
+  requestScrollPass();
+}
 
-  const update = () => {
-    ticking = false;
-    if (!isListInView() || userHoveringInteractive) {
-      if (activeItem) activeItem.classList.remove("auto-hover");
-      activeItem = null;
-      return;
+// READ phase — measures only.
+function hRead(m) {
+  hState.pendingItem = null;
+  if (!hState.list || !hState.items.length) return;
+  if (hState.userHoveringInteractive) return;
+
+  const listRect = hState.list.getBoundingClientRect();
+  if (!(listRect.bottom > 0 && listRect.top < m.viewportH)) return;
+
+  const center = m.viewportH / 2;
+  let closest = null;
+  let closestDist = Infinity;
+
+  for (const item of hState.items) {
+    const rect = item.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.top >= m.viewportH) continue;
+    const dist = Math.abs(rect.top + rect.height / 2 - center);
+    if (dist < closestDist) {
+      closestDist = dist;
+      closest = item;
     }
+  }
+  hState.pendingItem = closest;
+}
 
-    const center = window.innerHeight / 2;
-    let closest = null;
-    let closestDist = Infinity;
+// WRITE phase — mutates only, and only on a real change.
+function hWrite() {
+  if (hState.pendingItem === hState.activeItem) return;
+  if (hState.activeItem) hState.activeItem.classList.remove("auto-hover");
+  if (hState.pendingItem) hState.pendingItem.classList.add("auto-hover");
+  hState.activeItem = hState.pendingItem;
+}
 
-    for (const item of items) {
-      const rect = item.getBoundingClientRect();
-      if (rect.bottom <= 0 || rect.top >= window.innerHeight) continue;
-      const dist = Math.abs(rect.top + rect.height / 2 - center);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closest = item;
-      }
-    }
-
-    if (closest !== activeItem) {
-      if (activeItem) activeItem.classList.remove("auto-hover");
-      if (closest) closest.classList.add("auto-hover");
-      activeItem = closest;
-    }
-  };
-
-  const requestUpdate = () => {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(update);
-  };
-
-  const setUserHover = (state) => {
-    if (userHoveringInteractive === state) return;
-    userHoveringInteractive = state;
-    if (state && activeItem) {
-      activeItem.classList.remove("auto-hover");
-      activeItem = null;
-    }
-    requestUpdate();
-  };
-
-  document.addEventListener(
-    "pointerover",
-    (event) => {
-      if (event.target && event.target.closest(interactiveSelector)) {
-        setUserHover(true);
-      }
-    },
-    { passive: true },
-  );
-
-  document.addEventListener(
-    "pointerout",
-    (event) => {
-      const related = event.relatedTarget;
-      if (related && related.closest && related.closest(interactiveSelector)) return;
-      setUserHover(false);
-    },
-    { passive: true },
-  );
-
-  window.addEventListener("scroll", requestUpdate, { passive: true });
-  window.addEventListener("resize", requestUpdate);
-  requestUpdate();
+function hSetUserHover(on) {
+  if (hState.userHoveringInteractive === on) return;
+  hState.userHoveringInteractive = on;
+  if (on && hState.activeItem) {
+    hState.activeItem.classList.remove("auto-hover");
+    hState.activeItem = null;
+    hState.pendingItem = null;
+  }
+  requestScrollPass();
 }
 
 function initArticleMediaAutoHover() {
@@ -107,6 +133,11 @@ function initArticleMediaAutoHover() {
 const state = {
   candidates: [],
   active: null,
+  // Set by the read phase, consumed by the write phase.
+  //   undefined → nothing decided this frame
+  //   null      → clear the active candidate
+  //   <object>  → make this candidate active
+  pending: undefined,
   ticking: false,
   hoveringInteractive: false,
   suspendUntil: 0,
@@ -173,8 +204,12 @@ function isInCenterBand(imgRect, viewportHeight) {
   return Math.abs(imgCenter - centerY) <= bandHalf;
 }
 
+// READ phase. Decides which candidate SHOULD be active and parks it on
+// `state.pending`; commits nothing. Splitting the decision from the mutation is
+// what lets every auto-hover feature share a single layout per frame.
 function update() {
   state.ticking = false;
+  state.pending = undefined; // undefined = "no change decided", null = "clear"
 
   if (!state.candidates.length) {
     return;
@@ -254,7 +289,7 @@ function update() {
         state.suspendUntil = 0; // Resume immediately
         // Continue to normal update logic
       } else {
-        clearActive();
+        state.pending = null;
         return;
       }
     } else {
@@ -288,18 +323,19 @@ function update() {
     }
   }
 
-  if (!best) {
-    clearActive();
-    return;
-  }
+  state.pending = best || null;
+}
 
-  setActive(best);
+// WRITE phase — applies whatever the read phase decided, nothing more.
+function commitUpdate() {
+  if (state.pending === undefined) return;
+  if (state.pending === null) clearActive();
+  else setActive(state.pending);
+  state.pending = undefined;
 }
 
 function requestUpdate() {
-  if (state.ticking) return;
-  state.ticking = true;
-  requestAnimationFrame(update);
+  requestScrollPass();
 }
 
 function installGlobalListeners() {
@@ -347,8 +383,17 @@ function installGlobalListeners() {
     { passive: true },
   );
 
-  window.addEventListener("scroll", requestUpdate, { passive: true });
+  onScroll(update, commitUpdate, "autoHover/articleMedia");
   window.addEventListener("resize", () => {
+    refreshCandidates();
+    requestUpdate();
+  });
+
+  // A lazy image swapping in replaces the node a candidate points at and
+  // changes its height — re-acquire before the next measurement.
+  // `redefine:content-resized` fires once per BATCH of swaps; the per-image
+  // `redefine:image-loaded` would run this document-wide rescan once per image.
+  window.addEventListener("redefine:content-resized", () => {
     refreshCandidates();
     requestUpdate();
   });
@@ -369,6 +414,7 @@ function installGlobalListeners() {
 const mState = {
   items: [],     // [{ el: HTMLElement, img: HTMLElement }]
   actives: new Set(), // currently auto-hovered elements
+  pending: null,      // next active set, computed in the read phase
   ticking: false,
   suspended: false,
   suspendTimer: null,
@@ -415,19 +461,19 @@ function mIsInBand(imgRect, vh) {
   return imgCenter >= bandTop && imgCenter <= bandBottom;
 }
 
-function mUpdate() {
+// READ phase — build the next active set, commit nothing.
+function mUpdate(m) {
   mState.ticking = false;
+  mState.pending = null;
   if (!mState.items.length) return;
 
+  const nextActives = new Set();
   if (mState.suspended) {
-    // Remove all auto-hover during suspension
-    for (const el of mState.actives) el.classList.remove("auto-hover");
-    mState.actives.clear();
+    mState.pending = nextActives; // empty set → clear everything
     return;
   }
 
-  const vh = window.innerHeight;
-  const nextActives = new Set();
+  const vh = m ? m.viewportH : window.innerHeight;
 
   for (const item of mState.items) {
     // Re-acquire img ref if lazyload replaced it
@@ -446,6 +492,15 @@ function mUpdate() {
     nextActives.add(item.el);
   }
 
+  mState.pending = nextActives;
+}
+
+// WRITE phase — apply the diff.
+function mCommitUpdate() {
+  const nextActives = mState.pending;
+  if (!nextActives) return;
+  mState.pending = null;
+
   // Remove no-longer-active
   for (const el of mState.actives) {
     if (!nextActives.has(el)) {
@@ -463,14 +518,17 @@ function mUpdate() {
 }
 
 function mRequestUpdate() {
-  if (mState.ticking) return;
-  mState.ticking = true;
-  requestAnimationFrame(mUpdate);
+  requestScrollPass();
 }
 
 function mInstallListeners() {
-  window.addEventListener("scroll", mRequestUpdate, { passive: true });
+  onScroll(mUpdate, mCommitUpdate, "autoHover/masonry");
   window.addEventListener("resize", () => {
+    mRefreshItems();
+    mRequestUpdate();
+  });
+  // Batched, not per-image — see the note on the article-media listener.
+  window.addEventListener("redefine:content-resized", () => {
     mRefreshItems();
     mRequestUpdate();
   });

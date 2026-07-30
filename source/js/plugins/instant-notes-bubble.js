@@ -126,6 +126,32 @@ export function placeBubble(el, left, top, cardMaxW) {
   }
 }
 
+// ─── Batched placement ────────────────────────────────────────────────────────
+// placeBubbleAnimated has to flush layout once to commit its inverted start
+// transform. Called in a loop (positionExpandedList walks the whole list) that
+// meant write → forced layout → write → forced layout … once per bubble, on
+// every keystroke in the compose box. Wrapping the loop in
+// beginPlaceBatch()/endPlaceBatch() collects the inversions, flushes ONCE, then
+// arms every transition — same frame, same result, one layout.
+let placeBatch = null;
+
+export function beginPlaceBatch() {
+  placeBatch = [];
+}
+
+export function endPlaceBatch() {
+  const batch = placeBatch;
+  placeBatch = null;
+  if (!batch || !batch.length) return;
+  // Single flush commits every inverted transform written above.
+  void batch[batch.length - 1].el.offsetHeight;
+  for (const { el, dur, delay } of batch) {
+    const d = delay ? ` ${delay}ms` : "";
+    el.style.transition = `transform ${dur}ms ${GLIDE}${d}`;
+    el.style.transform = "none";
+  }
+}
+
 // Like placeBubble but GLIDES to the new spot instead of jumping while invisible.
 // Used by admin inline-edit reflow so neighbours slide to make room.
 // Uses FLIP (transform) instead of top/left transition so the layout position
@@ -166,6 +192,13 @@ export function placeBubbleAnimated(el, left, top, cardMaxW, dur = FRAME_MS, del
   // FLIP: invert to the old visual position, then animate transform → none.
   // transform doesn't affect layout so the scroll container stays stable.
   el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+
+  if (placeBatch) {
+    // endPlaceBatch() does the single flush and arms every transition together.
+    placeBatch.push({ el, dur, delay });
+    return;
+  }
+
   void el.offsetHeight; // force reflow to commit the starting transform
   const d = delay ? ` ${delay}ms` : "";
   el.style.transition = `transform ${dur}ms ${GLIDE}${d}`;

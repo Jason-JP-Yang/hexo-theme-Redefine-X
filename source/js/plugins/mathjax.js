@@ -13,46 +13,67 @@
 
   /* ======================== Overflow Handling ======================== */
 
+  /**
+   * Re-evaluate overflow for every block.
+   *
+   * Split into a RESET pass, a MEASURE pass and an APPLY pass. The original
+   * looped once per block doing reset-writes → measurement reads → more writes,
+   * so every formula on the page forced its own synchronous layout. With N
+   * formulas that is N full layouts back-to-back, and it runs on every Swup
+   * page:view — right when the animated scroll-to-top is in flight.
+   * Three separated passes cost one layout for the whole page.
+   */
   function handleOverflow() {
     var blocks = document.querySelectorAll(".mathjax-block");
-    for (var i = 0; i < blocks.length; i++) {
-      processBlock(blocks[i]);
+    var i;
+
+    // 1 — reset (writes only)
+    var live = [];
+    for (i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      block.classList.remove(
+        "math-overflow-scroll",
+        "math-overflow-fit",
+        "math-overflow-wrap"
+      );
+      var oldMasks = block.querySelectorAll(".math-scroll-mask");
+      for (var m = 0; m < oldMasks.length; m++) oldMasks[m].remove();
+
+      var mjxContainer = block.querySelector("mjx-container");
+      if (!mjxContainer) continue;
+
+      mjxContainer.style.transform = "";
+      mjxContainer.style.transformOrigin = "";
+      block.style.height = "";
+      block.style.overflow = "";
+      live.push({ block: block, mjx: mjxContainer });
     }
+
+    // 2 — measure (reads only)
+    for (i = 0; i < live.length; i++) {
+      live[i].containerWidth = live[i].block.clientWidth;
+      live[i].mathWidth = live[i].mjx.scrollWidth || live[i].mjx.offsetWidth;
+      live[i].height = live[i].mjx.offsetHeight;
+    }
+
+    // 3 — apply (writes only)
+    for (i = 0; i < live.length; i++) applyBlock(live[i]);
   }
 
-  function processBlock(block) {
-    // Clean up previous overflow state
-    block.classList.remove(
-      "math-overflow-scroll",
-      "math-overflow-fit",
-      "math-overflow-wrap"
-    );
-    var oldMasks = block.querySelectorAll(".math-scroll-mask");
-    for (var i = 0; i < oldMasks.length; i++) oldMasks[i].remove();
-
-    var mjxContainer = block.querySelector("mjx-container");
-    if (!mjxContainer) return;
-
-    // Reset any previous transforms
-    mjxContainer.style.transform = "";
-    mjxContainer.style.transformOrigin = "";
-    block.style.height = "";
-
-    var containerWidth = block.clientWidth;
-    var mathWidth = mjxContainer.scrollWidth || mjxContainer.offsetWidth;
+  function applyBlock(info) {
+    var block = info.block;
+    var mjxContainer = info.mjx;
+    var containerWidth = info.containerWidth;
+    var mathWidth = info.mathWidth;
 
     // No overflow — nothing to do
     if (mathWidth <= containerWidth + 2) return;
 
     if (overflowMode === "fit") {
-      applyFit(block, mjxContainer, containerWidth, mathWidth);
-    } else if (overflowMode === "wrap") {
-      // wrap mode: if still overflowing after MathJax linebreaking, fall back to scroll
-      if (mjxContainer.scrollWidth > containerWidth + 2) {
-        applyScroll(block);
-      }
+      applyFit(block, mjxContainer, containerWidth, mathWidth, info.height);
     } else {
-      // default: scroll
+      // "wrap" falls back to scroll when MathJax linebreaking did not resolve
+      // the overflow — which, given we just measured it, is the case here.
       applyScroll(block);
     }
   }
@@ -73,9 +94,17 @@
     block.appendChild(rightMask);
 
     updateScrollIndicators(block);
-    block.addEventListener("scroll", function () {
-      updateScrollIndicators(block);
-    });
+
+    // handleOverflow() re-runs applyScroll on every retypeset (i.e. every
+    // page:view). Without this guard each pass stacked another scroll listener
+    // on the same block, so horizontally scrolling one formula eventually ran
+    // the indicator update dozens of times per event.
+    if (!block.dataset.mathScrollBound) {
+      block.dataset.mathScrollBound = "1";
+      block.addEventListener("scroll", function () {
+        updateScrollIndicators(block);
+      }, { passive: true });
+    }
   }
 
   function updateScrollIndicators(block) {
@@ -102,7 +131,10 @@
   }
 
   /* ---- fit mode ---- */
-  function applyFit(block, mjxContainer, containerWidth, mathWidth) {
+  // originalHeight is measured in handleOverflow's read pass so this stays
+  // write-only (it used to read offsetHeight after writing the transform,
+  // forcing a layout per fitted formula).
+  function applyFit(block, mjxContainer, containerWidth, mathWidth, originalHeight) {
     block.classList.add("math-overflow-fit");
     var scale = containerWidth / mathWidth;
     if (scale > 0.98) return; // close enough, don't bother
@@ -113,7 +145,7 @@
     mjxContainer.style.transform = "scale(" + scale + ")";
     mjxContainer.style.transformOrigin = "center top";
     // Adjust container height to match scaled content
-    var originalHeight = mjxContainer.offsetHeight;
+    if (typeof originalHeight !== "number") originalHeight = mjxContainer.offsetHeight;
     block.style.height = originalHeight * scale + "px";
     block.style.overflow = "hidden";
   }

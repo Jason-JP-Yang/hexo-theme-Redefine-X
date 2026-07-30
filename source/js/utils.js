@@ -1,12 +1,20 @@
 /* utils function */
 import { navbarShrink } from "./layouts/navbarShrink.js";
-import { initTOC } from "./layouts/toc.js";
+import { getTOC } from "./layouts/toc.js";
 import { main } from "./main.js";
 import imageViewer from "./tools/imageViewer.js";
+import { onScroll, requestScrollPass } from "./tools/scrollScheduler.js";
 
 export const navigationState = {
   isNavigating: false,
 };
+
+// initUtils() re-runs on every Swup page:view. The scroll subscription must NOT:
+// it is registered exactly once and reads the latest utils object through this
+// slot. Before, every navigation added two more permanent window listeners that
+// nothing ever removed, so the per-frame scroll cost grew for the whole session.
+let activeUtils = null;
+let scrollWired = false;
 
 export default function initUtils() {
   const utils = {
@@ -30,47 +38,62 @@ export default function initUtils() {
     isHasScrollProgressBar: theme.global.scroll_progress.bar === true,
     isHasScrollPercent: theme.global.scroll_progress.percentage === true,
 
-    // Scroll Style
-    updateScrollStyle() {
-      const scrollTop =
-        window.pageYOffset || document.documentElement.scrollTop;
-      const scrollHeight = document.documentElement.scrollHeight;
-      const clientHeight =
-        window.innerHeight || document.documentElement.clientHeight;
-      const percent = this.calculatePercentage(
-        scrollTop,
-        scrollHeight,
-        clientHeight,
-      );
+    // Scroll Style — WRITE phase only. Every geometry value it needs comes from
+    // the shared scheduler's per-frame metrics bag, so this no longer forces a
+    // layout (it used to read documentElement.scrollHeight on every event, after
+    // the previous handler had already dirtied the layout).
+    updateScrollStyle(m) {
+      const scrollTop = m.scrollY;
+      const percent = this.calculatePercentage(scrollTop, m.docH, m.viewportH);
 
       this.updateScrollProgressBar(percent);
       this.updateScrollPercent(percent);
-      this.updatePageTopVisibility(scrollTop, clientHeight);
+      this.updatePageTopVisibility(scrollTop, m.viewportH);
 
       this.prevScrollValue = scrollTop;
     },
 
+    // Every writer below is guarded against re-writing a value that is already
+    // on the element. During Swup's animated scroll-to-top these ran ~60×/s and
+    // most frames produced an identical value — each redundant write still cost
+    // a style recalc and a repaint.
+    _lastBarWidth: null,
+    _lastBarVisibility: null,
     updateScrollProgressBar(percent) {
-      if (this.isHasScrollProgressBar) {
-        const progressPercent = percent.toFixed(3);
-        const visibility = percent === 0 ? "hidden" : "visible";
+      if (!this.isHasScrollProgressBar || !this.scrollProgressBar_dom) return;
+      const width = `${percent.toFixed(3)}%`;
+      const visibility = percent === 0 ? "hidden" : "visible";
 
+      if (visibility !== this._lastBarVisibility) {
+        this._lastBarVisibility = visibility;
         this.scrollProgressBar_dom.style.visibility = visibility;
-        this.scrollProgressBar_dom.style.width = `${progressPercent}%`;
+      }
+      if (width !== this._lastBarWidth) {
+        this._lastBarWidth = width;
+        this.scrollProgressBar_dom.style.width = width;
       }
     },
 
+    _percentDom: null,
+    _lastPercentText: null,
     updateScrollPercent(percent) {
-      if (this.isHasScrollPercent) {
-        const percentDom = this.backToTopButton_dom.querySelector(".percent");
-        const showButton = percent !== 0 && percent !== undefined;
+      if (!this.isHasScrollPercent || !this.backToTopButton_dom) return;
+      if (!this._percentDom || !this._percentDom.isConnected) {
+        this._percentDom = this.backToTopButton_dom.querySelector(".percent");
+        this._lastPercentText = null;
+      }
+      const showButton = percent !== 0 && percent !== undefined;
 
-        this.backToTopButton_dom.classList.toggle("show", showButton);
-        percentDom.innerHTML = percent.toFixed(0);
+      this.backToTopButton_dom.classList.toggle("show", showButton);
+      const text = percent.toFixed(0);
+      if (this._percentDom && text !== this._lastPercentText) {
+        this._lastPercentText = text;
+        this._percentDom.textContent = text;
       }
     },
 
     updatePageTopVisibility(scrollTop, clientHeight) {
+      if (!this.pageTop_dom) return;
       if (theme.navbar.auto_hide) {
         const prevScrollValue = this.prevScrollValue;
         const hidePageTop =
@@ -98,33 +121,62 @@ export default function initUtils() {
       return percentageValue;
     },
 
-    // register window scroll event
+    // Subscribe to the shared scroll pass. Registered ONCE for the session (see
+    // `scrollWired` below); later initUtils() calls only swap `activeUtils`, so
+    // navigating never multiplies the per-frame work.
     registerWindowScroll() {
-      window.addEventListener("scroll", () => {
-        this.updateScrollStyle();
-        this.updateTOCScroll();
-        this.updateNavbarShrink();
-        // this.updateHomeBannerBlur();
-        this.updateAutoHideTools();
-      });
-      window.addEventListener(
-        "scroll",
-        this.debounce(() => this.updateHomeBannerBlur(), 20),
+      if (scrollWired) return;
+      scrollWired = true;
+
+      onScroll(
+        // READ phase — the TOC's active index is pure arithmetic against cached
+        // heading offsets, so nothing here touches the DOM or forces layout.
+        (m) => {
+          const u = activeUtils;
+          if (u) u.readTOCScroll(m);
+        },
+        // WRITE phase — everything that mutates the page, in one batch, after
+        // every subscriber has finished measuring.
+        (m) => {
+          const u = activeUtils;
+          if (!u) return;
+          u.updateScrollStyle(m);
+          u.updateNavbarShrink(m);
+          u.updateAutoHideTools(m);
+          u.updateHomeBannerBlur(m);
+          u.writeTOCScroll();
+        },
+        "utils/scrollStyle",
       );
     },
 
-    updateTOCScroll() {
-      if (
-        theme.articles.toc.enable &&
-        initTOC().hasOwnProperty("updateActiveTOCLink")
-      ) {
-        initTOC().updateActiveTOCLink();
-      }
+    // The TOC used to call initTOC() — a FULL re-initialisation, including a
+    // localStorage read + JSON.parse and layout-class toggles on the whole page
+    // container — TWICE on every scroll event. Now the controller is built once
+    // per navigation (see toc.js) and the scroll pass only asks it which heading
+    // is active.
+    _tocIndex: -1,
+    readTOCScroll(m) {
+      this._tocIndex = -1;
+      if (!theme.articles.toc.enable) return;
+      const toc = getTOC();
+      if (!toc) return;
+      this._tocIndex = toc.computeActiveIndex(m.scrollY);
     },
 
-    updateNavbarShrink() {
+    writeTOCScroll() {
+      if (this._tocIndex < 0) return;
+      const toc = getTOC();
+      if (toc) toc.activateTOCLink(this._tocIndex);
+    },
+
+    // Only the cheap part (a scrollTop comparison + one body class) belongs in
+    // the scroll pass. navbarShrink.init() re-queried the navbar, re-measured
+    // its height AND registered another scroll listener — from inside a scroll
+    // handler. That is the unbounded listener growth; it is gone.
+    updateNavbarShrink(m) {
       if (!navigationState.isNavigating) {
-        navbarShrink.init();
+        navbarShrink.shrink(m.scrollY);
       }
     },
 
@@ -136,58 +188,65 @@ export default function initUtils() {
       };
     },
 
-    updateHomeBannerBlur() {
+    // The blur only ever toggles between 0px and 15px, but the old code wrote
+    // `filter` on the full-viewport banner background on every (debounced)
+    // scroll event. Re-applying an identical filter still re-rasterises a
+    // viewport-sized blurred layer — brutal on mobile. Write only on change.
+    _lastBannerBlur: null,
+    updateHomeBannerBlur(m) {
       if (!this.homeBannerBackground_dom) return;
-
       if (
-        theme.home_banner.style === "fixed" &&
-        location.pathname === config.root
+        theme.home_banner.style !== "fixed" ||
+        location.pathname !== config.root
       ) {
-        const scrollY = window.scrollY || window.pageYOffset;
-        const blurValue = scrollY >= this.triggerViewHeight ? 15 : 0;
-
-        try {
-          requestAnimationFrame(() => {
-            this.homeBannerBackground_dom.style.filter = `blur(${blurValue}px)`;
-            this.homeBannerBackground_dom.style.webkitFilter = `blur(${blurValue}px)`;
-          });
-        } catch (e) {
-          // Handle or log the error properly
-          console.error("Error updating banner blur:", e);
-        }
+        return;
       }
+
+      const blurValue = m.scrollY >= this.triggerViewHeight ? 15 : 0;
+      if (blurValue === this._lastBannerBlur) return;
+      this._lastBannerBlur = blurValue;
+
+      const filter = `blur(${blurValue}px)`;
+      this.homeBannerBackground_dom.style.filter = filter;
+      this.homeBannerBackground_dom.style.webkitFilter = filter;
     },
 
-    updateAutoHideTools() {
-      const y = window.scrollY;
-      const height = document.body.scrollHeight;
-      const windowHeight = window.innerHeight;
-      const toolList = document.getElementsByClassName(
-        "right-side-tools-container",
-      );
-      const aplayer = document.getElementById("aplayer");
-
-      for (let i = 0; i < toolList.length; i++) {
-        const tools = toolList[i];
-        if (y <= 100) {
-          if (location.pathname === config.root) {
-            tools.classList.add("hide");
-            if (aplayer !== null) {
-              aplayer.classList.add("hide");
-            }
-          }
-        } else if (y + windowHeight >= height - 20) {
-          tools.classList.add("hide");
-          if (aplayer !== null) {
-            aplayer.classList.add("hide");
-          }
-        } else {
-          tools.classList.remove("hide");
-          if (aplayer !== null) {
-            aplayer.classList.remove("hide");
-          }
-        }
+    // `document.body.scrollHeight` forced a synchronous layout on every scroll
+    // event; it now comes from the scheduler's cached metrics. The node lookups
+    // are cached too, and the class is only touched when the state flips.
+    _toolList: null,
+    _aplayer: null,
+    _lastToolsHidden: null,
+    updateAutoHideTools(m) {
+      if (!this._toolList || !this._toolList.length) {
+        this._toolList = document.getElementsByClassName(
+          "right-side-tools-container",
+        );
+        this._lastToolsHidden = null;
       }
+      if (!this._aplayer || !this._aplayer.isConnected) {
+        this._aplayer = document.getElementById("aplayer");
+      }
+
+      const y = m.scrollY;
+      let hidden;
+      if (y <= 100) {
+        // Preserved quirk: at the very top the tools only hide on the home page.
+        if (location.pathname !== config.root) return;
+        hidden = true;
+      } else if (y + m.viewportH >= m.bodyH - 20) {
+        hidden = true;
+      } else {
+        hidden = false;
+      }
+
+      if (hidden === this._lastToolsHidden) return;
+      this._lastToolsHidden = hidden;
+
+      for (let i = 0; i < this._toolList.length; i++) {
+        this._toolList[i].classList.toggle("hide", hidden);
+      }
+      if (this._aplayer) this._aplayer.classList.toggle("hide", hidden);
     },
 
     toggleToolsList() {
@@ -346,7 +405,9 @@ export default function initUtils() {
             const postDate = new Date(
               v.dataset.date.split(" GMT")[0],
             ).getTime();
-            v.innerHTML = this.getHowLongAgo(
+            // Plain text — innerHTML made the browser parse HTML once per
+            // article card on every home-page navigation for no reason.
+            v.textContent = this.getHowLongAgo(
               Math.floor((nowDate - postDate) / 1000),
             );
           });
@@ -361,7 +422,7 @@ export default function initUtils() {
               (nowDate - postDate) / (60 * 60 * 24 * 1000),
             );
             if (finalDays < 7) {
-              v.innerHTML = this.getHowLongAgo(
+              v.textContent = this.getHowLongAgo(
                 Math.floor((nowDate - postDate) / 1000),
               );
             }
@@ -370,10 +431,15 @@ export default function initUtils() {
     },
   };
 
-  utils.updateAutoHideTools();
+  // Publish this navigation's utils to the (single, permanent) scroll
+  // subscription before anything reads it.
+  activeUtils = utils;
 
   // init scroll
   utils.registerWindowScroll();
+
+  // Resync everything against the current scroll position for the new page.
+  requestScrollPass();
 
   // toggle show tools list
   utils.toggleToolsList();

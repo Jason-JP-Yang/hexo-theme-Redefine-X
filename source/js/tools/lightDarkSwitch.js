@@ -54,6 +54,19 @@ export const ModeToggle = {
     }
   },
 
+  // Anything that caches a RESOLVED colour (rather than re-reading computed
+  // style continuously) has to be told the scheme changed. MathJax's scroll
+  // hints do exactly that — they used to re-resolve their backdrop colour on
+  // every scroll event, which was wasteful but self-healing; now they cache, so
+  // this notification is what keeps them correct.
+  announceSchemeChange() {
+    window.dispatchEvent(
+      new CustomEvent("redefine:color-scheme-change", {
+        detail: { isDark: main.styleStatus.isDark },
+      }),
+    );
+  },
+
   enableLightMode() {
     document.body.classList.remove("dark-mode");
     document.documentElement.classList.remove("dark");
@@ -64,6 +77,7 @@ export const ModeToggle = {
     main.setStyleStatus();
     this.mermaidInit(this.mermaidLightTheme);
     this.setGiscusTheme();
+    this.announceSchemeChange();
   },
 
   enableDarkMode() {
@@ -76,6 +90,7 @@ export const ModeToggle = {
     main.setStyleStatus();
     this.mermaidInit(this.mermaidDarkTheme);
     this.setGiscusTheme();
+    this.announceSchemeChange();
   },
 
   async setGiscusTheme(theme) {
@@ -126,8 +141,16 @@ export const ModeToggle = {
     });
   },
 
+  // init() re-runs on every Swup page:view. matchMedia() hands back a NEW
+  // MediaQueryList each call, so this used to register one more OS-theme
+  // listener per navigation — after ten pages a single system theme change
+  // re-ran the whole mode switch ten times.
+  _autoTriggerBound: false,
   initModeAutoTrigger() {
+    if (this._autoTriggerBound) return;
+    this._autoTriggerBound = true;
     const isDarkMode = this.isDarkPrefersColorScheme();
+    if (!isDarkMode || !isDarkMode.addEventListener) return;
     isDarkMode.addEventListener("change", (e) => {
       e.matches ? this.enableDarkMode() : this.enableLightMode();
     });
