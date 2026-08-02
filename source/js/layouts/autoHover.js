@@ -50,12 +50,21 @@ function initHomeArticleAutoHover() {
     hState.pending = null;
     return;
   }
-  if (list === hState.list) return;
+  // The node identity check alone is not enough: load-more pagination APPENDS
+  // to the very same <ul>, so the element is unchanged while the set of cards
+  // is not. Comparing the count as well catches that, and re-running is cheap
+  // and idempotent — the listeners below are all wired once per session.
+  const cards = list.querySelectorAll(".home-article-item");
+  if (list === hState.list && cards.length === hState.items.length) return;
+
+  // Anything still attached keeps its class unless it is cleared here; in the
+  // append case those nodes survive the refresh and would stay lit forever.
+  for (const el of hState.actives) {
+    if (el.isConnected) el.classList.remove("auto-hover");
+  }
 
   hState.list = list;
-  hState.items = Array.from(list.querySelectorAll(".home-article-item"));
-  // Whatever was active belonged to the list Swup just replaced; those nodes are
-  // detached, so the set is dropped rather than cleaned.
+  hState.items = Array.from(cards);
   hState.actives = new Set();
   hState.pending = null;
   if (!hState.items.length) return;

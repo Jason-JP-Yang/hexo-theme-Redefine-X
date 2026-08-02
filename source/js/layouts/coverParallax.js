@@ -1,4 +1,4 @@
-import { onScroll, requestScrollPass } from "../tools/scrollScheduler.js";
+import { onScroll, requestScrollPass, getMetrics } from "../tools/scrollScheduler.js";
 
 /**
  * Redefine-X — cover parallax.
@@ -28,10 +28,44 @@ const FRAME_SELECTOR = ".home-article-thumbnail, .article-cover-frame";
 const MIN_RANGE = 2;
 // px of movement below which a write would not change a rendered pixel.
 const EPSILON = 0.1;
+// Must match the transition in the `.is-settling` rules.
+const SETTLE_MS = 260;
 
 let items = [];
 let wired = false;
 let motionAllowed = true;
+let suspended = false;
+
+/**
+ * Stop measuring and writing until told otherwise.
+ *
+ * The pagination flip rotates whole cards, and a rotated element's bounding box
+ * is its squashed PROJECTION — an edge-on card measures as a few pixels tall,
+ * which would compute a travel range of hundreds of pixels and throw the covers
+ * around while they turn. Suspending is cheaper and more honest than trying to
+ * detect and correct for the rotation.
+ */
+export function setCoverParallaxSuspended(value) {
+  suspended = !!value;
+  if (!suspended) requestScrollPass();
+}
+
+/**
+ * Measure and apply immediately, outside the scroll pass and regardless of the
+ * suspend flag.
+ *
+ * The pagination swap uses this to position freshly inserted covers while their
+ * cards are still FLAT, before priming them for the flip — all inside one task,
+ * so the flat state is never painted and the covers are already where they
+ * belong by the time the cards turn back over.
+ */
+export function syncCoverParallax() {
+  const wasSuspended = suspended;
+  suspended = false;
+  read(getMetrics());
+  write();
+  suspended = wasSuspended;
+}
 
 export default function initCoverParallax() {
   // The list is rebuilt on every call rather than diffed: Swup replaces the
@@ -51,6 +85,7 @@ export default function initCoverParallax() {
       nextOn: false,
       nextShift: 0,
       dirty: false,
+      settleTimer: 0,
     };
     items.push(item);
 
@@ -107,6 +142,7 @@ function watchReducedMotion() {
 
 // READ phase — measures only.
 function read(m) {
+  if (suspended) return;
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     it.dirty = false;
@@ -161,6 +197,8 @@ function write() {
     if (it.nextOn !== it.on) {
       it.frame.classList.toggle("has-parallax", it.nextOn);
       it.on = it.nextOn;
+      if (it.on) beginSettle(it);
+      else endSettle(it);
     }
 
     if (it.on) {
@@ -170,4 +208,23 @@ function write() {
     }
     it.shift = it.nextShift;
   }
+}
+
+// A cover is measured wherever it happens to be on screen, so the shift it wants
+// on its very first write is rarely zero — and `--parallax-shift` starts at
+// zero. Easing that one step in stops the image popping into place; every write
+// after it is a plain per-frame update with no transition in the way.
+function beginSettle(item) {
+  item.frame.classList.add("is-settling");
+  clearTimeout(item.settleTimer);
+  item.settleTimer = setTimeout(() => {
+    item.frame.classList.remove("is-settling");
+    item.settleTimer = 0;
+  }, SETTLE_MS + 60);
+}
+
+function endSettle(item) {
+  clearTimeout(item.settleTimer);
+  item.settleTimer = 0;
+  item.frame.classList.remove("is-settling");
 }

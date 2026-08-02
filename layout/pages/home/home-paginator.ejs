@@ -1,0 +1,53 @@
+<%
+    // Home pagination. Both modes are swapped in-document by
+    // source/js/layouts/homePagination.js; the markup here only has to describe
+    // where the pages are and which mode is in force.
+    //
+    // `data-no-swup` keeps swup's link handler off these controls — this is the
+    // one place on the site where a link to another URL must not become a
+    // document navigation.
+    const paginationMode = theme.home.pagination === "load_more" ? "load_more" : "paged";
+    const paginationDir = config.pagination_dir || "page";
+    const currentPage = page.current || 1;
+    const totalPages = page.total || 1;
+    const hasMore = currentPage < totalPages;
+
+    const paginatorOptions = {
+        prev_text: '<i class="fa-regular fa-angle-left"></i>',
+        next_text: '<i class="fa-regular fa-angle-right"></i>',
+        escape: false,
+    };
+%>
+<div class="home-pagination"
+     data-mode="<%= paginationMode %>"
+     data-current="<%= currentPage %>"
+     data-total="<%= totalPages %>"
+     data-first-url="<%- url_for('/') %>"
+     data-page-url="<%- url_for('/' + paginationDir + '/__PAGE__/') %>"
+     data-no-swup>
+
+    <% if (paginationMode === 'load_more') { %>
+        <% if (hasMore) { %>
+            <button class="home-load-more" type="button">
+                <%# Both faces occupy the SAME grid cell, so the button is sized by the
+                    wider of the two labels and its width cannot change when they swap. %>
+                <span class="load-more-faces">
+                    <span class="face face-idle"><%- __('load_more') %></span>
+                    <span class="face face-busy">
+                        <i class="fa-regular fa-spinner"></i><span><%- __('loading') %></span>
+                    </span>
+                </span>
+            </button>
+        <% } %>
+
+        <p class="home-load-more-end"<%= hasMore ? ' hidden' : '' %>><%- __('no_more_posts') %></p>
+
+        <%# Without scripting there is no button to press, so the ordinary page
+            links have to still be reachable. %>
+        <noscript>
+            <div class="paginator"><%- paginator(paginatorOptions) %></div>
+        </noscript>
+    <% } else { %>
+        <div class="paginator"><%- paginator(paginatorOptions) %></div>
+    <% } %>
+</div>

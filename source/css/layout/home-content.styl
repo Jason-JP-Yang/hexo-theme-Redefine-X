@@ -135,6 +135,13 @@ $q-card-tight      = 'card (max-width: ' + $bento-card-tight-max-width + ')'
           transform translate3d(0, calc(-50% + var(--parallax-shift, 0px)), 0)
           will-change transform
 
+        // Held for one settle only, when a cover first starts parallaxing. At
+        // shift 0 the two modes render identically, so what is eased here is
+        // purely the distance between "centred" and "where this scroll position
+        // says it should be" — after which the shift tracks the scroll exactly.
+        &.has-parallax.is-settling img
+          transition --parallax-shift 260ms cubic-bezier(0.22, 0.61, 0.36, 1)
+
       &:hover, &.auto-hover
         .home-article-thumbnail a
           transform scale(1.04)

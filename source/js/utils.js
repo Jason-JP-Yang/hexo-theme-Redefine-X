@@ -14,6 +14,18 @@ export const navigationState = {
 // slot. Before, every navigation added two more permanent window listeners that
 // nothing ever removed, so the per-frame scroll cost grew for the whole session.
 let activeUtils = null;
+
+/**
+ * Re-stamp the "x minutes ago" labels on the home article list.
+ *
+ * Client-side pagination swaps the card list without re-running initUtils(),
+ * and freshly fetched cards carry the server-rendered absolute date. Exposed so
+ * layouts/homePagination.js can refresh just this, instead of re-initialising
+ * every utility (which would restart the banner typing animation).
+ */
+export function refreshHomeRelativeTime() {
+  if (activeUtils) activeUtils.relativeTimeInHome();
+}
 let scrollWired = false;
 
 export default function initUtils() {
@@ -192,15 +204,17 @@ export default function initUtils() {
     // `filter` on the full-viewport banner background on every (debounced)
     // scroll event. Re-applying an identical filter still re-rasterises a
     // viewport-sized blurred layer — brutal on mobile. Write only on change.
+    //
+    // The guard is on the ELEMENT, not on `location.pathname`. The background
+    // only exists on home listings in the first place, and client-side
+    // pagination now moves the URL to /page/N/ while staying in the same
+    // document — a path comparison stopped matching there, so the blur was
+    // frozen at whatever it was when the page turned and never cleared again on
+    // the way back up to the banner.
     _lastBannerBlur: null,
     updateHomeBannerBlur(m) {
       if (!this.homeBannerBackground_dom) return;
-      if (
-        theme.home_banner.style !== "fixed" ||
-        location.pathname !== config.root
-      ) {
-        return;
-      }
+      if (theme.home_banner.style !== "fixed") return;
 
       const blurValue = m.scrollY >= this.triggerViewHeight ? 15 : 0;
       if (blurValue === this._lastBannerBlur) return;

@@ -8,6 +8,9 @@ next: 次のページ
 prev_posts: 前一篇
 next_posts: 次一篇
 page: "%d ページ"
+load_more: もっと読み込む
+loading: 読み込み中
+no_more_posts: これで打ち止めです~
 recent_posts: 最新記事
 share: 分かち合う
 powered_by: "%s で駆動する"

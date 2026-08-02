@@ -105,6 +105,9 @@ $gap = 30px
         transform translate3d(0, calc(-50% + var(--parallax-shift, 0px)), 0)
         will-change transform
 
+      &.has-parallax.is-settling .article-cover-image
+        transition --parallax-shift 260ms cubic-bezier(0.22, 0.61, 0.36, 1)
+
     .article-header .avatar img
           border-radius: $redefine-border-radius-medium * 0.87
           width 100%

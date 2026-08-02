@@ -11,7 +11,7 @@
     // column now runs to, a 16:9 cover spanning it stands ~676px tall, which
     // buries everything under it.
     const BENTO_TIERS = ["wide", "standard", "compact"];
-    const bentoEnabled = theme.home.bento && theme.home.bento.enable !== false;
+    const bentoEnabled = theme.home.bento !== false;
     const baseExcerptLength = theme.home.excerpt_length || 200;
 
     // How much excerpt material each tier gets, as a multiple of the configured
@@ -114,7 +114,5 @@
         <% }) %>
     </ul>
 
-    <div class="home-paginator px-7 py-5">
-        <%- partial('utils/paginator', {pageObject: page}) %>
-    </div>
+    <%- partial('pages/home/home-paginator') %>
 </div>

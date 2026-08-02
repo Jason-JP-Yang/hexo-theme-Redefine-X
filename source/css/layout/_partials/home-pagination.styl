@@ -1,0 +1,98 @@
+@require '../../common/variables'
+
+// Home pagination — both modes. The controls sit inside the article column, so
+// they carry the same horizontal padding the cards' bodies do.
+.home-pagination
+  padding 0 1.75rem 1.25rem
+
+  +redefine-mobile()
+    padding 0 0.75rem 1rem
+
+  // ── Load more ──────────────────────────────────────────────────────────────
+  .home-load-more
+    display block
+    margin 30px auto 0
+    padding 12px 34px
+    border 1px solid var(--border-color)
+    border-radius $redefine-border-radius-medium
+    background var(--background-color)
+    color var(--second-text-color)
+    font-family inherit
+    font-size 0.98rem
+    font-weight 500
+    line-height 1.4
+    cursor pointer
+    hover-style(
+      true,
+      1.04,
+      1.04
+    )
+
+    &:active
+      transform scale(0.97)
+      transition transform 0.1s ease
+
+    // The busy state is carried entirely by the spinner; dimming the control as
+    // well would read as "broken" rather than "working".
+    &.is-busy
+      cursor default
+
+      &:hover, &:active
+        transform none
+
+  // Both faces are placed in the SAME grid cell, so the track is sized by the
+  // wider of the two and the button's width cannot change when they swap. No
+  // measuring, no min-width guess, no reflow — the requirement is satisfied by
+  // the layout itself rather than by keeping two strings the same length.
+  .load-more-faces
+    display grid
+    align-items center
+    justify-items center
+
+    .face
+      grid-row 1
+      grid-column 1
+      display inline-flex
+      align-items center
+      gap 8px
+      white-space nowrap
+      transition opacity 0.2s ease, transform 0.2s ease
+
+    .face-busy
+      opacity 0
+      transform translateY(5px)
+
+      i
+        animation redefine-load-more-spin 0.9s linear infinite
+
+  .home-load-more.is-busy .load-more-faces
+    .face-idle
+      opacity 0
+      transform translateY(-5px)
+
+    .face-busy
+      opacity 1
+      transform none
+
+  // ── End of the list ────────────────────────────────────────────────────────
+  .home-load-more-end
+    margin 30px 0 0
+    text-align center
+    font-size 0.95rem
+    letter-spacing 0.5px
+    color var(--third-text-color)
+    user-select none
+
+    &[hidden]
+      display none
+
+  // The no-script fallback should not add a second set of controls' worth of
+  // spacing when it is the only thing rendered.
+  noscript .paginator
+    margin-top 30px
+
+@keyframes redefine-load-more-spin
+  from
+    transform rotate(0deg)
+  to
+    transform rotate(360deg)
