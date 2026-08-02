@@ -1,6 +1,23 @@
 @require '../common/variables'
 
+// Stylus parses an unknown at-rule's prelude as selector parts, so the only form
+// guaranteed to reach CSS untouched is a prebuilt string interpolated in.
+// (Writing `@container home (min-width: 640px)` directly is at the mercy of the
+// selector parser; this is not.)
+$q-home-two-column = 'home (min-width: ' + $bento-two-column-min-width + ')'
+$q-home-split      = 'home (min-width: ' + $bento-split-min-width + ')'
+$q-card-narrow     = 'card (max-width: ' + $bento-card-narrow-max-width + ')'
+$q-card-tight      = 'card (max-width: ' + $bento-card-tight-max-width + ')'
+
 .home-content-container
+  // The article column is the container everything downstream measures against:
+  // how many tiles fit per row, whether `wide` splits, how much meta a tile
+  // shows. Keying off THIS width instead of the viewport is what keeps the grid
+  // correct whether the sidebar is on the left, on the right, or absent — the
+  // viewport never knew about the sidebar in the first place.
+  container-type inline-size
+  container-name home
+
   if (hexo-config('home.sidebar.enable') && hexo-config('home.sidebar.position') == 'right')
     margin-left $spacing-unit
 
@@ -34,81 +51,384 @@
     word-break normal
 
   .home-article-list
+    display flex
+    flex-direction column
+    gap $bento-gap
+    margin 0
+    padding 0
+    list-style none
+
+    &.bento
+      display grid
+      grid-template-columns minmax(0, 1fr)
+      // Tiles differ in height by tier, so a full-width one leaves a hole when
+      // it lands mid-row. `dense` lets the next tile that fits backfill it
+      // instead of pushing a ragged edge down the whole page.
+      grid-auto-flow dense
+
     .home-article-item
       position relative
+      display flex
+      flex-direction column
+      // Every tile is its own container. The tag list, the type scale, the
+      // padding and the index numeral all key off the TILE's width — a tile
+      // 380px wide is cramped whether that happens on a phone or in a narrow
+      // column on a 27" display, and a viewport media query cannot tell those
+      // two apart.
+      container-type inline-size
+      container-name card
+      // Lets the cover inherit the card's radius instead of carrying its own,
+      // which is what makes the split (`wide`) tier round correctly on whichever
+      // edge its cover happens to be on.
+      overflow hidden
       redefine-container(
         true,
         1.015,
         1.015,
         0px,
-        38px
+        0
       )
 
-      .home-article-thumbnail img
+      // ── Cover ────────────────────────────────────────────────────────────
+      // THE cover contract: a ratio, never a height. Height falls out of the
+      // column width, so the same crop of an image appears on a phone, in a
+      // half-width tile, in a wide tile and on the post page banner — which is
+      // what makes a cover worth composing in the first place.
+      .home-article-thumbnail
+        position relative
+        width 100%
+        aspect-ratio var(--cover-aspect-ratio)
+        overflow hidden
+        background var(--third-background-color)
+        flex-shrink 0
+
+        // The zoom lives on the link and the parallax on the image, so the two
+        // never have to share one transform property.
+        a
+          position absolute
+          inset 0
+          display block
+          transform scale(1)
+          transition transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1)
+
+        img
+          position absolute
+          top 0
+          left 0
+          display block
           width 100%
           height 100%
           object-fit cover
-          position absolute
+
+          .dark &
+            filter brightness(0.75)
+
+        // Parallax mode, switched on by layouts/coverParallax.js and only for
+        // covers that `object-fit: cover` is actually cropping top and bottom.
+        // The image is laid out at exactly the size that crop was already
+        // drawing it (full width, natural height), so the frame keeps clipping
+        // the very same band — the only new thing is that the band travels.
+        // Nothing is scaled up and no detail is invented.
+        &.has-parallax img
+          height auto
           top 50%
-          transform translateY(-50%)
+          transform translate3d(0, calc(-50% + var(--parallax-shift, 0px)), 0)
+          will-change transform
+
+      &:hover, &.auto-hover
+        .home-article-thumbnail a
+          transform scale(1.04)
+
+      // ── Body ─────────────────────────────────────────────────────────────
+      .home-article-body
+        position relative
+        display flex
+        flex-direction column
+        gap 1.1rem
+        padding 1.4rem
+        flex 1 1 auto
+        min-width 0
+        // Clips the index numeral's overhang against the text block's own top
+        // edge, so it crops cleanly instead of running up over the cover.
+        overflow hidden
+
+      // The running number, printed behind the title. Sized in cqw so it tracks
+      // the tile it belongs to rather than the screen, and clamped so a
+      // full-width tile does not turn it into a billboard.
+      .home-article-index
+        position absolute
+        top 0
+        left 0
+        z-index 0
+        // Dropped clear of the text block's top edge so the whole numeral reads
+        // instead of being cropped by it; only the left bleed still runs off.
+        transform translate(-0.05em, 0.06em)
+        font-family $english-font-family, sans-serif
+        font-size clamp(4.5rem, 20cqw, 9.5rem)
+        font-weight 900
+        line-height 0.75
+        // Loosened from -0.045em: the strokes below are thicker, and two-digit
+        // numbers were the case that would have collided.
+        letter-spacing -0.03em
+        font-variant-numeric tabular-nums
+        color var(--second-text-color)
+        // Weight 900 only helps if the family actually ships a Black cut, which
+        // a system stack may not, so the strokes are thickened directly as well.
+        // Stroke colour matches the fill, so it reads as one heavier glyph
+        // rather than an outline around a lighter one.
+        -webkit-text-stroke 0.018em currentColor
+        // Dark at the top, fading to roughly the old lighter value at the
+        // bottom. Done with a mask rather than background-clip:text because a
+        // clipped background drops the text stroke above; a mask composes with
+        // it. 0.18 x 0.32 lands the bottom end at ~0.06, which is where the flat
+        // version used to sit.
+        opacity 0.18
+        -webkit-mask-image linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.32) 100%)
+        mask-image linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.32) 100%)
+        pointer-events none
+        user-select none
+
+        .dark &
+          opacity 0.24
 
       .home-article-title
         position relative
+        z-index 1
         font-weight 600
-        font-size 1.4rem
-        line-height 1.5
+        font-size 1.25rem
+        line-height 1.4
         color var(--second-text-color)
         font-family $english-font-family, $chinese-font-family, 'Noto Sans SC', 'Noto Color Emoji', sans-serif
-
         margin 0
-
-        +redefine-tablet()
-          font-size 1.3rem
-
-        +redefine-mobile()
-          font-size 1.2rem
+        // A fixed line budget per tier is what keeps a row of tiles aligned
+        // when one title is three words and the next is fifteen.
+        display -webkit-box
+        -webkit-box-orient vertical
+        -webkit-line-clamp 2
+        line-clamp 2
+        overflow hidden
 
       .home-article-content
+        position relative
+        z-index 1
         word-wrap break-word
         text-align justify
         color var(--default-text-color)
+        display -webkit-box
+        -webkit-box-orient vertical
+        -webkit-line-clamp 3
+        line-clamp 3
+        overflow hidden
 
-      .home-article-meta-info-container
-        display flex
-        justify-content space-between
+        > :first-child
+          margin-top 0
+
+        > :last-child
+          margin-bottom 0
+
+      // ── Sticky badge ─────────────────────────────────────────────────────
+      // Base material tier: a translucent colour, no backdrop pass. It sits on
+      // top of a photo often enough to need the opacity, and it is decorative
+      // enough not to deserve a compositor layer.
+      .home-article-sticky-badge
+        position absolute
+        top 12px
+        right 12px
+        z-index 2
+        display inline-flex
         align-items center
+        gap 5px
+        padding 3px 10px
+        font-size 0.7rem
+        line-height 1.6
+        color var(--third-text-color)
+        background var(--background-color-transparent-80)
+        border 1px solid var(--border-color)
+        border-radius $redefine-border-radius-medium
+        pointer-events none
+        user-select none
+
+        i
+          font-size 0.65rem
+
+      // ── Meta row ─────────────────────────────────────────────────────────
+      // Every entry is one inline-flex unit, so there is no collapsed
+      // whitespace between an icon and its text for a line break to land on —
+      // that is what used to strand an icon alone on a line. Wrapping happens
+      // between entries; inside an entry the text ellipsises instead.
+      .home-article-meta-info-container
+        position relative
+        z-index 1
+        display flex
+        flex-wrap wrap
+        align-items center
+        gap 6px 12px
         font-size 0.92rem
         color var(--third-text-color)
+        // Pins the meta row to the bottom of a stretched tile, so two tiles
+        // sharing a row end on the same line even when one has more to say.
+        margin-top auto
 
         .home-article-meta-info
+          display flex
+          flex-wrap wrap
+          align-items center
+          gap 4px 14px
+          flex 1 1 auto
+          min-width 0
           letter-spacing 0.5px
 
-          span
-            margin-right 10px
+        .home-article-meta-item
+          display inline-flex
+          align-items center
+          gap 6px
+          white-space nowrap
+          min-width 0
+          max-width 100%
 
-            &:last-child
-              margin-right 0
+          i
+            flex-shrink 0
 
-            ul, li
+          .meta-text
+            display block
+            min-width 0
+            margin 0
+            padding 0
+            list-style none
+            overflow hidden
+            text-overflow ellipsis
+
+            li
               display inline
 
-          .home-article-category
-            +redefine-mobile()
-              display none
+          .meta-sep
+            opacity 0.55
+            margin 0 2px
 
-          .home-article-tag
-            +redefine-tablet()
-              display none
+        // margin-left:auto rather than justify-content on the container: when
+        // the meta entries wrap onto a line of their own, this still sits at the
+        // right edge instead of falling back to flex-start.
+        .home-article-read-more
+          display inline-flex
+          align-items center
+          gap 4px
+          margin-left auto
+          white-space nowrap
 
-        hr
-          border none
-          flex 1
-          height 1px
-          background var(--border-color)
-          margin 0 10px
+          i
+            font-size 0.85em
 
         a
           color var(--third-text-color)
 
           &:hover
             color var(--primary-color)
+
+    // ── Tiers ──────────────────────────────────────────────────────────────
+    // Only `wide` touches the grid; `standard` and `compact` take a single
+    // column and differ in what they put inside it.
+    &.bento
+      .tier-wide
+        grid-column s('1 / -1')
+
+      // No cover to carry it, so it leans on type and copy instead — which is
+      // what lets it hold a column next to a tile that has one instead of
+      // reading as a tile that lost its image. Keyed on the absence of a cover
+      // rather than on `compact`, so a `standard` or `wide` tile on a post that
+      // simply has no cover gets the same treatment.
+      .no-cover
+        .home-article-title
+          font-size 1.35rem
+          -webkit-line-clamp 3
+          line-clamp 3
+
+        .home-article-content
+          -webkit-line-clamp 7
+          line-clamp 7
+
+// ── Column count ─────────────────────────────────────────────────────────────
+@container {$q-home-two-column}
+  .home-content-container .home-article-list.bento
+    grid-template-columns repeat(2, minmax(0, 1fr))
+
+// ── `wide`: cover beside the text, alternating sides ─────────────────────────
+// Queried on the column rather than the tile because a `wide` tile spans the
+// full column — the two widths are the same number, and an element cannot query
+// its own container.
+//
+// `align-items: start` matters: the cover keeps its ratio and therefore its own
+// height, so stretching it to match the text column would be the one thing that
+// breaks the cover contract.
+//
+// `:not(.no-cover)` because a split with nothing in its first column is just a
+// half-empty tile — a cover-less `wide` post keeps the stacked composition.
+@container {$q-home-split}
+  .home-content-container .home-article-list.bento .tier-wide:not(.no-cover)
+    display grid
+    grid-template-columns minmax(0, 46fr) minmax(0, 54fr)
+    align-items start
+
+    .home-article-thumbnail
+      grid-column 1
+      grid-row 1
+
+    // Stretched rather than centred so the text block's box spans the whole
+    // tile: its top edge is then the TILE's top edge, which is what the index
+    // numeral crops against, and the meta row's `margin-top: auto` lands on the
+    // tile's bottom edge exactly as it does in every other tier. Centring the
+    // box instead would slice the numeral against an invisible line somewhere
+    // in the middle of the tile.
+    .home-article-body
+      grid-column 2
+      grid-row 1
+      align-self stretch
+      padding 1.5rem
+      gap 0.85rem
+
+    .home-article-title
+      -webkit-line-clamp 2
+      line-clamp 2
+
+    .home-article-content
+      -webkit-line-clamp 2
+      line-clamp 2
+
+  // Every second wide tile mirrors, so a run of them zig-zags down the page
+  // instead of stacking the same L-shape over and over. The class is put on by
+  // the template, counted over wide tiles alone, so half-width tiles landing
+  // between them never break the alternation.
+  .home-content-container .home-article-list.bento .tier-wide.cover-right:not(.no-cover)
+    grid-template-columns minmax(0, 54fr) minmax(0, 46fr)
+
+    .home-article-thumbnail
+      grid-column 2
+
+    .home-article-body
+      grid-column 1
+
+// ── Tile-level density ───────────────────────────────────────────────────────
+// These query the TILE, so they fire for a narrow tile on a wide screen exactly
+// as they do on a phone. They replace the viewport breakpoints that used to hide
+// the same elements.
+//
+// The full ancestor chain is spelled out on purpose: a container query adds no
+// specificity of its own, so these have to match the base rules they override
+// and win on source order instead.
+@container {$q-card-narrow}
+  .home-content-container .home-article-list .home-article-item
+    .home-article-body
+      padding 1.15rem
+      gap 0.9rem
+
+    .home-article-title
+      font-size 1.15rem
+
+    .home-article-meta-info-container
+      font-size 0.85rem
+
+      .home-article-tag
+        display none
+
+@container {$q-card-tight}
+  .home-content-container .home-article-list .home-article-item .home-article-meta-info-container .home-article-category
+    display none

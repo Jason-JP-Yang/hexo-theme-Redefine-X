@@ -20,7 +20,7 @@
 			<%- partial('pages/home/home-sidebar') %>
 			<% } %>
 
-			<div class="main-content">
+			<div class="main-content<%= is_home() ? ' is-home' : '' %>">
 				<%- partial(getPagePartialPath(page)) %>
 			</div>
 

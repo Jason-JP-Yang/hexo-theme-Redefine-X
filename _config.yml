@@ -66,6 +66,12 @@ global:
   content_max_width: 1000px
   # Sidebar width
   sidebar_width: 210px
+  # Cover aspect ratio — ONE ratio for every surface that shows a post cover:
+  # home grid tiles (desktop and mobile) and the post page banner. Frames declare
+  # `aspect-ratio` and never a fixed height, so height always follows from the
+  # column width and a cover can be composed once and trusted to show the same
+  # crop everywhere.
+  cover_aspect_ratio: "16 / 9"
   # Effects on mouse hover
   hover:
     shadow: true # shadow effect
@@ -204,8 +210,10 @@ navbar:
     right: "#367df7"  #right side
     transparency: 35 #percent (10-99)
   # Navbar width (usually no need to modify)
+  # Keep `home` equal to `home.content_max_width` so the navbar lines up with the
+  # bento grid underneath it.
   width:
-    home: 1200px #home page
+    home: 1240px #home page
     pages: 1000px #other pages
   # Navbar links
   links:
@@ -261,9 +269,34 @@ home:
       #   path: /categories 
       #   icon: fa-regular fa-folder # can be empty
       # ...... # you can add more
+  # Home page content max width. The bento grid needs more horizontal room than a
+  # reading column does, so the home page widens on its own — post pages keep
+  # `global.content_max_width` and their measure is untouched.
+  content_max_width: 1240px
+  # Bento grid
+  bento:
+    # Whether to lay the home article list out as a bento grid.
+    # false -> the classic single-column list.
+    enable: true
+    # Gap between tiles (px)
+    gap: 28
+    # CONTAINER width (not viewport width) at which the grid goes to two columns.
+    # Measured on the article column itself, so it stays correct whether the
+    # sidebar is on, off, left or right.
+    two_column_min_width: 640
+    # Tile size per post. Write `bento: wide | standard | compact` in a post's
+    # front matter to place it by hand; posts without the key fall back to
+    #   sticky      -> wide      full width, cover beside the text
+    #   has cover   -> standard  half width, cover on top
+    #   no cover    -> compact   half width, text-forward, no cover
+    # Consecutive `wide` tiles alternate which side the cover sits on, counted
+    # over the wide tiles alone so half-width tiles between them do not break
+    # the zig-zag. There is deliberately no full-width-cover tier: at this column
+    # width a 16:9 cover spanning it stands ~676px tall and buries the text.
   # Article date format
   article_date_format: auto # auto, relative, YYYY-MM-DD, YYYY-MM-DD HH:mm:ss etc.
-  # Article excerpt length
+  # Article excerpt length. Each bento tier scales this; the tile then clamps the
+  # text visually, so this only decides how much material the clamp works with.
   excerpt_length: 200 # Max length of article excerpt
   # Article categories visibility
   categories:

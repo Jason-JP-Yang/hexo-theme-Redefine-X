@@ -8,6 +8,7 @@ import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
 import initLazyLoad from "./layouts/lazyload.js";
 import initAutoHover from "./layouts/autoHover.js";
+import initCoverParallax from "./layouts/coverParallax.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 import initInstantNotes from "./plugins/instantNotes.js";
 import { initNotoAnim } from "./plugins/noto-anim.js";
@@ -86,6 +87,8 @@ export const main = {
     }
 
     initAutoHover();
+
+    initCoverParallax();
 
     initMathJaxScroll();
 

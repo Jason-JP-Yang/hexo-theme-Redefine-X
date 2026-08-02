@@ -22,10 +22,58 @@ $temp-content-max-width = hexo-config('global.content_max_width')
 $content-max-width = $temp-content-max-width ? convert($temp-content-max-width) : 1000px
 $has-toc-content-max-width = $content-max-width * 1.2
 
+// The home page widens on its own: the bento grid needs horizontal room that a
+// reading column does not want. Post pages keep $content-max-width, so the
+// article measure is untouched by this.
+$temp-home-content-max-width = hexo-config('home.content_max_width')
+$home-content-max-width = $temp-home-content-max-width ? convert($temp-home-content-max-width) : $content-max-width
+
 $navbar-width-home-data = hexo-config('navbar.width.home')
 $navbar-width-home = $navbar-width-home-data ? convert($navbar-width-home-data) : 1200px
 $navbar-width-pages-data = hexo-config('navbar.width.pages')
 $navbar-width-pages = $navbar-width-pages-data ? convert($navbar-width-pages-data) : 1000px
+
+
+
+// ========================================================================================
+//                                       BENTO GRID
+// ========================================================================================
+$temp-bento-gap = hexo-config('home.bento.gap')
+$bento-gap = $temp-bento-gap ? unit($temp-bento-gap, 'px') : 28px
+
+// Deliberately a CONTAINER width, not a viewport width: the article column is
+// what has to fit two tiles, and its width depends on whether the sidebar is
+// there at all. See layout/home-content.styl.
+$temp-bento-two-column = hexo-config('home.bento.two_column_min_width')
+$bento-two-column-min-width = $temp-bento-two-column ? unit($temp-bento-two-column, 'px') : 640px
+
+// Width at which the `wide` tier splits into cover-beside-text. Queried on the
+// COLUMN, not on the tile, because an element cannot query its own container —
+// and a `wide` tile spans the full column anyway, so the two are the same
+// number. Below this it falls back to the stacked composition.
+$bento-split-min-width = 700px
+
+// Card width below which a tile drops its richest meta. This one IS queried on
+// the tile: a tile 380px wide is cramped whether that happens on a phone or in
+// a narrow column on a 27" display.
+$bento-card-narrow-max-width = 420px
+$bento-card-tight-max-width = 340px
+
+
+// ========================================================================================
+//                                    COVER ASPECT RATIO
+// ========================================================================================
+// One ratio for every surface that shows a post cover — home tiles at any width
+// and the post page banner — so the same crop of an image appears everywhere and
+// a cover can be composed once. Frames declare aspect-ratio; height always
+// follows from the column width.
+//
+// unquote() around a string-coerced value is what gets `16 / 9` into CSS intact:
+// left alone Stylus evaluates the slash and emits 1.7778, and s('%s', …) keeps
+// the quotes, which makes the custom property a string and the ratio invalid.
+// The '' + coercion also accepts a plain decimal in the config.
+$temp-cover-aspect-ratio = hexo-config('global.cover_aspect_ratio')
+$cover-aspect-ratio = $temp-cover-aspect-ratio ? unquote('' + $temp-cover-aspect-ratio) : unquote('16 / 9')
 
 
 // ========================================================================================

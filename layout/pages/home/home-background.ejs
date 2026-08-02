@@ -14,12 +14,11 @@
     a.extend:hover {
         background-color: var(--primary-color) !important;
     }
+    /* The card is already translucent over the background here, so the sticky
+       chip drops to an outline instead of stacking a second panel on top. */
     .site-info,
-    .home-article-sticky-label {
+    .home-article-sticky-badge {
         background-color: var(--background-color-transparent-15) !important;
-    }
-    .home-article-sticky-label {
-        backdrop-filter: none !important;
     }
     .home-banner-background {
         filter: blur(15px);

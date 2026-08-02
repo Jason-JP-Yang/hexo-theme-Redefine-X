@@ -16,15 +16,27 @@ export default function initAutoHover() {
 // used to be re-added on every home-page visit: `.home-article-list` is inside
 // #swup so it is a brand-new node each time, the `dataset.autoHoverInit` guard
 // therefore always passed, and two more permanent listeners piled up per visit.
+//
+// The home list is a bento grid, so "the article at the centre of the screen"
+// is a ROW, not a single tile: picking one of two tiles that sit side by side
+// and lighting only that one reads as a glitch. The active item is therefore a
+// set — which collapses back to exactly one tile in the single-column list and
+// on mobile, so the original behaviour is preserved wherever the grid is one
+// tile wide.
 const hState = {
   list: null,
   items: [],
-  activeItem: null,
-  pendingItem: null,
+  actives: new Set(),
+  pending: null,
   userHoveringInteractive: false,
   globalWired: false,
   scrollWired: false,
 };
+
+// Grid rows are stretch-aligned, so tiles sharing a row share a top edge to the
+// pixel. A couple of pixels of slack covers sub-pixel layout rounding without
+// ever merging two genuinely different rows (they are a full gap apart).
+const H_ROW_TOLERANCE = 2;
 
 const homeInteractiveSelector =
   "a,button,input,textarea,select,summary,[role='button'],[tabindex]:not([tabindex='-1']),.home-article-item";
@@ -34,15 +46,18 @@ function initHomeArticleAutoHover() {
   if (!list) {
     hState.list = null;
     hState.items = [];
-    hState.activeItem = null;
+    hState.actives = new Set();
+    hState.pending = null;
     return;
   }
   if (list === hState.list) return;
 
   hState.list = list;
   hState.items = Array.from(list.querySelectorAll(".home-article-item"));
-  hState.activeItem = null;
-  hState.pendingItem = null;
+  // Whatever was active belonged to the list Swup just replaced; those nodes are
+  // detached, so the set is dropped rather than cleaned.
+  hState.actives = new Set();
+  hState.pending = null;
   if (!hState.items.length) return;
 
   if (!hState.globalWired) {
@@ -77,8 +92,13 @@ function initHomeArticleAutoHover() {
 }
 
 // READ phase — measures only.
+// One pass collects every rect, so adding the row grouping costs no extra
+// layout: the tops are already in hand by the time the closest tile is known.
 function hRead(m) {
-  hState.pendingItem = null;
+  // Same convention as the masonry pass: null = "nothing decided this frame",
+  // an empty set = "clear everything". Every early return below is a case where
+  // nothing should be lit, so they all fall through to the empty set.
+  hState.pending = new Set();
   if (!hState.list || !hState.items.length) return;
   if (hState.userHoveringInteractive) return;
 
@@ -86,36 +106,53 @@ function hRead(m) {
   if (!(listRect.bottom > 0 && listRect.top < m.viewportH)) return;
 
   const center = m.viewportH / 2;
-  let closest = null;
+  const visible = [];
+  let closestTop = 0;
   let closestDist = Infinity;
+  let found = false;
 
   for (const item of hState.items) {
     const rect = item.getBoundingClientRect();
     if (rect.bottom <= 0 || rect.top >= m.viewportH) continue;
+    visible.push({ item, top: rect.top });
     const dist = Math.abs(rect.top + rect.height / 2 - center);
     if (dist < closestDist) {
       closestDist = dist;
-      closest = item;
+      closestTop = rect.top;
+      found = true;
     }
   }
-  hState.pendingItem = closest;
+  if (!found) return;
+
+  const next = new Set();
+  for (const entry of visible) {
+    if (Math.abs(entry.top - closestTop) <= H_ROW_TOLERANCE) next.add(entry.item);
+  }
+  hState.pending = next;
 }
 
-// WRITE phase — mutates only, and only on a real change.
+// WRITE phase — mutates only, and only what actually changed.
 function hWrite() {
-  if (hState.pendingItem === hState.activeItem) return;
-  if (hState.activeItem) hState.activeItem.classList.remove("auto-hover");
-  if (hState.pendingItem) hState.pendingItem.classList.add("auto-hover");
-  hState.activeItem = hState.pendingItem;
+  const next = hState.pending;
+  if (!next) return;
+  hState.pending = null;
+
+  for (const el of hState.actives) {
+    if (!next.has(el)) el.classList.remove("auto-hover");
+  }
+  for (const el of next) {
+    if (!hState.actives.has(el)) el.classList.add("auto-hover");
+  }
+  hState.actives = next;
 }
 
 function hSetUserHover(on) {
   if (hState.userHoveringInteractive === on) return;
   hState.userHoveringInteractive = on;
-  if (on && hState.activeItem) {
-    hState.activeItem.classList.remove("auto-hover");
-    hState.activeItem = null;
-    hState.pendingItem = null;
+  if (on && hState.actives.size) {
+    for (const el of hState.actives) el.classList.remove("auto-hover");
+    hState.actives = new Set();
+    hState.pending = null;
   }
   requestScrollPass();
 }

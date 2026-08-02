@@ -11,6 +11,14 @@ redefine-mobile()
   @media (max-width $media-max-width-mobile)
     {block}
 
+// COVER FRAME ==============================================================
+// Published as a custom property so every cover frame — home tiles, the post
+// banner, and anything added later — reads the SAME ratio from one place.
+// Height is never declared; it always falls out of the column width, which is
+// what keeps the visible crop identical at every breakpoint.
+:root
+  --cover-aspect-ratio $cover-aspect-ratio
+
 // ALL ======================================================================
 *
   transition-g()

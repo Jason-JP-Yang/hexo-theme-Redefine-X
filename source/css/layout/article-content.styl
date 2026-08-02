@@ -75,6 +75,36 @@ $gap = 30px
       box-shadow none !important
       max-width 100vw
 
+    // The other end of the cover contract (see global.cover_aspect_ratio and
+    // layout/home-content.styl): a ratio, never a height. The banner used to be
+    // h-60 / sm:h-72 / md:h-80, so one image showed three different crops of
+    // itself across breakpoints and a fourth on the home page — which made a
+    // cover impossible to compose once and trust.
+    .article-cover-frame
+      position relative
+      width 100%
+      aspect-ratio var(--cover-aspect-ratio)
+      overflow hidden
+      background var(--third-background-color)
+
+      .article-cover-image
+        position absolute
+        top 0
+        left 0
+        display block
+        width 100%
+        height 100%
+        object-fit cover
+
+      // Parallax mode — see layouts/coverParallax.js. Identical treatment to the
+      // home tiles: the image is laid out at the size the crop was already
+      // drawing it, then travelled inside the same frame.
+      &.has-parallax .article-cover-image
+        height auto
+        top 50%
+        transform translate3d(0, calc(-50% + var(--parallax-shift, 0px)), 0)
+        will-change transform
+
     .article-header .avatar img
           border-radius: $redefine-border-radius-medium * 0.87
           width 100%
