@@ -204,8 +204,9 @@ navbar:
     right: "#367df7"  #right side
     transparency: 35 #percent (10-99)
   # Navbar width (usually no need to modify)
+  # The home value also sets the bento grid's width — see $home-content-max-width
   width:
-    home: 1240px #home page
+    home: 1560px #home page
     pages: 1000px #other pages
   # Navbar links
   links:
@@ -261,14 +262,15 @@ home:
       #   path: /categories 
       #   icon: fa-regular fa-folder # can be empty
       # ...... # you can add more
-  # Bento grid layout. false -> classic single-column list
-  # Per-post override: `bento: wide | standard | compact` in the front matter
+  # Bento grid layout. false -> classic single-column list with a sidebar rail
+  # Tile sizes are derived from each post; there is nothing to set per post
   bento: true
   # Pagination style. paged (flip in place) | load_more (append below)
   pagination: paged
   # Article date format
   article_date_format: auto # auto, relative, YYYY-MM-DD, YYYY-MM-DD HH:mm:ss etc.
-  # Article excerpt length
+  # Article excerpt length. A floor on the bento grid, where a tile is given
+  # enough text for its size and then shows as much of it as it has room for
   excerpt_length: 200 # Max length of article excerpt
   # Article categories visibility
   categories:

@@ -22,14 +22,21 @@ $temp-content-max-width = hexo-config('global.content_max_width')
 $content-max-width = $temp-content-max-width ? convert($temp-content-max-width) : 1000px
 $has-toc-content-max-width = $content-max-width * 1.2
 
-// The home page is a grid, not a reading column, so it widens on its own. Kept
-// equal to $navbar-width-home so the two line up.
-$home-content-max-width = 1240px
-
 $navbar-width-home-data = hexo-config('navbar.width.home')
 $navbar-width-home = $navbar-width-home-data ? convert($navbar-width-home-data) : 1200px
 $navbar-width-pages-data = hexo-config('navbar.width.pages')
 $navbar-width-pages = $navbar-width-pages-data ? convert($navbar-width-pages-data) : 1000px
+
+// The home page is a grid, not a reading column, so it widens on its own.
+// DERIVED from the navbar width rather than repeated: the two are the only
+// full-width rules on the home page and a reader sees any drift between them
+// immediately. The bento grid absorbed the 240px sidebar rail, so this number
+// also carries the width that rail used to occupy.
+$home-content-max-width = $navbar-width-home
+// And it runs wider than the reading column on a screen too small to reach that
+// maximum, because on those screens the 20% margin is the difference between
+// three tiles across and two.
+$home-content-width = 92%
 
 
 
@@ -38,22 +45,101 @@ $navbar-width-pages = $navbar-width-pages-data ? convert($navbar-width-pages-dat
 // ========================================================================================
 $bento-gap = 28px
 
-// Deliberately a CONTAINER width, not a viewport width: the article column is
-// what has to fit two tiles, and its width depends on whether the sidebar is
-// there at all. See layout/home-content.styl.
-$bento-two-column-min-width = 640px
+// Three columns, two on the tablet grid. The movement library in
+// scripts/helpers/bento-helpers.js is authored against exactly these numbers.
+$bento-columns = 3
+$bento-columns-md = 2
 
-// Width at which the `wide` tier splits into cover-beside-text. Queried on the
-// COLUMN, not on the tile, because an element cannot query its own container —
-// and a `wide` tile spans the full column anyway, so the two are the same
-// number. Below this it falls back to the stacked composition.
-$bento-split-min-width = 700px
+// Everything above the grid that a 1x3 tile has to clear if it is to stand
+// inside one screen: the navbar, plus enough air above and below the tile that
+// it does not read as touching either edge.
+$bento-viewport-reserve = 130px
+// Floor and ceiling for the cell height, and a deliberately NARROW range.
+//
+// The height inside it is picked from the CONTENT: layouts/bentoFit.js measures
+// what every tile on the page actually wants and writes one row height back as
+// `--bento-row-fit` (see the note there for how the two ends trade off). This
+// pair is the range it is allowed to pick from, and the value CSS falls back to
+// when it never runs.
+//
+// Narrow on purpose. The cell is the one measurement every shape is a multiple
+// of, so a wide range means the same shape reads as two different tiles on two
+// different screens.
+//
+// Both ends are set by the same tile — the one-cell one, which is the tightest
+// box on the page and the only shape whose picture is short of room. The floor
+// is where it still holds a cover, a three-line title and a meta row that has
+// wrapped. The ceiling is where its cover stops being a strip: at the widest
+// column the tile is 381px across, its chrome keeps back 180 of the cell, and
+// 360 is what leaves the picture 180px — a 2.1:1 crop. A true 16:9 there would
+// take a 395px cell, which is a wider range than the grid can stay coherent
+// across, so the planner avoids putting a cover in a one-cell tile instead (see
+// TIGHT_COVER in scripts/helpers/bento-helpers.js).
+$bento-row-min = 270px
+$bento-row-max = 360px
 
-// Card width below which a tile drops its richest meta. This one IS queried on
-// the tile: a tile 380px wide is cramped whether that happens on a phone or in
-// a narrow column on a 27" display.
-$bento-card-narrow-max-width = 420px
-$bento-card-tight-max-width = 340px
+// What a tile keeps for its text no matter how much of it the cover would like.
+// The worst a one-cell tile's chrome comes to: a three-line title, a meta row
+// that has wrapped onto two, and the padding and gaps around them. Holding this
+// back is what lets the cover take EVERYTHING else without ever clipping the
+// meta row off the bottom of the tile.
+$bento-tile-chrome-min = 180px
+
+// The flattest a cover is allowed to be before the tile asks the grid for a
+// taller cell (layouts/bentoFit.js reads this). Covers here are composed at
+// $cover-aspect-ratio and a tile one cell tall cannot give a 16:9 crop the
+// height it wants, so this is how far from it the crop may drift before the
+// cell, rather than the picture, is what gives.
+//
+// Set at exactly what $bento-row-max can deliver: a one-cell tile 381px across
+// asks for 381/2.1 + 180 = 361px of cell, so a page carrying one is pushed to
+// the top of the range and no further. Asking for more would only be a demand
+// the clamp throws away.
+$bento-cover-flattest = 2.1
+
+// Deliberately CONTAINER widths, not viewport widths: what has to fit the tiles
+// is the article column, and nothing about the viewport knows how wide that is.
+//
+// Three across is the arrangement the grid exists for — at two across there are
+// not enough shapes left for the sizes to mean anything — so the threshold is
+// set as low as a third of the column can carry a card, not at some notional
+// desktop width. Below the smaller number the grid becomes a single column.
+$bento-lg-min-width = 840px
+$bento-md-min-width = 560px
+
+// Width below which a tile drops its richest meta. Queried on the TEXT COLUMN,
+// not on the tile: a tile can be 790px wide and still set its text in 270px when
+// its cover is beside it, and it is the text column that decides whether the meta
+// row fits on one line. Measured on the body, so these are inside its padding.
+$bento-card-narrow-max-width = 375px
+$bento-card-tight-max-width = 295px
+
+// Padding is the ONE thing that cannot be decided from the text column's width,
+// because the padding is what makes the text column that width — a container
+// cannot answer a question whose answer changes the question. So it is asked of
+// the tile, which the grid sizes and nothing inside can move.
+$bento-tile-narrow-max-width = 420px
+
+// ── When a one-row tile may put its cover BESIDE its text ────────────────────
+// The split composition needs two things at once: a cover column still wide
+// enough to be landscape at the tallest cell, and a text column still wide
+// enough to set a title in. Below that the tile keeps the stacked composition,
+// where the cover is a letterbox band across the top and cannot go portrait
+// however narrow the tile gets.
+//
+//   cover  >= 1.35 x $bento-row-max = 432px   (the flattest crop still landscape)
+//   text   >= 270px                           (a 1.2rem title needs this much)
+//
+// 700px is the next round number above their sum.
+$bento-split-text-min = 270px
+$bento-split-min-tile = 700px
+
+// The same threshold expressed as the COLUMN width that gets a tile there, which
+// is what a container query can actually test. A tile spanning `cn` of `N`
+// tracks is `cn/N * (C + gap) - gap` wide; solved for C, at cn = N that is just
+// the tile width, and at cn = 2 of 3 it is this.
+$bento-split-full-min-width = $bento-split-min-tile
+$bento-split-wide-min-width = ($bento-split-min-tile + $bento-gap) * $bento-columns / 2 - $bento-gap
 
 
 // ========================================================================================

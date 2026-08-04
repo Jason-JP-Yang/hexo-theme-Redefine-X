@@ -96,8 +96,13 @@
           width $main-content-width-mobile
 
         // The home page is a grid, not a reading column, so it is the one
-        // surface that gets its own width. Article measure stays untouched.
+        // surface that gets its own width AND its own margins. Article measure
+        // stays untouched; the grid takes the 12% back because it is what
+        // decides whether the column is wide enough for a third tile, and a
+        // margin that exists to rest the eye between paragraphs is not doing
+        // that job here.
         &.is-home
+          width $home-content-width
           max-width $home-content-max-width
 
         &.has-toc

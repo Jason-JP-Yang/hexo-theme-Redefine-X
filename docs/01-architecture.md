@@ -75,7 +75,7 @@ Front-end modules read these globals to decide what to initialize (e.g. `main.js
 The browser never loads raw `source/` files directly — it loads compiled output:
 
 - **JavaScript**: `source/js/build.js` (run via `npm run build:js`) terser-minifies every `source/js/**/*.js` into `source/js/build/**`, preserving class/function names and emitting source maps. Vendored `source/js/libs/**` are copied verbatim (not minified). Layouts reference `source/js/build/...`.
-- **CSS (Tailwind)**: `npm run build:css` compiles `source/css/tailwind.source.css` → `source/css/build/tailwind.css` (minified). `head.ejs` links `css/build/tailwind.css`.
+- **CSS (Tailwind)**: `npm run build:css` compiles `source/css/_tailwind.source.css` → `source/css/build/tailwind.css` (minified). `head.ejs` links `css/build/tailwind.css`.
 - **CSS (Stylus)**: `source/css/style.styl` (and its `@import`ed partials) is compiled by Hexo's `hexo-renderer-stylus` at generate time; `scripts/filters/stylus-handle.js` customizes that pipeline. Stylus is the bulk of the theme's styling; Tailwind utility classes are used inside layouts.
 
 So a theme front-end change is a **two-step** process: edit `source/...`, then `npm run build` inside the theme. Stylus changes are picked up by `hexo generate`/`hexo server` automatically, but Tailwind and JS changes require the theme build. See [06 — Front-end assets](06-frontend-assets.md).

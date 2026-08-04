@@ -33,13 +33,19 @@ const hState = {
   scrollWired: false,
 };
 
-// Grid rows are stretch-aligned, so tiles sharing a row share a top edge to the
-// pixel. A couple of pixels of slack covers sub-pixel layout rounding without
-// ever merging two genuinely different rows (they are a full gap apart).
-const H_ROW_TOLERANCE = 2;
+// The bento grid stopped having rows in the ordinary sense: a tile spans three,
+// four, five or six row units, so two tiles standing beside each other rarely
+// share a top edge and often do not share a bottom one either. What they do
+// share is a stretch of the page, so membership is decided by overlap — a tile
+// belongs with the closest one when the two cover most of the same band. In the
+// single-column list, where every tile is its own band, this collapses back to
+// exactly one tile, which is the behaviour it replaced.
+const H_BAND_OVERLAP = 0.55;
 
 const homeInteractiveSelector =
-  "a,button,input,textarea,select,summary,[role='button'],[tabindex]:not([tabindex='-1']),.home-article-item";
+  "a,button,input,textarea,select,summary,[role='button'],[tabindex]:not([tabindex='-1']),.home-article-item,.home-feature-tile";
+
+const homeTileSelector = ".home-article-item, .home-feature-tile";
 
 function initHomeArticleAutoHover() {
   const list = document.querySelector(".home-article-list");
@@ -54,7 +60,7 @@ function initHomeArticleAutoHover() {
   // to the very same <ul>, so the element is unchanged while the set of cards
   // is not. Comparing the count as well catches that, and re-running is cheap
   // and idempotent — the listeners below are all wired once per session.
-  const cards = list.querySelectorAll(".home-article-item");
+  const cards = list.querySelectorAll(homeTileSelector);
   if (list === hState.list && cards.length === hState.items.length) return;
 
   // Anything still attached keeps its class unless it is cleared here; in the
@@ -116,26 +122,30 @@ function hRead(m) {
 
   const center = m.viewportH / 2;
   const visible = [];
-  let closestTop = 0;
+  let closest = null;
   let closestDist = Infinity;
-  let found = false;
 
   for (const item of hState.items) {
     const rect = item.getBoundingClientRect();
     if (rect.bottom <= 0 || rect.top >= m.viewportH) continue;
-    visible.push({ item, top: rect.top });
+    const entry = { item, top: rect.top, bottom: rect.bottom, height: rect.height };
+    visible.push(entry);
     const dist = Math.abs(rect.top + rect.height / 2 - center);
     if (dist < closestDist) {
       closestDist = dist;
-      closestTop = rect.top;
-      found = true;
+      closest = entry;
     }
   }
-  if (!found) return;
+  if (!closest) return;
 
+  // Measured against the SHORTER of the two, so a small tile sitting alongside
+  // a tall one still counts as part of its band — the other way round it would
+  // need to cover half of a tile twice its height, which no tile beside it can.
   const next = new Set();
   for (const entry of visible) {
-    if (Math.abs(entry.top - closestTop) <= H_ROW_TOLERANCE) next.add(entry.item);
+    const overlap = Math.min(entry.bottom, closest.bottom) - Math.max(entry.top, closest.top);
+    const shortest = Math.min(entry.height, closest.height);
+    if (shortest > 0 && overlap / shortest >= H_BAND_OVERLAP) next.add(entry.item);
   }
   hState.pending = next;
 }

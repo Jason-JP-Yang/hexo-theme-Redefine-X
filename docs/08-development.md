@@ -11,7 +11,7 @@ How to build, develop, and release the theme. Commands here run **inside `themes
 
 ```sh
 npm run build        # build:css + build:js — run after ANY source/ front-end change
-npm run build:css    # Tailwind v4: source/css/tailwind.source.css → source/css/build/tailwind.css (minified)
+npm run build:css    # Tailwind v4: source/css/_tailwind.source.css → source/css/build/tailwind.css (minified)
 npm run build:js     # terser: source/js/**/*.js → source/js/build/** (+ source maps)
 npm run watch:css    # Tailwind in --watch during active styling
 ```
@@ -64,7 +64,7 @@ On `hexo` startup, [`events/welcome.js`](04-scripts.md#welcomejs) queries `redef
 
 | Source | Tool | Output | Trigger |
 |--------|------|--------|---------|
-| `source/css/tailwind.source.css` | Tailwind v4 CLI | `source/css/build/tailwind.css` | `npm run build:css` |
+| `source/css/_tailwind.source.css` | Tailwind v4 CLI | `source/css/build/tailwind.css` | `npm run build:css` |
 | `source/js/**/*.js` (not `libs/`) | terser (`build.js`) | `source/js/build/**` | `npm run build:js` |
 | `source/css/style.styl` (+partials) | hexo-renderer-stylus | in-memory → site CSS | `hexo generate`/`server` |
 | Markdown posts | filters + EJS | `public/**` | `hexo generate` |

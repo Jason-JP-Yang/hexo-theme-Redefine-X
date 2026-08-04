@@ -42,7 +42,7 @@ themes/redefine-x/
 │   └── masonry-generator.js #   builds photo-album pages
 ├── source/                  # Front-end assets
 │   ├── js/                  #   ES modules (build.js bundles → source/js/build/)
-│   ├── css/                 #   Stylus (style.styl) + Tailwind (tailwind.source.css)
+│   ├── css/                 #   Stylus (style.styl) + Tailwind (_tailwind.source.css)
 │   ├── fonts/ images/ assets/ fontawesome/ webfonts/
 ├── workflows/               # GitHub Actions templates exported into the generated site
 └── package.json             # Theme build/release scripts (Tailwind + terser + standard-version)

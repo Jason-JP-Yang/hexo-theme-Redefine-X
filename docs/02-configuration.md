@@ -145,7 +145,7 @@ home:
     show_on_mobile: true        # show nav in mobile sheet menu
     links: { Label: { path, icon }, ... }
   article_date_format: auto     # auto | relative | a moment.js format string
-  excerpt_length: 200           # chars in card excerpt
+  excerpt_length: 200           # chars in card excerpt (a floor on the bento grid)
   categories: { enable: true, limit: 3 }
   tags:       { enable: true, limit: 3 }
 ```

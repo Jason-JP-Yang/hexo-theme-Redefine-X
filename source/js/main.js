@@ -8,6 +8,8 @@ import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
 import initLazyLoad from "./layouts/lazyload.js";
 import initAutoHover from "./layouts/autoHover.js";
+import initBentoFit from "./layouts/bentoFit.js";
+import initTileSpotlight from "./layouts/tileSpotlight.js";
 import initCoverParallax from "./layouts/coverParallax.js";
 import initHomePagination from "./layouts/homePagination.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
@@ -88,6 +90,13 @@ export const main = {
     }
 
     initAutoHover();
+
+    // Before the parallax: the cell height it picks changes every cover's frame,
+    // and a cover measured against the old one starts its travel in the wrong
+    // place.
+    initBentoFit();
+
+    initTileSpotlight();
 
     initCoverParallax();
 

@@ -1,5 +1,7 @@
 import { requestScrollPass, invalidateMetrics } from "../tools/scrollScheduler.js";
 import initAutoHover from "./autoHover.js";
+import initBentoFit, { syncBentoFit } from "./bentoFit.js";
+import initTileSpotlight from "./tileSpotlight.js";
 import initCoverParallax, {
   setCoverParallaxSuspended,
   syncCoverParallax,
@@ -296,6 +298,14 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
   // paired up, measured or interpolated between the two layouts.
   const incoming = document.importNode(payload.list, true);
 
+  // Tiles carry a scroll-driven entrance animation, and a freshly inserted tile
+  // is at the start of its range. Left on, it would hold every card at opacity 0
+  // underneath the flip and drive `translate` while the flip drives `transform`.
+  // The class switches it off for the length of the turn; by the time it comes
+  // off, the cards on screen are past their entry range and resolve to the end
+  // state, and the ones below still animate when they are scrolled to.
+  if (animate) incoming.classList.add("is-flipping");
+
   state.list.replaceWith(incoming);
   state.list = incoming;
 
@@ -321,7 +331,12 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
   // covers be measured with honest geometry — and measuring them here rather
   // than after the flip is what stops every cover jumping into its parallax
   // offset the instant the cards land.
+  //
+  // The fit goes first and synchronously: a different set of posts is a
+  // different cell height, and every cover's frame is a fraction of it.
   let entering = [];
+  initBentoFit();
+  syncBentoFit();
   initCoverParallax();
   syncCoverParallax();
   if (animate) {
@@ -331,7 +346,9 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
 
   if (entering.length) await runFlip(entering, "in");
 
+  state.list.classList.remove("is-flipping");
   initAutoHover();
+  initTileSpotlight();
   settleMetrics();
 }
 
@@ -508,11 +525,17 @@ function runFlip(cards, direction) {
 /**
  * @param shift  pixels the page has still to scroll; the cards are selected by
  *               where they will be once it has, not by where they are now.
+ *
+ * The site cards are excluded. They are on every page, in the same place, and
+ * they are furniture rather than content: flipping them over would say the page
+ * had changed in a way it has not. They are still replaced along with the rest
+ * of the list — identical markup landing in an identical slot, which is why
+ * leaving them unanimated reads as them never having moved.
  */
 function cardsInViewport(list, shift) {
   const viewportH = window.innerHeight;
   const offset = shift || 0;
-  return Array.from(list.children).filter((card) => {
+  return Array.from(list.querySelectorAll(".home-article-item")).filter((card) => {
     const rect = card.getBoundingClientRect();
     const top = rect.top - offset;
     return top + rect.height > 0 && top < viewportH;
@@ -539,6 +562,12 @@ async function loadMore() {
     refreshHomeRelativeTime();
     initNotoAnim();
     initAutoHover();
+    initTileSpotlight();
+    // Same order as the flip: the appended tiles are part of the same grid, so
+    // the cell height is re-fitted over the whole of it before any cover is
+    // measured against it.
+    initBentoFit();
+    syncBentoFit();
     initCoverParallax();
     settleMetrics();
 
@@ -557,6 +586,12 @@ async function appendCards(cards) {
   if (!cards.length) return;
   const list = state.list;
 
+  // Same reason as the flip: the appended cards have their own reveal, and the
+  // scroll-driven entrance would be a second one running against it. Once it is
+  // switched back on, cards appended below the fold pick it up on the way down,
+  // which is exactly what it is for.
+  list.classList.add("is-flipping");
+
   await animateHeight(list, () => {
     cards.forEach((card) => list.appendChild(card));
     // Transform and opacity only, so these never feed back into the height
@@ -572,6 +607,8 @@ async function appendCards(cards) {
       ),
     );
   });
+
+  list.classList.remove("is-flipping");
 }
 
 async function retireButton() {
