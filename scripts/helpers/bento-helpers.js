@@ -5,18 +5,20 @@
  *
  * ── The model ────────────────────────────────────────────────────────────────
  *
- * The home page is a grid of CELLS: three columns across, and ONE row height
- * shared by every row (see `--bento-row` in layout/home-content.styl). A tile
- * covers a whole number of cells — 1x1, 1x2, 1x3, 2x1, 2x2, 3x1 — and the page
- * is those tiles packed together without gaps.
+ * The home page is a grid of CELLS: three columns across, and rows whose heights
+ * are picked one at a time (see `--bento-rows` in layout/home-content.styl). A
+ * tile covers a whole number of cells — 1x1, 1x2, 1x3, 2x1, 2x2, 3x1 — and the
+ * page is those tiles packed together without gaps.
  *
- * Every row is the same height on purpose. A row sized by whatever happens to be
- * in it changes from page to page, so the two site cards in the first row would
- * be a different height on every page, and no two tiles on the page would agree
- * on anything. What that shared height IS gets picked from the content by
- * layouts/bentoFit.js, inside a narrow range — tight enough that a page of notes
- * does not leave half its tiles empty, loose enough that a page of long-form
- * pieces is not all ellipsis.
+ * Each row is sized by what stands IN it: layouts/bentoFit.js measures how much
+ * summary those tiles have to show and how much of the row their covers need,
+ * and picks a height inside a fixed range. So a band of two-line notes closes up
+ * while the band of long-form pieces under it stays open, and the site cards'
+ * row is exactly as tall as the cards are.
+ *
+ * That is why every tile's ROW is written out below rather than left to
+ * auto-placement: a row can only be sized from its tiles if it is known which
+ * tiles are in it.
  *
  * How much summary a tile prints is not decided here, or anywhere else in the
  * build. The excerpt takes the space its tile has left over and stops on the last
@@ -346,50 +348,68 @@ const MOVEMENTS = {
 };
 
 /**
- * The row each slot lands in, run through CSS grid's own sparse auto-placement
- * (CSS Grid §8.5): the cursor only ever moves forward, so a slot whose column
- * start is left of the cursor drops a row, and a slot that would overlap
+ * The row each item lands in, run through CSS grid's own sparse auto-placement
+ * (CSS Grid §8.5): the cursor only ever moves forward, so an item whose column
+ * start is left of the cursor drops a row, and an item that would overlap
  * something already placed drops until it does not.
  *
  * Derived rather than declared because a movement's rectangle is already fully
  * described by its slots — a hand-written row number is a second copy of the
- * same fact, and the two would drift the first time a movement was edited.
+ * same fact, and the two would drift the first time a movement was edited. The
+ * numbers are then written into the markup rather than left to the browser,
+ * because a row cannot be sized from its tiles unless the page knows which
+ * tiles are in it.
+ *
+ * `items` are `{ cs, cn, rn }`, which is what both grids have in common — the
+ * three-column one straight off the shapes, the two-column one out of packMd.
  */
-function placeRows(slots) {
+function placeRows(items, columns) {
   const grid = [];
-  const cells = (r) => grid[r] || (grid[r] = new Array(COLUMNS).fill(false));
+  const cells = (r) => grid[r] || (grid[r] = new Array(columns).fill(false));
   const rows = [];
   let row = 0;
   let col = 0;
 
-  for (const s of slots) {
-    const shape = s.isFeature ? SHAPES.small : SHAPES[s.shape];
-    const start = s.cs - 1;
+  for (const item of items) {
+    const start = item.cs - 1;
     if (start < col) row++;
 
     for (;;) {
       let clash = false;
-      for (let r = row; r < row + shape.rn && !clash; r++) {
-        for (let c = start; c < start + shape.cn; c++) if (cells(r)[c]) clash = true;
+      for (let r = row; r < row + item.rn && !clash; r++) {
+        for (let c = start; c < start + item.cn; c++) if (cells(r)[c]) clash = true;
       }
       if (!clash) break;
       row++;
     }
 
-    for (let r = row; r < row + shape.rn; r++) {
-      for (let c = start; c < start + shape.cn; c++) cells(r)[c] = true;
+    for (let r = row; r < row + item.rn; r++) {
+      for (let c = start; c < start + item.cn; c++) cells(r)[c] = true;
     }
     rows.push(row);
-    col = start + shape.cn;
+    col = start + item.cn;
   }
 
   return rows;
 }
 
+/** A slot's box on the three-column grid. Features are one cell, like `small`. */
+function slotBox(s) {
+  const shape = s.isFeature ? SHAPES.small : SHAPES[s.shape];
+  return { cs: s.cs, cn: shape.cn, rn: shape.rn };
+}
+
+/** How many rows a placed set covers — the offset the next movement starts at. */
+function rowsUsed(items, rows) {
+  let used = 0;
+  for (let i = 0; i < items.length; i++) used = Math.max(used, rows[i] + items[i].rn);
+  return used;
+}
+
 // Post count, whether the movement carries the site cards, and the row each of
 // its posts lands in — all derived, so none of them can disagree with the slots.
 for (const movement of Object.values(MOVEMENTS)) {
-  const rows = placeRows(movement.slots);
+  const rows = placeRows(movement.slots.map(slotBox), COLUMNS);
   movement.size = movement.slots.filter((s) => !s.isFeature).length;
   movement.opens = movement.slots.some((s) => s.isFeature);
   // Aligned with the order fitCost walks the post slots, features skipped.
@@ -601,30 +621,66 @@ function planHomeGrid(posts, options) {
   // Counted over split tiles alone, so the mirroring survives any number of
   // ordinary tiles landing between them.
   let splitCount = 0;
+  // Movements are full-width rectangles stacked in order, so a movement's rows
+  // start where the previous one's ended — on each grid separately, since the
+  // same movement is a different number of rows tall on the two of them.
+  let lgOffset = 0;
+  let mdOffset = 0;
 
   for (const step of sequence) {
     const movement = MOVEMENTS[step.name];
-    const md = packMd(movement.slots.filter((s) => !s.isFeature));
+
+    // The slots this step actually renders: every feature, and posts until the
+    // step's allowance runs out. The same walk as the emit loop below, so the
+    // rows are computed over exactly what gets placed — a truncated opening at
+    // the end of a short page is a smaller rectangle, not the whole one with
+    // holes in it.
+    const drawn = [];
+    let allowed = step.take;
+    for (const s of movement.slots) {
+      if (!s.isFeature) {
+        if (allowed <= 0) break;
+        allowed--;
+      }
+      drawn.push(s);
+    }
+
+    const postSlots = drawn.filter((s) => !s.isFeature);
+    const features = drawn.filter((s) => s.isFeature);
+    const md = packMd(postSlots);
+
+    const lgBoxes = drawn.map(slotBox);
+    const lgRows = placeRows(lgBoxes, COLUMNS);
+
+    // The two site cards open the tablet grid the same way they open the wide
+    // one — one cell each, side by side — and the packed posts follow.
+    const mdBoxes = features.map((s, i) => ({ cs: i + 1, cn: 1, rn: 1 })).concat(md);
+    const mdRows = placeRows(mdBoxes, COLUMNS_MD);
+
     let used = 0;
     let mdIndex = 0;
     let featureIndex = 0;
+    let drawnIndex = 0;
 
-    for (const s of movement.slots) {
+    for (const s of drawn) {
+      const lgRow = lgOffset + lgRows[drawnIndex] + 1;
+      drawnIndex++;
+
       if (s.isFeature) {
         tiles.push({
           kind: "feature",
           name: s.shape,
           movement: step.name,
-          lg: { cs: s.cs, cn: 1, rn: 1 },
-          md: { cs: featureIndex + 1, cn: 1, rn: 1 },
+          lg: { cs: s.cs, cn: 1, rn: 1, rs: lgRow },
+          md: { cs: featureIndex + 1, cn: 1, rn: 1, rs: mdOffset + mdRows[featureIndex] + 1 },
         });
         featureIndex++;
         continue;
       }
 
-      if (used >= step.take) break;
       const shape = SHAPES[s.shape];
       const place = md[mdIndex] || { cs: 1, cn: COLUMNS_MD, rn: shape.rn };
+      const mdRow = mdOffset + (mdRows[features.length + mdIndex] || 0) + 1;
 
       tiles.push({
         kind: "post",
@@ -632,8 +688,8 @@ function planHomeGrid(posts, options) {
         tier: s.shape,
         postIndex: postIndex,
         movement: step.name,
-        lg: { cs: s.cs, cn: shape.cn, rn: shape.rn },
-        md: { cs: place.cs, cn: place.cn, rn: place.rn },
+        lg: { cs: s.cs, cn: shape.cn, rn: shape.rn, rs: lgRow },
+        md: { cs: place.cs, cn: place.cn, rn: place.rn, rs: mdRow },
         // Wide and only one row tall: no room for a cover above the text, so it
         // goes beside it. Derived rather than declared, so a shape can never
         // disagree with its own dimensions.
@@ -646,6 +702,9 @@ function planHomeGrid(posts, options) {
       used++;
       mdIndex++;
     }
+
+    lgOffset += rowsUsed(lgBoxes, lgRows);
+    mdOffset += rowsUsed(mdBoxes, mdRows);
   }
 
   return tiles;
@@ -655,14 +714,30 @@ hexo.extend.helper.register("bentoPlan", function (posts, options) {
   return planHomeGrid(posts, options);
 });
 
+/**
+ * How many rows the page comes to on each grid. The list carries both, because
+ * load-more appends the next page's tiles into this same grid and their rows
+ * have to be shifted past these (layouts/homePagination.js).
+ */
+hexo.extend.helper.register("bentoRows", function (tiles, key) {
+  let rows = 0;
+  for (const tile of tiles) {
+    const box = tile[key];
+    if (box && box.rs) rows = Math.max(rows, box.rs + box.rn - 1);
+  }
+  return rows;
+});
+
 /** Placement, carried as custom properties. */
 hexo.extend.helper.register("bentoStyle", function (tile) {
   return [
     "--lg-cs:" + tile.lg.cs,
     "--lg-cn:" + tile.lg.cn,
+    "--lg-rs:" + tile.lg.rs,
     "--lg-rn:" + tile.lg.rn,
     "--md-cs:" + tile.md.cs,
     "--md-cn:" + tile.md.cn,
+    "--md-rs:" + tile.md.rs,
     "--md-rn:" + tile.md.rn,
   ].join(";");
 });

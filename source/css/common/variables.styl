@@ -54,48 +54,47 @@ $bento-columns-md = 2
 // inside one screen: the navbar, plus enough air above and below the tile that
 // it does not read as touching either edge.
 $bento-viewport-reserve = 130px
-// Floor and ceiling for the cell height, and a deliberately NARROW range.
+// Floor and ceiling for a row's height.
 //
-// The height inside it is picked from the CONTENT: layouts/bentoFit.js measures
-// what every tile on the page actually wants and writes one row height back as
-// `--bento-row-fit` (see the note there for how the two ends trade off). This
-// pair is the range it is allowed to pick from, and the value CSS falls back to
-// when it never runs.
+// Rows are sized INDEPENDENTLY of each other: layouts/bentoFit.js measures what
+// the tiles standing in each row actually want — how much summary they have to
+// show, how much of the row their cover needs — and writes the whole list back
+// as `--bento-rows`. This pair is the range each of those answers is allowed to
+// land in, and the ceiling is what CSS falls back to when the script never runs.
 //
-// Narrow on purpose. The cell is the one measurement every shape is a multiple
-// of, so a wide range means the same shape reads as two different tiles on two
-// different screens.
-//
-// Both ends are set by the same tile — the one-cell one, which is the tightest
-// box on the page and the only shape whose picture is short of room. The floor
-// is where it still holds a cover, a three-line title and a meta row that has
-// wrapped. The ceiling is where its cover stops being a strip: at the widest
-// column the tile is 381px across, its chrome keeps back 180 of the cell, and
-// 360 is what leaves the picture 180px — a 2.1:1 crop. A true 16:9 there would
-// take a 395px cell, which is a wider range than the grid can stay coherent
-// across, so the planner avoids putting a cover in a one-cell tile instead (see
-// TIGHT_COVER in scripts/helpers/bento-helpers.js).
-$bento-row-min = 270px
+// The floor is where a one-cell tile still holds a cover, a title and a meta row
+// without any of them clipping. The ceiling is where a 1x3 tile stops being a
+// column of white on a page that had nothing to put in it.
+$bento-row-min = 230px
 $bento-row-max = 360px
 
-// What a tile keeps for its text no matter how much of it the cover would like.
-// The worst a one-cell tile's chrome comes to: a three-line title, a meta row
-// that has wrapped onto two, and the padding and gaps around them. Holding this
-// back is what lets the cover take EVERYTHING else without ever clipping the
-// meta row off the bottom of the tile.
+// The fallback for `--tile-chrome`, which layouts/bentoFit.js writes per tile:
+// how much of the tile is NOT the cover — its title, its meta row, the padding
+// and gaps around them, and the summary it has to show. The cover takes what is
+// left. This number is the worst a one-cell tile comes to, and it is what the
+// cover is sized against until the script has measured the real one.
 $bento-tile-chrome-min = 180px
 
-// The flattest a cover is allowed to be before the tile asks the grid for a
-// taller cell (layouts/bentoFit.js reads this). Covers here are composed at
-// $cover-aspect-ratio and a tile one cell tall cannot give a 16:9 crop the
-// height it wants, so this is how far from it the crop may drift before the
-// cell, rather than the picture, is what gives.
+// ── The three limits on a cover in a cell grid ───────────────────────────────
+// A tile's height is fixed by its row, so a cover above the text takes a SHARE
+// of it rather than a ratio of its own, and each of these stops a specific bad
+// crop:
 //
-// Set at exactly what $bento-row-max can deliver: a one-cell tile 381px across
-// asks for 381/2.1 + 180 = 361px of cell, so a page carrying one is pushed to
-// the top of the range and no further. Asking for more would only be a demand
-// the clamp throws away.
-$bento-cover-flattest = 2.1
+//   share      no tile gives more than this fraction of itself to one image
+//   widest     and none crops a wide photograph towards a portrait
+//   flattest   and none is squeezed below this into a hairline, however short
+//              the row it ended up in
+//
+// `target` is not a limit but a want: the crop a covered tile ASKS its row to be
+// tall enough for (layouts/bentoFit.js reads it). Covers are composed at
+// $cover-aspect-ratio, and a cell grid cannot give every tile 16:9 without every
+// row growing to fit the widest picture on the page — so this is the crop the
+// rows are actually sized around, and `flattest` is what happens when the range
+// above runs out before it is reached.
+$bento-cover-share = 0.6
+$bento-cover-widest = 1.55
+$bento-cover-target = 2.2
+$bento-cover-flattest = 3.2
 
 // Deliberately CONTAINER widths, not viewport widths: what has to fit the tiles
 // is the article column, and nothing about the viewport knows how wide that is.
@@ -140,6 +139,25 @@ $bento-split-min-tile = 700px
 // the tile width, and at cn = 2 of 3 it is this.
 $bento-split-full-min-width = $bento-split-min-tile
 $bento-split-wide-min-width = ($bento-split-min-tile + $bento-gap) * $bento-columns / 2 - $bento-gap
+
+
+// ========================================================================================
+//                                  CLASSIC ARTICLE LIST
+// ========================================================================================
+// The `home.bento: false` layout: one card per row, cover BESIDE the text and
+// alternating sides down the page.
+//
+// The cover column is a share of the card's width rather than a height, because
+// nothing here fixes the card's height — the text does. Its height then follows
+// from $cover-aspect-ratio, which is the crop the card is sized to hold; a card
+// whose text runs longer than that grows, and the picture grows with it, so the
+// crop drifts a little taller than 16:9 and never flatter.
+$list-cover-width = 42%
+
+// Below this the card stacks: a cover beside the text needs both columns to stay
+// readable, and a container narrower than this cannot give the text side enough
+// room to set a title once the picture has taken its share.
+$list-split-min-width = 620px
 
 
 // ========================================================================================

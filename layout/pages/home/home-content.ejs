@@ -67,7 +67,8 @@
     }
 %>
 <div class="home-content-container">
-    <ul class="home-article-list<%= bentoEnabled ? " bento" : "" %>" data-page="<%= currentPage %>">
+    <ul class="home-article-list<%= bentoEnabled ? " bento" : "" %>" data-page="<%= currentPage %>"
+        <%- bentoEnabled ? ' data-lg-rows="' + bentoRows(plan, "lg") + '" data-md-rows="' + bentoRows(plan, "md") + '"' : "" %>>
         <% plan.forEach((tile) => { %>
             <% if (tile.kind === "feature") { %>
                 <%- partial('pages/home/home-feature-tile', { tile: tile }) %>

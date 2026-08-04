@@ -554,7 +554,9 @@ async function loadMore() {
   try {
     const payload = await fetchPage(next);
     const incoming = document.importNode(payload.list, true);
-    await appendCards(Array.from(incoming.children));
+    const cards = Array.from(incoming.children);
+    shiftRows(cards, incoming);
+    await appendCards(cards);
 
     state.current = next;
     state.root.dataset.current = String(next);
@@ -580,6 +582,33 @@ async function loadMore() {
     state.busy = false;
     setButtonBusy(false);
   }
+}
+
+/**
+ * Every tile carries the grid row it was planned into, counted from the top of
+ * its OWN page (scripts/helpers/bento-helpers.js) — which is the only thing that
+ * lets a row be sized from the tiles standing in it. Appending a page into the
+ * grid already on screen therefore has to move its rows past the ones already
+ * there, or page 2 is laid over page 1.
+ *
+ * Both grids are shifted, not just the live one: the reader can turn the window
+ * from three columns to two after appending, and the two have different row
+ * counts for the same posts.
+ */
+function shiftRows(cards, incoming) {
+  const list = state.list;
+  const offset = { lg: Number(list.dataset.lgRows) || 0, md: Number(list.dataset.mdRows) || 0 };
+  if (!offset.lg && !offset.md) return;
+
+  for (const card of cards) {
+    for (const grid of ["lg", "md"]) {
+      const row = Number(card.style.getPropertyValue("--" + grid + "-rs"));
+      if (row > 0) card.style.setProperty("--" + grid + "-rs", String(row + offset[grid]));
+    }
+  }
+
+  list.dataset.lgRows = String(offset.lg + (Number(incoming.dataset.lgRows) || 0));
+  list.dataset.mdRows = String(offset.md + (Number(incoming.dataset.mdRows) || 0));
 }
 
 async function appendCards(cards) {
