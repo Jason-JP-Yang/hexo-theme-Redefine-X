@@ -779,7 +779,10 @@ split-mirrored()
 
 @supports (animation-timeline: view())
   @media (prefers-reduced-motion: no-preference)
-    .home-content-container .home-article-list.bento:not(.is-flipping) > *
+    // `has-entered` is put on by the paginator: a card that flipped in has had
+    // its entrance, and reattaching this one would drop it back to the opacity
+    // its scroll position says it should still be at.
+    .home-content-container .home-article-list.bento:not(.is-flipping) > *:not(.has-entered)
       animation bento-enter linear both
       animation-timeline view()
       // Entry only. Past this range the tile holds the end state, which is also

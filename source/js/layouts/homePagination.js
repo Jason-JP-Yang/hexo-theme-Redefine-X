@@ -1,5 +1,5 @@
 import { requestScrollPass, invalidateMetrics } from "../tools/scrollScheduler.js";
-import initAutoHover from "./autoHover.js";
+import initAutoHover, { syncHomeAutoHover } from "./autoHover.js";
 import initBentoFit, { syncBentoFit } from "./bentoFit.js";
 import initTileSpotlight from "./tileSpotlight.js";
 import initCoverParallax, {
@@ -334,11 +334,19 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
   //
   // The fit goes first and synchronously: a different set of posts is a
   // different cell height, and every cover's frame is a fraction of it.
+  //
+  // Everything a card's LANDED state depends on is settled in here too, while
+  // it is still flat: the lift the centre band gives it, and the rim light. Left
+  // until after the flip they would arrive a frame late, on cards that have just
+  // stopped moving, and read as a card spontaneously growing.
   let entering = [];
   initBentoFit();
   syncBentoFit();
   initCoverParallax();
   syncCoverParallax();
+  initAutoHover();
+  syncHomeAutoHover();
+  initTileSpotlight();
   if (animate) {
     entering = cardsInViewport(state.list);
     entering.forEach((card) => primeForFlipIn(card));
@@ -346,9 +354,14 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
 
   if (entering.length) await runFlip(entering, "in");
 
+  // A card that flipped in has HAD its entrance. Without this the scroll-driven
+  // one reattaches the moment `is-flipping` comes off, and every card still
+  // inside its entry range — anything low in the viewport — drops back to a
+  // partial opacity it has no way to explain. Cards below the fold are
+  // untouched and still animate when they are scrolled to.
+  entering.forEach((card) => card.classList.add("has-entered"));
+
   state.list.classList.remove("is-flipping");
-  initAutoHover();
-  initTileSpotlight();
   settleMetrics();
 }
 
@@ -526,16 +539,16 @@ function runFlip(cards, direction) {
  * @param shift  pixels the page has still to scroll; the cards are selected by
  *               where they will be once it has, not by where they are now.
  *
- * The site cards are excluded. They are on every page, in the same place, and
- * they are furniture rather than content: flipping them over would say the page
- * had changed in a way it has not. They are still replaced along with the rest
- * of the list — identical markup landing in an identical slot, which is why
- * leaving them unanimated reads as them never having moved.
+ * The site cards turn with everything else. They carry the same content on
+ * every page, so there was a case for holding them still — but a band of tiles
+ * rotating around two that do not read as two tiles that failed to animate, not
+ * as furniture, and the eye goes straight to them.
  */
 function cardsInViewport(list, shift) {
   const viewportH = window.innerHeight;
   const offset = shift || 0;
-  return Array.from(list.querySelectorAll(".home-article-item")).filter((card) => {
+  const tiles = list.querySelectorAll(".home-article-item, .home-feature-tile");
+  return Array.from(tiles).filter((card) => {
     const rect = card.getBoundingClientRect();
     const top = rect.top - offset;
     return top + rect.height > 0 && top < viewportH;
@@ -616,10 +629,11 @@ async function appendCards(cards) {
   const list = state.list;
 
   // Same reason as the flip: the appended cards have their own reveal, and the
-  // scroll-driven entrance would be a second one running against it. Once it is
-  // switched back on, cards appended below the fold pick it up on the way down,
-  // which is exactly what it is for.
+  // scroll-driven entrance would be a second one running against it. Every card
+  // appended here runs that reveal whether or not it is on screen, so every one
+  // of them is marked as having entered before the switch goes back on.
   list.classList.add("is-flipping");
+  cards.forEach((card) => card.classList.add("has-entered"));
 
   await animateHeight(list, () => {
     cards.forEach((card) => list.appendChild(card));

@@ -1,9 +1,22 @@
-import { onScroll, requestScrollPass } from "../tools/scrollScheduler.js";
+import { onScroll, requestScrollPass, getMetrics } from "../tools/scrollScheduler.js";
 
 export default function initAutoHover() {
   initHomeArticleAutoHover();
   initArticleMediaAutoHover();
   initMasonryAutoHover();
+}
+
+/**
+ * Now rather than next frame, for the one caller that needs it: the paginator
+ * lights the new cards while they are still FLAT, in the same task it inserts
+ * them. A frame later they are edge-on, their rects are their squashed
+ * projections, and the class would land — visibly, as a lift out of nowhere —
+ * only once the flip had already finished.
+ */
+export function syncHomeAutoHover() {
+  if (!hState.list || !hState.items.length) return;
+  hRead(getMetrics());
+  hWrite();
 }
 
 // ==================== Home Article Auto-Hover ====================
@@ -115,6 +128,13 @@ function hRead(m) {
   // nothing should be lit, so they all fall through to the empty set.
   hState.pending = new Set();
   if (!hState.list || !hState.items.length) return;
+  // Mid-flip a card's bounding box is its edge-on projection — a few pixels
+  // tall — so every band this pass could compute is a fiction. `null` rather
+  // than the empty set: nothing decided, so nothing is unlit either.
+  if (hState.list.classList.contains("is-flipping")) {
+    hState.pending = null;
+    return;
+  }
   if (hState.userHoveringInteractive) return;
 
   const listRect = hState.list.getBoundingClientRect();
