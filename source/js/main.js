@@ -6,6 +6,7 @@ import initScrollTopBottom from "./tools/scrollTopBottom.js";
 import initLocalSearch from "./tools/localSearch.js";
 import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
+import initNavbarCollapse from "./layouts/navbarCollapse.js";
 import initLazyLoad from "./layouts/lazyload.js";
 import initAutoHover from "./layouts/autoHover.js";
 import initBentoFit from "./layouts/bentoFit.js";
@@ -88,6 +89,10 @@ export const main = {
         preload: theme.articles.lazyload_preload === true
       });
     }
+
+    // Before anything that measures the page: the navbar is two different
+    // heights in its two presentations.
+    initNavbarCollapse();
 
     initAutoHover();
 

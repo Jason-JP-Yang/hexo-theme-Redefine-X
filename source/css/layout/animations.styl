@@ -1,5 +1,10 @@
+// `opacity`, spelled out. A bare `transition 0.4s` is `transition-property:
+// all`, and the home banner's background carries this class while sized in
+// viewport units — so every window resize animated its width and height for
+// 400ms, trailing the viewport and showing the page behind it the whole way.
+// A fade transitions opacity; that is the whole of what Swup asks of it.
 .transition-fade
-  transition 0.4s
+  transition opacity 0.4s ease
   opacity 1
 
 .transition-fade-up
