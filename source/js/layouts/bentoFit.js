@@ -1,77 +1,58 @@
 /**
  * Redefine-X — home bento fit pass.
  *
- * Four numbers come out of this file. None of them is a preference: every one is
- * read off the tiles that are actually on the page.
+ * Sizes every grid row from the tiles standing in it, writes the list back as
+ * `--bento-rows`, and hands each tile the numbers the stylesheet needs. Nothing
+ * here is a preference; every one is measured off the page.
  *
- *   --bento-rows    ONE HEIGHT PER ROW, written as the grid's whole
- *                   `grid-template-rows`. Each row is sized by what stands in
- *                   it, so a band of two-line notes closes up while the band of
- *                   long-form pieces under it stays open, and the row carrying
- *                   the two site cards is exactly as tall as the cards are.
- *                   The stylesheet fixes the range each answer may land in.
+ * ── The rule a row height obeys ─────────────────────────────────────────────
  *
- *   --tile-chrome   Per tile, everything in it that is NOT the cover: its title,
- *                   its meta row, the padding and gaps around them, and the
- *                   summary it has to show. The cover takes what is left, which
- *                   is what lets a tile with three words to say hand the room to
- *                   its picture instead of leaving it blank.
+ * A row GROWS while anything standing in it is still cut short, and SHRINKS only
+ * while every one of them has blank space left over. Its resting place is
+ * therefore the height at which the most demanding tile in it shows its whole
+ * summary: one tile still truncated is reason to grow even if the others are
+ * already full, and one tile still full is reason not to shrink.
  *
- *   --tile-furniture  The same thing minus the summary — the part of a tile that
- *                   may not be clipped whatever happens to its row. It is what
- *                   the cover's own floor gives way to.
+ * Blank space on the tiles that wanted less is then a property of the PAIRING,
+ * not of the row — and the planner is what answers for it, by not putting a
+ * two-line post in a row with a twelve-line one
+ * (scripts/helpers/bento-helpers.js).
  *
- *   --fit-lines     Per tile, how many lines of summary fit in the space the
- *                   tile has left. The stylesheet has already cut the box to a
- *                   whole number of lines with `round()`; this is the same
- *                   number arrived at from the other side, and its only effect
- *                   is to put a "…" on the last line. Nothing moves when it
- *                   lands.
+ * As a cost in the height `s` its rows add up to, that is:
  *
- * ── What a tile asks its row for ─────────────────────────────────────────────
+ *   s < need        impossible: the picture would leave its crop band, or the
+ *                   summary would fall below TEXT_LINES_MIN and stop being one
+ *   need <= s < lo  the summary is cut short — CLIP per pixel, every pixel
+ *   lo <= s <= hi   nothing cut and nothing blank; the cover took the slack
+ *   s > hi          white space — BLANK per pixel
+ *   s > max         impossible: a split tile's crop would pass `tallest`
  *
- * One height, built from three measured parts and one declared want:
+ * CLIP is several times BLANK, and that ratio is the rule above: with at most
+ * three tiles across a row, out-pricing every one of them at once is what makes
+ * "somebody is still cut" always win over "somebody now has space".
  *
- *   furniture   title + meta row + padding + gaps, measured, never negotiable
- *   summary     what the excerpt wants, capped at the room the tile would have
- *               at the top of the range once its cover has taken its crop —
- *               past that a summary is not short of space, it is a summary that
- *               needs truncating
- *   cover       the tile's width at `--bento-cover-target`, or `--bento-cover-
- *               share` of the tile where the tile is too wide for that crop to
- *               fit inside the share at any height
+ * `lo`..`hi` is a RANGE rather than a point because a cover may be cropped
+ * anywhere inside `--bento-cover-tallest`..`--bento-cover-flattest`: leftover
+ * height goes to the PICTURE before any of it is left blank. The whole thing is
+ * convex in `s` and `s` is a sum of row heights, so sweeping one row at a time
+ * across the breakpoints of the tiles standing in it lands ON the resting place
+ * rather than near it.
  *
- * A row then takes a quantile of what its tiles ask, so one long piece cannot
- * stretch a band on its own and one note cannot flatten it.
+ * MIRRORED in scripts/helpers/bento-helpers.js, which solves the same rule at
+ * build time to choose which shapes a run of posts gets. Any drift between the
+ * two files is a bug in both of them.
  *
- * ── Why this is measured and not computed ────────────────────────────────────
- *
- * The space a summary gets is the tile minus its cover, its title and its meta
- * row — and the title is the problem. It is never clamped, so it is one line on
- * one tile and three on the next, and no amount of arithmetic at build time
- * knows which. Every previous attempt at this was a table of line budgets
- * guessed against the worst case, which is why tiles ellipsised with half the
- * card still empty. Two reads of a laid-out grid answer it exactly.
- *
- * ── Cost ─────────────────────────────────────────────────────────────────────
- *
- * Two forced layouts per pass, and a pass runs only when the column's width
- * actually changed — writing the three properties does not change it, so it
- * cannot chase itself. Reads and writes are in separate loops. The home banner
- * is a full viewport tall, so on first load the grid this measures is entirely
- * below the fold.
+ * Measured rather than computed because the title is never clamped — one line on
+ * one tile and three on the next, and no build-time arithmetic knows which. The
+ * pass is skipped unless the column's width moved or something invalidated it;
+ * nothing written here can move that width, so it cannot chase itself.
  */
-
-// Which tile in a row gets its summary shown in full. The max would let one
-// 3000-word post stretch a band to the ceiling on its own, and the median
-// truncates as often as it fits — two thirds satisfied is where a row stops
-// looking either sparse or clipped.
-const FIT_QUANTILE = 0.65;
 
 let list = null;
 let observer = null;
 let frame = 0;
 let signature = "";
+let wired = false;
 
 export default function initBentoFit() {
   const next = document.querySelector(".home-article-list.bento");
@@ -87,26 +68,30 @@ export default function initBentoFit() {
   observer.observe(list);
   schedule();
 
-  // The line box is a font metric. A fit measured while the fallback face is
-  // still showing is a fit against the wrong line height.
-  if (document.fonts && document.fonts.status !== "loaded") {
-    document.fonts.ready.then(() => {
-      signature = "";
-      schedule();
-    });
-  }
+  if (wired) return;
+  wired = true;
+
+  // The line box is a font metric, and the site cards' row is their own height:
+  // a fit measured before either has settled is a fit against the wrong numbers,
+  // and neither changes the column width the pass keys off.
+  window.addEventListener("redefine:content-resized", invalidate);
+  if (document.fonts) document.fonts.ready.then(invalidate);
 }
 
 /**
- * Run the pass now rather than on the next frame. For the one caller that has to
- * have it: pagination measures every cover for its parallax in the same task it
- * inserts the new list, and the row heights decide how tall those covers are —
- * a frame later is a frame after the covers were measured against the old ones.
+ * Now rather than next frame, for the one caller that needs it: pagination
+ * measures every cover for its parallax in the same task it inserts the new list,
+ * and the row heights decide how tall those covers are.
  */
 export function syncBentoFit() {
   if (frame) cancelAnimationFrame(frame);
   frame = 0;
   run();
+}
+
+function invalidate() {
+  signature = "";
+  schedule();
 }
 
 function schedule() {
@@ -128,167 +113,323 @@ function run() {
   fit();
 }
 
-/** Linear-interpolated, so a row of two tiles lands between them rather than on
- *  the greedier one. */
-function quantile(sorted, q) {
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+/* ─── The cost of a height ─────────────────────────────────────────────────── */
+
+// Both charged where they SHOW — in the text column — so a split tile, whose
+// picture fills the height whatever the text does, is not blamed for the width it
+// does not use. CLIP outweighs BLANK by more than the widest row holds tiles,
+// which is what makes a row grow for one truncated tile even when every other
+// tile in it is already full. Mirrors W.BLANK and W.CLIP in
+// scripts/helpers/bento-helpers.js.
+const BLANK = 1;
+const CLIP = 6;
+// Steep enough that a sweep always climbs out of an impossible height, and finite
+// so that it can.
+const IMPOSSIBLE = 40;
+
+// The summary a tile is worth GROWING for. Past this the tile is not too small —
+// the excerpt is simply long, and an ellipsis is the right answer.
+const TEXT_LINES_MAX = 12;
+// And the least that reads as a summary rather than as a clipped word. This is
+// part of `need`, not a weight: a row that cannot show two lines is as wrong as
+// one that crops the picture out of its band, and the row has to grow. Mirrors
+// W.TEXT_LINES_MIN in scripts/helpers/bento-helpers.js.
+const TEXT_LINES_MIN = 2;
+
+const SWEEPS = 8;
+const SETTLED = 0.5;
+
+function tileCost(t, s) {
+  if (s < t.need) return IMPOSSIBLE * (t.need - s) * t.share;
+  if (s > t.max) return IMPOSSIBLE * (s - t.max) * t.share;
+  // Every pixel of a cut summary, with no saturation: a cut that stops counting
+  // is a row that stops growing, and that is the one thing this may not do.
+  if (s < t.lo) return CLIP * (t.lo - s) * t.share;
+  if (s > t.hi) return BLANK * (s - t.hi) * t.share;
+  return 0;
 }
+
+function span(rows, gap, t) {
+  let height = gap * (t.rn - 1);
+  for (let r = t.rs; r < t.rs + t.rn; r++) height += rows[r] || 0;
+  return height;
+}
+
+function solveRows(tiles, rowCount, fixed, gap) {
+  const standing = [];
+  for (let r = 0; r <= rowCount; r++) standing.push([]);
+  for (const t of tiles) {
+    for (let r = t.rs; r < t.rs + t.rn && r <= rowCount; r++) standing[r].push(t);
+  }
+
+  // A first guess in the right neighbourhood — as tall as the tallest thing in
+  // the row needs, or as the shortest thing wants — and then the sweep. The site
+  // cards' row is not a guess and not a variable: it is their own height, and
+  // nothing on the page may stretch or compress it.
+  const rows = [];
+  for (let r = 1; r <= rowCount; r++) {
+    if (fixed[r] > 0) {
+      rows[r] = fixed[r];
+      continue;
+    }
+    let start = 0;
+    let want = Infinity;
+    for (const t of standing[r]) {
+      start = Math.max(start, (t.need - gap * (t.rn - 1)) / t.rn);
+      want = Math.min(want, (t.lo - gap * (t.rn - 1)) / t.rn);
+    }
+    rows[r] = want === Infinity ? start : Math.max(start, want);
+  }
+
+  for (let pass = 0; pass < SWEEPS; pass++) {
+    let moved = 0;
+
+    for (let r = 1; r <= rowCount; r++) {
+      const here = standing[r];
+      if (!here.length || fixed[r] > 0) continue;
+
+      // Every height at which one of these tiles changes what it charges. A
+      // piecewise-linear function of one variable takes its minimum at a
+      // breakpoint or at a bound, so this list is the whole search.
+      const tries = [0, rows[r]];
+      for (const t of here) {
+        const rest = span(rows, gap, t) - rows[r];
+        for (const edge of [t.need, t.lo, t.hi, t.max]) {
+          const h = edge - rest;
+          if (h > 0 && h < Infinity) tries.push(h);
+        }
+      }
+
+      let best = rows[r];
+      let bestCost = Infinity;
+      for (const h of tries) {
+        rows[r] = h;
+        let cost = 0;
+        for (const t of here) cost += tileCost(t, span(rows, gap, t));
+        if (cost < bestCost - 1e-6) {
+          bestCost = cost;
+          best = h;
+        }
+      }
+
+      if (Math.abs(best - rows[r]) > SETTLED) moved++;
+      rows[r] = best;
+    }
+
+    if (!moved) break;
+  }
+
+  return rows;
+}
+
+/* ─── Reading a tile ───────────────────────────────────────────────────────── */
+
+/**
+ * The height the summary TAKES, off a Range over its own contents rather than off
+ * the box holding it. `scrollHeight` never goes below `clientHeight`, so a box
+ * filling a `1fr` track answers "how tall is your text?" with its own size and the
+ * solver reproduces whatever height the page already had. A Range reports the
+ * union of the line boxes, which no amount of stretching can inflate.
+ */
+function textHeight(text) {
+  if (!text.textContent || !text.textContent.trim()) return 0;
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const rect = range.getBoundingClientRect();
+  if (rect && rect.height > 0) return rect.height;
+  // A Range cannot be inflated by a stretched box, but a composition it does not
+  // lay out rects for would report nothing at all — and a summary measured at
+  // zero is a tile with no summary in it. `scrollHeight` is the fallback, and it
+  // is safe HERE only: the body is `max-content` for the length of this read, so
+  // the box it reports is not the one the grid was stretching.
+  return text.scrollHeight;
+}
+
+/**
+ * Everything about a tile that its row height does not decide. Called again for
+ * the split tiles once their real row is known, because their cover column — and
+ * therefore the width their text and title are set in — follows that row.
+ */
+function measure(t, geom, line) {
+  const width = t.el.clientWidth;
+  const style = getComputedStyle(t.body);
+  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  const gap = parseFloat(style.rowGap) || 0;
+
+  // SUMMED, never subtracted from the body's own height: the head and the meta
+  // row are `auto` tracks and are exactly their contents whatever the grid is
+  // doing to the body, while the body's height is the grid's answer, not theirs.
+  t.chrome =
+    padding + gap * 2 + (t.head ? t.head.offsetHeight : 0) + (t.meta ? t.meta.offsetHeight : 0);
+
+  const coverWidth = t.cover ? t.cover.clientWidth : 0;
+  // Only a cover ABOVE the text takes a share of the tile's HEIGHT: one beside
+  // the text is a column, and a text-forward tile has no box at all.
+  t.stacked = coverWidth > 0 && coverWidth >= width - 1;
+  const beside = coverWidth > 0 && !t.stacked;
+
+  t.coverMin = t.stacked ? width / geom.flattest : 0;
+  t.coverMax = t.stacked ? width / geom.tallest : 0;
+
+  const raw = textHeight(t.text);
+  t.blocks = Math.max(0, t.text.children.length - 1);
+  t.textLines = line > 0 ? Math.max(0, Math.round(raw / line) - t.blocks) : 0;
+  t.summary = Math.min(raw, (TEXT_LINES_MAX + t.blocks) * line);
+
+  // The floor carries the least summary that still IS one. A tile whose row
+  // cannot hold the picture and two lines is not cramped, it is the wrong tile
+  // for this post — so the row grows, and if it cannot grow the planner is told
+  // this shape does not work here rather than the summary being deleted.
+  t.need = t.chrome + t.coverMin + Math.min(t.summary, TEXT_LINES_MIN * line);
+  // The tallest this tile may be before a cover BESIDE the text is cropped past
+  // `tallest`: that column is the tile's height at the target ratio until one of
+  // its two ceilings stops it, and past that the crop only tightens. Never below
+  // the floor — at the narrowest tile the composition is allowed on at all the
+  // two are within a few pixels, and a ceiling under the floor is not a height.
+  const column = Math.min(width - geom.textMin, width * geom.coverMax);
+  t.max = beside ? Math.max(t.need, column / geom.tallest) : Infinity;
+
+  t.lo = t.chrome + t.coverMin + t.summary;
+  t.hi = t.chrome + t.coverMax + t.summary;
+  t.share = width > 0 ? t.text.clientWidth / width : 1;
+}
+
+/* ─── The pass ─────────────────────────────────────────────────────────────── */
 
 function fit() {
   const listStyle = getComputedStyle(list);
-  const row = parseFloat(listStyle.gridAutoRows);
+  const auto = parseFloat(listStyle.gridAutoRows);
   const gap = parseFloat(listStyle.rowGap) || 0;
-  // The stylesheet owns every one of these; reading them back is what keeps the
-  // two ends of the same rule from drifting apart. See the bento block in
+  // The stylesheet owns all of these; reading them back is what keeps the two
+  // ends of the same rule from drifting apart. See the bento block in
   // common/variables.styl.
-  const min = parseFloat(listStyle.getPropertyValue("--bento-row-min"));
-  const max = parseFloat(listStyle.getPropertyValue("--bento-row-max"));
-  const share = parseFloat(listStyle.getPropertyValue("--bento-cover-share"));
-  const target = parseFloat(listStyle.getPropertyValue("--bento-cover-target"));
+  const geom = {
+    target: parseFloat(listStyle.getPropertyValue("--bento-cover-target")),
+    tallest: parseFloat(listStyle.getPropertyValue("--bento-cover-tallest")),
+    flattest: parseFloat(listStyle.getPropertyValue("--bento-cover-flattest")),
+    textMin: parseFloat(listStyle.getPropertyValue("--bento-split-text-min")),
+    coverMax: parseFloat(listStyle.getPropertyValue("--bento-split-cover-max")) || 1,
+  };
 
-  // One column with rows as tall as their content: there is no leftover to
-  // divide up and no heights to pick, so everything is handed back to the
-  // stylesheet.
-  if (!(row > 0 && min > 0 && max >= min && share > 0 && target > 0)) {
+  // One column with rows as tall as their content: there is no leftover to divide
+  // up and no heights to pick, so everything is handed back to the stylesheet.
+  if (!(auto > 0 && geom.target > 0 && geom.tallest > 0 && geom.flattest > 0)) {
     clear();
     return;
   }
 
-  // ── Read ───────────────────────────────────────────────────────────────────
-  // With the clamp and the cut lifted, so `scrollHeight` reports the height the
-  // summary wants rather than the height it was allowed, and with the site cards
-  // cut loose from their track so they report the height they want rather than
-  // the one the row is giving them.
-  list.classList.add("is-measuring");
-
   const tiles = [];
+  const cards = [];
   const fixed = [];
-  let rows = 0;
+  let rowCount = 0;
 
   for (const el of list.children) {
     const placement = getComputedStyle(el);
-    // Written out by the planner rather than left to auto-placement, precisely
-    // so this is answerable: a row cannot be sized from its tiles unless it is
-    // known which tiles are in it.
+    // Written out by the planner rather than left to auto-placement, precisely so
+    // this is answerable: a row cannot be sized from tiles it does not know about.
     const rs = parseInt(placement.gridRowStart, 10);
     const rn = parseInt(String(placement.gridRowEnd).replace(/[^0-9]/g, ""), 10) || 1;
     if (!(rs > 0)) continue;
-    rows = Math.max(rows, rs + rn - 1);
+    rowCount = Math.max(rowCount, rs + rn - 1);
 
-    // The site cards are furniture with a fixed amount in them: their row is
-    // not a negotiation, it is their own height.
+    // The site cards are furniture with a fixed amount in them: their row is not
+    // a negotiation, it is their own height, and nothing on the page may stretch
+    // or compress it. Read below rather than here — a card in its track is
+    // already the height of the row, so measuring it now would hand the row back
+    // its own answer and it could only ever grow.
     if (el.classList.contains("home-feature-tile")) {
-      fixed[rs] = Math.max(fixed[rs] || 0, el.offsetHeight);
+      cards.push({ el, rs });
       continue;
     }
 
+    const body = el.querySelector(".home-article-body");
     const text = el.querySelector(".home-article-content");
-    if (!text) continue;
+    if (!body || !text || !el.clientWidth) continue;
 
-    const height = el.clientHeight;
-    if (!height) continue;
-
-    // Only a cover ABOVE the text takes a share of the tile's HEIGHT. A cover
-    // beside the text is a column, and one that has been dropped for a
-    // text-forward composition is not there at all.
-    const cover = el.querySelector(".home-article-thumbnail");
-    const coverHeight = cover ? cover.clientHeight : 0;
-    const coverWidth = cover ? cover.clientWidth : 0;
-    const above = coverHeight > 0 && coverWidth >= el.clientWidth - 1;
-
-    // Everything the tile has to hold whatever else happens. Derived by
-    // subtraction rather than by adding up boxes, so nothing has to know which
-    // parts a tier happens to print.
-    const furniture = height - (above ? coverHeight : 0) - text.clientHeight;
-
-    // The tallest this tile is allowed to become, and from that the most
-    // summary it may ask for: what is left at that height once the cover has
-    // taken the crop it wants. A summary longer than that is not short of room,
-    // it is a summary the tile is meant to truncate.
-    const roof = max * rn + gap * (rn - 1);
-    const crop = above ? Math.min(coverWidth / target, share * roof) : 0;
-    const summary = Math.min(text.scrollHeight, Math.max(0, roof - furniture - crop));
-
-    // What the tile asks its rows for: what it has to hold, plus a cover.
-    //
-    // A fixed point, not a sum, because the cover is BOTH a crop and a share of
-    // a height it is itself part of. Solve `T = chrome + min(width / target,
-    // share * T)`: either the crop fits inside the share, and the tile is its
-    // contents plus that crop, or the tile is so wide that the crop cannot fit
-    // in the share at any height — and then asking for it would push every wide
-    // tile to the ceiling, so the share is what the cover gets and the crop
-    // comes out flatter than the target. Which is the right answer for a wide
-    // tile: 3:1 across 1000px is a cinematic band, and across 380px it is a
-    // hairline, so a ratio alone was never the whole question.
-    const chrome = furniture + summary;
-    let desired = chrome;
-    if (above) {
-      desired = chrome + coverWidth / target;
-      if (share * desired < coverWidth / target) desired = chrome / (1 - share);
-    }
-
-    tiles.push({ el, text, rs, rn, chrome, furniture, desired });
+    tiles.push({
+      el,
+      body,
+      text,
+      head: el.querySelector(".home-article-head"),
+      meta: el.querySelector(".home-article-meta-info-container"),
+      cover: el.querySelector(".home-article-thumbnail"),
+      rs,
+      rn,
+    });
   }
 
+  if (!tiles.length || !rowCount) return;
+
+  const line = parseFloat(getComputedStyle(tiles[0].text).lineHeight);
+  if (!(line > 0)) return;
+
+  // ── Read ───────────────────────────────────────────────────────────────────
+  // The clamp and the cut come off so the summary reports the height it wants
+  // rather than the height it was allowed, and the site cards come loose from
+  // their track so they report their own height rather than the row's. One class
+  // on the list rather than a write per tile, and it never survives the frame.
+  list.classList.add("is-measuring");
+  for (const card of cards) fixed[card.rs] = Math.max(fixed[card.rs] || 0, card.el.offsetHeight);
+  for (const t of tiles) measure(t, geom, line);
   list.classList.remove("is-measuring");
-  if (!tiles.length || !rows) return;
 
-  // ── The row heights ────────────────────────────────────────────────────────
-  // A tile spanning several rows asks each of them for its share, so a 1x3 with
-  // a lot to say lifts three rows a little rather than one row a lot.
-  const votes = [];
-  for (const t of tiles) {
-    const each = (t.desired - gap * (t.rn - 1)) / t.rn;
-    for (let r = t.rs; r < t.rs + t.rn; r++) (votes[r] || (votes[r] = [])).push(each);
+  let rows = solveRows(tiles, rowCount, fixed, gap);
+  apply(tiles, rows, gap, line);
+
+  // A split tile's cover column is its own height at the cover ratio, so the row
+  // just written is what decides how wide its text is set — and that is what
+  // decides how tall the text is. One correction, never more: the second answer
+  // is written from a layout that already has the first one in it.
+  const split = tiles.filter((t) => t.cover && !t.stacked);
+  if (split.length) {
+    list.classList.add("is-measuring");
+    for (const t of split) measure(t, geom, line);
+    list.classList.remove("is-measuring");
+    rows = solveRows(tiles, rowCount, fixed, gap);
+    apply(tiles, rows, gap, line);
   }
+}
 
-  const heights = [];
-  for (let r = 1; r <= rows; r++) {
-    if (fixed[r] > 0) {
-      heights[r] = fixed[r];
-      continue;
-    }
-    const asked = votes[r];
-    if (!asked || !asked.length) {
-      heights[r] = max;
-      continue;
-    }
-    asked.sort((a, b) => a - b);
-    heights[r] = Math.min(max, Math.max(min, quantile(asked, FIT_QUANTILE)));
-  }
-
-  // ── Write, then read again ─────────────────────────────────────────────────
+function apply(tiles, rows, gap, line) {
   const track = [];
-  for (let r = 1; r <= rows; r++) track.push(Math.round(heights[r]) + "px");
+  for (let r = 1; r < rows.length; r++) track.push(Math.round(rows[r] || 0) + "px");
   list.style.setProperty("--bento-rows", track.join(" "));
 
   for (const t of tiles) {
-    let height = gap * (t.rn - 1);
-    for (let r = t.rs; r < t.rs + t.rn; r++) height += heights[r];
-    // Read by the split composition, which sizes its cover COLUMN off the
-    // tile's height — those tiles are one row tall, so this is that row.
+    const height = span(rows, gap, t);
+
+    // Leftover height goes to the PICTURE first, as far as the crop band allows,
+    // and only what is left over after that reads as white space. Written out
+    // rather than expressed in CSS because the summary's height is the one term
+    // in it the stylesheet cannot see.
+    const cover = t.stacked
+      ? Math.min(t.coverMax, Math.max(t.coverMin, height - t.chrome - t.summary))
+      : 0;
+
+    // Read by the split composition, which sizes its cover COLUMN off the tile's
+    // height — those tiles are one row tall, so this is that row.
     t.el.style.setProperty("--tile-height", Math.round(height) + "px");
-    t.el.style.setProperty("--tile-chrome", Math.round(t.chrome) + "px");
-    // What the cover may never take, however flat that leaves it. A row can
-    // come out shorter than a tile asked for — it is shared with the tiles
-    // beside it — and when it does the summary is what gives, not the meta row.
-    t.el.style.setProperty("--tile-furniture", Math.round(t.furniture) + "px");
+    if (t.stacked) t.el.style.setProperty("--tile-cover", Math.round(cover) + "px");
+    else t.el.style.removeProperty("--tile-cover");
+
+    // And the clamp comes OFF, so the box below is read at the size the row just
+    // gave it. A clamp left over from the previous pass is a smaller box, and a
+    // line count taken through one could only ever shrink.
+    t.text.style.setProperty("--fit-lines", "none");
   }
 
-  const lineHeight = parseFloat(getComputedStyle(tiles[0].text).lineHeight);
-  if (!(lineHeight > 0)) return;
-
+  // ── The ellipsis ───────────────────────────────────────────────────────────
+  // MEASURED, not predicted. `round(down, 100%, 1lh)` has already cut the box to
+  // a whole number of lines, so this is a division — but of the box the page
+  // actually built, not of the height this pass believes it asked for. A clamp
+  // one line larger than the box shows no ellipsis at all: `overflow` cuts the
+  // text off mid-sentence and nothing marks that it was cut.
+  //
+  // Paragraphs after the first carry a one-line top margin, and a margin is not
+  // a line.
   for (const t of tiles) {
-    // The box has already been cut to a whole number of lines, so this is a
-    // division rather than an estimate. Paragraphs after the first carry a
-    // one-line top margin (see the stylesheet), and a margin is not a line.
-    const blocks = Math.max(0, t.text.children.length - 1);
-    t.lines = Math.floor(t.text.clientHeight / lineHeight + 0.01) - blocks;
+    t.lines = Math.floor(t.text.clientHeight / line + 0.01) - t.blocks;
   }
-
   for (const t of tiles) {
     t.text.style.setProperty("--fit-lines", t.lines > 0 ? String(t.lines) : "none");
   }
@@ -298,8 +439,7 @@ function clear() {
   list.style.removeProperty("--bento-rows");
   for (const tile of list.querySelectorAll(".home-article-item")) {
     tile.style.removeProperty("--tile-height");
-    tile.style.removeProperty("--tile-chrome");
-    tile.style.removeProperty("--tile-furniture");
+    tile.style.removeProperty("--tile-cover");
   }
   for (const text of list.querySelectorAll(".home-article-content")) {
     text.style.removeProperty("--fit-lines");

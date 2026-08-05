@@ -12,56 +12,42 @@ $q-card-tight  = 'card (max-width: ' + $bento-card-tight-max-width + ')'
 $q-tile-narrow = 'tile (max-width: ' + $bento-tile-narrow-max-width + ')'
 $q-list-split  = 'home (min-width: ' + $list-split-min-width + ')'
 
-// Where a one-row tile is wide enough to put its cover beside its text, and
-// where it is not. Two pairs because a two-column tile is the whole column on
-// the tablet grid and two thirds of it on the desktop one — see
-// $bento-split-min-tile. Each pair is exclusive and bounded on both sides: a
-// container query's condition does NOT stop applying when a wider one starts
-// matching, and which tiles are wide is exactly what changes between the grids.
-$q-bento-flat-md    = 'home (min-width: ' + $bento-md-min-width + ') and (max-width: ' + ($bento-split-full-min-width - 1px) + ')'
-$q-bento-split-md   = 'home (min-width: ' + $bento-split-full-min-width + ') and (max-width: ' + ($bento-lg-min-width - 1px) + ')'
-$q-bento-flat-wide  = 'home (min-width: ' + $bento-lg-min-width + ') and (max-width: ' + ($bento-split-wide-min-width - 1px) + ')'
-$q-bento-split-wide = 'home (min-width: ' + $bento-split-wide-min-width + ')'
+// Where a one-row tile puts its cover beside its text. The two grids need their
+// own query because a two-column tile is the whole column on the tablet grid and
+// two thirds of it on the desktop one, and the tablet one is bounded ABOVE as
+// well: a container query's condition does not stop applying when a wider one
+// starts matching, and which tiles are wide is what changes between the grids.
+//
+// There is no "too narrow to split" query any more. The grid's own breakpoints
+// are derived from these thresholds (see variables.styl), so a tile is never
+// handed a composition its width cannot carry — a cover is shown or the shape is
+// not used, never a cover quietly dropped.
+$q-bento-split-md   = 'home (min-width: ' + $bento-md-min-width + ') and (max-width: ' + ($bento-lg-min-width - 1px) + ')'
+$q-bento-split-wide = 'home (min-width: ' + $bento-lg-min-width + ')'
 
 // ── The cell ─────────────────────────────────────────────────────────────────
-// Rows are sized ONE AT A TIME, from the tiles standing in them:
-// layouts/bentoFit.js measures how much summary each tile has to show and how
-// much of the row its cover needs, picks a height per row inside the range
-// below, and writes the whole list back as `--bento-rows`. A band of two-line
-// notes closes up while the band of long-form pieces under it stays open, and
-// the site cards' row is exactly as tall as the cards are.
-//
-// This is the value every row falls back to when the script has not run. It is
-// the GENEROUS end deliberately: a tile with air in it reads as composed, a tile
-// with its summary cut short reads as broken.
-//
-// The viewport is deliberately NOT in this expression. It used to cap the cell so
-// a 1x3 tile stood inside one screen, but the cap sits below the floor on any
-// window under about 1150px tall, which is most of them — so it did not shorten
-// anything, it just pinned the cell to the floor and threw the measurement away.
-$bento-row = $bento-row-max
+// Every row is sized on its own by layouts/bentoFit.js, from the tiles standing
+// in it, and written back as `--bento-rows`. This is what a row falls back to
+// before that lands.
+$bento-row = $bento-row-fallback
 
 // ── The split composition's columns ──────────────────────────────────────────
-// A one-row tile has no room for a cover ABOVE its text, so it goes beside it.
-// The cover column is the tile's own height at the site's one cover ratio — the
-// same crop of the same image as everywhere else — until that would leave the
-// text column too narrow to set a title in, at which point the text floor wins
-// and the crop tightens. It can never go portrait: the tiles this is applied to
-// are all at least $bento-split-min-tile wide.
-//
-// `--tile-height` is what this tile's own row came out at, written by
-// layouts/bentoFit.js. Rows differ from one another now, so the shared fallback
-// is only right until the measurement lands.
-$bento-split-cover = 'minmax(0, min(calc(var(--tile-height, var(--bento-row)) * var(--cover-aspect-ratio)), calc(100% - ' + $bento-split-text-min + ')))'
+// A one-row tile puts its cover beside the text, so here the ROW is fixed and the
+// COLUMN moves: the tile's own height at the target ratio, held under two
+// ceilings — a share of the tile, and an absolute floor for the text. The share
+// is the one that matters in practice; see $bento-split-cover-max for the loop it
+// exists to break. `--tile-height` is the row this tile came out at, and
+// bentoFit.js caps that row at the same two ceilings so the crop cannot pass
+// $bento-cover-tallest.
+$bento-split-cover = 'minmax(0, min(calc(var(--tile-height, var(--bento-row)) * var(--bento-cover-target)), ' + unit($bento-split-cover-max * 100, '%') + ', calc(100% - ' + $bento-split-text-min + ')))'
 $bento-split-text  = 'minmax(0, 1fr)'
 
 .home-content-container
-  // The article column, and the outermost of the three containers the grid is
-  // measured against: this one decides how many tracks there are and which
-  // compositions those tracks are wide enough for. (`tile` decides how a cover
-  // crops, `card` decides what the text column has room to say.) Keying off THIS
-  // width instead of the viewport is what keeps the grid correct regardless of
-  // what else the page puts beside it.
+  // The outermost of the three containers the grid is measured against: this one
+  // decides how many tracks there are and which compositions they are wide enough
+  // for, `tile` decides how a cover crops, `card` decides what the text column has
+  // room to say. Keying off THIS width rather than the viewport is what keeps the
+  // grid correct whatever else the page puts beside it.
   container-type inline-size
   container-name home
 
@@ -109,42 +95,29 @@ $bento-split-text  = 'minmax(0, 1fr)'
     list-style none
 
     // ── The grid ─────────────────────────────────────────────────────────────
-    // One column here, with rows sized by content: a phone reads a list, and a
-    // list of cells all the same height would clip half of them. The cell grid
-    // starts at the first container query below, and every tile on it is placed
-    // EXPLICITLY — scripts/helpers/bento-helpers.js runs the same sparse
-    // auto-placement the browser would and writes the answer out, because a row
-    // can only be sized from its tiles if the page knows which tiles are in it.
-    //
-    // Which also settles `dense`, whose backfilling would have broken the
-    // running numbers by pulling a later tile into an earlier gap: there is no
-    // auto-placement left here to make dense.
+    // One column here, with rows sized by content: a phone reads a list. The cell
+    // grid starts at the first container query below, and every tile on it is
+    // placed EXPLICITLY by scripts/helpers/bento-helpers.js — a row can only be
+    // sized from its tiles if the page knows which tiles are in it, and with no
+    // auto-placement left there is nothing for `dense` to backfill out of
+    // reading order.
     &.bento
-      // Published as custom properties, not just used. The split composition
-      // sizes its cover column off a row height, and layouts/bentoFit.js reads
-      // every one of these back: the range a row may be picked from, the crop a
-      // covered tile asks its row to be tall enough for, and the share of a tile
-      // its cover may take — so the arithmetic on both sides of the measurement
-      // is done against the same numbers.
+      // Published, not just used: layouts/bentoFit.js reads every one of these
+      // back, so both sides of the measurement work off the same numbers.
       --bento-row $bento-row
-      --bento-row-min $bento-row-min
-      --bento-row-max $bento-row-max
-      --bento-cover-share $bento-cover-share
-      --bento-cover-widest $bento-cover-widest
       --bento-cover-target $bento-cover-target
+      --bento-cover-tallest $bento-cover-tallest
       --bento-cover-flattest $bento-cover-flattest
+      --bento-split-text-min $bento-split-text-min
+      --bento-split-cover-max $bento-split-cover-max
       display grid
       grid-auto-flow row
       grid-template-columns minmax(0, 1fr)
       grid-auto-rows auto
 
-      // `min-height: 0` is not decoration. A grid item's automatic minimum size
-      // is its MIN-CONTENT height, so an item whose contents are taller than the
-      // cell simply grows out of it — the track stays put and the tile hangs
-      // past its neighbours. `.home-article-item` escapes that by being a scroll
-      // container (`overflow: hidden` zeroes the automatic minimum), which is
-      // exactly why the article tiles obeyed the grid while the two site cards
-      // did not. Stated here so it holds for anything the grid is ever given.
+      // A grid item's automatic minimum size is its MIN-CONTENT height, so an
+      // item taller than its cell grows out of the track instead of being
+      // clipped. Stated here so it holds for anything the grid is ever given.
       > *
         min-width 0
         min-height 0
@@ -155,11 +128,9 @@ $bento-split-text  = 'minmax(0, 1fr)'
       position relative
       display flex
       flex-direction column
-      // Every tile is its own container, and the cover's crop keys off it — the
-      // one thing on a tile that is measured against the whole width. Everything
-      // else is measured against the text column, which is the body's container
-      // below; on a tile with its cover beside the text the two are nothing like
-      // the same number.
+      // The cover's crop keys off this — the one thing on a tile measured against
+      // the whole width. Everything else asks the text column (the body's
+      // container below); on a split tile the two are nothing like the same.
       container-type inline-size
       container-name tile
       // Lets the cover inherit the card's radius instead of carrying its own.
@@ -183,10 +154,9 @@ $bento-split-text  = 'minmax(0, 1fr)'
           scale 1.015
 
       // ── Rim light ────────────────────────────────────────────────────────
-      // A one-pixel band at the tile's edge, lit where the pointer is and
-      // tinted with the cover's own colour. Light, not a new material: it is a
-      // gradient masked down to the border, with no backdrop pass behind it.
-      // See layouts/tileSpotlight.js for where the two coordinates come from.
+      // A one-pixel band at the tile's edge, lit where the pointer is and tinted
+      // with the cover's own colour. Light, not a new material: a gradient masked
+      // down to the border, no backdrop pass. See layouts/tileSpotlight.js.
       &::after
         content ''
         position absolute
@@ -209,12 +179,8 @@ $bento-split-text  = 'minmax(0, 1fr)'
         opacity 1
 
       // ── Cover ────────────────────────────────────────────────────────────
-      // THE cover contract: a ratio, never a height, and always a LANDSCAPE
-      // ratio. Covers on this site are composed wide, so a tile is never allowed
-      // to crop one into a portrait; the three steps below widen the crop as the
-      // tile widens, which is how a two-thirds tile avoids a cover half its own
-      // height. `flex: 0 0 auto` — the frame gets the ratio it asked for and the
-      // band grows to hold it.
+      // A ratio, never a height. `flex: 0 0 auto` — the frame gets the ratio it
+      // asked for and the band grows to hold it.
       .home-article-thumbnail
         position relative
         width 100%
@@ -244,27 +210,22 @@ $bento-split-text  = 'minmax(0, 1fr)'
           .dark &
             filter brightness(0.75)
 
-        // Parallax mode, switched on by layouts/coverParallax.js and only for
-        // covers that `object-fit: cover` is actually cropping top and bottom.
-        // The image is laid out at exactly the size that crop was already
-        // drawing it (full width, natural height), so the frame keeps clipping
-        // the very same band — the only new thing is that the band travels.
-        // Nothing is scaled up and no detail is invented.
+        // Parallax mode, switched on by layouts/coverParallax.js for covers that
+        // `object-fit: cover` is actually cropping top and bottom. The image is
+        // laid out at the size that crop was already drawing it, so the frame
+        // keeps clipping the same band — the only new thing is that it travels.
         &.has-parallax img
           height auto
           top 50%
           transform translate3d(0, calc(-50% + var(--parallax-shift, 0px)), 0)
           will-change transform
 
-        // Held for one settle only, when a cover first starts parallaxing. At
-        // shift 0 the two modes render identically, so what is eased here is
-        // purely the distance between "centred" and "where this scroll position
-        // says it should be" — after which the shift tracks the scroll exactly.
+        // One settle, when a cover first starts parallaxing: the distance between
+        // "centred" and where this scroll position says it should be.
         //
         // Longhands, not the `transition` shorthand: a custom property is a legal
         // transition-property but not a legal CSS identifier, so clean-css's
-        // shorthand parser rejects the whole declaration and DROPS it — the
-        // settle silently disappeared from the minified stylesheet.
+        // shorthand parser rejects the whole declaration and DROPS it.
         &.has-parallax.is-settling img
           transition-property --parallax-shift
           transition-duration 260ms
@@ -275,17 +236,13 @@ $bento-split-text  = 'minmax(0, 1fr)'
           transform scale(1.04)
 
       // ── Body ─────────────────────────────────────────────────────────────
-      // Three rows: the heading, the summary, the meta row. The middle one is
-      // `1fr`, and that single track is the whole excerpt mechanism — it is
-      // exactly what the tile has left after the cover, the title (however many
-      // lines it took) and the meta row, with nothing estimating anything.
+      // Three rows: heading, summary, meta. The middle one is `1fr` — exactly
+      // what the tile has left after the cover, the title and the meta row.
       //
-      // A grid rather than a column of flex items because the leftover has to be
-      // MEASURABLE. Percentages on a flex item resolve against the whole
-      // container, so the excerpt could not ask CSS how much room it had; on a
-      // grid item they resolve against the grid area, which is the leftover
-      // itself. That is what lets the cut land on a line boundary — see the
-      // `max-height` on .home-article-content.
+      // A grid rather than flex because the leftover has to be MEASURABLE: a
+      // percentage on a grid item resolves against its grid area, which is the
+      // leftover itself, and that is what lets the excerpt's cut land on a line
+      // boundary (see the `max-height` on .home-article-content).
       .home-article-body
         position relative
         display grid
@@ -295,20 +252,16 @@ $bento-split-text  = 'minmax(0, 1fr)'
         flex 1 1 auto
         min-width 0
         min-height 0
-        // The text column, and the container every density rule below queries.
-        // A 790px tile whose cover takes two thirds of it sets its title and its
-        // meta row in 220px, and asking the TILE how much room the text has is
-        // how a meta row ends up wrapping onto three lines inside a tile that
-        // looks more than wide enough for one.
+        // The text column, and the container every density rule below queries: a
+        // 790px tile whose cover takes two thirds of it sets its meta row in
+        // 220px, and asking the TILE is how that row ends up on three lines.
         container-type inline-size
         container-name card
         // Clips the index numeral's overhang against the text block's own top
         // edge, so it crops cleanly instead of running up over the cover.
         overflow hidden
 
-      // The running number, printed behind the title. It counts in reading
-      // order — see the note on `grid-auto-flow` above for why that is true and
-      // not merely usually true.
+      // The running number, printed behind the title, in reading order.
       .home-article-index
         position absolute
         top 0
@@ -318,10 +271,9 @@ $bento-split-text  = 'minmax(0, 1fr)'
         // instead of being cropped by it; only the left bleed still runs off.
         transform translate(-0.05em, 0.06em)
         font-family $english-font-family, sans-serif
-        // One size on every tile. Sized in `cqw` it tracked the tile's width, so
-        // a two-column tile printed a numeral twice the height of the one beside
-        // it — which reads as two different design elements rather than one
-        // running count.
+        // One size on every tile: in `cqw` a two-column tile printed a numeral
+        // twice the height of the one beside it, which reads as two elements
+        // rather than one running count.
         font-size 4rem
         font-weight 900
         line-height 0.75
@@ -352,9 +304,9 @@ $bento-split-text  = 'minmax(0, 1fr)'
         .dark &
           opacity 0.28
 
-      // The heading block: eyebrow and title as ONE row of the body grid. Two
-      // rows would keep the gap between them when a tile has no eyebrow, and
-      // every pixel above the excerpt is a pixel the excerpt does not get.
+      // Eyebrow and title as ONE row of the body grid: two rows would keep the
+      // gap between them on a tile with no eyebrow, and every pixel above the
+      // excerpt is a pixel the excerpt does not get.
       .home-article-head
         grid-row 1
         position relative
@@ -364,9 +316,7 @@ $bento-split-text  = 'minmax(0, 1fr)'
         gap 0.45rem
         min-width 0
 
-      // The eyebrow: the post's top-level category, set above the title as a
-      // kicker. Small caps and wide tracking against the title's larger, tighter
-      // setting — the level of contrast is the point, not the information.
+      // The post's top-level category, set above the title as a kicker.
       .home-article-eyebrow
         font-size 0.72rem
         font-weight 600
@@ -377,10 +327,8 @@ $bento-split-text  = 'minmax(0, 1fr)'
       &.has-accent .home-article-eyebrow
         color unquote('rgb(var(--tile-accent))')
 
-      // NEVER clamped. A title is the one thing on a tile that has to be read in
-      // full, so it wraps to as many lines as it needs and the excerpt below it
-      // gives up the room. A title that looks too long for its tile is a sizing
-      // decision to fix in the plan, not something to hide behind an ellipsis.
+      // NEVER clamped: a title has to be read in full, so it wraps to as many
+      // lines as it needs and the excerpt below gives up the room.
       .home-article-title
         font-weight 600
         font-size 1.2rem
@@ -390,13 +338,9 @@ $bento-split-text  = 'minmax(0, 1fr)'
         margin 0
 
       // ── The excerpt ──────────────────────────────────────────────────────
-      // The part that gives. It occupies the body's `1fr` row, which is whatever
-      // the tile has left, and prints as much as fits there — no line budget is
-      // declared anywhere, at build time or here.
-      //
-      // What stops it mid-word is the `max-height` in the bento block below.
-      // Here it is only told to stretch into its row and clip: the row is the
-      // budget.
+      // The part that gives: it takes the body's `1fr` row and prints as much as
+      // fits. No line budget is declared anywhere — the `max-height` in the bento
+      // block below is what cuts it, and the row is the budget.
       .home-article-content
         grid-row 2
         position relative
@@ -426,9 +370,7 @@ $bento-split-text  = 'minmax(0, 1fr)'
           margin-top unquote('1lh')
 
       // ── Sticky badge ─────────────────────────────────────────────────────
-      // Base material tier: a translucent colour, no backdrop pass. It sits on
-      // top of a photo often enough to need the opacity, and it is decorative
-      // enough not to deserve a compositor layer.
+      // Base material tier: a translucent colour, no backdrop pass.
       .home-article-sticky-badge
         position absolute
         top 12px
@@ -451,14 +393,12 @@ $bento-split-text  = 'minmax(0, 1fr)'
           font-size 0.65rem
 
       // ── Meta row ─────────────────────────────────────────────────────────
-      // Every entry is one inline-flex unit, so there is no collapsed
-      // whitespace between an icon and its text for a line break to land on —
-      // that is what used to strand an icon alone on a line. Wrapping happens
-      // between entries; inside an entry the text ellipsises instead.
+      // Every entry is one inline-flex unit, so there is no collapsed whitespace
+      // between an icon and its text for a line break to land on. Wrapping
+      // happens between entries; inside one the text ellipsises instead.
       .home-article-meta-info-container
-        // The body grid's last row, which is what pins the meta to the bottom
-        // edge of every tile: tiles sharing a band end on the same line even
-        // when one of them has far more to say.
+        // The body grid's last row, which pins the meta to the bottom edge of
+        // every tile: tiles sharing a band end on the same line.
         grid-row 3
         position relative
         z-index 1
@@ -525,41 +465,33 @@ $bento-split-text  = 'minmax(0, 1fr)'
             color var(--primary-color)
 
     // ── Site tiles ───────────────────────────────────────────────────────────
-    // A bare grid cell. The card inside is the sidebar's, with the sidebar's own
-    // chrome (layout/home-sidebar.styl), so it looks exactly as it always has —
-    // the grid only decides where it goes.
-    //
-    // And the row comes to THEM rather than the other way round: the two cards
-    // are furniture with a fixed amount in them, so their row is measured off
-    // their own content (layouts/bentoFit.js) instead of being handed the height
-    // the posts underneath happened to want. The taller of the two sets it.
+    // A bare grid cell around the sidebar's own card (layout/home-sidebar.styl).
+    // The row comes to THEM: layouts/bentoFit.js measures both cards and pins
+    // their row to the taller one, so it is never compressed or stretched by the
+    // posts around it. Nothing else on the page can move that row.
     .home-feature-tile
       display flex
       flex-direction column
       min-width 0
       min-height 0
-      // Nothing should reach this now that the row is sized to fit — it is here
-      // for the frame before the measurement lands, and for the fallback height
+      // For the frame before the measurement lands, and for the fallback height
       // a page gets with the script switched off.
       overflow hidden
 
-      // The card fills the cell rather than floating in the middle of it, so
-      // the first row reads as one row of tiles. What changes inside is only how
-      // the existing contents share the height.
+      // The card fills the cell rather than floating in the middle of it, so the
+      // first row reads as one row of tiles.
       > *
         flex 1 1 auto
         display flex
         flex-direction column
         min-height 0
 
-      // Avatar, name and counts as one centred block — the same arrangement the
-      // rail had, just with room around it.
+      // Avatar, name and counts as one centred block.
       .sidebar-content
         justify-content center
 
       // The site name stays a header at the top edge, where its full-bleed
-      // background belongs; the links share out whatever is left, and shrink
-      // rather than run off the bottom when there are a lot of them.
+      // background belongs; the links share out whatever is left.
       .sidebar-links .site-info
         flex 0 0 auto
 
@@ -570,10 +502,7 @@ $bento-split-text  = 'minmax(0, 1fr)'
 
     // ── Type by shape ────────────────────────────────────────────────────────
     // The only thing a shape changes is emphasis; the sizes came from the plan.
-    // ── Type by shape ────────────────────────────────────────────────────────
-    // `cqw` is the TEXT COLUMN here, not the tile — the body is the container —
-    // so the coefficients are larger than the tile widths they used to be
-    // written against and land in the same place.
+    // `cqw` is the TEXT COLUMN here, not the tile — the body is the container.
     &.bento
       .tier-wide .home-article-title
         font-size clamp(1.3rem, 2.4cqw, 1.7rem)
@@ -587,10 +516,8 @@ $bento-split-text  = 'minmax(0, 1fr)'
       .tier-tall .home-article-title
         font-size 1.3rem
 
-      // One cell tall, and a cover, a title and the meta row to fit inside it.
-      // Everything that can be tightened is: the eyebrow costs a whole line it
-      // cannot spare, the category says the same thing twice on a tile this
-      // size, and the padding is the only other place to find room.
+      // One cell tall, with a cover, a title and the meta row to fit inside it,
+      // so everything that can be tightened is.
       .tier-small
         .home-article-body
           padding 1rem
@@ -607,16 +534,13 @@ $bento-split-text  = 'minmax(0, 1fr)'
           line-height 1.3
 
 
-      // No cover to carry it, so it leans on type instead — which is what lets
-      // it hold a slot next to a tile that has one instead of reading as a tile
-      // that lost its image.
+      // No cover to carry it, so it leans on type instead.
       .no-cover .home-article-title
         font-size 1.35rem
 
-      // The wash is the only place the accent touches a large area, and it is
-      // kept under a tenth of an alpha: a text-forward tile carrying the colour
-      // of the image it is not showing, not a coloured card. Dark mode gets a
-      // little more of it — the same alpha over a dark ground reads as nothing.
+      // The one place the accent touches a large area, kept under a tenth of an
+      // alpha: a text-forward tile carrying the colour of the image it is not
+      // showing, not a coloured card. Dark mode gets a little more of it.
       .no-cover.has-accent
         background unquote('linear-gradient(160deg, rgb(var(--tile-accent) / 0.09), rgb(var(--tile-accent) / 0.02) 62%), var(--background-color)')
 
@@ -624,21 +548,15 @@ $bento-split-text  = 'minmax(0, 1fr)'
           background unquote('linear-gradient(160deg, rgb(var(--tile-accent) / 0.15), rgb(var(--tile-accent) / 0.03) 62%), var(--background-color)')
 
 // ── The classic list ─────────────────────────────────────────────────────────
-// `home.bento: false`. One card per row, and the cover BESIDE the text rather
-// than above it: a 16:9 band across a 900px column is 500px of picture before a
-// word of the post, which puts every card but the first below the fold. Beside
-// it the card is a strip and the page reads as a list again.
-//
-// The side alternates, which is what stops a column of identical L-shapes
-// reading as one element stamped over and over. `:nth-child` rather than a class
-// off the plan: with the bento grid off there is nothing in the list but article
-// cards, so the count IS the position.
+// `home.bento: false`. One card per row with the cover BESIDE the text, sides
+// alternating so a column of identical L-shapes does not read as one element
+// stamped over and over. `:nth-child` works because with the grid off there is
+// nothing in the list but article cards, so the count IS the position.
 //
 // Nothing fixes a card's height here — the text does — so the cover column is a
-// share of the WIDTH and its height follows. $cover-aspect-ratio is held as a
-// FLOOR on the row rather than as a ratio on the frame: a card whose text runs
-// past it grows, and the picture grows with it, so the crop drifts a little
-// taller than 16:9 and never flatter.
+// share of the WIDTH and its height follows. The ratio is a FLOOR on the row
+// rather than a ratio on the frame: a card whose text runs past it grows, and the
+// picture grows with it, so the crop drifts a little taller and never flatter.
 @container {$q-list-split}
   .home-content-container .home-article-list:not(.bento) .home-article-item:not(.no-cover)
     display grid
@@ -650,15 +568,13 @@ $bento-split-text  = 'minmax(0, 1fr)'
     .home-article-thumbnail
       grid-column 1
       grid-row 1
-      // Deliberately unset, as in the bento split: the frame is the full height
-      // of the card and its width is the column's, so the crop is the track's to
-      // decide. A ratio held here would leave dead space under the image on
-      // every card whose text runs longer than the picture.
+      // Unset, as in the bento split: the crop is the track's to decide, and a
+      // ratio here would leave dead space under the image.
       aspect-ratio auto
       width 100%
-      // The floor, in the card's own container units — the cover column at the
-      // site's cover ratio. `cqw` is the CARD here (see `container-name: tile`
-      // on the item), which is the one width this column is a share of.
+      // The floor, in the card's own container units. `cqw` is the CARD here
+      // (`container-name: tile` on the item), which is what the column is a
+      // share of.
       min-height unquote(s('calc(%s / (%s))', unit($list-cover-width, 'cqw'), $cover-aspect-ratio))
 
     .home-article-body
@@ -676,30 +592,26 @@ $bento-split-text  = 'minmax(0, 1fr)'
       grid-column 1
 
 // ── One column ───────────────────────────────────────────────────────────────
-// The site cards open page 1 and then get out of the way: on a phone the grid is
-// a list, and two cards of furniture at the top of every page of it is two cards
-// between the reader and the posts they turned the page for.
+// The site cards open page 1 and then get out of the way: on a phone, furniture
+// at the top of every page sits between the reader and the posts.
 @container {$q-bento-sm}
   .home-content-container .home-article-list.bento:not([data-page="1"]) .home-feature-tile
     display none
 
-  // One column, rows as tall as their content: there is no leftover to fill, so
-  // the excerpt is given a flat allowance instead. Five lines is what a
-  // full-width card carries without becoming a page of its own.
+  // Rows are as tall as their content here, so there is no leftover to fill and
+  // the excerpt gets a flat allowance instead.
   .home-content-container .home-article-list.bento .home-article-item .home-article-content
     -webkit-line-clamp 5
     line-clamp 5
 
 // ── Two across ───────────────────────────────────────────────────────────────
-// The tablet fallback. One column or two, on the same cell height —
-// deliberately plainer, because the shapes that make the grid worth having need
-// a third column before they are legible.
+// The tablet fallback, deliberately plainer: the shapes that make the grid worth
+// having need a third column before they are legible.
 @container {$q-bento-md}
   .home-content-container .home-article-list.bento
     grid-template-columns repeat($bento-columns-md, minmax(0, 1fr))
     // One height per row, written by layouts/bentoFit.js. Until it lands there
-    // are no explicit rows at all and every one of them comes from the line
-    // below, which is the same height for all of them.
+    // are no explicit rows and every one comes from the line below.
     grid-template-rows var(--bento-rows, none)
     grid-auto-rows var(--bento-row)
 
@@ -708,21 +620,15 @@ $bento-split-text  = 'minmax(0, 1fr)'
       grid-row s('var(--md-rs) / span var(--md-rn)')
 
   // ── How much summary a tile prints ─────────────────────────────────────────
-  // Both halves of the answer, and neither is a number anyone chose.
-  //
-  // `max-height` is the cut. `100%` on a grid item is its grid AREA — the body's
+  // `max-height` is the cut: `100%` on a grid item is its grid AREA — the body's
   // `1fr` row, i.e. exactly what the tile has left — and `round(down, …, 1lh)`
-  // takes that down to a whole number of lines, so the clip can never land
-  // through the middle of a row of glyphs. When a tile has no room at all the
-  // result is 0 and the summary simply is not there, which is the composition a
-  // one-cell tile with a cover has always wanted and used to need a class for.
+  // takes it down to a whole number of lines, so the clip never lands through the
+  // middle of a row of glyphs. At 0 the summary simply is not there, which is the
+  // composition a one-cell tile with a cover wants anyway.
   //
-  // The clamp is the "…". `round()` cuts cleanly but says nothing, so
-  // layouts/bentoFit.js measures the box it just produced and writes back the
-  // line count that fits — the same number, arrived at from the other side, with
-  // an ellipsis on the last line. Until it does, `none` means the cut above is
-  // the only limit, so the script's write changes what the last line SAYS and
-  // never how many lines there are.
+  // The clamp is only the "…": layouts/bentoFit.js measures the box the cut
+  // produced and writes back the same line count, so the write changes what the
+  // last line SAYS and never how many lines there are.
   .home-content-container .home-article-list.bento .home-article-item .home-article-content
     max-height unquote('round(down, 100%, 1lh)')
     -webkit-line-clamp var(--fit-lines, none)
@@ -737,85 +643,33 @@ $bento-split-text  = 'minmax(0, 1fr)'
       grid-column s('var(--lg-cs) / span var(--lg-cn)')
       grid-row s('var(--lg-rs) / span var(--lg-rn)')
 
-// ── The cover's share of a cell grid ─────────────────────────────────────────
-// A tile's height is fixed by its row, so the cover takes a share of it rather
-// than a ratio of its own: it gets EVERYTHING the text does not need, bounded.
+// ── The cover's crop on a cell grid ──────────────────────────────────────────
+// A cover above the text is a RATIO and the ROW moves to hold it, so the height
+// is the tile's own width at a crop inside the band — and WHICH crop is the one
+// term the stylesheet cannot work out, because it depends on how tall the summary
+// under the picture came out. layouts/bentoFit.js solves that and writes the
+// answer here: leftover height in a tile goes to the picture, as far as
+// $bento-cover-tallest, before any of it is left blank.
 //
-//   100% - tile-chrome    what is left once the title, the meta row, the padding
-//                         around them and the summary the tile has to show have
-//                         been kept back. layouts/bentoFit.js measures that per
-//                         tile and sizes the row so this lands on the crop the
-//                         cover wants; $bento-tile-chrome-min is the worst case
-//                         it falls back to until the measurement arrives.
-//   share                 no tile gives more than this fraction of itself to one
-//                         image, however little it has to say
-//   100cqw / widest       and a narrow tile must not crop a wide photograph into
-//                         a portrait, the one thing a frame here may never do
-//   100cqw / flattest     with the whole thing floored, so a row that came out
-//                         shorter than this tile asked for takes it out of the
-//                         summary rather than shaving the picture to a hairline
-//
-// Handing the cover the leftover is what closed the gap this used to leave. A
-// fixed share meant a tile with three words of summary still gave 40% of itself
-// to white space under a strip of picture — the cover could not grow into the
-// room and the row could not shrink past it.
-//
-// `--tile-furniture` is the one thing that outranks the floor: the title, the
-// meta row and the padding around them, which are what the tile is FOR. A
-// summary is meant to truncate and a picture is meant to crop, but a meta row
-// clipped off the bottom edge is a broken card, so the floor gives way first.
-$bento-cover-leftover = 'calc(100% - var(--tile-chrome, ' + $bento-tile-chrome-min + '))'
-$bento-cover-floor    = 'min(calc(100cqw / var(--bento-cover-flattest)), calc(100% - var(--tile-furniture, ' + $bento-tile-chrome-min + ')))'
+// The fallback is for the frame before the script lands: the target crop, held
+// off the title and meta row by the worst case of their height.
+$bento-cover-crop = 'min(calc(100cqw / var(--bento-cover-target)), calc(100% - ' + $bento-tile-chrome-min + '))'
 
 @container {$q-bento-md}
   .home-content-container .home-article-list.bento .home-article-item .home-article-thumbnail
     aspect-ratio auto
     // Built as a string: `min()` is a Stylus built-in and would try to compare
     // a percentage against a calc it cannot resolve.
-    height unquote('min(calc(var(--bento-cover-share) * 100%), calc(100cqw / var(--bento-cover-widest)), max(' + $bento-cover-leftover + ', ' + $bento-cover-floor + '))')
-
-// ── Where a cover is worse than none ─────────────────────────────────────────
-// A tile TWO OR THREE COLUMNS wide and ONE ROW tall cannot carry a cover above
-// its text. A landscape band across 700px of tile is 100px tall at best, which
-// is a 7:1 hairline — and it takes the 100px the title and meta row need, so the
-// tile clips as well as looking wrong. Beside the text it is one of the best
-// tiles on the page, but only once the tile is wide enough for that; until then
-// the composition is text, and the split blocks below put the picture back.
-//
-// The wash is the one a post with no cover gets. It is the same tile: the colour
-// comes from the picture it is not showing, either way.
-text-forward-tile()
-  .home-article-thumbnail
-    display none
-
-  &.has-accent
-    background unquote('linear-gradient(160deg, rgb(var(--tile-accent) / 0.09), rgb(var(--tile-accent) / 0.02) 62%), var(--background-color)')
-
-    .dark &
-      background unquote('linear-gradient(160deg, rgb(var(--tile-accent) / 0.15), rgb(var(--tile-accent) / 0.03) 62%), var(--background-color)')
-
-// Two columns, below the split threshold: every wide tile here is one row tall.
-@container {$q-bento-flat-md}
-  .home-content-container .home-article-list.bento .home-article-item.md-split
-    text-forward-tile()
-
-// Three columns, below it: a 3x1 band is the whole column and is always past the
-// threshold at this size, so this is the 2x1 alone.
-@container {$q-bento-flat-wide}
-  .home-content-container .home-article-list.bento .home-article-item.lg-split.tier-duo
-    text-forward-tile()
+    height unquote('var(--tile-cover, ' + $bento-cover-crop + ')')
 
 // ── Cover beside text ────────────────────────────────────────────────────────
-// The composition for a tile ONE ROW tall. There is no room for a band across
-// the top of a 260px cell — the picture would take a third of the tile and leave
-// the summary nothing — so the cover goes down the side instead, at the site's
-// one cover ratio, and the text takes the rest of the width.
+// The composition for a tile ONE ROW tall: the cover goes down the side at the
+// site's cover ratio and the text takes the rest of the width. This is what makes
+// a 2x1 tile worth having — the same post that shows two lines under a letterbox
+// strip shows six beside a picture.
 //
-// This is the composition that makes a 2x1 tile worth having: the same post that
-// shows two lines under a letterbox strip shows six beside a picture.
-//
-// `:not(.no-cover)` because a split with nothing in its first column is just a
-// half-empty tile — a cover-less tile keeps the stacked composition.
+// The two guards keep the composition off tiles with nothing to put in its first
+// column: a fixed cover track with no picture in it is just a half-empty tile.
 split-composition()
   display grid
   grid-template-columns unquote($bento-split-cover + ' ' + $bento-split-text)
@@ -825,23 +679,20 @@ split-composition()
     grid-column 1
     grid-row 1
     // Deliberately unset: the frame is the full height of the tile and its width
-    // is the column's, so the ratio is decided by the track, not here. A ratio
-    // held on the frame would leave dead space under the image.
+    // is the column's, so the ratio is the track's to decide, not the frame's.
     aspect-ratio auto
     width 100%
     height 100%
 
-  // The text block's box spans the whole tile, so its top edge is the TILE's top
-  // edge — which is what the index numeral crops against — and the meta row sits
-  // on the tile's bottom edge as it does elsewhere.
+  // The text block spans the whole tile, so its top edge is the TILE's top edge —
+  // what the index numeral crops against — and the meta row sits on the bottom.
   .home-article-body
     grid-column 2
     grid-row 1
     padding 1.5rem
 
-// Every second one mirrors, so a run of them zig-zags down the page instead of
-// stamping the same L-shape over and over. The class is put on by the plan,
-// counted over split tiles alone.
+// Every second one mirrors, so a run of them zig-zags instead of stamping the
+// same L-shape over and over. The class is put on by the plan.
 split-mirrored()
   grid-template-columns unquote($bento-split-text + ' ' + $bento-split-cover)
 
@@ -884,32 +735,39 @@ split-mirrored()
     split-mirrored()
 
 // ── Measuring ────────────────────────────────────────────────────────────────
-// layouts/bentoFit.js reads two things off every tile: how tall the summary
-// WANTS to be, and how much room the tile has for it. Neither is legible while
-// something is limiting the box — `scrollHeight` on a clamped element reports the
-// clamped height, not the text's — so the limits come off for the length of the
-// read. One class on the list rather than a write per tile, and it never survives
-// the frame.
+// `scrollHeight` on a clamped element reports the clamped height, not the text's,
+// so the limits come off for the length of layouts/bentoFit.js's read. One class
+// on the list rather than a write per tile, and it never survives the frame.
 .home-content-container .home-article-list.bento.is-measuring .home-article-item .home-article-content
   max-height none
   -webkit-line-clamp none
   line-clamp none
 
-// The same read for the site cards, whose row is sized to hold them: cut loose
-// from the track for the length of it, so what is measured is the height the
-// card wants rather than the height the row is currently giving it. One
-// declaration is enough — a grid item's height is its content's until `stretch`
-// makes it the row's, and this is what takes that away.
+// And the box has to stop being stretched, or it reports the room it was GIVEN
+// rather than the room its text takes — `scrollHeight` never goes below
+// `clientHeight`, so a filled box answers a height query with its own size. Both
+// the flex line and the `1fr` track have to let go, which is also what makes the
+// furniture readable as the body minus the text.
+//
+// `height`, not `align-self`: the body is a flex item in the stacked composition
+// and a grid item in the split one, and `align-self` is the CROSS axis in the
+// first — it would take the text column's width away instead of its height.
+.home-content-container .home-article-list.bento.is-measuring .home-article-item .home-article-body
+  flex 0 0 auto
+  height max-content
+  grid-template-rows auto auto auto
+
+// The same read for the site cards: cut loose from the track, so what is measured
+// is the height the card wants rather than the height the row is giving it. A
+// grid item's height is its content's until `stretch` makes it the row's.
 .home-content-container .home-article-list.bento.is-measuring .home-feature-tile
   align-self start
 
 // ── Entrance ─────────────────────────────────────────────────────────────────
-// Driven by each tile's own position in the viewport rather than by a timer, so
-// there is no scroll listener, no observer and no stagger to tune: tiles arrive
-// in the order they are reached, at the speed the reader scrolls. The animation
-// drives `translate` and `opacity` — never `transform` — because the hover lift
-// is a `scale`, and an animation's filled value would otherwise win over it for
-// the rest of the session.
+// Driven by each tile's position in the viewport rather than by a timer: no
+// scroll listener, no observer, no stagger to tune. It drives `translate` and
+// `opacity` — never `transform` — because the hover lift is a `scale`, and a
+// filled animation value would win over it for the rest of the session.
 @keyframes bento-enter
   from
     opacity 0
@@ -930,18 +788,14 @@ split-mirrored()
 
 // ── Density ──────────────────────────────────────────────────────────────────
 // What a cramped tile drops, keyed on how cramped it actually is rather than on
-// the size of the screen: a 300px text column is a 300px text column whether it
-// happens on a phone or in a split tile on a 27" display.
-//
-// The full ancestor chain is spelled out on purpose: a container query adds no
-// specificity of its own, so these have to match the base rules they override
+// screen size. The full ancestor chain is spelled out on purpose: a container
+// query adds no specificity, so these have to match the base rules they override
 // and win on source order instead.
-
-// Padding asks the TILE, everything below asks the text column. It has to: the
-// body is the text column's container, and its padding is what decides how wide
-// that column is, so a rule inside the column's own query that changes it is a
-// question whose answer changes the question. The tile is sized by the grid and
-// nothing inside it can move it.
+//
+// Padding asks the TILE, everything below asks the text column — the body is that
+// column's container and its padding is what decides the column's width, so a
+// rule inside the column's own query that changes it is a question whose answer
+// changes the question.
 @container {$q-tile-narrow}
   .home-content-container .home-article-list .home-article-item .home-article-body
     padding 1.15rem
