@@ -23,5 +23,7 @@
 @require 'layout/tag-content.styl'
 @require 'layout/mathjax.styl'
 
+// The two site cards, plus the classic layout's rail. Required either way: the
+// bento grid drops the rail but keeps the cards, placing them in its first row.
 if (hexo-config('home.sidebar.enable') == true)
   @require 'layout/home-sidebar.styl'

@@ -85,6 +85,9 @@ $logo-image-box-width = 34px
           line-height 1
           color var(--first-text-color)
           transform translateY(1px)
+          // Same rule as the links: the title breaking over two lines is the
+          // navbar not fitting, and it has to say so rather than absorb it.
+          white-space nowrap
 
           +redefine-tablet()
             font-size: $logo-title-font-size * 0.9
@@ -108,6 +111,12 @@ $logo-image-box-width = 34px
           +redefine-tablet()
             display none
 
+          // The measured half of the same switch: a window can be wider than the
+          // breakpoint and still too narrow for these links. See
+          // layouts/navbarCollapse.js.
+          .navbar-collapsed &
+            display none
+
           .navbar-item
             float left
             // padding 5px
@@ -116,6 +125,10 @@ $logo-image-box-width = 34px
             font-weight 500
             cursor pointer
             color var(--default-text-color)
+            // A link that reflows onto two lines is not a navbar that fits, it is
+            // one that has run out of room and hidden the fact. Refusing to wrap
+            // is what turns that into an overflow the script above can see.
+            white-space nowrap
 
             a
               display block
@@ -231,6 +244,11 @@ $logo-image-box-width = 34px
             margin-left 0
 
           +redefine-tablet()
+            display flex
+            justify-content center
+            align-items center
+
+          .navbar-collapsed &
             display flex
             justify-content center
             align-items center

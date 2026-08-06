@@ -23,6 +23,7 @@ import {
 import {
   createBubble, wrapCard, clearWrap, bubbleHasEmoji,
   fadeOutBubbles, placeBubble, placeBubbleAnimated, fadeInBubbles,
+  beginPlaceBatch, endPlaceBatch,
 } from "./instant-notes-bubble.js";
 
 // ════════════════════════════════════════════════════════════
@@ -621,16 +622,47 @@ function snapshotBubbles(els) {
 // same duration + curve, a bubble's on-screen path is the exact linear blend
 // old→new even while its animating parent frame moves under it. settle() clears
 // the temporary width pins once landed.
-function armFlip(snap, els, dur = FRAME_MS) {
-  const moves = [];
+// ── Measure everything BEFORE mutating anything ──────────────────────────────
+// This used to be one loop that, per bubble, read a rect, wrote eight styles,
+// read another rect and wrote again — so every bubble forced its own
+// synchronous layout. Expanding a panel with ten bubbles meant ten full layouts
+// inside the single frame that has to arm the whole animation, which is exactly
+// the stutter you see at the START of the expand on a phone.
+//
+// Both hoisted reads are safe: a bubble wrapper is position:absolute with inline
+// left/top, so pinning its card's width/height cannot move its origin — the
+// `now` rect is identical before and after.
+function measureFlip(snap, els) {
+  const plans = [];
   els.forEach((el) => {
     const s = snap.get(el);
     if (!s || el.style.display === "none") return;
     const isInput = el.classList.contains("instant-notes-input-bubble");
     const card = el.querySelector(".bubble-card");
     const finalW = (isInput ? el : card || el).getBoundingClientRect().width;
-    let widthMove = null;
+
+    const plan = { el, s, isInput, card, finalW, now: null, cardRect: null, innerW: 0 };
     if (card && Math.abs(finalW - s.cardW) > 0.5) {
+      const cardRect = card.getBoundingClientRect(); // FINAL box (post-mutation)
+      const cs = getComputedStyle(card);
+      plan.cardRect = cardRect;
+      plan.innerW =
+        cardRect.width -
+        (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) -
+        (parseFloat(cs.borderLeftWidth) || 0) - (parseFloat(cs.borderRightWidth) || 0);
+    }
+    plan.now = el.getBoundingClientRect();
+    plans.push(plan);
+  });
+  return plans;
+}
+
+function armFlip(snap, els, dur = FRAME_MS) {
+  const moves = [];
+  measureFlip(snap, els).forEach((plan) => {
+    const { el, s, isInput, card, now } = plan;
+    let widthMove = null;
+    if (plan.cardRect) {
       // ── Size morph WITHOUT per-frame text rewrap ──────────────────────────
       // Animating max-width re-wraps the text on EVERY frame — words jump
       // between lines for the whole flight and all bubbles visibly vibrate.
@@ -641,12 +673,8 @@ function armFlip(snap, els, dur = FRAME_MS) {
       // content; (3) overlay a clone re-wrapped at the OLD width and fade it
       // out quickly, masking the single wrap change. Nothing reflows
       // mid-flight, so nothing shakes.
-      const cardRect = card.getBoundingClientRect(); // FINAL box (post-mutation)
-      const cs = getComputedStyle(card);
-      const innerW =
-        cardRect.width -
-        (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) -
-        (parseFloat(cs.borderLeftWidth) || 0) - (parseFloat(cs.borderRightWidth) || 0);
+      const cardRect = plan.cardRect; // FINAL box, measured in the read pass
+      const innerW = plan.innerW;
 
       // Old-wrap snapshot (clone BEFORE freezing). Skipped for the input card:
       // cloning a textarea drops its live value, and the compose card has no
@@ -691,11 +719,17 @@ function armFlip(snap, els, dur = FRAME_MS) {
       card.style.maxWidth = "none"; // must not cap the pinned/tweened width
       card.style.width = `${Math.round(s.cardW)}px`;
       card.style.height = `${Math.round(s.cardH)}px`;
+      // The card is already clipped (overflow:hidden, just set) and its content
+      // is frozen at a fixed width, so containment changes nothing visually —
+      // but it stops each card's per-frame width/height tween from invalidating
+      // layout and paint for the rest of the panel. With several cards morphing
+      // at once that is the difference between one contained relayout each and
+      // a cascade across the whole list every frame.
+      card.style.contain = "layout paint";
       if (isInput) el.style.width = `${Math.round(s.cardW)}px`;
     }
     el.style.transition = "none";
     if (card) card.style.transition = "none";
-    const now = el.getBoundingClientRect();
     const dx = Math.round(s.rect.left - now.left);
     const dy = Math.round(s.rect.top - now.top);
     el.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : "none";
@@ -739,6 +773,7 @@ function armFlip(snap, els, dur = FRAME_MS) {
         card.style.overflow = "";
         card.style.position = "";
         card.style.boxSizing = "";
+        card.style.contain = "";
         card.style.maxWidth = widthMove.restoreMax || "";
         if (!widthMove.restoreMax) {
           // Final state was an UNWRAPPED card — drop the wrap helpers entirely.
@@ -920,6 +955,11 @@ async function expandPanel(panel) {
     // analytic transform (no reflow); history simply fades in once the frame has
     // grown — the SAME plain cross-fade every expand path uses. (Problem 1.2, 2.)
     panel._composeCompact = false;
+    // Same `notes-anim` guard every other expand/collapse path uses: it drops
+    // the field's scroll-fade mask for the duration of the flight. A masked
+    // layer re-rasterises on every frame while the frame it sits in is
+    // resizing, and this path was the only one still paying for that.
+    panel.classList.add("notes-anim");
     const input = panel._inputBubble;
     const compactH = panel._placeholder
       ? panel._placeholder.getBoundingClientRect().height : finalH;
@@ -1364,11 +1404,18 @@ function expandedHeight(measured, maxHeight) {
 export function animateFrame(panel, t, animate, dur = FRAME_MS, delay = 0) {
   const reduced = prefersReducedMotion();
   const d = delay ? ` ${delay}ms` : "";
-  // Background + box-shadow ride the same transition so the `notes-elevated`
-  // glass (toggled right after this call on expand) morphs IN SYNC with the frame
-  // resize instead of popping. (Problem 2.)
+  // `background` and `box-shadow` used to be in this list so the `notes-elevated`
+  // glass (toggled right after this call on expand) would morph in sync with the
+  // resize rather than pop. They are NOT in it any more, and nothing changes on
+  // screen: `.notes-elevated` declares byte-identical background and box-shadow
+  // values to the base `.instant-notes-panel` rule in both light and dark (see
+  // home-notes.styl — the class exists purely as an explicit, matching target).
+  // Interpolating a value to itself is free in theory and expensive in practice:
+  // it marks the panel's background and its 24px-blur drop shadow dirty on every
+  // single frame, forcing a full-panel repaint alongside the resize. If those
+  // two rules ever genuinely diverge, put the properties back here.
   panel.style.transition = animate && !reduced
-    ? `left ${dur}ms ${GLIDE}${d}, top ${dur}ms ${GLIDE}${d}, width ${dur}ms ${GLIDE}${d}, height ${dur}ms ${GLIDE}${d}, background ${dur}ms ${GLIDE}${d}, box-shadow ${dur}ms ${GLIDE}${d}`
+    ? `left ${dur}ms ${GLIDE}${d}, top ${dur}ms ${GLIDE}${d}, width ${dur}ms ${GLIDE}${d}, height ${dur}ms ${GLIDE}${d}`
     : "none";
   panel.style.left = `${Math.round(t.left)}px`;
   panel.style.top = `${Math.round(t.top)}px`;
@@ -1513,6 +1560,10 @@ export function measureExpandedList(panel, slotWidth, keepGeom) {
 export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_MS, animDelay = 0) {
   const field = panel.querySelector("#instant-notes-field");
   if (!field) return;
+  // The smooth path FLIPs every bubble; batch the inversions so the whole list
+  // costs one forced layout instead of one per bubble (this runs on every
+  // keystroke in the compose box).
+  if (smooth) beginPlaceBatch();
   const place = smooth
     ? (el, l, t, w) => placeBubbleAnimated(el, l, t, w, animDur, animDelay)
     : placeBubble;
@@ -1580,6 +1631,10 @@ export function positionExpandedList(panel, m, innerH, smooth, animDur = FRAME_M
   panel._bubbleEls.forEach((el) => {
     if (!order.includes(el)) el.style.display = "none";
   });
+
+  // Flush + arm every batched inversion in one go before anything reads layout
+  // again (updateScrollFade below does).
+  if (smooth) endPlaceBatch();
 
   panel._listContentH = contentH;
   panel._listViewportH = viewportH;

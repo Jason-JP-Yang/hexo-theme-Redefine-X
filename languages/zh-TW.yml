@@ -8,6 +8,9 @@ next: 下一頁
 prev_posts: 上一篇
 next_posts: 下一篇
 page: 第 %d 頁
+load_more: 載入更多
+loading: 載入中
+no_more_posts: 我也是有底線的~
 recent_posts: 之前的文章
 share: 分享
 powered_by: "%s 框架"

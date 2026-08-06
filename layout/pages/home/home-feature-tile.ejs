@@ -1,0 +1,51 @@
+<%
+    // The two site cards, as grid cells.
+    //
+    // The markup inside is the sidebar's, unchanged, and so is its stylesheet
+    // (layout/home-sidebar.styl, whose card rules are written at the top level
+    // precisely so they work in both places). The bento grid drops the 240px
+    // rail — a second layout system beside the grid — but the cards themselves
+    // are not a bento invention and do not get a bento restyle.
+    //
+    // Each takes the smallest tile there is, one cell of the grid's first band,
+    // and the cell only stretches them; the card is still the card.
+    const sidebar = theme.home.sidebar || {};
+    const hasLinks = sidebar.links != null;
+    const hasAnnouncement = sidebar.announcement != null;
+%>
+<li class="home-feature-tile feature-<%= tile.name %>" style="<%= bentoStyle(tile) %>">
+    <% if (tile.name === "info") { %>
+        <div class="sidebar-content">
+            <%- partial("components/sidebar/avatar") %>
+            <%- partial("components/sidebar/author") %>
+            <%- partial('components/sidebar/statistics') %>
+        </div>
+    <% } else if (hasLinks || hasAnnouncement) { %>
+        <div class="sidebar-links">
+            <div class="site-info">
+                <div class="site-name"><%= theme.info.title || config.title %></div>
+                <% if (hasAnnouncement && hasLinks) { %>
+                    <div class="announcement">
+                        <%- sidebar.announcement %>
+                    </div>
+                <% } %>
+            </div>
+            <% if (hasLinks) { %>
+                <% for (let i in sidebar.links) { %>
+                    <% if (sidebar.links[i].path !== 'none') { %>
+                        <a class="links" href="<%= url_for(sidebar.links[i].path) %>">
+                            <% if (sidebar.links[i].icon) { %>
+                                <i class="<%- sidebar.links[i].icon %> icon-space"></i>
+                            <% } %>
+                            <span class="link-name"><%= __(i) %></span>
+                        </a>
+                    <% } %>
+                <% } %>
+            <% } else { %>
+                <div class="announcement-outside">
+                    <%- sidebar.announcement %>
+                </div>
+            <% } %>
+        </div>
+    <% } %>
+</li>

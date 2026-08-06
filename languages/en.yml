@@ -8,6 +8,9 @@ next: Next
 prev_posts: Prev posts
 next_posts: Next posts
 page: Page %d
+load_more: Load more
+loading: Loading
+no_more_posts: Well, that's my bottom line~
 recent_posts: Recent Posts
 share: Share
 powered_by: "POWERED BY %s"

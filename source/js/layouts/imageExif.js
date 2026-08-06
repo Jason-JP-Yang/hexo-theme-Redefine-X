@@ -29,6 +29,80 @@
   // Developer override: 'None' | 'Side' | 'Float' | 'Block'
   const DEV_FORCE_LAYOUT_MODE = 'None';
 
+  // ── Batched layout scheduling ────────────────────────────────────
+  // checkLayout() is EXPENSIVE: trySideLayout/tryFloatLayout each clone the
+  // info card, append it, read offsetHeight and remove it again — a forced
+  // synchronous layout per container, per call. It was being invoked once per
+  // image as each lazy image landed, once per ResizeObserver entry, and again
+  // on every resize/force-check event, all un-coalesced.
+  //
+  // Now every trigger just names a container; the actual work runs once per
+  // frame for the whole set. And while Swup is animating the page to the top,
+  // the work is parked until the scroll settles — re-measuring an EXIF card
+  // that is flying past the viewport at speed buys nothing and costs a layout.
+  //
+  // This file is a CLASSIC script (see scripts.ejs) and loads BEFORE the module
+  // that defines the scheduler, so the global is looked up lazily at call time.
+  function scheduler() {
+    return window.__redefineScroll || null;
+  }
+
+  const dirtyContainers = new Set();
+  let layoutFrame = null;
+
+  function scheduleLayout(container) {
+    if (!container) return;
+    dirtyContainers.add(container);
+
+    const s = scheduler();
+    if (s && s.isScrollFlight()) {
+      s.afterFlight(runScheduledLayout);
+      return;
+    }
+    if (layoutFrame !== null) return;
+    layoutFrame = requestAnimationFrame(runScheduledLayout);
+  }
+
+  function scheduleLayoutAll() {
+    document.querySelectorAll('.image-exif-container').forEach(scheduleLayout);
+  }
+
+  // Each checkLayout() is one forced synchronous layout (it clones the card,
+  // appends it, reads offsetHeight, removes it). After a scroll flight over an
+  // image-heavy page, dozens of containers can come due at once — doing them all
+  // in one frame would simply move the stall rather than remove it. Spend a
+  // slice of the frame, then hand the rest to the next one. Settling a card a
+  // frame or two later is imperceptible; a 300ms freeze is not.
+  const LAYOUT_BUDGET_MS = 8;
+
+  function runScheduledLayout() {
+    if (layoutFrame !== null) {
+      cancelAnimationFrame(layoutFrame);
+      layoutFrame = null;
+    }
+    if (!dirtyContainers.size) return;
+
+    const started = performance.now();
+    let did = 0;
+    for (const container of Array.from(dirtyContainers)) {
+      dirtyContainers.delete(container);
+      if (!container.isConnected) continue;
+      checkLayout(container);
+      did++;
+      // Always do at least one, so a single slow container can never deadlock
+      // the queue.
+      if (did > 0 && performance.now() - started > LAYOUT_BUDGET_MS) break;
+    }
+
+    if (dirtyContainers.size) {
+      layoutFrame = requestAnimationFrame(runScheduledLayout);
+    }
+
+    // Card heights changed → cached page offsets (TOC headings, scrollHeight)
+    // are stale.
+    if (did) window.dispatchEvent(new CustomEvent('redefine:content-resized'));
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────
 
   /** Return sorted divisors of n (ascending). */
@@ -351,11 +425,9 @@
 
   const resizeObserver = new ResizeObserver((entries) => {
     for (const entry of entries) {
-      requestAnimationFrame(() => {
-        if (entry.target.classList.contains('image-exif-container')) {
-          checkLayout(entry.target);
-        }
-      });
+      if (entry.target.classList.contains('image-exif-container')) {
+        scheduleLayout(entry.target);
+      }
     }
   });
 
@@ -377,13 +449,13 @@
       });
 
       // Initial layout check
-      checkLayout(container);
-      setTimeout(() => checkLayout(container), 300);
+      scheduleLayout(container);
+      setTimeout(() => scheduleLayout(container), 300);
 
       // Image load → re-check
       container.querySelectorAll('img.image-exif-img').forEach((img) => {
         if (!img.complete) {
-          img.addEventListener('load', () => checkLayout(container));
+          img.addEventListener('load', () => scheduleLayout(container));
         }
       });
 
@@ -394,7 +466,7 @@
           for (const m of mutations) {
             for (const node of m.addedNodes) {
               if (node.tagName === 'IMG') {
-                const run = () => requestAnimationFrame(() => checkLayout(container));
+                const run = () => scheduleLayout(container);
                 node.complete ? run() : node.addEventListener('load', run);
               }
             }
@@ -407,22 +479,14 @@
   // ── Debounced global resize ──────────────────────────────────────
 
   let resizeTimer = null;
-  let resizing = false;
 
   function handleResize() {
-    document.querySelectorAll('.image-exif-container').forEach(checkLayout);
+    scheduleLayoutAll();
   }
 
   function debouncedResize() {
-    if (resizing) return;
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      resizing = true;
-      requestAnimationFrame(() => {
-        handleResize();
-        resizing = false;
-      });
-    }, RESIZE_DELAY);
+    resizeTimer = setTimeout(scheduleLayoutAll, RESIZE_DELAY);
   }
 
   // ── Boot ─────────────────────────────────────────────────────────
@@ -457,7 +521,7 @@
     const img = e.detail?.img;
     if (img) {
       const c = img.closest('.image-exif-container');
-      if (c) requestAnimationFrame(() => checkLayout(c));
+      if (c) scheduleLayout(c);
     }
   });
 })();

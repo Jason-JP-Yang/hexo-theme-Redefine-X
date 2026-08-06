@@ -6,8 +6,13 @@ import initScrollTopBottom from "./tools/scrollTopBottom.js";
 import initLocalSearch from "./tools/localSearch.js";
 import initCopyCode from "./tools/codeBlock.js";
 import initBookmarkNav from "./layouts/bookmarkNav.js";
+import initNavbarCollapse from "./layouts/navbarCollapse.js";
 import initLazyLoad from "./layouts/lazyload.js";
 import initAutoHover from "./layouts/autoHover.js";
+import initBentoFit from "./layouts/bentoFit.js";
+import initTileSpotlight from "./layouts/tileSpotlight.js";
+import initCoverParallax from "./layouts/coverParallax.js";
+import initHomePagination from "./layouts/homePagination.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 import initInstantNotes from "./plugins/instantNotes.js";
 import { initNotoAnim } from "./plugins/noto-anim.js";
@@ -85,7 +90,22 @@ export const main = {
       });
     }
 
+    // Before anything that measures the page: the navbar is two different
+    // heights in its two presentations.
+    initNavbarCollapse();
+
     initAutoHover();
+
+    // Before the parallax: the cell height it picks changes every cover's frame,
+    // and a cover measured against the old one starts its travel in the wrong
+    // place.
+    initBentoFit();
+
+    initTileSpotlight();
+
+    initCoverParallax();
+
+    initHomePagination();
 
     initMathJaxScroll();
 

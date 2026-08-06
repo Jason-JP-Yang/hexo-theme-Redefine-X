@@ -1,62 +1,147 @@
+<%
+    // ── Home grid ────────────────────────────────────────────────────────────
+    // Sizes come from the plan (scripts/helpers/bento-helpers.js), which weighs
+    // every post — pinned, cover, length, excerpt, recency, taxonomy, title —
+    // and hands it a slot to match. This file fills the slot it is handed.
+    //
+    // A slot fixes WHERE a tile goes and HOW BIG it is, and nothing else. How
+    // much of the summary is printed is not decided here or anywhere else in the
+    // build: the tile hands the excerpt whatever height it has left and the
+    // excerpt stops on the last line that fits (layout/home-content.styl,
+    // layouts/bentoFit.js).
+    const bentoEnabled = theme.home.bento !== false;
+    const baseExcerptLength = theme.home.excerpt_length || 200;
+
+    // `thumbnail` wins here — it exists precisely to override the cover in the
+    // list — and everything else falls through to the same file the post page
+    // uses for its banner. Covers are always shown when a post has one.
+    function resolveCover(post) {
+        if (post.thumbnail === false) return "";
+        if (!post.thumbnail && !post.cover && !post.banner) return "";
+        if (post.thumbnail) return post.thumbnail;
+        if (post.cover && post.cover.includes("/")) return post.cover;
+        if (post.banner && post.banner.includes("/")) return post.banner;
+        if (config.marked && config.marked.postAsset === true) {
+            return [post.path, post.cover || post.banner].join("/");
+        }
+        return "";
+    }
+
+    const posts = page.posts.toArray ? page.posts.toArray() : page.posts;
+
+    // Numbering runs on across pagination rather than restarting at 1 on page 2.
+    const perPage =
+        (config.index_generator && config.index_generator.per_page) ||
+        config.per_page ||
+        posts.length ||
+        0;
+    const currentPage = page.current || 1;
+    const numberOffset = (currentPage - 1) * perPage;
+
+    // The site cards replace the old sidebar rail, so `home.sidebar.enable` now
+    // means "open the grid with them". They are on every page, in the first
+    // band, and the paginator leaves them alone.
+    const withFeatures =
+        bentoEnabled && theme.home.sidebar && theme.home.sidebar.enable === true;
+
+    // The classic list is one cell wide by one cell's worth of text: it clamps at
+    // three lines and has no grid to place anything in.
+    const plan = bentoEnabled
+        ? bentoPlan(posts, { features: withFeatures })
+        : posts.map((post, i) => ({ kind: "post", tier: "standard", postIndex: i, lg: { cn: 1, rn: 1 } }));
+
+    // How much RAW text to put in the document — a payload question, not a
+    // display one. The tile decides how many lines of it to show; all this has to
+    // guarantee is that it never runs out before the tile does, because a tile
+    // that has exhausted its excerpt shows white space with no ellipsis, which
+    // reads as broken rather than as truncated.
+    //
+    // One cell of tile at the grid's widest column holds a little under 500
+    // characters once the cover, title and meta row have taken their share, so a
+    // tile is given its cell count's worth with a little over. `excerpt_length`
+    // is the floor.
+    const CHARS_PER_CELL = 520;
+    function excerptBudget(tile) {
+        const cells = ((tile.lg && tile.lg.cn) || 1) * ((tile.lg && tile.lg.rn) || 1);
+        return Math.max(baseExcerptLength, CHARS_PER_CELL * cells);
+    }
+%>
 <div class="home-content-container">
-    <ul class="home-article-list">
-        <% page.posts.forEach(post => { %>
-            <li class="home-article-item">
+    <ul class="home-article-list<%= bentoEnabled ? " bento" : "" %>" data-page="<%= currentPage %>"
+        <%- bentoEnabled ? ' data-lg-rows="' + bentoRows(plan, "lg") + '" data-md-rows="' + bentoRows(plan, "md") + '"' : "" %>>
+        <% plan.forEach((tile) => { %>
+            <% if (tile.kind === "feature") { %>
+                <%- partial('pages/home/home-feature-tile', { tile: tile }) %>
+            <% } else { %>
+                <%
+                    const post = posts[tile.postIndex];
+                    const tier = tile.tier;
+                    const cover = resolveCover(post);
+                    const postNumber = numberOffset + tile.postIndex + 1;
+                    const accent = coverAccent(post);
+                    const style = [bentoEnabled ? bentoStyle(tile) : "", accent ? "--tile-accent:" + accent : ""]
+                        .filter(Boolean)
+                        .join(";");
+                %>
+                <li class="home-article-item tier-<%= tier %><%= cover ? "" : " no-cover" %><%= accent ? " has-accent" : "" %><%= bentoEnabled ? bentoClasses(tile) : "" %>"
+                    <%- style ? ' style="' + style + '"' : "" %>>
 
-                <% if (post.sticky) { %>
-                    <div class="absolute top-[12px] right-[12px] text-[0.7rem] text-third-text-color rounded-medium bg-background-color-transparent-15 py-[2px] px-[10px] border border-border-color z-1 hover:text-first-text-color cursor-default">
-                        <i class="fa-regular fa-thumbtack mr-[3px] text-[0.65rem]"></i><%- __('sticky') %>
+                    <% if (post.sticky) { %>
+                        <div class="home-article-sticky-badge">
+                            <i class="fa-regular fa-thumbtack"></i><%- __('sticky') %>
+                        </div>
+                    <% } %>
+
+                    <% if (cover) { %>
+                        <div class="home-article-thumbnail">
+                            <%# aria-hidden + tabindex="-1": this links to the same place as the
+                                title below it, so it is decorative to a screen reader and should
+                                not cost a second tab stop. %>
+                            <a href="<%- url_for(post.path) %>" tabindex="-1" aria-hidden="true">
+                                <img src="<%- url_for(cover) %>" alt="<%= post.title %>"
+                                    <%- tile.postIndex === 0 ? 'fetchpriority="high"' : 'loading="lazy"' %> decoding="async" />
+                            </a>
+                        </div>
+                    <% } %>
+
+                    <div class="home-article-body">
+                        <span class="home-article-index" aria-hidden="true"><%= postNumber %></span>
+
+                        <%# The eyebrow and the title are one row of the body's grid, not
+                            two. Their own row would keep its gap when there is no eyebrow
+                            to put in it — an empty track still has tracks either side of
+                            it — and the excerpt is sized from what is left over, so a
+                            phantom 0.9rem is a line of summary that silently disappears. %>
+                        <div class="home-article-head">
+                            <% if (post.categories.length && theme.home.categories.enable === true) { %>
+                                <%# The eyebrow: the post's top-level category, set above the title. %>
+                                <span class="home-article-eyebrow"><%= post.categories.toArray()[0].name %></span>
+                            <% } %>
+
+                            <%# Never clamped. A title that does not fit is a tile that was
+                                sized wrong, and the plan is what fixes that. %>
+                            <h3 class="home-article-title">
+                                <a href="<%- url_for(post.path) %>">
+                                    <%= post.title %>
+                                </a>
+                            </h3>
+                        </div>
+
+                        <div class="home-article-content markdown-body">
+                            <% if (post.excerpt && post.excerpt == "false") { %>
+                            <% } else if (post.excerpt && post.excerpt !== "false") { %>
+                                <%- render(post.excerpt, "markdown") %>
+                            <% } else { %>
+                                <%- truncate(strip_html(post.content), {length: excerptBudget(tile)}) %>
+                            <% } %>
+                        </div>
+
+                        <%- partial('pages/home/home-article', {post: post}) %>
                     </div>
-                <% } %>
-
-                <%  let articleThumbnail = "";
-                if (post.cover || post.banner || (post.thumbnail && post.thumbnail !== false)) { %>
-                    <%
-                    if (post.thumbnail && post.thumbnail !== null) {
-                      articleThumbnail = post.thumbnail;
-                    } else if (post.cover && post.cover.includes("/")) {
-                      articleThumbnail = post.cover;
-                    } else if (post.banner && post.banner.includes("/")) {
-                      articleThumbnail = post.banner;
-                    } else if (config.marked.postAsset && config.marked.postAsset == true) {
-                      articleThumbnail = [post.path, post.cover || post.banner].join("/");
-                    }
-                    %>
-                <% } %>
-
-                <% if (post.thumbnail !== false && (post.thumbnail || post.cover || post.banner)) { %>
-                    <div id="home-article-thumbnail" class="home-article-thumbnail relative h-[150px] overflow-hidden rounded-t-large">
-                        <a href="<%- url_for(post.path) %>">
-                            <img src="<%- url_for(articleThumbnail) %>" alt="<%= post.title %>" class="w-full h-full object-cover dark:brightness-75 transition-all" />
-                        </a>
-                    </div>
-                <% } %>
-                <div class="flex flex-col gap-5 px-7 pb-7 <%= post.thumbnail !== false && (post.thumbnail || post.cover || post.banner) ? "pt-5" : "pt-7" %>">
-                    <h3 class="home-article-title">
-                        <a href="<%- url_for(post.path) %>">
-                            <%= post.title %>
-                        </a>
-                    </h3>
-
-                    <div class="home-article-content markdown-body">
-                        <% if (post.excerpt && post.excerpt == "false") { %>
-                        <% } else if (post.excerpt && post.excerpt !== "false") { %>
-                            <%- render(post.excerpt, "markdown") %>
-                        <% } else { %>
-                            <%
-                                const excerptLength = theme.home.excerpt_length || 200;
-                            %>
-                            <%- truncate(strip_html(post.content), {length: excerptLength}) %>
-                        <% } %>
-                    </div>
-
-                    <%- partial('pages/home/home-article', {post: post}) %>
-                </div>
-            </li>
+                </li>
+            <% } %>
         <% }) %>
     </ul>
 
-    <div class="home-paginator px-7 py-5">
-        <%- partial('utils/paginator', {pageObject: page}) %>
-    </div>
+    <%- partial('pages/home/home-paginator') %>
 </div>

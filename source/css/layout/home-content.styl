@@ -1,23 +1,76 @@
 @require '../common/variables'
 
+// Stylus parses an unknown at-rule's prelude as selector parts, so the only form
+// guaranteed to reach CSS untouched is a prebuilt string interpolated in.
+// (Writing `@container home (min-width: 840px)` directly is at the mercy of the
+// selector parser; this is not.)
+$q-bento-lg    = 'home (min-width: ' + $bento-lg-min-width + ')'
+$q-bento-md    = 'home (min-width: ' + $bento-md-min-width + ')'
+$q-bento-sm    = 'home (max-width: ' + ($bento-md-min-width - 1px) + ')'
+$q-card-narrow = 'card (max-width: ' + $bento-card-narrow-max-width + ')'
+$q-card-tight  = 'card (max-width: ' + $bento-card-tight-max-width + ')'
+$q-tile-narrow = 'tile (max-width: ' + $bento-tile-narrow-max-width + ')'
+$q-list-split  = 'home (min-width: ' + $list-split-min-width + ')'
+
+// Where a one-row tile puts its cover beside its text. The two grids need their
+// own query because a two-column tile is the whole column on the tablet grid and
+// two thirds of it on the desktop one, and the tablet one is bounded ABOVE as
+// well: a container query's condition does not stop applying when a wider one
+// starts matching, and which tiles are wide is what changes between the grids.
+//
+// There is no "too narrow to split" query any more. The grid's own breakpoints
+// are derived from these thresholds (see variables.styl), so a tile is never
+// handed a composition its width cannot carry — a cover is shown or the shape is
+// not used, never a cover quietly dropped.
+$q-bento-split-md   = 'home (min-width: ' + $bento-md-min-width + ') and (max-width: ' + ($bento-lg-min-width - 1px) + ')'
+$q-bento-split-wide = 'home (min-width: ' + $bento-lg-min-width + ')'
+
+// ── The cell ─────────────────────────────────────────────────────────────────
+// Every row is sized on its own by layouts/bentoFit.js, from the tiles standing
+// in it, and written back as `--bento-rows`. This is what a row falls back to
+// before that lands.
+$bento-row = $bento-row-fallback
+
+// ── The split composition's columns ──────────────────────────────────────────
+// A one-row tile puts its cover beside the text, so here the ROW is fixed and the
+// COLUMN moves: the tile's own height at the target ratio, held under two
+// ceilings — a share of the tile, and an absolute floor for the text. The share
+// is the one that matters in practice; see $bento-split-cover-max for the loop it
+// exists to break. `--tile-height` is the row this tile came out at, and
+// bentoFit.js caps that row at the same two ceilings so the crop cannot pass
+// $bento-cover-tallest.
+$bento-split-cover = 'minmax(0, min(calc(var(--tile-height, var(--bento-row)) * var(--bento-cover-target)), ' + unit($bento-split-cover-max * 100, '%') + ', calc(100% - ' + $bento-split-text-min + ')))'
+$bento-split-text  = 'minmax(0, 1fr)'
+
 .home-content-container
-  if (hexo-config('home.sidebar.enable') && hexo-config('home.sidebar.position') == 'right')
-    margin-left $spacing-unit
+  // The outermost of the three containers the grid is measured against: this one
+  // decides how many tracks there are and which compositions they are wide enough
+  // for, `tile` decides how a cover crops, `card` decides what the text column has
+  // room to say. Keying off THIS width rather than the viewport is what keeps the
+  // grid correct whatever else the page puts beside it.
+  container-type inline-size
+  container-name home
 
-    +redefine-tablet()
-      margin-left 0
+  // Only the classic list still has a sidebar rail beside it to make room for;
+  // the bento grid absorbed that rail into its own first band.
+  if (hexo-config('home.bento') == false)
+    if (hexo-config('home.sidebar.enable') && hexo-config('home.sidebar.position') == 'right')
+      margin-left $spacing-unit
 
-    +redefine-mobile()
-      margin-left 0
+      +redefine-tablet()
+        margin-left 0
 
-  if (hexo-config('home.sidebar.enable') && hexo-config('home.sidebar.position') == 'left')
-    margin-right $spacing-unit
+      +redefine-mobile()
+        margin-left 0
 
-    +redefine-tablet()
-      margin-right 0
+    if (hexo-config('home.sidebar.enable') && hexo-config('home.sidebar.position') == 'left')
+      margin-right $spacing-unit
 
-    +redefine-mobile()
-      margin-right 0
+      +redefine-tablet()
+        margin-right 0
+
+      +redefine-mobile()
+        margin-right 0
 
   .seo-reader-text
     border 0
@@ -34,81 +87,742 @@
     word-break normal
 
   .home-article-list
+    display flex
+    flex-direction column
+    gap $bento-gap
+    margin 0
+    padding 0
+    list-style none
+
+    // ── The grid ─────────────────────────────────────────────────────────────
+    // One column here, with rows sized by content: a phone reads a list. The cell
+    // grid starts at the first container query below, and every tile on it is
+    // placed EXPLICITLY by scripts/helpers/bento-helpers.js — a row can only be
+    // sized from its tiles if the page knows which tiles are in it, and with no
+    // auto-placement left there is nothing for `dense` to backfill out of
+    // reading order.
+    &.bento
+      // Published, not just used: layouts/bentoFit.js reads every one of these
+      // back, so both sides of the measurement work off the same numbers.
+      --bento-row $bento-row
+      --bento-cover-target $bento-cover-target
+      --bento-cover-tallest $bento-cover-tallest
+      --bento-cover-flattest $bento-cover-flattest
+      --bento-split-text-min $bento-split-text-min
+      --bento-split-cover-max $bento-split-cover-max
+      display grid
+      grid-auto-flow row
+      grid-template-columns minmax(0, 1fr)
+      grid-auto-rows auto
+
+      // A grid item's automatic minimum size is its MIN-CONTENT height, so an
+      // item taller than its cell grows out of the track instead of being
+      // clipped. Stated here so it holds for anything the grid is ever given.
+      > *
+        min-width 0
+        min-height 0
+        grid-column s('1 / -1')
+
+    // ── Article tiles ────────────────────────────────────────────────────────
     .home-article-item
       position relative
-      redefine-container(
-        true,
-        1.015,
-        1.015,
-        0px,
-        38px
+      display flex
+      flex-direction column
+      // The cover's crop keys off this — the one thing on a tile measured against
+      // the whole width. Everything else asks the text column (the body's
+      // container below); on a split tile the two are nothing like the same.
+      container-type inline-size
+      container-name tile
+      // Lets the cover inherit the card's radius instead of carrying its own.
+      overflow hidden
+      border-radius $redefine-border-radius-large
+      box-sizing border-box
+      background var(--background-color)
+      // `hover-style` with the transform switched off: the hover lift is a
+      // `scale` below, not a `transform`, because the entrance animation drives
+      // `translate` and the two must not fight over one property.
+      hover-style(
+        false,
+        0,
+        0
       )
+      transition-t('scale', '0', '0.24', 'ease')
 
-      .home-article-thumbnail img
+      if (hexo-config('global.hover.scale'))
+        &:hover,
+        &.auto-hover
+          scale 1.015
+
+      // ── Rim light ────────────────────────────────────────────────────────
+      // A one-pixel band at the tile's edge, lit where the pointer is and tinted
+      // with the cover's own colour. Light, not a new material: a gradient masked
+      // down to the border, no backdrop pass. See layouts/tileSpotlight.js.
+      &::after
+        content ''
+        position absolute
+        inset 0
+        z-index 3
+        border-radius inherit
+        padding 1px
+        pointer-events none
+        opacity 0
+        transition opacity 0.28s ease
+        // Built as a string: Stylus owns `rgb()` and would try to evaluate it,
+        // and the slash before the alpha is division to its parser.
+        background unquote('radial-gradient(240px circle at var(--tile-px, 50%) var(--tile-py, 0%), rgb(var(--tile-accent, 150 150 150) / 0.85), transparent 68%)')
+        -webkit-mask linear-gradient(#000, #000) content-box, linear-gradient(#000, #000)
+        mask linear-gradient(#000, #000) content-box, linear-gradient(#000, #000)
+        -webkit-mask-composite xor
+        mask-composite exclude
+
+      &.is-lit::after
+        opacity 1
+
+      // ── Cover ────────────────────────────────────────────────────────────
+      // A ratio, never a height. `flex: 0 0 auto` — the frame gets the ratio it
+      // asked for and the band grows to hold it.
+      .home-article-thumbnail
+        position relative
+        width 100%
+        aspect-ratio var(--cover-aspect-ratio)
+        flex 0 0 auto
+        overflow hidden
+        background var(--third-background-color)
+
+        // The zoom lives on the link and the parallax on the image, so the two
+        // never have to share one transform property.
+        a
+          position absolute
+          inset 0
+          display block
+          transform scale(1)
+          transition transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1)
+
+        img
+          position absolute
+          top 0
+          left 0
+          display block
           width 100%
           height 100%
           object-fit cover
-          position absolute
-          top 50%
-          transform translateY(-50%)
 
-      .home-article-title
+          .dark &
+            filter brightness(0.75)
+
+        // Parallax mode, switched on by layouts/coverParallax.js for covers that
+        // `object-fit: cover` is actually cropping top and bottom. The image is
+        // laid out at the size that crop was already drawing it, so the frame
+        // keeps clipping the same band — the only new thing is that it travels.
+        &.has-parallax img
+          height auto
+          top 50%
+          transform translate3d(0, calc(-50% + var(--parallax-shift, 0px)), 0)
+          will-change transform
+
+        // One settle, when a cover first starts parallaxing: the distance between
+        // "centred" and where this scroll position says it should be.
+        //
+        // Longhands, not the `transition` shorthand: a custom property is a legal
+        // transition-property but not a legal CSS identifier, so clean-css's
+        // shorthand parser rejects the whole declaration and DROPS it.
+        &.has-parallax.is-settling img
+          transition-property --parallax-shift
+          transition-duration 260ms
+          transition-timing-function cubic-bezier(0.22, 0.61, 0.36, 1)
+
+      &:hover, &.auto-hover
+        .home-article-thumbnail a
+          transform scale(1.04)
+
+      // ── Body ─────────────────────────────────────────────────────────────
+      // Three rows: heading, summary, meta. The middle one is `1fr` — exactly
+      // what the tile has left after the cover, the title and the meta row.
+      //
+      // A grid rather than flex because the leftover has to be MEASURABLE: a
+      // percentage on a grid item resolves against its grid area, which is the
+      // leftover itself, and that is what lets the excerpt's cut land on a line
+      // boundary (see the `max-height` on .home-article-content).
+      .home-article-body
         position relative
+        display grid
+        grid-template-rows auto minmax(0, 1fr) auto
+        gap 0.9rem
+        padding 1.4rem
+        flex 1 1 auto
+        min-width 0
+        min-height 0
+        // The text column, and the container every density rule below queries: a
+        // 790px tile whose cover takes two thirds of it sets its meta row in
+        // 220px, and asking the TILE is how that row ends up on three lines.
+        container-type inline-size
+        container-name card
+        // Clips the index numeral's overhang against the text block's own top
+        // edge, so it crops cleanly instead of running up over the cover.
+        overflow hidden
+
+      // The running number, printed behind the title, in reading order.
+      .home-article-index
+        position absolute
+        top 0
+        left 0
+        z-index 0
+        // Dropped clear of the text block's top edge so the whole numeral reads
+        // instead of being cropped by it; only the left bleed still runs off.
+        transform translate(-0.05em, 0.06em)
+        font-family $english-font-family, sans-serif
+        // One size on every tile: in `cqw` a two-column tile printed a numeral
+        // twice the height of the one beside it, which reads as two elements
+        // rather than one running count.
+        font-size 4rem
+        font-weight 900
+        line-height 0.75
+        letter-spacing -0.03em
+        font-variant-numeric tabular-nums
+        color var(--second-text-color)
+        // Weight 900 only helps if the family actually ships a Black cut, which
+        // a system stack may not, so the strokes are thickened directly as well.
+        -webkit-text-stroke 0.018em currentColor
+        // Dark at the top, fading towards the bottom. Done with a mask rather
+        // than background-clip:text because a clipped background drops the text
+        // stroke above; a mask composes with it.
+        opacity 0.16
+        -webkit-mask-image linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.32) 100%)
+        mask-image linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.32) 100%)
+        pointer-events none
+        user-select none
+
+        .dark &
+          opacity 0.22
+
+      // Tinted by the cover's own dominant colour where there is one, so a band
+      // of tiles carries the palette of its images instead of one flat grey.
+      &.has-accent .home-article-index
+        color unquote('rgb(var(--tile-accent))')
+        opacity 0.2
+
+        .dark &
+          opacity 0.28
+
+      // Eyebrow and title as ONE row of the body grid: two rows would keep the
+      // gap between them on a tile with no eyebrow, and every pixel above the
+      // excerpt is a pixel the excerpt does not get.
+      .home-article-head
+        grid-row 1
+        position relative
+        z-index 1
+        display flex
+        flex-direction column
+        gap 0.45rem
+        min-width 0
+
+      // The post's top-level category, set above the title as a kicker.
+      .home-article-eyebrow
+        font-size 0.72rem
         font-weight 600
-        font-size 1.4rem
-        line-height 1.5
+        letter-spacing 0.14em
+        text-transform uppercase
+        color var(--third-text-color)
+
+      &.has-accent .home-article-eyebrow
+        color unquote('rgb(var(--tile-accent))')
+
+      // NEVER clamped: a title has to be read in full, so it wraps to as many
+      // lines as it needs and the excerpt below gives up the room.
+      .home-article-title
+        font-weight 600
+        font-size 1.2rem
+        line-height 1.35
         color var(--second-text-color)
         font-family $english-font-family, $chinese-font-family, 'Noto Sans SC', 'Noto Color Emoji', sans-serif
-
         margin 0
 
-        +redefine-tablet()
-          font-size 1.3rem
-
-        +redefine-mobile()
-          font-size 1.2rem
-
+      // ── The excerpt ──────────────────────────────────────────────────────
+      // The part that gives: it takes the body's `1fr` row and prints as much as
+      // fits. No line budget is declared anywhere — the `max-height` in the bento
+      // block below is what cuts it, and the row is the budget.
       .home-article-content
+        grid-row 2
+        position relative
+        z-index 1
+        min-height 0
         word-wrap break-word
         text-align justify
         color var(--default-text-color)
+        // Stated rather than inherited. Both of the numbers under this box —
+        // the whole-line cut and the ellipsis line count — are multiples of ONE
+        // line height, so the box and the paragraphs inside it have to agree on
+        // what a line is.
+        font-size $default-article-font-size
+        line-height $default-line-height
+        display -webkit-box
+        -webkit-box-orient vertical
+        -webkit-line-clamp 3
+        line-clamp 3
+        overflow hidden
 
-      .home-article-meta-info-container
-        display flex
-        justify-content space-between
+        // Same reason: a paragraph margin that is not a whole number of lines
+        // puts half a line at the bottom of a box that was cut to whole ones.
+        > *
+          margin 0
+
+        > * + *
+          margin-top unquote('1lh')
+
+      // ── Sticky badge ─────────────────────────────────────────────────────
+      // Base material tier: a translucent colour, no backdrop pass.
+      .home-article-sticky-badge
+        position absolute
+        top 12px
+        right 12px
+        z-index 2
+        display inline-flex
         align-items center
+        gap 5px
+        padding 3px 10px
+        font-size 0.7rem
+        line-height 1.6
+        color var(--third-text-color)
+        background var(--background-color-transparent-80)
+        border 1px solid var(--border-color)
+        border-radius $redefine-border-radius-medium
+        pointer-events none
+        user-select none
+
+        i
+          font-size 0.65rem
+
+      // ── Meta row ─────────────────────────────────────────────────────────
+      // Every entry is one inline-flex unit, so there is no collapsed whitespace
+      // between an icon and its text for a line break to land on. Wrapping
+      // happens between entries; inside one the text ellipsises instead.
+      .home-article-meta-info-container
+        // The body grid's last row, which pins the meta to the bottom edge of
+        // every tile: tiles sharing a band end on the same line.
+        grid-row 3
+        position relative
+        z-index 1
+        display flex
+        flex-wrap wrap
+        align-items center
+        gap 6px 12px
         font-size 0.92rem
         color var(--third-text-color)
 
         .home-article-meta-info
+          display flex
+          flex-wrap wrap
+          align-items center
+          gap 4px 14px
+          flex 1 1 auto
+          min-width 0
           letter-spacing 0.5px
 
-          span
-            margin-right 10px
+        .home-article-meta-item
+          display inline-flex
+          align-items center
+          gap 6px
+          white-space nowrap
+          min-width 0
+          max-width 100%
 
-            &:last-child
-              margin-right 0
+          i
+            flex-shrink 0
 
-            ul, li
+          .meta-text
+            display block
+            min-width 0
+            margin 0
+            padding 0
+            list-style none
+            overflow hidden
+            text-overflow ellipsis
+
+            li
               display inline
 
-          .home-article-category
-            +redefine-mobile()
-              display none
+          .meta-sep
+            opacity 0.55
+            margin 0 2px
 
-          .home-article-tag
-            +redefine-tablet()
-              display none
+        // margin-left:auto rather than justify-content on the container: when
+        // the meta entries wrap onto a line of their own, this still sits at the
+        // right edge instead of falling back to flex-start.
+        .home-article-read-more
+          display inline-flex
+          align-items center
+          gap 4px
+          margin-left auto
+          white-space nowrap
 
-        hr
-          border none
-          flex 1
-          height 1px
-          background var(--border-color)
-          margin 0 10px
+          i
+            font-size 0.85em
 
         a
           color var(--third-text-color)
 
           &:hover
             color var(--primary-color)
+
+    // ── Site tiles ───────────────────────────────────────────────────────────
+    // A bare grid cell around the sidebar's own card (layout/home-sidebar.styl).
+    // The row comes to THEM: layouts/bentoFit.js measures both cards and pins
+    // their row to the taller one, so it is never compressed or stretched by the
+    // posts around it. Nothing else on the page can move that row.
+    .home-feature-tile
+      display flex
+      flex-direction column
+      min-width 0
+      min-height 0
+      // For the frame before the measurement lands, and for the fallback height
+      // a page gets with the script switched off.
+      overflow hidden
+
+      // The card fills the cell rather than floating in the middle of it, so the
+      // first row reads as one row of tiles.
+      > *
+        flex 1 1 auto
+        display flex
+        flex-direction column
+        min-height 0
+
+      // Avatar, name and counts as one centred block.
+      .sidebar-content
+        justify-content center
+
+      // The site name stays a header at the top edge, where its full-bleed
+      // background belongs; the links share out whatever is left.
+      .sidebar-links .site-info
+        flex 0 0 auto
+
+      .sidebar-links .links
+        flex 1 1 auto
+        min-height 0
+        padding 3px 0
+
+    // ── Type by shape ────────────────────────────────────────────────────────
+    // The only thing a shape changes is emphasis; the sizes came from the plan.
+    // `cqw` is the TEXT COLUMN here, not the tile — the body is the container.
+    &.bento
+      .tier-wide .home-article-title
+        font-size clamp(1.3rem, 2.4cqw, 1.7rem)
+
+      .tier-duo .home-article-title
+        font-size clamp(1.2rem, 3.2cqw, 1.5rem)
+
+      .tier-band .home-article-title
+        font-size clamp(1.35rem, 4.2cqw, 1.85rem)
+
+      .tier-tall .home-article-title
+        font-size 1.3rem
+
+      // One cell tall, with a cover, a title and the meta row to fit inside it,
+      // so everything that can be tightened is.
+      .tier-small
+        .home-article-body
+          padding 1rem
+          gap 0.5rem
+
+        .home-article-eyebrow
+          display none
+
+        .home-article-meta-info-container .home-article-category
+          display none
+
+        .home-article-title
+          font-size 1.05rem
+          line-height 1.3
+
+
+      // No cover to carry it, so it leans on type instead.
+      .no-cover .home-article-title
+        font-size 1.35rem
+
+      // The one place the accent touches a large area, kept under a tenth of an
+      // alpha: a text-forward tile carrying the colour of the image it is not
+      // showing, not a coloured card. Dark mode gets a little more of it.
+      .no-cover.has-accent
+        background unquote('linear-gradient(160deg, rgb(var(--tile-accent) / 0.09), rgb(var(--tile-accent) / 0.02) 62%), var(--background-color)')
+
+        .dark &
+          background unquote('linear-gradient(160deg, rgb(var(--tile-accent) / 0.15), rgb(var(--tile-accent) / 0.03) 62%), var(--background-color)')
+
+// ── The classic list ─────────────────────────────────────────────────────────
+// `home.bento: false`. One card per row with the cover BESIDE the text, sides
+// alternating so a column of identical L-shapes does not read as one element
+// stamped over and over. `:nth-child` works because with the grid off there is
+// nothing in the list but article cards, so the count IS the position.
+//
+// Nothing fixes a card's height here — the text does — so the cover column is a
+// share of the WIDTH and its height follows. The ratio is a FLOOR on the row
+// rather than a ratio on the frame: a card whose text runs past it grows, and the
+// picture grows with it, so the crop drifts a little taller and never flatter.
+@container {$q-list-split}
+  .home-content-container .home-article-list:not(.bento) .home-article-item:not(.no-cover)
+    display grid
+    // s(), not concatenation: a unit on the left of a `+` is arithmetic to
+    // Stylus, and it tries to coerce the track list into a percentage.
+    grid-template-columns unquote(s('%s minmax(0, 1fr)', $list-cover-width))
+    align-items stretch
+
+    .home-article-thumbnail
+      grid-column 1
+      grid-row 1
+      // Unset, as in the bento split: the crop is the track's to decide, and a
+      // ratio here would leave dead space under the image.
+      aspect-ratio auto
+      width 100%
+      // The floor, in the card's own container units. `cqw` is the CARD here
+      // (`container-name: tile` on the item), which is what the column is a
+      // share of.
+      min-height unquote(s('calc(%s / (%s))', unit($list-cover-width, 'cqw'), $cover-aspect-ratio))
+
+    .home-article-body
+      grid-column 2
+      grid-row 1
+      padding 1.5rem
+
+  .home-content-container .home-article-list:not(.bento) .home-article-item:nth-child(even):not(.no-cover)
+    grid-template-columns unquote(s('minmax(0, 1fr) %s', $list-cover-width))
+
+    .home-article-thumbnail
+      grid-column 2
+
+    .home-article-body
+      grid-column 1
+
+// ── One column ───────────────────────────────────────────────────────────────
+// The site cards open page 1 and then get out of the way: on a phone, furniture
+// at the top of every page sits between the reader and the posts.
+@container {$q-bento-sm}
+  .home-content-container .home-article-list.bento:not([data-page="1"]) .home-feature-tile
+    display none
+
+  // Rows are as tall as their content here, so there is no leftover to fill and
+  // the excerpt gets a flat allowance instead.
+  .home-content-container .home-article-list.bento .home-article-item .home-article-content
+    -webkit-line-clamp 5
+    line-clamp 5
+
+// ── Two across ───────────────────────────────────────────────────────────────
+// The tablet fallback, deliberately plainer: the shapes that make the grid worth
+// having need a third column before they are legible.
+@container {$q-bento-md}
+  .home-content-container .home-article-list.bento
+    grid-template-columns repeat($bento-columns-md, minmax(0, 1fr))
+    // One height per row, written by layouts/bentoFit.js. Until it lands there
+    // are no explicit rows and every one comes from the line below.
+    grid-template-rows var(--bento-rows, none)
+    grid-auto-rows var(--bento-row)
+
+    > *
+      grid-column s('var(--md-cs) / span var(--md-cn)')
+      grid-row s('var(--md-rs) / span var(--md-rn)')
+
+  // ── How much summary a tile prints ─────────────────────────────────────────
+  // `max-height` is the cut: `100%` on a grid item is its grid AREA — the body's
+  // `1fr` row, i.e. exactly what the tile has left — and `round(down, …, 1lh)`
+  // takes it down to a whole number of lines, so the clip never lands through the
+  // middle of a row of glyphs. At 0 the summary simply is not there, which is the
+  // composition a one-cell tile with a cover wants anyway.
+  //
+  // The clamp is only the "…": layouts/bentoFit.js measures the box the cut
+  // produced and writes back the same line count, so the write changes what the
+  // last line SAYS and never how many lines there are.
+  .home-content-container .home-article-list.bento .home-article-item .home-article-content
+    max-height unquote('round(down, 100%, 1lh)')
+    -webkit-line-clamp var(--fit-lines, none)
+    line-clamp var(--fit-lines, none)
+
+// ── Three across ─────────────────────────────────────────────────────────────
+@container {$q-bento-lg}
+  .home-content-container .home-article-list.bento
+    grid-template-columns repeat($bento-columns, minmax(0, 1fr))
+
+    > *
+      grid-column s('var(--lg-cs) / span var(--lg-cn)')
+      grid-row s('var(--lg-rs) / span var(--lg-rn)')
+
+// ── The cover's crop on a cell grid ──────────────────────────────────────────
+// A cover above the text is a RATIO and the ROW moves to hold it, so the height
+// is the tile's own width at a crop inside the band — and WHICH crop is the one
+// term the stylesheet cannot work out, because it depends on how tall the summary
+// under the picture came out. layouts/bentoFit.js solves that and writes the
+// answer here: leftover height in a tile goes to the picture, as far as
+// $bento-cover-tallest, before any of it is left blank.
+//
+// The fallback is for the frame before the script lands: the target crop, held
+// off the title and meta row by the worst case of their height.
+$bento-cover-crop = 'min(calc(100cqw / var(--bento-cover-target)), calc(100% - ' + $bento-tile-chrome-min + '))'
+
+@container {$q-bento-md}
+  .home-content-container .home-article-list.bento .home-article-item .home-article-thumbnail
+    aspect-ratio auto
+    // Built as a string: `min()` is a Stylus built-in and would try to compare
+    // a percentage against a calc it cannot resolve.
+    height unquote('var(--tile-cover, ' + $bento-cover-crop + ')')
+
+// ── Cover beside text ────────────────────────────────────────────────────────
+// The composition for a tile ONE ROW tall: the cover goes down the side at the
+// site's cover ratio and the text takes the rest of the width. This is what makes
+// a 2x1 tile worth having — the same post that shows two lines under a letterbox
+// strip shows six beside a picture.
+//
+// The two guards keep the composition off tiles with nothing to put in its first
+// column: a fixed cover track with no picture in it is just a half-empty tile.
+split-composition()
+  display grid
+  grid-template-columns unquote($bento-split-cover + ' ' + $bento-split-text)
+  align-items stretch
+
+  .home-article-thumbnail
+    grid-column 1
+    grid-row 1
+    // Deliberately unset: the frame is the full height of the tile and its width
+    // is the column's, so the ratio is the track's to decide, not the frame's.
+    aspect-ratio auto
+    width 100%
+    height 100%
+
+  // The text block spans the whole tile, so its top edge is the TILE's top edge —
+  // what the index numeral crops against — and the meta row sits on the bottom.
+  .home-article-body
+    grid-column 2
+    grid-row 1
+    padding 1.5rem
+
+// Every second one mirrors, so a run of them zig-zags instead of stamping the
+// same L-shape over and over. The class is put on by the plan.
+split-mirrored()
+  grid-template-columns unquote($bento-split-text + ' ' + $bento-split-cover)
+
+  .home-article-thumbnail
+    grid-column 2
+
+  .home-article-body
+    grid-column 1
+
+// Two columns, and a wide tile here is the whole column. Bounded ABOVE as well:
+// a container query's condition does not stop applying when a wider one starts
+// matching, and at three columns which tiles are wide is a different question
+// with a different answer. Leaving this open is what used to stretch a
+// one-column tile's cover into a portrait strip.
+@container {$q-bento-split-md}
+  .home-content-container .home-article-list.bento .home-article-item.md-split:not(.no-cover)
+    split-composition()
+
+  .home-content-container .home-article-list.bento .home-article-item.md-split.cover-right:not(.no-cover)
+    split-mirrored()
+
+// Three columns. A 3x1 band is the whole column and is therefore always past the
+// threshold at this size; a 2x1 is two thirds of it and is not, so it has its own
+// query below and keeps the stacked composition until the column is wide enough.
+@container {$q-bento-lg}
+  .home-content-container .home-article-list.bento .home-article-item.lg-split.tier-band:not(.no-cover)
+    split-composition()
+
+    .home-article-body
+      padding 1.6rem
+
+  .home-content-container .home-article-list.bento .home-article-item.lg-split.tier-band.cover-right:not(.no-cover)
+    split-mirrored()
+
+@container {$q-bento-split-wide}
+  .home-content-container .home-article-list.bento .home-article-item.lg-split.tier-duo:not(.no-cover)
+    split-composition()
+
+  .home-content-container .home-article-list.bento .home-article-item.lg-split.tier-duo.cover-right:not(.no-cover)
+    split-mirrored()
+
+// ── Measuring ────────────────────────────────────────────────────────────────
+// `scrollHeight` on a clamped element reports the clamped height, not the text's,
+// so the limits come off for the length of layouts/bentoFit.js's read. One class
+// on the list rather than a write per tile, and it never survives the frame.
+.home-content-container .home-article-list.bento.is-measuring .home-article-item .home-article-content
+  max-height none
+  -webkit-line-clamp none
+  line-clamp none
+
+// And the box has to stop being stretched, or it reports the room it was GIVEN
+// rather than the room its text takes — `scrollHeight` never goes below
+// `clientHeight`, so a filled box answers a height query with its own size. Both
+// the flex line and the `1fr` track have to let go, which is also what makes the
+// furniture readable as the body minus the text.
+//
+// `height`, not `align-self`: the body is a flex item in the stacked composition
+// and a grid item in the split one, and `align-self` is the CROSS axis in the
+// first — it would take the text column's width away instead of its height.
+.home-content-container .home-article-list.bento.is-measuring .home-article-item .home-article-body
+  flex 0 0 auto
+  height max-content
+  grid-template-rows auto auto auto
+
+// The same read for the site cards: cut loose from the track, so what is measured
+// is the height the card wants rather than the height the row is giving it. A
+// grid item's height is its content's until `stretch` makes it the row's.
+.home-content-container .home-article-list.bento.is-measuring .home-feature-tile
+  align-self start
+
+// ── Entrance ─────────────────────────────────────────────────────────────────
+// Driven by each tile's position in the viewport rather than by a timer: no
+// scroll listener, no observer, no stagger to tune. It drives `translate` and
+// `opacity` — never `transform` — because the hover lift is a `scale`, and a
+// filled animation value would win over it for the rest of the session.
+@keyframes bento-enter
+  from
+    opacity 0
+    translate 0 26px
+
+  to
+    opacity 1
+    translate 0 0
+
+@supports (animation-timeline: view())
+  @media (prefers-reduced-motion: no-preference)
+    // `has-entered` is put on by the paginator: a card that flipped in has had
+    // its entrance, and reattaching this one would drop it back to the opacity
+    // its scroll position says it should still be at.
+    .home-content-container .home-article-list.bento:not(.is-flipping) > *:not(.has-entered)
+      animation bento-enter linear both
+      animation-timeline view()
+      // Entry only. Past this range the tile holds the end state, which is also
+      // what a tile already on screen at load resolves to.
+      animation-range entry 0% entry 62%
+
+// ── Density ──────────────────────────────────────────────────────────────────
+// What a cramped tile drops, keyed on how cramped it actually is rather than on
+// screen size. The full ancestor chain is spelled out on purpose: a container
+// query adds no specificity, so these have to match the base rules they override
+// and win on source order instead.
+//
+// Padding asks the TILE, everything below asks the text column — the body is that
+// column's container and its padding is what decides the column's width, so a
+// rule inside the column's own query that changes it is a question whose answer
+// changes the question.
+@container {$q-tile-narrow}
+  .home-content-container .home-article-list .home-article-item .home-article-body
+    padding 1.15rem
+    gap 0.75rem
+
+@container {$q-card-narrow}
+  .home-content-container .home-article-list .home-article-item
+    .home-article-title
+      font-size 1.1rem
+
+    .home-article-eyebrow
+      font-size 0.66rem
+      letter-spacing 0.1em
+
+    .home-article-meta-info-container
+      font-size 0.85rem
+
+      .home-article-tag
+        display none
+
+@container {$q-card-tight}
+  .home-content-container .home-article-list .home-article-item
+    .home-article-eyebrow
+      display none
+
+    .home-article-meta-info-container .home-article-category
+      display none

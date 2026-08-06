@@ -1,3 +1,10 @@
+/* Tailwind v4 INPUT. Compiled by `npm run build:css` into css/build/tailwind.css,
+   which is what the layouts link.
+
+   The leading underscore is load-bearing: Hexo skips any theme source path with a
+   `_` segment, and without it this file was copied verbatim into public/ — an
+   unresolvable `@import "tailwindcss"` shipped to the site, which is also what the
+   css-optimizer was erroring on. */
 @import 'tailwindcss';
 
 @custom-variant dark (&:is(.dark *));

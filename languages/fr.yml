@@ -8,6 +8,9 @@ next: Suivant
 prev_posts: Articles précédents
 next_posts: Articles suivants
 page: Page %d
+load_more: Charger plus
+loading: Chargement
+no_more_posts: J'ai touché le fond~
 recent_posts: Articles récents
 share: Partager
 powered_by: "POWERED BY %s"

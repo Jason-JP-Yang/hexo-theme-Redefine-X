@@ -1,24 +1,47 @@
 import { navigationState } from "../utils.js";
+import { getMetrics } from "../tools/scrollScheduler.js";
 
 export const navbarShrink = {
-  navbarDom: document.querySelector(".navbar-container"),
-  leftAsideDom: document.querySelector(".page-aside"),
+  navbarDom: null,
+  leftAsideDom: null,
   isnavbarShrink: false,
   navbarHeight: 0,
 
+  // init() is the per-navigation WIRING pass: re-acquire the DOM (the whole
+  // navbar lives inside #swup and is replaced on every page:view, so refs
+  // captured at module load go stale and measure 0), re-measure the height,
+  // re-bind the drawer/submenu.
+  //
+  // It deliberately does NOT register a scroll listener any more. It used to —
+  // and because utils' scroll handler called init(), every single scroll event
+  // added another listener, which then called init() again on the next event.
+  // The scroll path now calls shrink() directly through the shared scheduler.
   init() {
-    this.navbarHeight = this.navbarDom.getBoundingClientRect().height;
+    this.navbarDom = document.querySelector(".navbar-container");
+    this.leftAsideDom = document.querySelector(".page-aside");
+    if (!this.navbarDom) return;
+
+    this.measure();
     this.shrink();
     this.togglenavbarDrawerShow();
     this.toggleSubmenu();
-    window.addEventListener("scroll", () => {
-      this.shrink();
-    });
   },
 
-  shrink() {
-    const scrollTop =
-      document.documentElement.scrollTop || document.body.scrollTop;
+  // The navbar's own height only changes on a real layout change, never while
+  // scrolling — measuring it per frame was a forced layout for a constant.
+  measure() {
+    if (!this.navbarDom) return;
+    const h = this.navbarDom.getBoundingClientRect().height;
+    // While shrunk the navbar reports its SHRUNK height; keeping that as the
+    // threshold would make the state oscillate around the boundary. Only accept
+    // a measurement taken in the expanded state.
+    if (h > 0 && !this.isnavbarShrink) this.navbarHeight = h;
+  },
+
+  // scrollTop is supplied by the shared scroll pass (already measured for the
+  // frame). The fallback keeps direct callers — init(), page:view — working.
+  shrink(scrollTop) {
+    if (typeof scrollTop !== "number") scrollTop = getMetrics().scrollY;
 
     if (!this.isnavbarShrink && scrollTop > this.navbarHeight) {
       this.isnavbarShrink = true;
@@ -126,9 +149,15 @@ try {
 
   swup.hooks.on("visit:start", () => {
     navigationState.isNavigating = true;
+    // Keep the flag in step with the class we just dropped, otherwise shrink()
+    // believes it is still shrunk and refuses to re-add the class on the next
+    // page until you scroll all the way back above the navbar first.
+    navbarShrink.isnavbarShrink = false;
     document.body.classList.remove("navbar-shrink");
   });
 } catch (error) {}
+
+window.addEventListener("resize", () => navbarShrink.measure(), { passive: true });
 
 document.addEventListener("DOMContentLoaded", () => {
   navbarShrink.init();

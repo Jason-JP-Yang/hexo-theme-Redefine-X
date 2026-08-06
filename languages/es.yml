@@ -8,6 +8,9 @@ next: Siguiente
 prev_posts: Publicaciones anteriores
 next_posts: Publicaciones siguientes
 page: Página %d
+load_more: Cargar más
+loading: Cargando
+no_more_posts: Hasta aquí llego~
 recent_posts: Publicaciones recientes
 share: Compartir
 powered_by: "DESARROLLADO POR %s"

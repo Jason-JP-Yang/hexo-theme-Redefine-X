@@ -9,6 +9,13 @@
  * - Optional preload for out-of-viewport images when network is idle
  */
 
+import {
+  onRawScroll,
+  isScrollFlight,
+  afterFlight,
+  invalidateMetrics,
+} from "../tools/scrollScheduler.js";
+
 export const loadedPreloaders = new WeakSet();
 const preloadedImages = new Map();
 const inflightLoads = new Map();
@@ -18,6 +25,61 @@ let preloadQueue = [];
 let isPreloading = false;
 let isUserScrolling = false;
 let userScrollTimeout = null;
+let scrollWired = false;
+let preloadStartTimer = null;
+
+// ─── Batched DOM commit ──────────────────────────────────────────────────────
+// Swapping a preloader for a real <img> is a layout-changing DOM mutation that
+// also fires `redefine:image-loaded`, which makes the EXIF card re-measure
+// itself (a clone + offsetHeight round trip = one forced layout each). Doing
+// that per image, as each one finished, meant an image-heavy page produced a
+// storm of interleaved decodes and layouts.
+//
+// Two things fix it:
+//   1. All swaps ready in the same frame commit together, in ONE rAF, so the
+//      browser lays out once instead of once per image.
+//   2. While Swup is flying the page to the top, swaps are parked entirely.
+//      The network fetch still runs (the bytes stay warm), but nothing touches
+//      the DOM until the scroll settles — the images being swept past at speed
+//      are not on screen when it lands, so nothing visible is lost.
+const pendingSwaps = [];
+let swapFrame = null;
+
+function queueSwap(preloader, img) {
+  pendingSwaps.push({ preloader, img });
+  if (isScrollFlight()) {
+    afterFlight(flushSwaps);
+    return;
+  }
+  if (swapFrame !== null) return;
+  swapFrame = requestAnimationFrame(flushSwaps);
+}
+
+function flushSwaps() {
+  if (swapFrame !== null) {
+    cancelAnimationFrame(swapFrame);
+    swapFrame = null;
+  }
+  if (!pendingSwaps.length) return;
+  const batch = pendingSwaps.splice(0, pendingSwaps.length);
+
+  // Mutate everything first…
+  const swapped = [];
+  for (const { preloader, img } of batch) {
+    if (!preloader.parentNode) continue;
+    preloader.parentNode.replaceChild(img, preloader);
+    swapped.push(img);
+  }
+  if (!swapped.length) return;
+
+  // …then let the listeners (EXIF layout, auto-hover, TOC offsets) react once
+  // the whole batch is in the document.
+  invalidateMetrics();
+  for (const img of swapped) {
+    window.dispatchEvent(new CustomEvent("redefine:image-loaded", { detail: { img } }));
+  }
+  window.dispatchEvent(new CustomEvent("redefine:content-resized"));
+}
 
 /**
  * Check if URL is same-origin
@@ -44,9 +106,21 @@ function loadImage(src, alt) {
       img.crossOrigin = "anonymous";
     }
     
-    img.onload = () => resolve(img);
+    // Decode BEFORE the image ever enters the document. Without this the
+    // browser decodes at first paint — on the main thread, right in the middle
+    // of whatever animation is running. AVIF (what the build pipeline emits) is
+    // expensive to decode, so on an image-heavy page this was a visible stall
+    // per image. decode() failures are non-fatal: fall through and let the
+    // normal paint path handle it.
+    img.onload = () => {
+      if (typeof img.decode === "function") {
+        img.decode().then(() => resolve(img), () => resolve(img));
+      } else {
+        resolve(img);
+      }
+    };
     img.onerror = () => reject(new Error(`Failed to load: ${src}`));
-    
+
     img.src = src;
   });
 }
@@ -93,17 +167,17 @@ export function transformPreloaderToImage(preloader, img) {
 }
 
 /**
- * Replace preloader with loaded image
+ * Replace preloader with loaded image.
+ *
+ * The 200ms fade-out is the visible cross-fade and is preserved exactly; only
+ * the DOM commit at the end of it is batched (and deferred past a scroll
+ * flight) instead of firing standalone per image.
  */
 function replacePreloader(preloader, img) {
   transformPreloaderToImage(preloader, img);
   preloader.classList.add("img-preloader-fade-out");
-  
-  // Replace DOM node
-  setTimeout(() => {
-    preloader.parentNode?.replaceChild(img, preloader);
-    window.dispatchEvent(new CustomEvent('redefine:image-loaded', { detail: { img } }));
-  }, 200);
+
+  setTimeout(() => queueSwap(preloader, img), 200);
 }
 
 /**
@@ -202,23 +276,46 @@ function getObserver() {
 }
 
 /**
- * Check if network is idle (no pending requests)
+ * Check if network is idle (no pending requests).
+ *
+ * This used to snapshot and filter performance.getEntriesByType('resource') —
+ * the ENTIRE buffer, hundreds of entries on a media-heavy page — from inside a
+ * 200ms polling loop. A PerformanceObserver gives the same answer by keeping a
+ * single timestamp up to date as entries arrive.
  */
-function isNetworkIdle() {
-  if (typeof performance === 'undefined' || !performance.getEntriesByType) {
-    return true;
+let lastResourceEnd = -Infinity;
+let resourceObserverReady = false;
+
+if (typeof PerformanceObserver !== "undefined") {
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const t = entry.responseEnd || entry.fetchStart || 0;
+        if (t > lastResourceEnd) lastResourceEnd = t;
+      }
+    }).observe({ type: "resource", buffered: true });
+    resourceObserverReady = true;
+  } catch (e) {
+    // Fall back to the scan below.
   }
-  
+}
+
+function isNetworkIdle() {
+  if (typeof performance === 'undefined') return true;
+
+  if (resourceObserverReady) {
+    return performance.now() - lastResourceEnd >= 500;
+  }
+
+  if (!performance.getEntriesByType) return true;
   const resources = performance.getEntriesByType('resource');
   const now = performance.now();
-  
-  // Check if any resource loaded in the last 500ms
-  const recentResources = resources.filter(entry => {
+  for (let i = resources.length - 1; i >= 0; i--) {
+    const entry = resources[i];
     const loadTime = entry.responseEnd || entry.fetchStart;
-    return (now - loadTime) < 500;
-  });
-  
-  return recentResources.length === 0;
+    if (now - loadTime < 500) return false;
+  }
+  return true;
 }
 
 /**
@@ -319,9 +416,10 @@ async function processPreloadQueue() {
  */
 function startPreload() {
   if (!preloadEnabled) return;
-  
-  // Wait a bit for initial visible images to load
-  setTimeout(() => {
+
+  // One pending start at a time — this runs again on every Swup page:view.
+  clearTimeout(preloadStartTimer);
+  preloadStartTimer = setTimeout(() => {
     preloadQueue = buildPreloadQueue();
     processPreloadQueue();
   }, 1000);
@@ -345,22 +443,27 @@ export default function initLazyLoad(config = {}) {
   // Start preloading if enabled
   if (preloadEnabled) {
     startPreload();
-    
-    // Track user scrolling to pause preload during scroll
-    window.addEventListener('scroll', () => {
-      isUserScrolling = true;
-      clearTimeout(userScrollTimeout);
-      
-      userScrollTimeout = setTimeout(() => {
-        isUserScrolling = false;
-        
-        // Re-check preload queue after scroll ends
-        if (!isPreloading && preloadQueue.length === 0) {
-          preloadQueue = buildPreloadQueue();
-          processPreloadQueue();
-        }
-      }, 500);
-    }, { passive: true });
+
+    // Track user scrolling to pause preload during scroll.
+    // Registered ONCE: initLazyLoad() runs on every page:view, and this used to
+    // add another permanent listener each time.
+    if (!scrollWired) {
+      scrollWired = true;
+      onRawScroll(() => {
+        isUserScrolling = true;
+        clearTimeout(userScrollTimeout);
+
+        userScrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+
+          // Re-check preload queue after scroll ends
+          if (!isPreloading && preloadQueue.length === 0) {
+            preloadQueue = buildPreloadQueue();
+            processPreloadQueue();
+          }
+        }, 500);
+      });
+    }
   }
 }
 

@@ -11,6 +11,31 @@
   overflow hidden          /* clip the gradient hints to this box */
   --mathjax-scroll-bg-color var(--background-color)
 
+/*
+ * Skip layout + paint for display math that is off-screen.
+ *
+ * Display math renders to inline SVG, and a dense page produces a LOT of it —
+ * the sin1°–sin90° post is ~1.5 MB across ~15,500 SVG element nodes. Keeping
+ * all of that live is pure raster cost on every scrolled frame, and it is the
+ * reason such pages stutter regardless of how cheap the JavaScript is.
+ *
+ * `.mathjax-cv` is added by scripts/filters/mathjax-render.js, which also
+ * stamps an inline `contain-intrinsic-size: auto <height>ex` taken from the
+ * SVG's own reported height. The class is only added when that height is
+ * known, so a block can never collapse to zero: no measurement, no class, old
+ * behaviour. The `auto` keyword means the browser remembers each block's real
+ * size after its first paint, so the scroll height settles immediately.
+ *
+ * Nothing is hidden that could be seen — a skipped block is off-screen by
+ * definition, it is still found by in-page search, and anchors still resolve
+ * into it. When rendered, `content-visibility: auto` adds layout/style/paint
+ * containment, all of which this block already satisfies (it is
+ * position:relative and overflow:hidden, and is already the containing block
+ * for its absolutely-positioned scroll hints).
+ */
+.mathjax-block.mathjax-cv
+  content-visibility auto
+
 /* ----- Inner scroll container ----- */
 .mathjax-scroll-wrapper
   display flex

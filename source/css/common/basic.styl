@@ -11,6 +11,25 @@ redefine-mobile()
   @media (max-width $media-max-width-mobile)
     {block}
 
+// COVER FRAME ==============================================================
+// Published as a custom property so every cover frame — home tiles, the post
+// banner, and anything added later — reads the SAME ratio from one place.
+// Height is never declared; it always falls out of the column width, which is
+// what keeps the visible crop identical at every breakpoint.
+:root
+  --cover-aspect-ratio $cover-aspect-ratio
+
+// Registered so it INTERPOLATES. An unregistered custom property steps from one
+// value to the next, and the one moment that matters is the first: a cover is
+// measured wherever it happens to be on screen, so the shift it needs is rarely
+// zero, and applying it flat would pop the image by tens of pixels. Registered,
+// it can be transitioned once on the way in (see `.is-settling`) and then
+// tracked per frame.
+@property --parallax-shift
+  syntax '<length>'
+  inherits false
+  initial-value 0px
+
 // ALL ======================================================================
 *
   transition-g()

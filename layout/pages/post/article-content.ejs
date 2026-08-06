@@ -15,7 +15,13 @@
                 }
                 %>
 			<% if (articleCover) { %>
-			<img src="<%= url_for(articleCover) %>" alt="<%= page.title %>" class="w-full h-60 sm:h-72 md:h-80 object-cover sm:rounded-t-large dark:brightness-75" />
+			<%# The frame's height comes from `aspect-ratio`, never from a fixed h-* class —
+			    that is what makes this banner show the same crop of the image as the home
+			    tile does, at every screen size. The frame is also what layouts/coverParallax.js
+			    travels the image inside of when the crop leaves something to reveal. %>
+			<div class="article-cover-frame sm:rounded-t-large">
+				<img src="<%= url_for(articleCover) %>" alt="<%= page.title %>" class="article-cover-image dark:brightness-75" />
+			</div>
 			<% } %>
 			<div class="w-full flex items-center absolute bottom-0 <%= theme.articles.style.title_alignment === "center" ? "justify-center" : "justify-start" %>">
 				<h1 class="article-title-cover text-center mx-6 my-6 text-second-text-color bg-background-color-transparent px-4 py-3 text-3xl sm:text-4xl md:text-5xl font-semibold backdrop-blur-lg rounded-xl border border-border-color "><%= page.title %></h1>

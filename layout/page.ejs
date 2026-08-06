@@ -15,16 +15,21 @@
 			<%- partial('components/header/navbar') %>
 		</div>
 
+		<%# The bento grid absorbs the sidebar: its cards are rendered as grid tiles
+			by pages/home/home-content, so the rail is only built for the classic
+			single-column list. Two layout systems side by side is what the grid
+			replaced. %>
+		<% const homeRail = is_home() && theme.home.bento === false && theme.home.sidebar.enable === true; %>
 		<div class="main-content-body transition-fade-up">
-			<% if (is_home() && theme.home.sidebar.enable === true && theme.home.sidebar.position === "left") { %>
+			<% if (homeRail && theme.home.sidebar.position === "left") { %>
 			<%- partial('pages/home/home-sidebar') %>
 			<% } %>
 
-			<div class="main-content">
+			<div class="main-content<%= is_home() ? ' is-home' : '' %>">
 				<%- partial(getPagePartialPath(page)) %>
 			</div>
 
-			<% if (is_home() && theme.home.sidebar.enable === true && theme.home.sidebar.position === "right") { %>
+			<% if (homeRail && theme.home.sidebar.position === "right") { %>
 			<%- partial('pages/home/home-sidebar') %>
 			<% } %>
 		</div>

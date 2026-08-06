@@ -227,7 +227,33 @@ async function renderAndInject(html, expressions, mjRuntime, log) {
     if (svg == null) return match;   // keep placeholder if render failed
 
     if (mode === 'display') {
-      return '<div class="mathjax-block" data-mathjax="display">' +
+      // ── Skip-rendering off-screen formulas ────────────────────────────────
+      // A single page of dense display math is enormous: "Root Expression of
+      // sin1° to sin90°" is 90 blocks totalling ~1.5 MB of inline SVG and
+      // ~15,500 SVG element nodes. The browser has to lay out and paint all of
+      // it, which is why scrolling such a page stutters no matter how cheap the
+      // JS is — it is not JS at all, it is raster work.
+      //
+      // `content-visibility: auto` (applied in mathjax.styl to .mathjax-cv)
+      // lets the browser skip layout AND paint for blocks that are off-screen.
+      // That only works without layout shift if it knows how tall each block
+      // WILL be, so stamp the real height here — MathJax already reports it on
+      // the root <svg>, and its `ex` is relative to the same inherited font
+      // that `.mathjax-block`'s own `ex` resolves against (nothing in the
+      // theme overrides font-size on the block or on mjx-container), so the
+      // value carries over verbatim and keeps tracking the reader's font-size
+      // adjustment.
+      //
+      // The `auto` keyword makes the browser remember each block's real size
+      // once rendered, so even the small discrepancy from the wrapper's own
+      // box self-corrects after first paint.
+      //
+      // A block whose height cannot be read does NOT get the class, so it keeps
+      // the old always-rendered behaviour rather than collapsing to zero.
+      const hm = /\bheight="([\d.]+)ex"/.exec(svg);
+      const cls = hm ? 'mathjax-block mathjax-cv' : 'mathjax-block';
+      const style = hm ? ' style="contain-intrinsic-size:auto ' + hm[1] + 'ex"' : '';
+      return '<div class="' + cls + '" data-mathjax="display"' + style + '>' +
              '<div class="mathjax-scroll-wrapper">' + svg + '</div></div>';
     }
     return '<span class="mathjax-inline" data-mathjax="inline">' + svg + '</span>';

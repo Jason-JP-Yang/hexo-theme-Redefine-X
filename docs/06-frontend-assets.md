@@ -69,7 +69,7 @@ swup + plugins (`Swup`, `SwupPreloadPlugin`, `SwupProgressPlugin`, `SwupScriptsP
 
 Two styling systems coexist:
 - **Stylus** — the bulk of the theme. Entry `style.styl` `@import`s everything below; compiled by Hexo's `hexo-renderer-stylus` at generate time (customized by [`stylus-handle.js`](04-scripts.md#stylus-handlejs)). Stylus changes are picked up automatically by `hexo server`/`generate`.
-- **Tailwind v4** — `tailwind.source.css` compiled by `npm run build:css` → `css/build/tailwind.css`. Utility classes are used directly inside `.ejs` layouts. Tailwind changes require the theme build.
+- **Tailwind v4** — `_tailwind.source.css` compiled by `npm run build:css` → `css/build/tailwind.css`. Utility classes are used directly inside `.ejs` layouts. Tailwind changes require the theme build.
 
 ### `css/common/` — foundations
 | File | Role |

@@ -378,6 +378,15 @@
   // The expanded frame is sized to the band by JS — drop the collapsed 300px floor
   // so it never overflows a narrow band. (Problem 3.)
   min-width 0
+  // Paint containment matches the clip the panel ALREADY has (`overflow hidden`
+  // on the base rule), so nothing looks different — but it promises the browser
+  // that a repaint inside the panel can never escape it. While the frame is
+  // resizing, that is the difference between invalidating the panel's own box
+  // and invalidating everything stacked behind it in the banner. Safe here: the
+  // panel is already a stacking context (positioned + z-index) and already the
+  // containing block for its absolutely-positioned bubbles, and the pickers are
+  // anchored to .home-banner-container, not to the panel.
+  contain paint
 
   // Keep the "INSTANT NOTES" label above the scrolling bubbles (base label
   // z-index 2 is BELOW bubbles 5/15, so bubbles would cover it).
@@ -417,6 +426,20 @@
 .instant-notes-panel.is-expanded.notes-anim .instant-notes-field
   -webkit-mask-image none !important
   mask-image none !important
+
+// While the frame is in flight every surviving bubble is riding a `transform`
+// transition. Declaring that up front lets the browser promote each bubble to
+// its own layer BEFORE the animation starts, instead of discovering it mid-
+// flight and re-promoting (which shows up as a hitch a frame or two in). Scoped
+// to `.notes-anim` so the layers are released the moment the panel settles —
+// a permanent will-change would just waste memory.
+//
+// `contain layout` isolates each bubble's internal layout from its siblings.
+// It is NOT `paint`: the emoji badge (top:-14px) and the newest bubble's tail
+// (bottom:-11px) deliberately overflow the wrapper and must keep doing so.
+.instant-notes-panel.is-expanded.notes-anim .instant-note-bubble
+  will-change transform
+  contain layout
 
 // The expanded panel keeps the EXACT same frosted glass + shadow as the collapsed
 // panel — and as the rest of the bottom bar (arrow / social pill). Expanding must
