@@ -17,7 +17,7 @@ info:
   # Author name
   author: Jason-JP-Yang
   # Site URL
-  url: https://blog.jason-yang.top
+  url: https://blog.example.com
 # BASIC INFORMATION <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # IMAGE CONFIGURATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
@@ -264,7 +264,8 @@ home:
       # ...... # you can add more
   # Bento grid layout. false -> classic single-column list with a sidebar rail
   # Tile sizes are derived from each post; there is nothing to set per post
-  bento: true
+  # Only suggested to turn on when you have a lot of posts
+  bento: false
   # Pagination style. paged (flip in place) | load_more (append below)
   pagination: paged
   # Article date format
