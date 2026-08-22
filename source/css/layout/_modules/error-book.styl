@@ -1,0 +1,369 @@
+// ---------------------error book 错题本---------------------
+// Two accents carry every state in this module: an option is either the one
+// that was right or one of the ones that was not, and the same pair colours the
+// verdict chips and the written-answer field. They are alpha overlays rather
+// than solid fills so a single value works in both modes, the way the note and
+// folding modules do it.
+$eb-right = #00C58E
+$eb-wrong = #F85676
+
+.error-book
+  display flex
+  flex-direction column
+  gap 1.25rem
+  margin 2rem 0
+
+  // ── card ──────────────────────────────────────────────────────────
+  .eb-card
+    box-sizing border-box
+    padding 1.4rem 1.5rem
+    border-radius $redefine-border-radius-large
+    background var(--background-color)
+    box-shadow var(--redefine-box-shadow-flat)
+    transition box-shadow .25s ease
+
+    +redefine-mobile()
+      padding 1.1rem 1rem
+
+  .eb-head
+    display flex
+    flex-wrap wrap
+    align-items center
+    gap .45rem
+    margin-bottom .85rem
+
+  .eb-no
+    font-family $english-font-family
+    font-size .82rem
+    font-weight 700
+    letter-spacing .06em
+    color var(--primary-color)
+
+  .eb-type
+    padding .1rem .5rem
+    border 1px solid var(--border-color)
+    border-radius $redefine-border-radius-xsmall
+    color var(--third-text-color)
+    font-size .72rem
+    letter-spacing .05em
+    text-transform uppercase
+
+  .eb-tags
+    display inline-flex
+    flex-wrap wrap
+    gap .3rem
+    margin-left auto
+
+  .eb-tag
+    padding .1rem .5rem
+    border-radius $redefine-border-radius-xsmall
+    background var(--third-background-color)
+    color var(--third-text-color)
+    font-size .72rem
+
+  .eb-stem
+    font-size 1rem
+
+  // ── options ───────────────────────────────────────────────────────
+  .eb-options
+    display flex
+    flex-direction column
+    gap .55rem
+    margin 1rem 0 0
+    padding 0
+    list-style none
+
+    > li
+      margin-left 0
+      line-height inherit
+      list-style none
+
+  .eb-opt-hit
+    display flex
+    align-items flex-start
+    gap .7rem
+    padding .6rem .75rem
+    border 1px solid var(--border-color)
+    border-radius $redefine-border-radius-medium
+    background var(--background-color)
+    cursor pointer
+    user-select none
+    transition background-color .2s ease, border-color .2s ease
+
+    &:hover
+      background var(--third-background-color)
+
+    &:focus-visible
+      outline 2px solid var(--primary-color)
+      outline-offset 2px
+
+  .eb-opt-key
+    display inline-flex
+    flex 0 0 auto
+    align-items center
+    justify-content center
+    width 1.65rem
+    height 1.65rem
+    border-radius $redefine-border-radius-xsmall
+    background var(--third-background-color)
+    color var(--second-text-color)
+    font-size .85rem
+    font-weight 600
+    transition background-color .2s ease, color .2s ease
+
+  .eb-opt-text
+    flex 1 1 auto
+    min-width 0
+    padding-top .12rem
+    font-size .95rem
+
+  .eb-opt-mark
+    flex 0 0 auto
+    margin-top .3rem
+    font-size .9rem
+    opacity 0
+    transform scale(.6)
+    transition opacity .2s ease, transform .2s ease
+
+  .eb-option.is-right,
+  .eb-option.is-wrong
+    .eb-opt-mark
+      opacity 1
+      transform scale(1)
+
+  .eb-option.is-right
+    .eb-opt-hit
+      border-color rgba($eb-right, .5)
+      background rgba($eb-right, .09)
+
+    .eb-opt-key
+      background $eb-right
+      color #fff
+
+    .eb-opt-mark
+      color $eb-right
+
+  .eb-option.is-wrong
+    .eb-opt-hit
+      border-color rgba($eb-wrong, .5)
+      background rgba($eb-wrong, .08)
+
+    .eb-opt-key
+      background $eb-wrong
+      color #fff
+
+    .eb-opt-mark
+      color $eb-wrong
+
+  // ── written answer ────────────────────────────────────────────────
+  .eb-answer
+    display flex
+    flex-wrap wrap
+    align-items center
+    gap .55rem
+    margin 1rem 0 0
+
+  .eb-input
+    flex 1 1 220px
+    min-width 0
+    padding .55rem .85rem
+    border 1px solid var(--border-color)
+    border-radius $redefine-border-radius-medium
+    background var(--second-background-color)
+    color var(--default-text-color)
+    font-family inherit
+    font-size .95rem
+    outline none
+    transition border-color .2s ease, background-color .2s ease
+
+    &:focus
+      border-color var(--primary-color)
+
+  .eb-check
+    flex 0 0 auto
+    padding .55rem 1.15rem
+    border 1px solid var(--border-color)
+    border-radius $redefine-border-radius-medium
+    background var(--third-background-color)
+    color var(--second-text-color)
+    font-family inherit
+    font-size .88rem
+    font-weight 600
+    cursor pointer
+    transition background-color .2s ease, color .2s ease, border-color .2s ease
+
+    &:hover
+      border-color transparent
+      background var(--primary-color)
+      color #fff
+
+  .eb-answer.is-right .eb-input
+    border-color rgba($eb-right, .6)
+    background rgba($eb-right, .09)
+
+  .eb-answer.is-wrong .eb-input
+    border-color rgba($eb-wrong, .6)
+    background rgba($eb-wrong, .08)
+
+  // ── reveal ────────────────────────────────────────────────────────
+  // The collapse animates its own track height, so nothing has to be measured
+  // and nothing is left holding a stale pixel value after the content reflows.
+  .eb-collapse
+    display grid
+    grid-template-rows 0fr
+    opacity 0
+    transition grid-template-rows .3s cubic-bezier(.4, 0, .2, 1), opacity .25s ease
+
+    &.is-open
+      grid-template-rows 1fr
+      opacity 1
+
+  .eb-collapse-inner
+    min-height 0
+    overflow hidden
+
+  .eb-why
+    margin .5rem 0 0 2.35rem
+    padding .6rem .85rem
+    border-left 3px solid $eb-wrong
+    border-radius 0 $redefine-border-radius-small $redefine-border-radius-small 0
+    background rgba($eb-wrong, .07)
+    font-size .9rem
+
+    +redefine-mobile()
+      margin-left 0
+
+  .eb-foot
+    display flex
+    flex-wrap wrap
+    gap .5rem
+    margin-top 1rem
+
+  .eb-review-toggle, .eb-clear
+    display inline-flex
+    align-items center
+    gap .45rem
+    padding .45rem .9rem
+    border 1px dashed var(--border-color)
+    border-radius $redefine-border-radius-medium
+    background transparent
+    color var(--third-text-color)
+    font-family inherit
+    font-size .82rem
+    cursor pointer
+    transition color .2s ease, border-color .2s ease
+
+    &:hover
+      border-style solid
+      border-color var(--primary-color)
+      color var(--primary-color)
+
+  .eb-review-toggle
+    .eb-caret
+      font-size .68rem
+      transition transform .25s ease
+
+    &.is-open .eb-caret
+      transform rotate(180deg)
+
+  // The clear button appears only once there is something to clear, so the
+  // class sets `display` and the attribute has to say otherwise out loud.
+  .eb-clear
+    &:hover
+      border-color $eb-wrong
+      color $eb-wrong
+
+    &[hidden]
+      display none
+
+  .eb-review .eb-collapse-inner
+    padding-top .9rem
+
+  .eb-verdict
+    display flex
+    flex-wrap wrap
+    gap .5rem
+    margin-bottom .9rem
+
+    // The class sets `display`, so the attribute needs saying out loud.
+    &[hidden]
+      display none
+
+  .eb-chip
+    display inline-flex
+    align-items center
+    gap .4rem
+    padding .32rem .75rem
+    border 1px solid transparent
+    border-radius $redefine-border-radius-medium
+    font-size .85rem
+
+  .eb-chip-label
+    color var(--third-text-color)
+    font-size .76rem
+
+  .eb-chip-value
+    font-weight 700
+
+  .eb-chip--mine
+    border-color rgba($eb-wrong, .3)
+    background rgba($eb-wrong, .08)
+
+    i, .eb-chip-value
+      color $eb-wrong
+
+  .eb-chip--right
+    border-color rgba($eb-right, .3)
+    background rgba($eb-right, .08)
+
+    i, .eb-chip-value
+      color $eb-right
+
+  .eb-whymine
+    margin-bottom .9rem
+    padding .6rem .85rem
+    border-left 3px solid $eb-wrong
+    border-radius 0 $redefine-border-radius-small $redefine-border-radius-small 0
+    background rgba($eb-wrong, .07)
+    font-size .9rem
+
+  .eb-solution
+    padding 1rem 1.1rem
+    border 1px solid var(--border-color)
+    border-radius $redefine-border-radius-medium
+    background var(--second-background-color)
+    font-size .95rem
+
+  .eb-solution-label
+    display block
+    margin-bottom .55rem
+    color var(--third-text-color)
+    font-size .7rem
+    letter-spacing .1em
+    text-transform uppercase
+
+  // ── markdown inside a card ────────────────────────────────────────
+  .eb-stem, .eb-opt-text, .eb-why, .eb-whymine, .eb-solution, .eb-prose
+    &> :last-child
+      margin-bottom 0
+
+    p:last-child
+      margin-bottom 0
+
+  // Headings written inside a card arrive demoted to .h1–.h6 paragraphs, so
+  // they need sizes that belong to a card rather than to an article.
+  .eb-card
+    .h1, .h2, .h3
+      margin .9rem 0 .45rem
+      border-bottom none
+      font-size 1.15rem
+      font-weight 650
+      letter-spacing normal
+
+    .h4, .h5, .h6
+      margin .8rem 0 .4rem
+      font-size 1rem
+      font-weight 600
+
+    &> :first-child
+      margin-top 0

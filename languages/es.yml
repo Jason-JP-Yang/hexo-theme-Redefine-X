@@ -151,3 +151,20 @@ image_exif:
   value:
     program_with_number: "Prog %s"
     mode_with_number: "Modo %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: Opción múltiple
+  written: Respuesta escrita
+  open: Respuesta abierta
+  review: Último error
+  answer: Ver la respuesta
+  mine: Yo respondí
+  yours: Tú respondiste
+  correct: Respuesta correcta
+  solution: Solución
+  check: Comprobar
+  clear: Borrar
+  placeholder: Respuesta final

@@ -41,6 +41,13 @@
     module: false
 }) %>
 
+<%# Error Book card interactions. Loaded unconditionally, and self-initialising
+    on every Swup page view: this file sits OUTSIDE the #swup container, so a
+    per-page condition would only ever be read on the first load. %>
+<%- renderJS('plugins/errorBook.js', {
+    module: false
+}) %>
+
 <% if (theme.footer.runtime) { %>
     <%- renderJS('tools/runtime.js') %>
     <%- renderJS('libs/odometer.min.js') %>

@@ -152,3 +152,20 @@ image_exif:
   value:
     program_with_number: "Prog %s"
     mode_with_number: "Mode %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: Multiple choice
+  written: Written answer
+  open: Open response
+  review: Last incorrect attempt
+  answer: Show answer
+  mine: I answered
+  yours: You answered
+  correct: Correct answer
+  solution: Solution
+  check: Check
+  clear: Clear
+  placeholder: Final answer

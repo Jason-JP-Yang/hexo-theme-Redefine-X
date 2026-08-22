@@ -154,3 +154,20 @@ image_exif:
   value:
     program_with_number: "程序 %s"
     mode_with_number: "模式 %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: 选择题
+  written: 填空题
+  open: 简答题
+  review: 上次的错误作答
+  answer: 查看答案
+  mine: 我当时选了
+  yours: 你填的是
+  correct: 正确答案
+  solution: 解析
+  check: 检查
+  clear: 清除
+  placeholder: 最终答案

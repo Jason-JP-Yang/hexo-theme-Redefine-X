@@ -151,3 +151,20 @@ image_exif:
   value:
     program_with_number: "Prog %s"
     mode_with_number: "Mode %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: 選択問題
+  written: 記述問題
+  open: 自由記述
+  review: 前回の誤答
+  answer: 答えを見る
+  mine: 前回の解答
+  yours: あなたの解答
+  correct: 正解
+  solution: 解説
+  check: 確認
+  clear: クリア
+  placeholder: 最終解答

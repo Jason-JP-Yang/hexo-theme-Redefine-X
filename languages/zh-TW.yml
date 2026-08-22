@@ -153,3 +153,20 @@ image_exif:
   value:
     program_with_number: "程式 %s"
     mode_with_number: "模式 %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: 選擇題
+  written: 填空題
+  open: 簡答題
+  review: 上次的錯誤作答
+  answer: 查看答案
+  mine: 我當時選了
+  yours: 你填的是
+  correct: 正確答案
+  solution: 解析
+  check: 檢查
+  clear: 清除
+  placeholder: 最終答案
