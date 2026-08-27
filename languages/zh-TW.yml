@@ -170,3 +170,25 @@ error_book:
   check: 檢查
   clear: 清除
   placeholder: 最終答案
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: 通知
+  close: 關閉
+  mark_read: 全部標為已讀
+  signed_out: 使用 GitHub 登入即可追蹤本部落格。
+  sign_in: 使用 GitHub 登入
+  follow: 追蹤本部落格
+  unfollow: 取消追蹤
+  enable_push: 在此裝置上開啟推播
+  empty: 追蹤後即可收到新文章通知。
+  empty_following: 目前還沒有內容，新文章會出現在這裡。
+  push_denied: 瀏覽器已封鎖通知，新內容仍會顯示在這裡。
+  push_unsupported: 此瀏覽器不支援推播，新內容仍會顯示在這裡。
+  push_insecure: 推播需要安全連線（https 或 localhost），新內容仍會顯示在這裡。
+  push_ios: 在 iPhone 上需先將本站加入主畫面，才能接收推播通知。
+  topic_posts: 文章
+  topic_announcements: 公告
+  topic_notes: 隨記

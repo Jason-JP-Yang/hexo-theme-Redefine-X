@@ -201,6 +201,15 @@
         <%- renderJS('libs/anime.min.js')%>
     <% } %>
 
+    <%# PWA manifest. Emitted by scripts/notifications-generator.js. Required for
+        Web Push on iOS, which only delivers to a site installed to the Home
+        Screen — and a site cannot be installed without this. %>
+    <% if (theme.notifications && theme.notifications.enable) { %>
+        <link rel="manifest" href="<%- url_for('/manifest.json') %>">
+        <meta name="theme-color" content="<%= theme.colors.primary %>">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+    <% } %>
+
     <%- export_config() %>
     
     <!--- Fontawesome Part-->

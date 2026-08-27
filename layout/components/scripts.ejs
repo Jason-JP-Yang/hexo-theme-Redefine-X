@@ -11,10 +11,14 @@
 }) %>
 
 <%# Shared GitHub-OAuth identity component (window.blogAuth) — single login
-    source for comments, masonry likes, and admin. CLASSIC script so it runs
-    during parse, handles the ?giscus= OAuth callback, and is ready BEFORE the
-    masonry-reactions classic script (below) consumes it. %>
-<% if (theme.comment && theme.comment.system === 'giscus') { %>
+    source for comments, masonry likes, admin, and notifications. CLASSIC script
+    so it runs during parse, handles the ?giscus= OAuth callback, and is ready
+    BEFORE the masonry-reactions classic script (below) consumes it.
+
+    Also loaded when notifications are on: following is GitHub-bound, so the bell
+    is inert without this global — and it is what resolves the Worker base URL,
+    including the localhost override. %>
+<% if ((theme.comment && theme.comment.system === 'giscus') || (theme.notifications && theme.notifications.enable)) { %>
     <%- renderJS('tools/auth.js', { module: false }) %>
 <% } %>
 
@@ -120,6 +124,15 @@
 
 <% if (theme.home_banner.instant_notes && theme.home_banner.instant_notes.enable) { %>
     <%- renderJS('plugins/instantNotes.js', {
+        module: true
+    }) %>
+<% } %>
+
+<%# Follow + push notifications. Loaded unconditionally when enabled and
+    self-initialising on every Swup page view: the bell lives in the navbar
+    (inside #swup, rebuilt each navigation) while the panel lives outside it. %>
+<% if (theme.notifications && theme.notifications.enable) { %>
+    <%- renderJS('plugins/notifications.js', {
         module: true
     }) %>
 <% } %>

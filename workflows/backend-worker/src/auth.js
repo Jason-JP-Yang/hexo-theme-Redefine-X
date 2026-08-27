@@ -6,26 +6,30 @@
  * from giscus and sends it to POST /api/auth/login. This module:
  *
  *   1. fetchGitHubUser()  — verifies the token by asking GitHub "who am I?".
- *   2. signSession()      — mints a short-lived HMAC-signed session token once
- *                           the user is confirmed to be an admin, so that every
- *                           subsequent admin write is verified LOCALLY (no extra
- *                           GitHub call per request).
+ *   2. signSession()      — mints a short-lived HMAC-signed session token for
+ *                           EVERY verified user, carrying `isAdmin` in the
+ *                           payload, so that each later request is authorized
+ *                           LOCALLY (no extra GitHub call per request). Admin
+ *                           routes additionally require isAdmin; follower routes
+ *                           (/api/me/*, /api/push/*) take any valid token.
  *   3. verifySession()    — validates that HMAC token + its expiry.
  *
  * The session token is a compact JWT-ish string: base64url(payload).base64url(sig)
- * Uses Web Crypto (available in Workers) — no external dependencies.
+ * Uses Web Crypto (available in Workers) — no external dependencies. The
+ * base64url helpers are exported because Web Push needs the same encoding for
+ * its keys.
  */
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function bytesToB64url(bytes) {
+export function bytesToB64url(bytes) {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function b64urlToBytes(str) {
+export function b64urlToBytes(str) {
   const b64 = str.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((str.length + 3) % 4);
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);

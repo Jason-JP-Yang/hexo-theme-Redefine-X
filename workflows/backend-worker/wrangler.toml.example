@@ -12,6 +12,14 @@ compatibility_date = "2024-12-01"
 # pattern = "backend.example.com"
 # custom_domain = true
 
+# ─── Cron: drain the push queue ─────────────────────────────
+# Ingest only QUEUES pushes; this trigger sends them, in bounded batches, so a
+# fan-out to many followers can never exceed the per-invocation subrequest cap.
+# Required for notifications; harmless if the feature is unused (it drains an
+# empty table).
+[triggers]
+crons = ["* * * * *"]
+
 # ─── D1 Database Binding ────────────────────────────────────
 [[d1_databases]]
 binding = "DB"
@@ -20,11 +28,55 @@ database_id = "RUN: wrangler d1 create your-notes-db"   # paste the returned id
 
 # ─── Environment Variables (non-secret) ─────────────────────
 [vars]
-# CORS allowlist — your blog origin(s), comma-separated. localhost is always allowed.
-ALLOWED_ORIGIN = "https://your-blog-domain.example"
+# NOTE: ALLOWED_ORIGIN is intentionally absent. Set it in the Cloudflare
+# dashboard (Settings → Variables and Secrets) so the CORS allowlist can change
+# without a redeploy — declaring it here would overwrite the dashboard value on
+# every deploy. Unset falls back to the SITE_URL domain, never to "*".
+#
+# Format — comma-separated DOMAINS; scheme and port are ignored:
+#   blog.example.com     that host, any scheme, any port
+#   *.example.com        any single-label subdomain (never crosses a dot)
+#   local                any private address (localhost, 127.x, 10.x,
+#                        172.16-31.x, 192.168.x, *.local)
+#   *                    everything (not recommended)
 # Admin allowlist — GitHub NUMERIC id(s) (immutable) preferred; login names also work.
 ADMIN_LOGINS = "your-github-id-or-login"
+# Refuse admin writes that come from a localhost page. Guards local development
+# against writing to production by accident. `.dev.vars` sets this true so the
+# local Worker still accepts them.
+ALLOW_LOCALHOST_ADMIN = "false"
+
+# ─── Notifications (only needed if you enable the feature) ──
+# Your site's public URL. Used as the changelog fallback source and as the
+# default click target of a test push.
+SITE_URL = "https://your-blog-domain.example"
+# The deploy repo the webhook watches, "owner/name", and the branch that
+# publishes. The webhook reads changelog.json from this repo at the pushed SHA.
+DEPLOY_REPO = "your-github-name/your-deploy-repo"
+DEPLOY_BRANCH = "main"
+# VAPID application server PUBLIC key (base64url, 65-byte uncompressed P-256
+# point). NOT a secret — every subscribing browser receives it. Must be the same
+# value as `notifications.vapid_public_key` in the theme config.
+VAPID_PUBLIC_KEY = ""
+# Contact for the push services, per RFC 8292. mailto: or https:.
+VAPID_SUBJECT = "mailto:you@example.com"
+# Set to "true" to record notifications WITHOUT sending them. The safe way to
+# verify a first ingest. The database also carries its own `dry_run` setting,
+# which the first webhook sets automatically (see the bootstrap note in README).
+NOTIFY_DRY_RUN = "false"
+# Announce a new Instant Note on the `notes` topic. Editing one never notifies.
+NOTIFY_ON_NOTE = "true"
+NOTE_TITLE = "New note"
+# Notify the person who triggered the notification. Off by default; `.dev.vars`
+# turns it on so local testing has something observable.
+NOTIFY_SELF = "false"
 
 # ─── Secrets (NEVER commit; set out-of-band) ────────────────
-# HMAC signing key for admin session tokens:
+# HMAC signing key for session tokens:
 #   wrangler secret put SESSION_SECRET
+# VAPID application server PRIVATE key (base64url, 32-byte P-256 scalar):
+#   wrangler secret put VAPID_PRIVATE_KEY
+# Shared secret configured on the GitHub webhook:
+#   wrangler secret put GITHUB_WEBHOOK_SECRET
+# Only if the deploy repo is PRIVATE — a fine-grained PAT with Contents: Read:
+#   wrangler secret put GITHUB_READ_TOKEN

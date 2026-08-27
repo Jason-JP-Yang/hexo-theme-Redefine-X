@@ -168,3 +168,25 @@ error_book:
   check: Comprobar
   clear: Borrar
   placeholder: Respuesta final
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: Notificaciones
+  close: Cerrar
+  mark_read: Marcar todo como leído
+  signed_out: Inicia sesión con GitHub para seguir este blog.
+  sign_in: Iniciar sesión con GitHub
+  follow: Seguir este blog
+  unfollow: Dejar de seguir
+  enable_push: Activar notificaciones en este dispositivo
+  empty: Sigue el blog para recibir avisos de nuevas entradas.
+  empty_following: Nada por ahora. Las nuevas entradas aparecerán aquí.
+  push_denied: Tu navegador bloquea las notificaciones. Las novedades siguen apareciendo aquí.
+  push_unsupported: Este navegador no admite push. Las novedades siguen apareciendo aquí.
+  push_insecure: El push necesita una conexión segura (https o localhost). Las novedades siguen apareciendo aquí.
+  push_ios: En iPhone, añade este sitio a la pantalla de inicio para recibir notificaciones.
+  topic_posts: Entradas
+  topic_announcements: Anuncios
+  topic_notes: Notas

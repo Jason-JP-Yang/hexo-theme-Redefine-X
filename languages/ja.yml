@@ -168,3 +168,25 @@ error_book:
   check: 確認
   clear: クリア
   placeholder: 最終解答
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: 通知
+  close: 閉じる
+  mark_read: すべて既読にする
+  signed_out: GitHub でサインインするとこのブログをフォローできます。
+  sign_in: GitHub でサインイン
+  follow: このブログをフォロー
+  unfollow: フォロー解除
+  enable_push: この端末で通知を有効にする
+  empty: フォローすると新着記事をお知らせします。
+  empty_following: まだ何もありません。新着はここに表示されます。
+  push_denied: ブラウザで通知がブロックされています。新着はここに表示されます。
+  push_unsupported: このブラウザはプッシュ通知に対応していません。新着はここに表示されます。
+  push_insecure: プッシュには安全な接続（https または localhost）が必要です。新着はここに表示されます。
+  push_ios: iPhone ではホーム画面に追加すると通知を受け取れます。
+  topic_posts: 記事
+  topic_announcements: お知らせ
+  topic_notes: ノート

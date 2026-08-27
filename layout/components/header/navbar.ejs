@@ -62,12 +62,32 @@
                             <i class="fa-solid fa-magnifying-glass"></i>
                         </li>
                     <% } %>
+                    <% if (theme.notifications && theme.notifications.enable) { %>
+                        <li class="navbar-item notifications-bell"
+                            role="button"
+                            tabindex="0"
+                            aria-expanded="false"
+                            aria-label="<%= __('notifications.title') %>">
+                            <i class="fa-regular fa-bell"></i>
+                            <span class="bell-badge">0</span>
+                        </li>
+                    <% } %>
                 </ul>
             </div>
             <!-- Mobile -->
             <div class="mobile">
                 <% if (theme.navbar.search.enable === true) { %>
                     <div class="icon-item search search-popup-trigger"><i class="fa-solid fa-magnifying-glass"></i>
+                    </div>
+                <% } %>
+                <% if (theme.notifications && theme.notifications.enable) { %>
+                    <div class="icon-item notifications-bell"
+                         role="button"
+                         tabindex="0"
+                         aria-expanded="false"
+                         aria-label="<%= __('notifications.title') %>">
+                        <i class="fa-regular fa-bell"></i>
+                        <span class="bell-badge">0</span>
                     </div>
                 <% } %>
                 <div class="icon-item navbar-bar">

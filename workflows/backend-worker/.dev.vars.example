@@ -1,6 +1,52 @@
 # Local-only secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored) and fill.
 # In production these are set with `wrangler secret put`, NOT from this file.
+#
+# Entries here also OVERRIDE the [vars] block of wrangler.toml during
+# `wrangler dev`, which is how the local run points at the local site instead of
+# the production one (see SITE_URL below).
 
-# HMAC signing key for admin session tokens. Generate a random 32+ byte value, e.g.:
+# HMAC signing key for session tokens. Generate a random 32+ byte value, e.g.:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#
+# This does NOT have to match production — but note that a token minted by one
+# Worker will not verify at the other, so the front-end must talk to exactly one
+# of them. That is what `developer.local_api_url` in the theme config arranges.
 SESSION_SECRET=replace-with-a-long-random-value
+
+# ─── Notifications ──────────────────────────────────────────
+# VAPID application server PRIVATE key — base64url, the 32-byte P-256 scalar.
+# Generate a pair with:  npm run vapid:keygen
+# Use the SAME pair as production, or set VAPID_PUBLIC_KEY below to the local
+# public half as well — the two halves must always match each other.
+VAPID_PRIVATE_KEY=
+
+# Shared secret you also enter in the GitHub webhook form. Any long random value.
+# Only needed locally if you are replaying webhook deliveries through a tunnel;
+# POST /api/admin/notify/ingest exercises the same pipeline without one.
+GITHUB_WEBHOOK_SECRET=
+
+# Point the local Worker at the local site, so /api/admin/notify/ingest reads the
+# changelog.json that `hexo server` is serving rather than the deployed one.
+SITE_URL=http://localhost:4000
+
+# Send immediately instead of waiting out the 120s deploy grace period. There is
+# no deploy to wait for locally, and the wait only makes `drain` report sent: 0.
+NOTIFY_GRACE_SEC=0
+
+# This IS the local Worker, so admin writes from a localhost page are the whole
+# point. Production keeps this false (see wrangler.toml).
+ALLOW_LOCALHOST_ADMIN=true
+
+# ALLOWED_ORIGIN is authoritative — the Worker has no built-in localhost
+# exception. `local` covers every private address (localhost, 127.x, 10.x,
+# 172.16-31.x, 192.168.x, *.local), so a phone on the LAN can reach this Worker
+# during testing. Setting it here keeps the production allowlist untouched.
+ALLOWED_ORIGIN=local
+
+# Notify yourself about your own actions. Off in production; on here, because
+# with one follower in the local database, excluding yourself would mean nothing
+# observable ever happens.
+NOTIFY_SELF=true
+
+# Only if the deploy repo is PRIVATE — a fine-grained PAT with Contents: Read.
+# GITHUB_READ_TOKEN=

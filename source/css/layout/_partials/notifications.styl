@@ -1,0 +1,350 @@
+// ========================================================================================
+//                                     NOTIFICATIONS
+// ========================================================================================
+// Bell (in the navbar) + panel (mounted outside #swup).
+//
+// Material: BASE tier only — a translucent background colour plus a plain
+// blur(). The elevated `backdrop-filter` tier is reserved for surfaces that must
+// read as floating above live content (the home buttons, the instant-notes
+// panel); every pass costs a compositor layer, and a panel that is only visible
+// while it is open does not earn one.
+//
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+$np-width = 380px
+$np-radius = 16px
+$np-gap = 12px
+
+// ─── bell ───────────────────────────────────────────────────
+.notifications-bell
+  position relative
+  cursor pointer
+  user-select none
+
+  i
+    transition transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease
+
+  &:hover i,
+  &.is-active i
+    color var(--primary-color)
+
+  &.is-active i
+    transform rotate(-12deg)
+
+  // The count sits on the icon, so it is positioned against the bell box rather
+  // than flowed after it — a navbar item must not change width when a number
+  // appears inside it.
+  .bell-badge
+    position absolute
+    top -4px
+    right -8px
+    min-width 16px
+    height 16px
+    padding 0 4px
+    border-radius 8px
+    background var(--primary-color)
+    color #fff
+    font-size 10px
+    font-weight 600
+    line-height 16px
+    text-align center
+    pointer-events none
+    opacity 0
+    transform scale(0.6)
+    transition opacity 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)
+
+  &.has-unread .bell-badge
+    opacity 1
+    transform scale(1)
+
+// The desktop navbar item is a bare <li>; give the icon the same optical box the
+// search trigger gets so the two sit on one baseline.
+.navbar-list .notifications-bell
+  display flex
+  align-items center
+  justify-content center
+
+// ─── mask ───────────────────────────────────────────────────
+.notifications-mask
+  position fixed
+  inset 0
+  z-index 1000
+  background transparent
+  opacity 0
+  pointer-events none
+  transition opacity 0.25s ease
+
+  &.is-open
+    opacity 1
+    pointer-events auto
+
+  +redefine-tablet()
+    &.is-open
+      background rgba(0, 0, 0, 0.28)
+
+// ─── panel ──────────────────────────────────────────────────
+.notifications-panel
+  position fixed
+  top ($navbar-height + 6px)
+  right 24px
+  z-index 1001
+  display flex
+  flex-direction column
+  width $np-width
+  max-width calc(100vw - 32px)
+  max-height 70svh
+  border-radius $np-radius
+  border 1px solid var(--border-color)
+  // Solid, like the search overlay: a list of text needs a settled ground to be
+  // read against, and the elevated backdrop tier is reserved for surfaces that
+  // sit over live content permanently. Depth comes from the shadow instead.
+  background var(--background-color)
+  box-shadow 0 12px 32px var(--shadow-color-1)
+  overflow hidden
+
+  opacity 0
+  visibility hidden
+  transform translateY(-8px) scale(0.98)
+  transform-origin top right
+  transition opacity 0.22s ease, transform 0.28s cubic-bezier(0.34, 1.2, 0.64, 1), visibility 0.28s
+
+  &.is-open
+    opacity 1
+    visibility visible
+    transform translateY(0) scale(1)
+
+  &.is-busy
+    .np-foot button
+      pointer-events none
+      opacity 0.55
+
+  // On a phone the panel is a sheet: anchoring a 380px card to a corner of a
+  // 375px viewport leaves it neither centred nor full width.
+  +redefine-tablet()
+    top auto
+    right 0
+    bottom 0
+    left 0
+    width 100%
+    max-width 100%
+    max-height 78svh
+    border-radius $np-radius $np-radius 0 0
+    border-bottom none
+    transform-origin bottom center
+    transform translateY(16px)
+
+    &.is-open
+      transform translateY(0)
+
+// ─── head ───────────────────────────────────────────────────
+.np-head
+  display flex
+  align-items center
+  gap 8px
+  padding 14px 16px
+  border-bottom 1px solid var(--border-color)
+
+  .np-title
+    flex 1
+    font-size 0.95rem
+    font-weight 600
+    color var(--first-text-color)
+
+  .np-mark-read
+    font-size 0.78rem
+    color var(--primary-color)
+    background none
+    border none
+    cursor pointer
+    padding 2px 4px
+
+    &:hover
+      text-decoration underline
+
+  .np-close
+    display flex
+    align-items center
+    justify-content center
+    width 24px
+    height 24px
+    border none
+    border-radius 6px
+    background none
+    color var(--third-text-color)
+    cursor pointer
+    transition background 0.2s ease, color 0.2s ease
+
+    &:hover
+      background var(--third-background-color-transparent)
+      color var(--first-text-color)
+
+// ─── body ───────────────────────────────────────────────────
+.np-body
+  flex 1
+  min-height 0
+  overflow-y auto
+  overscroll-behavior contain
+
+.np-empty
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 10px
+  padding 40px 24px
+  color var(--third-text-color)
+  text-align center
+
+  i
+    font-size 22px
+    opacity 0.6
+
+  p
+    margin 0
+    font-size 0.85rem
+    line-height 1.5
+
+.np-list
+  display flex
+  flex-direction column
+
+.np-item
+  display flex
+  align-items flex-start
+  gap $np-gap
+  padding 12px 16px
+  border-bottom 1px solid var(--border-color)
+  color inherit
+  text-decoration none
+  transition background 0.2s ease
+
+  &:last-child
+    border-bottom none
+
+  &:hover
+    background var(--third-background-color-transparent)
+
+  // Unread is carried by a leading rule rather than a filled row: the list is
+  // read at a glance and a block of tinted rows is harder to scan than an edge.
+  &.is-unread
+    box-shadow inset 2px 0 0 var(--primary-color)
+
+    .np-item-title
+      font-weight 600
+      color var(--first-text-color)
+
+.np-item-icon
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 28px
+  height 28px
+  margin-top 1px
+  border-radius 8px
+  background var(--third-background-color-transparent)
+  color var(--second-text-color)
+  font-size 12px
+
+.np-item-main
+  display flex
+  flex-direction column
+  gap 2px
+  min-width 0
+
+.np-item-title
+  font-size 0.875rem
+  line-height 1.35
+  color var(--second-text-color)
+
+.np-item-body
+  font-size 0.8rem
+  line-height 1.4
+  color var(--third-text-color)
+  // Two lines is the most a list row can give a summary before the list stops
+  // being scannable; the full text is one click away on the page itself.
+  display -webkit-box
+  -webkit-line-clamp 2
+  -webkit-box-orient vertical
+  overflow hidden
+
+.np-item-time
+  margin-top 2px
+  font-size 0.72rem
+  color var(--fourth-text-color)
+
+// ─── foot ───────────────────────────────────────────────────
+.np-foot
+  display flex
+  flex-direction column
+  gap 10px
+  padding 12px 16px
+  border-top 1px solid var(--border-color)
+
+  &:empty
+    display none
+
+  .np-action
+    display flex
+    align-items center
+    justify-content center
+    gap 8px
+    width 100%
+    padding 9px 12px
+    border none
+    border-radius 10px
+    background var(--primary-color)
+    color #fff
+    font-size 0.85rem
+    font-weight 500
+    cursor pointer
+    transition filter 0.2s ease, transform 0.2s ease
+
+    &:hover
+      filter brightness(1.08)
+
+    &:active
+      transform scale(0.98)
+
+  .np-unfollow
+    align-self center
+    border none
+    background none
+    color var(--fourth-text-color)
+    font-size 0.78rem
+    cursor pointer
+    padding 2px 4px
+
+    &:hover
+      color var(--primary-color)
+      text-decoration underline
+
+  .np-note
+    margin 0
+    font-size 0.76rem
+    line-height 1.45
+    color var(--third-text-color)
+
+.np-topics
+  display flex
+  flex-wrap wrap
+  gap 6px
+
+  .np-topic
+    padding 4px 10px
+    border 1px solid var(--border-color)
+    border-radius 999px
+    background transparent
+    color var(--third-text-color)
+    font-size 0.75rem
+    cursor pointer
+    transition all 0.2s ease
+
+    &:hover
+      border-color var(--primary-color)
+      color var(--primary-color)
+
+    &.is-on
+      border-color var(--primary-color)
+      background var(--primary-color)
+      color #fff

@@ -7,13 +7,16 @@
  *
  *   • masonry-reactions  → uses getToken() to like photos via GitHub GraphQL.
  *   • instant-notes admin → uses getSession()/getSessionToken() to write notes.
+ *   • notifications       → uses getSessionToken() to follow the blog, register
+ *                           a push device, and read its own inbox.
  *   • (future) a unified "signed in as …" UI.
  *
  * It exchanges the giscus session for a GitHub user token (via the merged
  * Worker's /api/oauth/token proxy), and asks the Worker /api/auth/login "who am
- * I + am I admin?". Admins receive a short-lived HMAC session token used for
- * admin writes. Non-admins simply get isAdmin:false — comments and likes keep
- * working unchanged.
+ * I + am I admin?". EVERY verified user receives a short-lived HMAC session
+ * token; the isAdmin claim inside it is what admin writes require. A reader who
+ * is not an admin still holds a usable token — that is what lets them follow the
+ * blog — and comments and likes keep working unchanged either way.
  *
  * Loaded as a CLASSIC script (see scripts.ejs) BEFORE masonry-reactions so the
  * global is ready and the OAuth-callback session sync runs synchronously.
@@ -47,13 +50,128 @@
       return null;
     }
   }
+  // ─── backend selection ───────────────────────────────────
+  // EXACTLY three combinations are permitted; nothing else can be expressed:
+  //
+  //   A  localhost page  → local Worker        developer.backend: local
+  //   B  localhost page  → production Worker   developer.backend: production
+  //   C  production page → production Worker   (forced, config is ignored)
+  //
+  // The fourth combination — a deployed page talking to a local Worker — is
+  // rejected in code, not by convention, so a stray `backend: local` committed
+  // by accident degrades to C instead of shipping a broken or leaky site.
+  //
+  // The selection must sit at the BASE and apply to EVERY consumer at once: a
+  // session token is HMAC-signed with the Worker's SESSION_SECRET, and
+  // `wrangler dev` reads a different one from .dev.vars than production does.
+  // Minting a token at one instance and spending it at the other is a guaranteed
+  // 403 — which is precisely what a half-applied override used to cause.
+
+  /**
+   * Is this host somewhere only a developer can reach?
+   *
+   * Broader than "localhost" on purpose: testing push on a phone means loading
+   * the dev site over the LAN, so the private ranges count too. All of these are
+   * unroutable from the public internet, which is the property that matters —
+   * a host on this list cannot be a deployed site.
+   *
+   *   localhost, *.localhost, *.local (mDNS)
+   *   127.0.0.0/8, ::1
+   *   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+   */
+  function isPrivateHost(host) {
+    var h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+    if (h === "localhost" || h === "::1") return true;
+    if (/(^|\.)localhost$/.test(h) || /\.local$/.test(h)) return true;
+    if (/^127\.\d+\.\d+\.\d+$/.test(h)) return true;
+    if (/^10\.\d+\.\d+\.\d+$/.test(h)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(h)) return true;
+    var m = /^172\.(\d+)\.\d+\.\d+$/.exec(h);
+    if (m) {
+      var second = parseInt(m[1], 10);
+      return second >= 16 && second <= 31;
+    }
+    return false;
+  }
+
+  function isLocalhostPage() {
+    return isPrivateHost(location.hostname);
+  }
+
+  /**
+   * Push and service workers require a SECURE CONTEXT. Browsers grant that to
+   * localhost and 127.0.0.1 over plain http, but NOT to a LAN address — so
+   * http://192.168.1.50:4000 can select the local backend and use the in-site
+   * inbox, yet can never receive a push. Nothing in this codebase can change
+   * that; it needs https (a tunnel, or a locally-trusted certificate).
+   */
+  function isSecureDevContext() {
+    return typeof window.isSecureContext === "boolean" ? window.isSecureContext : true;
+  }
+
+  /**
+   * A local Worker URL is only accepted if it points somewhere private. Without
+   * this the developer hook would be a general-purpose redirect for every
+   * authenticated API call — a place to point the blog's session tokens at
+   * somebody else's host by editing one line of config.
+   */
+  function isLoopbackUrl(raw) {
+    try {
+      var u = new URL(raw, location.href);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      return isPrivateHost(u.hostname);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  var devBaseResolved = false;
+  var devBase = null;
+
+  function getDevBase() {
+    if (devBaseResolved) return devBase;
+    devBaseResolved = true;
+    devBase = null;
+
+    var d = (window.theme && window.theme.developer) || {};
+    if (String(d.backend || "production") !== "local") return devBase;
+
+    if (!isLocalhostPage()) {
+      warn(
+        "developer.backend is 'local' but " +
+          location.hostname +
+          " is not a private host (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x, *.local) — " +
+          "ignoring it and using the production backend."
+      );
+      return devBase;
+    }
+    if (!d.local_api_url || !isLoopbackUrl(d.local_api_url)) {
+      warn(
+        "developer.local_api_url must be a localhost/127.0.0.1 URL — " +
+          "ignoring it and using the production backend."
+      );
+      return devBase;
+    }
+
+    devBase = strip(d.local_api_url);
+    return devBase;
+  }
+
+  function warn(message) {
+    try {
+      console.warn("[blogAuth] " + message);
+    } catch (e) {}
+  }
+
   /**
    * Resolve the merged-Worker base URL. Both custom domains route to the same
    * Worker, so either works for /api/oauth/token and /api/auth/login.
-   * Prefer the masonry page's giscusProxy (keeps likes on their usual domain),
-   * else the globally-exported instant_notes.api_url.
+   * The selected backend wins; otherwise the masonry page's giscusProxy (keeps
+   * likes on their usual domain), else the exported instant_notes.api_url.
    */
   function getApiBase() {
+    var dev = getDevBase();
+    if (dev) return dev;
     var mc = getMasonryConfig();
     if (mc && mc.giscusProxy) return strip(mc.giscusProxy);
     var t =
@@ -63,6 +181,18 @@
       window.theme.home_banner.instant_notes.api_url;
     if (t) return strip(t);
     return null;
+  }
+
+  /**
+   * Resolve a Worker base for any other consumer.
+   *
+   * EVERY module that talks to the Worker must go through this — instant notes,
+   * notifications, anything later. Reading `api_url` straight from the config
+   * is what produced the split brain this replaced: notes posting to production
+   * with a token the local Worker had signed.
+   */
+  function resolveApiBase(fallback) {
+    return getDevBase() || (fallback ? strip(fallback) : getApiBase());
   }
 
   function readGiscusSession() {
@@ -249,15 +379,36 @@
     getLoginUrl: getLoginUrl,
     login: login,
     logout: logout,
+    resolveApiBase: resolveApiBase,
+    get apiBase() {
+      return getApiBase();
+    },
+    // "local" or "production" — which of the three permitted combinations is
+    // actually in force, after the guards above have had their say.
+    get backend() {
+      return getDevBase() ? "local" : "production";
+    },
+    get isLocalDev() {
+      return !!getDevBase();
+    },
     get isAuthenticated() {
       return !!readGiscusSession();
     },
     get isAdmin() {
       return !!(cachedSession && cachedSession.isAdmin);
     },
+    // The GitHub NUMERIC id — stable across a username change, which is why the
+    // backend keys followers by it rather than by login.
+    get githubId() {
+      return (cachedSession && cachedSession.id) || null;
+    },
     get user() {
       return cachedSession
-        ? { login: cachedSession.login, avatar: cachedSession.avatar }
+        ? {
+            id: cachedSession.id || null,
+            login: cachedSession.login,
+            avatar: cachedSession.avatar,
+          }
         : null;
     },
   };
@@ -273,6 +424,31 @@
         localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(giscusParam));
     } catch (e) {}
   })();
+
+  // Say which backend is in force, once, on localhost only. Every consumer
+  // shares this base, so getting it wrong breaks notes, likes and notifications
+  // together and in ways that read as unrelated bugs — worth one console line.
+  if (isLocalhostPage()) {
+    try {
+      console.info(
+        "[blogAuth] backend: " +
+          (getDevBase() ? "LOCAL" : "PRODUCTION") +
+          " → " +
+          (getApiBase() || "(none configured)")
+      );
+      // The failure this prevents is silent and very confusing: on a LAN address
+      // over http the browser withholds serviceWorker entirely, so Follow
+      // "works", the inbox fills up, and no push ever arrives.
+      if (!isSecureDevContext()) {
+        warn(
+          location.origin +
+            " is not a secure context, so push notifications CANNOT work here " +
+            "(the in-site inbox still does). Use http://localhost:4000, or serve " +
+            "the dev site over https."
+        );
+      }
+    } catch (e) {}
+  }
 
   hydrate();
 

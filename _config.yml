@@ -507,6 +507,25 @@ plugins:
     normal_width: 0.6
 # PLUGINS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
+# NOTIFICATIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
+# Docs: https://redefine-x-docs.jason-yang.top/zh/notifications
+# Requires the backend Worker in workflows/backend-worker (see its README).
+notifications:
+  # Whether to enable follow + push notifications
+  enable: false
+  # Backend Worker base URL (the same worker that serves notes, auth and the giscus proxy)
+  api_url:
+  # VAPID public key. Public by design — it is shipped to every browser.
+  # Generate a pair with `npm run vapid:keygen` in the backend-worker directory.
+  vapid_public_key:
+  # Emit changelog.json at build time. This file is what the backend reads.
+  changelog: true
+  # How many most-recent entries changelog.json keeps
+  changelog_limit: 30
+  # Topics a reader can subscribe to, comma-separated
+  topics: posts, announcements, notes
+# NOTIFICATIONS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
+
 # PAGE TEMPLATES >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/page_templates
 page_templates:
@@ -534,4 +553,11 @@ cdn:
 developer:
   # Whether to enable developer mode (only for developers who want to modify the theme source code, not for ordinary users)
   enable: false
+  # Which backend the front-end talks to: production | local
+  # `local` applies ONLY on a localhost page and ONLY to a loopback URL; a
+  # deployed site ignores it. Switches EVERY worker call at once, because a
+  # session token only verifies at the instance that signed it.
+  backend: production
+  # The Worker used when backend is `local`. Must be localhost or 127.0.0.1.
+  local_api_url: http://localhost:8787
 # DEVELOPER MODE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end

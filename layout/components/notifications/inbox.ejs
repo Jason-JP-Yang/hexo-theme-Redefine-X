@@ -1,0 +1,34 @@
+<%#
+    Notifications panel.
+
+    Mounted from layout.ejs, OUTSIDE the #swup container: the navbar (and with
+    it the bell) is rebuilt on every same-page navigation, but this panel must
+    keep its open state and its fetched list across one. Everything inside
+    .np-body / .np-foot is written by source/js/plugins/notifications-inbox.js —
+    the server renders the shell only, because the contents depend on who is
+    signed in, which is not known at build time.
+%>
+<div id="notifications-mask" class="notifications-mask"></div>
+
+<aside id="notifications-panel"
+       class="notifications-panel"
+       role="dialog"
+       aria-modal="false"
+       aria-label="<%= __('notifications.title') %>"
+       aria-hidden="true">
+    <header class="np-head">
+        <span class="np-title"><%= __('notifications.title') %></span>
+        <button type="button" class="np-mark-read" hidden><%= __('notifications.mark_read') %></button>
+        <button type="button" class="np-close" aria-label="<%= __('notifications.close') %>">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+    </header>
+
+    <div class="np-body">
+        <div class="np-empty">
+            <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
+        </div>
+    </div>
+
+    <footer class="np-foot"></footer>
+</aside>

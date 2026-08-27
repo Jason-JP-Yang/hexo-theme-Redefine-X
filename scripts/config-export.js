@@ -33,6 +33,10 @@ hexo.extend.helper.register("export_config", function () {
     navbar: this.theme.navbar,
     page_templates: this.theme.page_templates,
     home: this.theme.home,
+    notifications: this.theme.notifications,
+    // Carries developer.local_api_url, which tools/auth.js reads to point every
+    // Worker call at `wrangler dev` while the site is served from localhost.
+    developer: this.theme.developer,
 
     footerStart: this.theme.footer.start,
   };
@@ -47,6 +51,12 @@ hexo.extend.helper.register("export_config", function () {
     languageContent = yaml.load(languageContent);
   } catch (e) {
     console.log(e);
+  }
+
+  // The notification panel is rendered entirely on the client, so its strings
+  // have to travel with the config rather than through __() in a template.
+  if (languageContent && languageContent["notifications"]) {
+    theme_config.notifications_i18n = languageContent["notifications"];
   }
 
   let data_config = {

@@ -169,3 +169,25 @@ error_book:
   check: Check
   clear: Clear
   placeholder: Final answer
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: Notifications
+  close: Close
+  mark_read: Mark all read
+  signed_out: Sign in with GitHub to follow this blog.
+  sign_in: Sign in with GitHub
+  follow: Follow this blog
+  unfollow: Unfollow
+  enable_push: Enable push on this device
+  empty: Follow the blog to get notified about new posts.
+  empty_following: Nothing yet. New posts will show up here.
+  push_denied: Notifications are blocked in your browser. New items still appear here.
+  push_unsupported: This browser cannot receive push. New items still appear here.
+  push_insecure: Push needs a secure connection (https, or localhost) — new items still appear here.
+  push_ios: On iPhone, add this site to your Home Screen to receive push notifications.
+  topic_posts: Posts
+  topic_announcements: Announcements
+  topic_notes: Notes
