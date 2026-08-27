@@ -12,8 +12,10 @@
  *     the push service.
  *
  * The one asymmetry worth knowing: the ECDH key pair is generated fresh for
- * EVERY message (that is what makes the encryption forward-secret), while the
- * VAPID key pair is long-lived and configured out of band.
+ * EVERY message (RFC 8291 requires it, and it is what makes the encryption
+ * forward-secret), while the VAPID key pair is long-lived and configured out of
+ * band. That asymmetry is also where the CPU budget goes, so the long-lived half
+ * is cached at module scope — see `vapidHeader`.
  */
 
 import { bytesToB64url, b64urlToBytes } from "./auth.js";
@@ -28,6 +30,22 @@ const RECORD_SIZE = 4096;
 const MAX_PLAINTEXT = 3000;
 // VAPID tokens are short-lived by design; 12h is the maximum most services allow.
 const VAPID_TTL_SEC = 12 * 60 * 60;
+// Re-sign a cached token this long before it actually expires, so a message is
+// never sent with a header that lapses in flight.
+const VAPID_REFRESH_SEC = 5 * 60;
+
+// ─── module-scope caches ─────────────────────────────────────
+// A fan-out signs the SAME VAPID token over and over: the JWT's audience is the
+// push endpoint's ORIGIN, and every subscriber's endpoint resolves to one of
+// three of them (Google, Mozilla, Apple). Signing per message therefore paid for
+// an ECDSA key import and an ECDSA signature per DEVICE to produce at most three
+// distinct strings. Both are cached here instead, which takes the per-message
+// cost of VAPID to zero for all but the first device on each push service.
+//
+// Isolate-local and non-authoritative: losing the cache costs one signature, so
+// nothing here needs invalidating beyond the key changing under it.
+let vapidKeyCache = null; // { publicKey, privateKey, key }
+const vapidJwtCache = new Map(); // audience origin -> { header, expiresAt }
 
 // ─── byte helpers ────────────────────────────────────────────
 function concat(...chunks) {
@@ -158,6 +176,14 @@ async function encryptPayload(plaintext, uaPublic, authSecret) {
  * x/y coordinates the JWK import needs.
  */
 async function importVapidKey(privateKeyB64, publicKeyB64) {
+  if (
+    vapidKeyCache &&
+    vapidKeyCache.privateKey === privateKeyB64 &&
+    vapidKeyCache.publicKey === publicKeyB64
+  ) {
+    return vapidKeyCache.key;
+  }
+
   const d = b64urlToBytes(privateKeyB64);
   const pub = b64urlToBytes(publicKeyB64);
   if (d.length !== 32) {
@@ -166,7 +192,7 @@ async function importVapidKey(privateKeyB64, publicKeyB64) {
   if (pub.length !== 65 || pub[0] !== 4) {
     throw new Error("VAPID_PUBLIC_KEY must be a 65-byte uncompressed P-256 point");
   }
-  return crypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     "jwk",
     {
       kty: "EC",
@@ -180,25 +206,51 @@ async function importVapidKey(privateKeyB64, publicKeyB64) {
     false,
     ["sign"]
   );
+
+  vapidKeyCache = { privateKey: privateKeyB64, publicKey: publicKeyB64, key };
+  return key;
+}
+
+/**
+ * The RFC 8292 `sub` claim: who to contact about this server.
+ *
+ * SITE_URL is the natural answer and the only variable that carries it, but the
+ * spec allows only `https:` and `mailto:` — and SITE_URL is deliberately set to
+ * `http://localhost:4000` during local development, which push services reject
+ * outright. Falling back to the audience keeps a local run sending real pushes
+ * instead of collecting 400s that look like a broken key pair.
+ */
+function vapidSubject(env, audience) {
+  const site = String(env.SITE_URL || "");
+  return /^(https:\/\/|mailto:)/i.test(site) ? site : audience;
 }
 
 /**
  * Build the `Authorization: vapid t=…, k=…` header value for one audience.
- * The audience is the ORIGIN of the push endpoint, never the full URL.
+ *
+ * The audience is the ORIGIN of the push endpoint, never the full URL — which is
+ * what makes the result cacheable: a hundred subscribers share three origins, so
+ * a hundred-device fan-out needs three signatures, not a hundred.
+ *
+ * `sub` identifies this server to the push service per RFC 8292. The site's own
+ * URL satisfies it (a `mailto:` is equally valid), so it comes from SITE_URL
+ * rather than from a second variable that could drift away from it.
  */
 async function vapidHeader(endpoint, env) {
   const audience = new URL(endpoint).origin;
+  const subject = vapidSubject(env, audience);
+  const cacheKey = `${audience}|${env.VAPID_PUBLIC_KEY}|${subject}`;
+  const now = Math.floor(Date.now() / 1000);
+
+  const cached = vapidJwtCache.get(cacheKey);
+  if (cached && cached.expiresAt - VAPID_REFRESH_SEC > now) return cached.header;
+
   const key = await importVapidKey(env.VAPID_PRIVATE_KEY, env.VAPID_PUBLIC_KEY);
+  const exp = now + VAPID_TTL_SEC;
 
   const header = bytesToB64url(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
   const payload = bytesToB64url(
-    enc.encode(
-      JSON.stringify({
-        aud: audience,
-        exp: Math.floor(Date.now() / 1000) + VAPID_TTL_SEC,
-        sub: env.VAPID_SUBJECT || "mailto:admin@example.com",
-      })
-    )
+    enc.encode(JSON.stringify({ aud: audience, exp, sub: subject }))
   );
   const signingInput = `${header}.${payload}`;
 
@@ -212,7 +264,9 @@ async function vapidHeader(endpoint, env) {
     )
   );
 
-  return `vapid t=${signingInput}.${bytesToB64url(sig)}, k=${env.VAPID_PUBLIC_KEY}`;
+  const value = `vapid t=${signingInput}.${bytesToB64url(sig)}, k=${env.VAPID_PUBLIC_KEY}`;
+  vapidJwtCache.set(cacheKey, { header: value, expiresAt: exp });
+  return value;
 }
 
 // ─── public API ──────────────────────────────────────────────
@@ -318,20 +372,4 @@ export async function checkVapidKeys(env) {
     out.pair = `error: ${e && e.message ? e.message : e}`;
   }
   return out;
-}
-
-/**
- * Generate a VAPID key pair. Exposed so a key can be minted without installing
- * anything: `wrangler dev` then GET /api/admin/vapid-keygen (admin-only), or by
- * running the same Web Crypto calls in Node.
- */
-export async function generateVapidKeys() {
-  const pair = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"]
-  );
-  const pub = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-  const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
-  return { publicKey: bytesToB64url(pub), privateKey: jwk.d };
 }

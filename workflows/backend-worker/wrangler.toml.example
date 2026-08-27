@@ -1,82 +1,99 @@
-# Copy to `wrangler.toml` (gitignored) and fill in your own values.
-
-name = "your-backend-worker"          # Cloudflare Worker name
+name = "backend-blog"
 main = "src/index.js"
 compatibility_date = "2024-12-01"
 
-# ─── Custom domain (optional) ───────────────────────────────
-# One domain fronts the whole API. `wrangler deploy` provisions the domain +
-# DNS automatically when the zone is on Cloudflare. Omit this block to use the
-# default <name>.<subdomain>.workers.dev URL instead.
-# [[routes]]
-# pattern = "backend.example.com"
-# custom_domain = true
+# ─── Routes ─────────────────────────────────────────────────
+# One Worker serves the Instant Notes API, the auth endpoints, the giscus CORS
+# proxy (comments + masonry likes), AND the notification pipeline. A single
+# custom domain fronts all of it; `wrangler deploy` provisions the domain + DNS
+# automatically (the zone must be on Cloudflare).
+[[routes]]
+pattern = "backend.example.com"
+custom_domain = true
 
 # ─── Cron: drain the push queue ─────────────────────────────
-# Ingest only QUEUES pushes; this trigger sends them, in bounded batches, so a
-# fan-out to many followers can never exceed the per-invocation subrequest cap.
-# Required for notifications; harmless if the feature is unused (it drains an
-# empty table).
+# The SECOND half of sending, not the whole of it. Ingest — a new note, a
+# deployment webhook, an admin broadcast — sends the first bounded batch itself,
+# so a small audience is served in the moment and this never has to run for
+# anything to arrive. What it carries is the remainder of a fan-out too large for
+# one invocation, and a retry for a push service that was down at the time.
+#
+# Five minutes, not one: a backlog still clears in minutes, while an idle queue
+# costs 288 indexed SELECTs a day instead of 1,440.
 [triggers]
-crons = ["* * * * *"]
+crons = ["*/5 * * * *"]
 
 # ─── D1 Database Binding ────────────────────────────────────
 [[d1_databases]]
 binding = "DB"
-database_name = "your-notes-db"
-database_id = "RUN: wrangler d1 create your-notes-db"   # paste the returned id
+database_name = "instant-notes-db"
+database_id = ""  # Fill after: wrangler d1 create <db-name>
 
-# ─── Environment Variables (non-secret) ─────────────────────
+# ─── Environment Variables ──────────────────────────────────
+# Seven values run this Worker and nothing reads an eighth. Anything that used to
+# be a feature flag is now simply how the Worker behaves — a flag whose only
+# correct value is "on" is not configuration, it is an unexercised code path.
 [vars]
-# NOTE: ALLOWED_ORIGIN is intentionally absent. Set it in the Cloudflare
-# dashboard (Settings → Variables and Secrets) so the CORS allowlist can change
-# without a redeploy — declaring it here would overwrite the dashboard value on
-# every deploy. Unset falls back to the SITE_URL domain, never to "*".
+# ─── ALLOWED_ORIGIN is deliberately NOT declared here ───────
+# It lives in the Cloudflare dashboard instead (Workers & Pages → <worker> →
+# Settings → Variables and Secrets), so the CORS allowlist can be changed and
+# take effect WITHOUT a redeploy. Declaring it here would defeat that: every
+# `wrangler deploy` overwrites the dashboard value with whatever this file says.
 #
-# Format — comma-separated DOMAINS; scheme and port are ignored:
-#   blog.example.com     that host, any scheme, any port
-#   *.example.com        any single-label subdomain (never crosses a dot)
-#   local                any private address (localhost, 127.x, 10.x,
-#                        172.16-31.x, 192.168.x, *.local)
-#   *                    everything (not recommended)
-# Admin allowlist — GitHub NUMERIC id(s) (immutable) preferred; login names also work.
-ADMIN_LOGINS = "your-github-id-or-login"
-# Refuse admin writes that come from a localhost page. Guards local development
-# against writing to production by accident. `.dev.vars` sets this true so the
-# local Worker still accepts them.
-ALLOW_LOCALHOST_ADMIN = "false"
+# Format — comma-separated DOMAINS. Scheme and port are ignored.
+#   blog.example.com      that host, any scheme, any port
+#   *.example.com         any single-label subdomain (never crosses a dot)
+#   local                 any private address: localhost, 127.x, 10.x,
+#                         172.16-31.x, 192.168.x, *.local
+#   192.168.*.*           one specific LAN range
+#   *                     everything (not recommended)
+#
+# Unset, it falls back to the SITE_URL domain. With BOTH unset it allows NOBODY —
+# a blank allowlist fails closed, because a wildcard produced by a configuration
+# mistake is exactly the wildcard nobody chose.
 
-# ─── Notifications (only needed if you enable the feature) ──
-# Your site's public URL. Used as the changelog fallback source and as the
-# default click target of a test push.
-SITE_URL = "https://your-blog-domain.example"
-# The deploy repo the webhook watches, "owner/name", and the branch that
-# publishes. The webhook reads changelog.json from this repo at the pushed SHA.
-DEPLOY_REPO = "your-github-name/your-deploy-repo"
-DEPLOY_BRANCH = "main"
-# VAPID application server PUBLIC key (base64url, 65-byte uncompressed P-256
-# point). NOT a secret — every subscribing browser receives it. Must be the same
-# value as `notifications.vapid_public_key` in the theme config.
+# Comma-separated admin allowlist. GitHub NUMERIC ids are preferred: they are
+# immutable, whereas a login name can be released and re-registered by someone
+# else. Find yours at https://api.github.com/users/<you>
+ADMIN_LOGINS = ""
+
+# The site this backend belongs to. The ONE place a URL comes from: the changelog
+# fallback source, the click target of a note notification and of a test push,
+# the VAPID `sub` claim that identifies this server to the push services, and the
+# fallback CORS origin. No trailing slash.
+SITE_URL = "https://blog.example.com"
+
+# VAPID application server PUBLIC key. NOT a secret — it is shipped to every
+# subscribing browser. Generate a pair with `npm run vapid:keygen`. Must stay
+# byte-identical to `notifications.vapid_public_key` in the theme config; a
+# mismatch makes every push fail with 401/403 at the push service.
 VAPID_PUBLIC_KEY = ""
-# Contact for the push services, per RFC 8292. mailto: or https:.
-VAPID_SUBJECT = "mailto:you@example.com"
-# Set to "true" to record notifications WITHOUT sending them. The safe way to
-# verify a first ingest. The database also carries its own `dry_run` setting,
-# which the first webhook sets automatically (see the bootstrap note in README).
-NOTIFY_DRY_RUN = "false"
-# Announce a new Instant Note on the `notes` topic. Editing one never notifies.
-NOTIFY_ON_NOTE = "true"
-NOTE_TITLE = "New note"
-# Notify the person who triggered the notification. Off by default; `.dev.vars`
-# turns it on so local testing has something observable.
-NOTIFY_SELF = "false"
 
-# ─── Secrets (NEVER commit; set out-of-band) ────────────────
-# HMAC signing key for session tokens:
+# ─── Secrets (do NOT put values here; set via Wrangler) ─────
+# HMAC signing key for session tokens. Any long random value:
 #   wrangler secret put SESSION_SECRET
-# VAPID application server PRIVATE key (base64url, 32-byte P-256 scalar):
+#
+# VAPID application server private key — the 32-byte P-256 scalar (base64url)
+# printed alongside the public key by `npm run vapid:keygen`:
 #   wrangler secret put VAPID_PRIVATE_KEY
-# Shared secret configured on the GitHub webhook:
+#
+# Shared secret entered in the webhook form on the DEPLOY repo. It is also what
+# tells the Worker which repository to trust: only the repo holding this secret
+# can produce a valid signature, so no DEPLOY_REPO variable is needed.
 #   wrangler secret put GITHUB_WEBHOOK_SECRET
-# Only if the deploy repo is PRIVATE — a fine-grained PAT with Contents: Read:
-#   wrangler secret put GITHUB_READ_TOKEN
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+persist = true
+head_sampling_rate = 1

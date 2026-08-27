@@ -1,8 +1,9 @@
 -- Redefine-X backend Worker — D1 schema
 -- Run: wrangler d1 execute instant-notes-db --remote --file=./schema.sql
 --
--- Idempotent: every statement is CREATE … IF NOT EXISTS, so re-running it over a
--- live database adds the notification tables without touching existing notes.
+-- Idempotent: every statement is CREATE … IF NOT EXISTS (or DROP … IF EXISTS), so
+-- re-running it over a live database adds the notification tables without
+-- touching existing notes.
 
 -- ════════════════════════════════════════════════════════════
 -- Instant Notes
@@ -88,8 +89,9 @@ CREATE TABLE IF NOT EXISTS deliveries (
 CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries(github_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deliveries_unread ON deliveries(github_id, read_at);
 
--- The push queue: one row per (notification, device). Drained by the cron in
--- bounded batches so a fan-out never exceeds the per-invocation subrequest cap.
+-- The push queue: one row per (notification, device). Ingest drains the first
+-- bounded batch itself and the cron carries the rest, so a fan-out of any size
+-- stays inside the per-invocation CPU and subrequest ceilings.
 CREATE TABLE IF NOT EXISTS outbox (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   notification_id TEXT    NOT NULL,
@@ -105,8 +107,16 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 CREATE INDEX IF NOT EXISTS idx_outbox_drain ON outbox(state, not_before);
 
--- Small key/value store for pipeline state: bootstrap_at, last_push_sha, dry_run.
-CREATE TABLE IF NOT EXISTS settings (
-  key   TEXT PRIMARY KEY,
-  value TEXT
-);
+-- ════════════════════════════════════════════════════════════
+-- Removed
+-- ════════════════════════════════════════════════════════════
+
+-- `settings` held three keys — dry_run, bootstrap_at, last_push_sha — and all
+-- three are gone.
+--
+-- The first two existed to stop a fresh database from announcing the entire back
+-- catalogue at once, which was a real hazard only while changelog.json listed
+-- every recent post. It now lists what a deployment ADDED, so there is nothing
+-- to guard against and no state to keep. The third was never read by anything
+-- but a diagnostic.
+DROP TABLE IF EXISTS settings;

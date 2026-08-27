@@ -8,65 +8,75 @@
  *                          → outbox rows       (the push queue)
  *   drainOutbox()    outbox rows → sendWebPush() → sent | retried | dead
  *
- * Splitting fan-out (cheap, one D1 write per recipient) from sending (expensive,
- * one subrequest per device) is what keeps a broadcast inside the Worker's
- * per-invocation limits: ingest never sends, and the cron never fans out.
+ * Splitting fan-out (cheap) from sending (one subrequest and a round of
+ * public-key crypto per device) is what keeps a broadcast inside the Worker's
+ * per-invocation limits however many followers there are. Ingest queues the
+ * whole audience and drains only the first few itself; the cron drains the rest.
  *
  * Idempotency lives entirely in `notifications.id`. Re-ingesting an entry that
  * already exists is a no-op, so webhook retries, a re-run over the same
  * changelog, and an edit to an already-delivered entry all cost nothing.
+ *
+ * ─── on the shape of the SQL ─────────────────────────────────
+ * Every write here is phrased so that rows do NOT cross the wire. Fan-out is
+ * `INSERT … SELECT`, so the audience is resolved inside SQLite and the Worker
+ * never sees the follower list at all; batches of statements go out through
+ * `db.batch()`, which is ONE round trip and one implicit transaction. What that
+ * replaced was a loop of `.run()` calls — a round trip per entry and per
+ * recipient, which is where essentially all of the old latency lived.
  */
 
 import { sendWebPush } from "./webpush.js";
 
-// Sending is one subrequest per device and the free plan allows 50 per
-// invocation, so the batch stays under it with room for the D1 round-trips.
-const DRAIN_BATCH = 40;
+// How many pushes one invocation sends.
+//
+// Two ceilings bound this, and on the Workers FREE plan the CPU one binds first:
+// 50 subrequests per invocation, but only 10ms of CPU — and a single push costs
+// an ECDH key pair, an ECDH agreement, three HKDF chains and an AES-GCM seal.
+// (VAPID no longer counts: its signature is cached per push service.) Twelve
+// leaves comfortable headroom inside 10ms. On the paid plan this can go to ~45
+// before the subrequest ceiling starts to matter.
+export const DRAIN_BATCH = 12;
+
+// How many of those the INGEST path sends itself, before handing the rest to the
+// cron. Ingest has already spent CPU on the changelog fetch and the fan-out, so
+// it takes a smaller bite — enough that a small audience is served entirely in
+// the moment, without risking the invocation that owns the durable writes.
+export const INLINE_BATCH = 6;
+
 // A push service that keeps failing is not coming back within this job's
 // lifetime; five attempts spread over the backoff below is enough to ride out a
 // transient outage without queueing dead rows forever.
 const MAX_ATTEMPTS = 5;
-// Give the static deploy time to finish before the first send, so a notification
-// never links to a page that is still 404. Overridable because locally there is
-// no deploy to wait for — set NOTIFY_GRACE_SEC=0 in .dev.vars.
-const DEPLOY_GRACE_SEC = 120;
 
-function graceSeconds(env) {
-  const raw = env && env.NOTIFY_GRACE_SEC;
-  if (raw === undefined || raw === null || raw === "") return DEPLOY_GRACE_SEC;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : DEPLOY_GRACE_SEC;
-}
+// Exponential, in seconds, indexed by attempt count.
+const BACKOFF = [60, 300, 900, 3600, 10800];
+
+// D1 allows 100 bound parameters per query, and ?1/?2 are spoken for.
+const MAX_EXPLICIT_USERS = 90;
+
+// Above this many NEW entries in one ingest, record them and deliver none.
+//
+// A burst this large is never news. It is a back catalogue arriving at once —
+// a fresh database seeing changelog.json for the first time, a regenerated set
+// of ids, a changelog rebuilt from scratch — and the only useful response is to
+// absorb it silently so that everything in it is deduped forever afterwards.
+//
+// This replaced a `settings` row that had to be flipped by hand and a
+// bootstrap flag that only ever fired once. Being stateless is the point: it
+// needs no migration, cannot be left in the wrong position, and keeps guarding
+// the case where a burst happens on a database that is years old.
+const MAX_ANNOUNCED_PER_INGEST = 10;
+
+// Finished queue rows are kept this long, purely so the admin history can show
+// what happened to a notification.
+const OUTBOX_RETENTION_DAYS = 90;
 
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 const isoIn = (seconds) =>
   new Date(Date.now() + seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-// ─── settings helpers ────────────────────────────────────────
-export async function getSetting(db, key) {
-  const row = await db.prepare(`SELECT value FROM settings WHERE key = ?1`).bind(key).first();
-  return row ? row.value : null;
-}
-
-export async function setSetting(db, key, value) {
-  await db
-    .prepare(
-      `INSERT INTO settings (key, value) VALUES (?1, ?2)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-    )
-    .bind(key, String(value))
-    .run();
-}
-
-/**
- * Dry run means "record it, do not send it". It is on when the env var says so
- * or when the database has never been bootstrapped — the guard that stops a
- * first deployment from pushing the entire back catalogue at everyone.
- */
-export async function isDryRun(db, env) {
-  if (String(env.NOTIFY_DRY_RUN || "") === "true") return true;
-  return (await getSetting(db, "dry_run")) === "true";
-}
+const changesOf = (result) => (result && result.meta && result.meta.changes) || 0;
 
 // ─── entry normalisation ─────────────────────────────────────
 /**
@@ -78,9 +88,7 @@ export function normalizeEntry(raw, defaults = {}) {
   if (!raw || !raw.id || !raw.title || !raw.url) return null;
 
   const audience =
-    raw.audience && typeof raw.audience === "object"
-      ? raw.audience
-      : { kind: "topic" };
+    raw.audience && typeof raw.audience === "object" ? raw.audience : { kind: "topic" };
 
   return {
     id: String(raw.id),
@@ -103,7 +111,7 @@ export function normalizeEntry(raw, defaults = {}) {
 
 // ─── audience resolution ─────────────────────────────────────
 /**
- * Which followers should receive this notification.
+ * Turn one entry's audience into a WHERE clause over `followers`.
  *
  *   topic  — followers subscribed to it (an empty `topics` means "everything")
  *   all    — every follower, ignoring topic preferences
@@ -111,143 +119,166 @@ export function normalizeEntry(raw, defaults = {}) {
  *
  * A follower muted past `muted_until` is skipped in every case: muting is about
  * the reader's attention, not about what the author considers important.
+ *
+ * Returned as SQL rather than as a list of ids on purpose — see the note at the
+ * top of the file. ?1 is the notification id and ?2 is the current timestamp;
+ * anything this adds starts at ?3.
  */
-async function resolveAudience(db, notification) {
+function audienceWhere(entry) {
   let audience;
   try {
-    audience = JSON.parse(notification.audience_json);
+    audience = JSON.parse(entry.audience_json);
   } catch {
     audience = { kind: "topic" };
   }
-  const now = nowIso();
 
-  // `exclude` is applied to whatever the kind selected, so it works the same for
-  // a topic fan-out, an `all` broadcast and an explicit user list. Its main use
-  // is leaving out whoever triggered the notification.
-  const excluded = new Set(
-    (Array.isArray(audience.exclude) ? audience.exclude : []).map(String)
-  );
-  const withoutExcluded = (rows) =>
-    (rows || []).map((r) => r.github_id).filter((id) => !excluded.has(String(id)));
-
-  if (audience.kind === "users" && Array.isArray(audience.users)) {
-    const wanted = audience.users.map((u) => String(u));
-    if (wanted.length === 0) return [];
-    const placeholders = wanted.map((_, i) => `?${i + 2}`).join(", ");
-    const { results } = await db
-      .prepare(
-        `SELECT github_id FROM followers
-         WHERE (muted_until IS NULL OR muted_until < ?1)
-           AND (CAST(github_id AS TEXT) IN (${placeholders}) OR login IN (${placeholders}))`
-      )
-      .bind(now, ...wanted)
-      .all();
-    return withoutExcluded(results);
-  }
+  const unmuted = "(muted_until IS NULL OR muted_until < ?2)";
 
   if (audience.kind === "all") {
-    const { results } = await db
-      .prepare(
-        `SELECT github_id FROM followers WHERE muted_until IS NULL OR muted_until < ?1`
-      )
-      .bind(now)
-      .all();
-    return withoutExcluded(results);
+    return { where: unmuted, params: [] };
+  }
+
+  if (audience.kind === "users") {
+    const wanted = (Array.isArray(audience.users) ? audience.users : [])
+      .slice(0, MAX_EXPLICIT_USERS)
+      .map(String);
+    // An explicit audience of nobody is a no-op, not a broadcast.
+    if (wanted.length === 0) return null;
+    const list = wanted.map((_, i) => `?${i + 3}`).join(", ");
+    return {
+      where: `${unmuted} AND (CAST(github_id AS TEXT) IN (${list}) OR login IN (${list}))`,
+      params: wanted,
+    };
   }
 
   // Default: topic. `topics = ''` is an explicit "no filter", which is the state
   // a reader is in until they touch the preference toggles.
-  const { results } = await db
-    .prepare(
-      `SELECT github_id FROM followers
-       WHERE (muted_until IS NULL OR muted_until < ?1)
-         AND (topics = '' OR (',' || topics || ',') LIKE '%,' || ?2 || ',%')`
-    )
-    .bind(now, notification.topic)
-    .all();
-  return withoutExcluded(results);
+  return {
+    where: `${unmuted} AND (topics = '' OR (',' || topics || ',') LIKE '%,' || ?3 || ',%')`,
+    params: [entry.topic],
+  };
 }
 
 // ─── ingest ──────────────────────────────────────────────────
 /**
- * Record entries and fan them out.
+ * Record entries, fan them out, and queue the pushes.
  *
- * @returns {{ingested:string[], skipped:string[], deliveries:number, queued:number, dryRun:boolean}}
+ * Two round trips whatever the input size: one batch that inserts the
+ * notifications and reports which of them were new, and one batch that writes
+ * the inbox and the queue for exactly those.
+ *
+ * @returns {{ingested:string[], skipped:string[], deliveries:number, queued:number, absorbed?:boolean}}
  */
 export async function ingestEntries(db, env, rawEntries, defaults = {}) {
-  const dryRun = await isDryRun(db, env);
-  const result = { ingested: [], skipped: [], deliveries: 0, queued: 0, dryRun };
+  const result = { ingested: [], skipped: [], deliveries: 0, queued: 0 };
 
-  for (const raw of rawEntries || []) {
-    const entry = normalizeEntry(raw, defaults);
-    if (!entry) continue;
+  const entries = (rawEntries || [])
+    .map((raw) => normalizeEntry(raw, defaults))
+    .filter(Boolean);
+  if (entries.length === 0) return result;
 
-    const inserted = await db
-      .prepare(
-        `INSERT OR IGNORE INTO notifications
-           (id, type, topic, title, body, url, image, tag, audience_json, silent, source, published_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`
-      )
-      .bind(
-        entry.id,
-        entry.type,
-        entry.topic,
-        entry.title,
-        entry.body,
-        entry.url,
-        entry.image,
-        entry.tag,
-        entry.audience_json,
-        entry.silent,
-        entry.source,
-        entry.published_at
-      )
-      .run();
-
-    // Already known — this is the replay/edit case, and it must not resend.
-    if (!inserted.meta || inserted.meta.changes === 0) {
-      result.skipped.push(entry.id);
-      continue;
-    }
-    result.ingested.push(entry.id);
-
-    const recipients = await resolveAudience(db, entry);
-    if (recipients.length === 0) continue;
-
-    // Inbox rows are written even in a dry run: the record of what happened is
-    // never the risky part, only the sending is.
-    const inbox = recipients.map((githubId) =>
+  // `RETURNING id` is what makes this one round trip instead of a read followed
+  // by a write: an ignored row returns nothing, so the response itself says
+  // which entries were new without a second query to find out.
+  const inserts = await db.batch(
+    entries.map((entry) =>
       db
         .prepare(
-          `INSERT OR IGNORE INTO deliveries (notification_id, github_id) VALUES (?1, ?2)`
+          `INSERT OR IGNORE INTO notifications
+             (id, type, topic, title, body, url, image, tag, audience_json, silent, source, published_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+           RETURNING id`
         )
-        .bind(entry.id, githubId)
+        .bind(
+          entry.id,
+          entry.type,
+          entry.topic,
+          entry.title,
+          entry.body,
+          entry.url,
+          entry.image,
+          entry.tag,
+          entry.audience_json,
+          entry.silent,
+          entry.source,
+          entry.published_at
+        )
+    )
+  );
+
+  const fresh = [];
+  entries.forEach((entry, i) => {
+    const res = inserts[i];
+    // Two independent signals that the row was actually written, because
+    // getting this wrong is the one failure mode with no symptom: read it as
+    // "nothing was new" and the pipeline goes silent forever. `meta.changes` is
+    // D1's documented field; `RETURNING` is the more direct answer. An ignored
+    // insert reports zero on both, so accepting either cannot over-deliver.
+    const wrote =
+      changesOf(res) > 0 || !!(res && res.results && res.results.length > 0);
+    // Already known — this is the replay/edit case, and it must not resend.
+    if (!wrote) {
+      result.skipped.push(entry.id);
+      return;
+    }
+    result.ingested.push(entry.id);
+    fresh.push(entry);
+  });
+
+  if (fresh.length === 0) return result;
+
+  // Recorded above, deliberately undelivered: the rows now exist, so every one
+  // of these ids is deduped from here on and the NEXT deployment announces only
+  // what it actually added.
+  if (fresh.length > MAX_ANNOUNCED_PER_INGEST) {
+    result.absorbed = true;
+    return result;
+  }
+
+  const now = nowIso();
+  const statements = [];
+  const kinds = []; // parallel to `statements`, so the counts can be attributed
+
+  for (const entry of fresh) {
+    const audience = audienceWhere(entry);
+    if (!audience) continue;
+
+    // The inbox is written for every recipient, push device or not — that is
+    // what lets the bell work for a reader who declined the OS permission.
+    statements.push(
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO deliveries (notification_id, github_id)
+           SELECT ?1, github_id FROM followers WHERE ${audience.where}`
+        )
+        .bind(entry.id, now, ...audience.params)
     );
-    await db.batch(inbox);
-    result.deliveries += recipients.length;
+    kinds.push("delivery");
 
-    if (dryRun) continue;
-
-    const placeholders = recipients.map((_, i) => `?${i + 1}`).join(", ");
-    const { results: devices } = await db
-      .prepare(`SELECT id FROM push_devices WHERE github_id IN (${placeholders})`)
-      .bind(...recipients)
-      .all();
-
-    if (!devices || devices.length === 0) continue;
-
-    const notBefore = isoIn(graceSeconds(env));
-    const queue = devices.map((d) =>
+    // Queued straight off the rows the statement above just wrote, so the
+    // audience is resolved exactly once and never leaves the database.
+    statements.push(
       db
         .prepare(
           `INSERT OR IGNORE INTO outbox (notification_id, device_id, not_before)
-           VALUES (?1, ?2, ?3)`
+           SELECT ?1, p.id, ?2
+             FROM push_devices p
+            WHERE p.github_id IN (SELECT github_id FROM deliveries WHERE notification_id = ?1)`
         )
-        .bind(entry.id, d.id, notBefore)
+        .bind(entry.id, now)
     );
-    await db.batch(queue);
-    result.queued += devices.length;
+    kinds.push("queued");
   }
+
+  if (statements.length === 0) return result;
+
+  // Sequential and transactional: the outbox statement for an entry always sees
+  // the deliveries the statement before it wrote.
+  const written = await db.batch(statements);
+  written.forEach((res, i) => {
+    if (kinds[i] === "delivery") result.deliveries += changesOf(res);
+    else result.queued += changesOf(res);
+  });
 
   return result;
 }
@@ -269,11 +300,14 @@ function classify(status) {
   return "dead";
 }
 
-// Exponential, in seconds, indexed by attempt count.
-const BACKOFF = [60, 300, 900, 3600, 10800];
-
 /**
  * Send one bounded batch of queued pushes.
+ *
+ * Two round trips regardless of batch size: one SELECT to claim the work, and
+ * one batch at the end carrying every state change plus the "how much is left"
+ * count. The sends themselves happen in between, holding no transaction — a
+ * slow push service therefore delays nothing but itself.
+ *
  * @returns {{sent:number, dropped:number, retried:number, dead:number, remaining:number}}
  */
 export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
@@ -299,7 +333,10 @@ export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
 
   if (!rows || rows.length === 0) return stats;
 
+  const writes = [];
+
   for (const row of rows) {
+    const device = { endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth };
     const payload = {
       id: row.notification_id,
       title: row.title,
@@ -313,36 +350,28 @@ export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
 
     let res;
     try {
-      res = await sendWebPush(
-        { endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth },
-        payload,
-        env,
-        { ttl: 86400, urgency: row.silent ? "low" : "normal" }
-      );
-
+      res = await sendWebPush(device, payload, env, {
+        ttl: 86400,
+        urgency: row.silent ? "low" : "normal",
+      });
       if (!res.ok && classify(res.status) === "shrink") {
-        res = await sendWebPush(
-          { endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth },
-          null,
-          env,
-          { ttl: 86400 }
-        );
+        res = await sendWebPush(device, null, env, { ttl: 86400 });
       }
     } catch (e) {
       // sendWebPush only THROWS for configuration faults (missing or malformed
       // VAPID keys) — never for a delivery failure, which comes back as a status.
       // A config fault is not this row's problem and would be true of every other
       // row too, so marking them all dead would destroy the queue over one typo.
-      // Abort instead, leave everything pending, and say why.
+      // Stop here, flush whatever already succeeded, leave the rest pending.
       stats.configError = String(e && e.message ? e.message : e);
       stats.aborted = true;
-      return stats;
+      break;
     }
 
     const stamp = nowIso();
 
     if (res.ok) {
-      await db.batch([
+      writes.push(
         db
           .prepare(
             `UPDATE outbox SET state = 'sent', attempts = attempts + 1, updated_at = ?1 WHERE id = ?2`
@@ -350,8 +379,8 @@ export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
           .bind(stamp, row.outbox_id),
         db
           .prepare(`UPDATE push_devices SET last_ok_at = ?1, fail_count = 0 WHERE id = ?2`)
-          .bind(stamp, row.device_id),
-      ]);
+          .bind(stamp, row.device_id)
+      );
       stats.sent++;
       continue;
     }
@@ -363,21 +392,21 @@ export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
     if (action === "drop") {
       // Deleting the device cascades naturally: its queued rows join to nothing
       // and are cleaned up by pruneOutbox().
-      await db.batch([
+      writes.push(
         db.prepare(`DELETE FROM push_devices WHERE id = ?1`).bind(row.device_id),
         db
           .prepare(
             `UPDATE outbox SET state = 'dead', attempts = ?1, last_error = ?2, updated_at = ?3 WHERE id = ?4`
           )
-          .bind(attempts, error, stamp, row.outbox_id),
-      ]);
+          .bind(attempts, error, stamp, row.outbox_id)
+      );
       stats.dropped++;
       continue;
     }
 
     if (action === "retry" && attempts < MAX_ATTEMPTS) {
       const delay = BACKOFF[Math.min(attempts - 1, BACKOFF.length - 1)];
-      await db.batch([
+      writes.push(
         db
           .prepare(
             `UPDATE outbox SET attempts = ?1, not_before = ?2, last_error = ?3, updated_at = ?4 WHERE id = ?5`
@@ -385,13 +414,13 @@ export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
           .bind(attempts, isoIn(delay), error, stamp, row.outbox_id),
         db
           .prepare(`UPDATE push_devices SET fail_count = fail_count + 1 WHERE id = ?1`)
-          .bind(row.device_id),
-      ]);
+          .bind(row.device_id)
+      );
       stats.retried++;
       continue;
     }
 
-    await db.batch([
+    writes.push(
       db
         .prepare(
           `UPDATE outbox SET state = 'dead', attempts = ?1, last_error = ?2, updated_at = ?3 WHERE id = ?4`
@@ -399,37 +428,41 @@ export async function drainOutbox(db, env, limit = DRAIN_BATCH) {
         .bind(attempts, error, stamp, row.outbox_id),
       db
         .prepare(`UPDATE push_devices SET fail_count = fail_count + 1 WHERE id = ?1`)
-        .bind(row.device_id),
-    ]);
+        .bind(row.device_id)
+    );
     stats.dead++;
   }
 
-  const pending = await db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM outbox WHERE state = 'pending' AND not_before <= ?1`
-    )
-    .bind(nowIso())
-    .first();
-  stats.remaining = pending ? pending.n : 0;
+  // The backlog count rides along on the write batch rather than paying for a
+  // round trip of its own. It is the last statement, so it counts what is left
+  // AFTER everything above has landed.
+  writes.push(
+    db
+      .prepare(`SELECT COUNT(*) AS n FROM outbox WHERE state = 'pending' AND not_before <= ?1`)
+      .bind(nowIso())
+  );
+
+  const written = await db.batch(writes);
+  const tail = written[written.length - 1];
+  const count = tail && tail.results && tail.results[0];
+  stats.remaining = count ? count.n : 0;
 
   return stats;
 }
 
 /**
- * Housekeeping: finished queue rows, rows whose device or notification no longer
- * exists, and devices that have failed far past any plausible recovery.
+ * Housekeeping: finished queue rows, rows whose device no longer exists, and
+ * devices that have failed far past any plausible recovery. One round trip.
  */
 export async function pruneOutbox(db) {
-  const cutoff = new Date(Date.now() - 90 * 86400 * 1000)
+  const cutoff = new Date(Date.now() - OUTBOX_RETENTION_DAYS * 86400 * 1000)
     .toISOString()
     .replace(/\.\d{3}Z$/, "Z");
   await db.batch([
     db
       .prepare(`DELETE FROM outbox WHERE state IN ('sent','dead') AND created_at < ?1`)
       .bind(cutoff),
-    db.prepare(
-      `DELETE FROM outbox WHERE device_id NOT IN (SELECT id FROM push_devices)`
-    ),
+    db.prepare(`DELETE FROM outbox WHERE device_id NOT IN (SELECT id FROM push_devices)`),
     db.prepare(`DELETE FROM push_devices WHERE fail_count > 10`),
   ]);
 }

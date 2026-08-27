@@ -37,14 +37,25 @@ export function b64urlToBytes(str) {
   return bytes;
 }
 
+// The session key is imported on EVERY authenticated request, and the secret
+// behind it changes only when the deployment does. Caching the imported
+// CryptoKey at module scope takes one Web Crypto call out of the hot path
+// without changing what is signed or verified. Isolate-local, so nothing here
+// needs invalidating beyond the secret changing under it.
+let hmacKeyCache = null; // { secret, key }
+
 async function importKey(secret) {
-  return crypto.subtle.importKey(
+  if (hmacKeyCache && hmacKeyCache.secret === secret) return hmacKeyCache.key;
+
+  const key = await crypto.subtle.importKey(
     "raw",
     enc.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"]
   );
+  hmacKeyCache = { secret, key };
+  return key;
 }
 
 /**

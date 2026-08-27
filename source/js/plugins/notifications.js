@@ -314,12 +314,12 @@ async function refresh({ quiet = false } = {}) {
     paint();
   }
 
-  const [inbox, prefs] = await Promise.all([
-    api("/api/me/notifications"),
-    api("/api/me/preferences"),
-  ]);
+  // ONE call: the inbox endpoint returns the follow state and topic selection
+  // alongside the items, because painting the panel always needed both and
+  // asking twice cost a second round trip to render the same view.
+  const inbox = await api("/api/me/notifications");
 
-  if (!inbox || !prefs) {
+  if (!inbox) {
     // A failed call while signed in is a transient backend problem, not a
     // sign-out; keep whatever the panel already shows rather than flashing an
     // empty state at the reader.
@@ -330,11 +330,11 @@ async function refresh({ quiet = false } = {}) {
 
   state = {
     ...state,
-    phase: prefs.following ? "following" : "not-following",
+    phase: inbox.following ? "following" : "not-following",
     items: inbox.items || [],
     unread: inbox.unread || 0,
     topics: config.topics,
-    selected: String(prefs.topics || "")
+    selected: String(inbox.topics || "")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
