@@ -37,8 +37,9 @@ database_id = ""  # Fill after: wrangler d1 create <db-name>
 # ─── ALLOWED_ORIGIN is deliberately NOT declared here ───────
 # It lives in the Cloudflare dashboard instead (Workers & Pages → <worker> →
 # Settings → Variables and Secrets), so the CORS allowlist can be changed and
-# take effect WITHOUT a redeploy. Declaring it here would defeat that: every
-# `wrangler deploy` overwrites the dashboard value with whatever this file says.
+# take effect WITHOUT a redeploy. `keep_vars` above is what makes that stick —
+# without it, a deploy replaces the Worker's whole plain-text variable set with
+# whatever this file lists, and a dashboard-only value is deleted.
 #
 # Format — comma-separated DOMAINS. Scheme and port are ignored.
 #   blog.example.com      that host, any scheme, any port
@@ -85,15 +86,9 @@ VAPID_PUBLIC_KEY = ""
 [observability]
 enabled = false
 head_sampling_rate = 1
-redact_query_string = false
 
 [observability.logs]
 enabled = true
 head_sampling_rate = 1
 persist = true
 invocation_logs = true
-
-[observability.traces]
-enabled = true
-persist = true
-head_sampling_rate = 1

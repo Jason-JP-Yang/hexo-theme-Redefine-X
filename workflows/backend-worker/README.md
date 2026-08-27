@@ -5,7 +5,7 @@ front-end of its own — it serves JSON and proxies, and the theme talks to it.
 
 Four concerns, one Worker, one custom domain:
 
-| | |
+| Structure| Information|
 | --- | --- |
 | **Instant Notes** | D1-backed notes on the home banner. Public read, admin CRUD. |
 | **Auth** | Verifies a giscus-derived GitHub token and mints a short-lived HMAC session. Every verified reader gets one; only allowlisted ids get `isAdmin`. |
@@ -43,7 +43,7 @@ or subrequest ceiling however many followers there are.
 
 Seven values run this Worker and nothing reads an eighth.
 
-| | Where | What |
+| | Location | Use |
 | --- | --- | --- |
 | `ADMIN_LOGINS` | `wrangler.toml` | Comma-separated GitHub **numeric ids** (immutable — a login name can be released and re-registered by someone else). Decides the `isAdmin` claim. |
 | `ALLOWED_ORIGIN` | **dashboard** | CORS allowlist. Deliberately not in `wrangler.toml` so it can be changed without a redeploy. |
@@ -414,6 +414,7 @@ repo): Settings → Webhooks → Add webhook
 
 GitHub sends a ping immediately; a `200` with `{"pong": true}` means it is wired.
 
+
 ## Local development
 
 ```sh
@@ -431,8 +432,7 @@ expressed; the fourth is rejected in code rather than by convention.
 | --- | --- | --- | --- | --- | --- |
 | **A** | `localhost:4000` | `localhost:8787` | `local` | yes — `.dev.vars` sets `ALLOWED_ORIGIN=local` | Full-stack work. Everything writes to the **local** D1. |
 | **B** | `localhost:4000` | production | `production` *(default)* | only if `local` is added to the production `ALLOWED_ORIGIN` | Theme work against real data. |
-| **C** | deployed site | production | ignored — forced | yes | Live. |
-| ~~D~~ | deployed site | `localhost:8787` | — | — | **Impossible.** A deployed page ignores `backend: local` entirely. |
+| **C** | deployed site | production | ignored — forced | yes | Live. | 
 
 Two guards make that enforceable:
 

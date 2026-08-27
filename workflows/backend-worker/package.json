@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "db:backup": "wrangler d1 export instant-notes-db --remote --output ./d1-backup.sql",
     "db:init": "wrangler d1 execute instant-notes-db --remote --file=./schema.sql",
     "db:init:local": "wrangler d1 execute instant-notes-db --local --file=./schema.sql",
     "vapid:keygen": "node scripts/vapid-keygen.mjs"
