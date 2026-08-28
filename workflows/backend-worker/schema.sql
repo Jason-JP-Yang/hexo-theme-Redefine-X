@@ -105,6 +105,17 @@ CREATE TABLE followers (
 -- scarce direction, to record something nothing depended on. A subscription that
 -- is really finished says so with a 404 or a 410, which is authoritative and
 -- immediate; the consumer deletes on that instead of counting up to a threshold.
+-- `device` is the one fact about a subscription its User-Agent cannot carry: a
+-- laptop and a desktop send byte-identical strings, and only the machine itself
+-- knows which it is. The subscribing browser works it out once and sends it; the
+-- management panel renders browser and OS from `ua` and the machine class from
+-- here. Empty means the client declined to guess, which the panel shows as
+-- "Unknown" rather than picking one.
+--
+-- Existing databases take it as a migration rather than a rebuild — this table
+-- holds live subscriptions that cannot be recreated without every reader
+-- re-granting permission:
+--   ALTER TABLE push_devices ADD COLUMN device TEXT NOT NULL DEFAULT '';
 CREATE TABLE push_devices (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   github_id  INTEGER NOT NULL,
@@ -112,6 +123,7 @@ CREATE TABLE push_devices (
   p256dh     TEXT    NOT NULL,
   auth       TEXT    NOT NULL,
   ua         TEXT    NOT NULL DEFAULT '',
+  device     TEXT    NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 

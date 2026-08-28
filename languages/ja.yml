@@ -175,6 +175,7 @@ error_book:
 notifications:
   title: 通知
   close: 閉じる
+  back: 戻る
   mark_read: すべて既読にする
   signed_out: GitHub でサインインするとこのブログをフォローできます。
   sign_in: GitHub でサインイン
@@ -182,14 +183,39 @@ notifications:
   follow_nav: フォロー
   follow_blog: ブログをフォロー
   following: フォロー中
-  unfollow: フォロー解除
-  enable_push: この端末で通知を有効にする
   empty: フォローすると新着記事をお知らせします。
   empty_following: まだ何もありません。新着はここに表示されます。
-  push_denied: ブラウザで通知がブロックされています。新着はここに表示されます。
-  push_unsupported: このブラウザはプッシュ通知に対応していません。新着はここに表示されます。
-  push_insecure: プッシュには安全な接続（https または localhost）が必要です。新着はここに表示されます。
-  push_ios: iPhone ではホーム画面に追加すると通知を受け取れます。
-  topic_posts: 記事
-  topic_announcements: お知らせ
-  topic_notes: ノート
+  push_denied: ブラウザの設定で通知がブロックされています。
+  push_unsupported: このブラウザはプッシュ通知に対応していません。
+  push_insecure: プッシュには安全な接続（https または localhost）が必要です。
+  push_ios: iPhone ではまずホーム画面に追加してください。
+  still_inbox: 新着はここに表示されます。
+  unreachable: 通知サービスに接続できませんでした。購読状態は変わっていません。
+  retry: 再試行
+  manage: 購読を管理
+  manage_title: 購読を管理
+  back_to_inbox: 通知に戻る
+  section_delivery: 受け取る内容
+  section_devices: 登録済みの端末
+  always_on: 常に有効
+  opt_inbox: ブログ内でメッセージを受け取る
+  opt_push: このブラウザでプッシュ通知を受け取る
+  opt_push_hint: このブラウザをプッシュ端末として登録します。
+  opt_announcements: ブログのお知らせを受け取る
+  opt_notes: 新しいノートを受け取る
+  opt_posts: 新しい記事を受け取る
+  no_devices: プッシュを登録したブラウザはまだありません。
+  this_browser: このブラウザ
+  remove_device: この端末を削除
+  subscribed: 登録
+  unknown: 不明
+  device_laptop: ノート PC
+  device_desktop: デスクトップ
+  device_mobile: スマートフォン
+  device_tablet: タブレット
+  logout: このブラウザからログアウト
+  logout_confirm: もう一度押すとログアウト
+  logout_note: このブラウザからログアウトすると、記事へのコメント、Masonry での写真へのリアクション、このブラウザでの通知とプッシュの受信ができなくなります。次回サインイン時にブログが自動で復元を試みます。失敗した場合は、もう一度フォローを押すとプッシュが戻ります。
+  unfollow_blog: ブログのフォローを解除
+  unfollow_confirm: もう一度押すと解除
+  unfollow_note: このブログのフォローを解除すると、どのブラウザでもプッシュ通知を受け取らなくなります。受信箱は消去され、復元できません。サインインは維持されます。サインアウトするには、記事下のコメントタブをご利用ください。

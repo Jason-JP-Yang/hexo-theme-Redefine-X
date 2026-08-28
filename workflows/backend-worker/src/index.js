@@ -58,6 +58,16 @@ const NOTE_TITLE = "New note";
 // returns the last 48h) and a pile of them is noise by the time anyone looks.
 const NOTE_TAG = "notes";
 
+// What a subscribing browser is allowed to call itself. An allowlist rather than
+// a length cap because this string is rendered as an icon name by the panel, and
+// the set it can choose from is closed.
+const DEVICE_CLASSES = new Set(["laptop", "desktop", "mobile", "tablet"]);
+
+// Enough of an endpoint for a browser to recognise its OWN subscription in the
+// device list, and not enough to be one. Push endpoints are bearer URLs — whoever
+// holds one can send to it — so the full string never leaves the database.
+const ENDPOINT_TAIL = 18;
+
 // A `background()` helper used to live here, deferring push sending past the
 // response with waitUntil. Nothing needs it any more: handing a fan-out to the
 // queue is three D1 round trips and one sendBatch, with no crypto and no calls
@@ -493,20 +503,24 @@ app.post("/api/push/subscribe", userMiddleware, async (c) => {
     upsertFollower(db, session, body.topics),
     db
       .prepare(
-        `INSERT INTO push_devices (github_id, endpoint, p256dh, auth, ua)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        `INSERT INTO push_devices (github_id, endpoint, p256dh, auth, ua, device)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(endpoint) DO UPDATE SET
            github_id = excluded.github_id,
            p256dh    = excluded.p256dh,
            auth      = excluded.auth,
-           ua        = excluded.ua`
+           ua        = excluded.ua,
+           -- A re-subscribe from a client too old to send this must not erase
+           -- what an earlier one already worked out.
+           device    = COALESCE(NULLIF(excluded.device, ''), push_devices.device)`
       )
       .bind(
         session.id,
         String(endpoint),
         String(p256dh),
         String(auth),
-        String(c.req.header("User-Agent") || "").slice(0, 180)
+        String(c.req.header("User-Agent") || "").slice(0, 180),
+        DEVICE_CLASSES.has(String(body.device)) ? String(body.device) : ""
       ),
   ]);
 
@@ -517,6 +531,11 @@ app.post("/api/push/subscribe", userMiddleware, async (c) => {
 // Removes the device only. The follower row and the inbox survive, so the reader
 // keeps their history and can re-subscribe without losing it. Leaving entirely
 // is PUT /api/me/preferences { follow: false }.
+//
+// Three ways to name what to remove, all scoped to the caller's own id:
+//   { endpoint } — this browser, which is the only one that knows its endpoint;
+//   { id }       — a row from the reader's device list, revoked from elsewhere;
+//   neither      — every device on the account.
 app.delete("/api/push/subscribe", userMiddleware, async (c) => {
   const session = c.get("user");
   let body = {};
@@ -530,6 +549,14 @@ app.delete("/api/push/subscribe", userMiddleware, async (c) => {
       .prepare(`DELETE FROM push_devices WHERE endpoint = ?1 AND github_id = ?2`)
       .bind(String(body.endpoint), session.id)
       .run();
+  } else if (body && body.id != null) {
+    // `github_id` in the WHERE is what makes a row id safe to accept from a
+    // browser: the id space is global and guessable, so the scope is what stops
+    // one reader revoking another's device.
+    await db
+      .prepare(`DELETE FROM push_devices WHERE id = ?1 AND github_id = ?2`)
+      .bind(Number(body.id) || 0, session.id)
+      .run();
   } else {
     await db.prepare(`DELETE FROM push_devices WHERE github_id = ?1`).bind(session.id).run();
   }
@@ -537,19 +564,21 @@ app.delete("/api/push/subscribe", userMiddleware, async (c) => {
 });
 
 // ─── USER: the in-site inbox ────────────────────────────────
-// Returns everything the notification panel paints in ONE round trip: the items,
-// the badge count, the device count and the follow state. The panel used to ask
-// for the last two separately, which cost a second HTTP request and three more
-// queries to render exactly the same view.
+// Returns everything BOTH pages of the notification panel paint, in ONE round
+// trip: the items, the badge count, the follow state, the topic selection, and
+// the reader's registered devices. The panel used to ask for those separately,
+// which cost a second HTTP request and three more queries to render the same
+// view — and the device list is very nearly free here, because the count it
+// replaces already had to walk the same index.
 app.get("/api/me/notifications", userMiddleware, async (c) => {
   const session = c.get("user");
   const db = c.env.DB;
 
-  // Both halves read the reader's own row by primary key. The inbox arrives as
+  // All three read the reader's own row by primary key. The inbox arrives as
   // two JSON arrays on it, so the items cost one row plus one keyed lookup per
   // notification — where a (notification × follower) table cost an index walk
   // and a second row for every item on every panel open.
-  const [items, meta] = await db.batch([
+  const [items, meta, devices] = await db.batch([
     db
       .prepare(
         `SELECT n.id, n.type, n.topic, n.title, n.body, n.url, n.image,
@@ -572,10 +601,20 @@ app.get("/api/me/notifications", userMiddleware, async (c) => {
     // The badge is a scalar off the same row — no json_each, no counting.
     db
       .prepare(
-        `SELECT json_array_length(f.unread) AS unread, f.topics, f.muted_until,
-                (SELECT COUNT(*) FROM push_devices WHERE github_id = ?1) AS devices
+        `SELECT json_array_length(f.unread) AS unread, f.topics, f.muted_until
            FROM followers f
           WHERE f.github_id = ?1`
+      )
+      .bind(session.id),
+    // Browser and OS are parsed from `ua` in the panel rather than here: the
+    // strings are long, the rules change often, and a Worker invocation has ten
+    // milliseconds to spend on things only it can do.
+    db
+      .prepare(
+        `SELECT id, ua, device, created_at, substr(endpoint, -${ENDPOINT_TAIL}) AS tail
+           FROM push_devices
+          WHERE github_id = ?1
+          ORDER BY created_at DESC`
       )
       .bind(session.id),
   ]);
@@ -585,7 +624,7 @@ app.get("/api/me/notifications", userMiddleware, async (c) => {
   return c.json({
     items: items.results || [],
     unread: row ? row.unread || 0 : 0,
-    devices: row ? row.devices || 0 : 0,
+    devices: devices.results || [],
     following: !!row,
     topics: row ? row.topics : "",
     muted_until: row ? row.muted_until : null,
@@ -657,7 +696,10 @@ app.get("/api/me/preferences", userMiddleware, async (c) => {
       .prepare(`SELECT topics, muted_until, created_at FROM followers WHERE github_id = ?1`)
       .bind(session.id),
     db
-      .prepare(`SELECT id, ua, created_at FROM push_devices WHERE github_id = ?1`)
+      .prepare(
+        `SELECT id, ua, device, created_at, substr(endpoint, -${ENDPOINT_TAIL}) AS tail
+           FROM push_devices WHERE github_id = ?1`
+      )
       .bind(session.id),
   ]);
 

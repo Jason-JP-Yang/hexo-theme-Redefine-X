@@ -87,13 +87,14 @@ const UPSERT_FOLLOWER = `INSERT INTO followers (github_id, login, avatar, topics
      login  = excluded.login,
      topics = COALESCE(?4, followers.topics)`;
 
-const UPSERT_DEVICE = `INSERT INTO push_devices (github_id, endpoint, p256dh, auth, ua)
-   VALUES (?1, ?2, ?3, ?4, ?5)
+const UPSERT_DEVICE = `INSERT INTO push_devices (github_id, endpoint, p256dh, auth, ua, device)
+   VALUES (?1, ?2, ?3, ?4, ?5, ?6)
    ON CONFLICT(endpoint) DO UPDATE SET
      github_id = excluded.github_id,
      p256dh    = excluded.p256dh,
      auth      = excluded.auth,
-     ua        = excluded.ua`;
+     ua        = excluded.ua,
+     device    = COALESCE(NULLIF(excluded.device, ''), push_devices.device)`;
 
 check("upsertFollower — insert then rename, keeping topics", () => {
   const f = db.prepare(UPSERT_FOLLOWER);
@@ -111,17 +112,15 @@ check("upsertFollower — insert then rename, keeping topics", () => {
 
 check("push_devices upsert — re-subscribe rewrites, never duplicates", () => {
   const d = db.prepare(UPSERT_DEVICE);
-  d.run(1, "https://fcm/a", "p", "a", "ua");
-  d.run(1, "https://fcm/b", "p", "a", "ua");
-  d.run(2, "https://fcm/c", "p", "a", "ua");
-  d.run(3, "https://fcm/d", "p", "a", "ua");
-  d.run(1, "https://fcm/a", "p2", "a2", "ua2"); // same browser again
+  d.run(1, "https://fcm/a", "p", "a", "ua", "laptop");
+  d.run(1, "https://fcm/b", "p", "a", "ua", "mobile");
+  d.run(2, "https://fcm/c", "p", "a", "ua", "");
+  d.run(3, "https://fcm/d", "p", "a", "ua", "tablet");
+  d.run(1, "https://fcm/a", "p2", "a2", "ua2", ""); // same browser, older client
   eq(db.prepare(`SELECT COUNT(*) n FROM push_devices`).get().n, 4, "devices");
-  eq(
-    db.prepare(`SELECT p256dh FROM push_devices WHERE endpoint='https://fcm/a'`).get().p256dh,
-    "p2",
-    "keys rewritten"
-  );
+  const a = db.prepare(`SELECT p256dh, device FROM push_devices WHERE endpoint='https://fcm/a'`).get();
+  eq(a.p256dh, "p2", "keys rewritten");
+  eq(a.device, "laptop", "a blank device does not erase what was known");
   return "4 devices — alice x2, bob, carol";
 });
 
@@ -262,10 +261,14 @@ const INBOX = `SELECT n.id, n.type, n.topic, n.title, n.body, n.url, n.image,
           ORDER BY published_at DESC
           LIMIT ?2`;
 
-const META = `SELECT json_array_length(f.unread) AS unread, f.topics, f.muted_until,
-                (SELECT COUNT(*) FROM push_devices WHERE github_id = ?1) AS devices
+const META = `SELECT json_array_length(f.unread) AS unread, f.topics, f.muted_until
            FROM followers f
           WHERE f.github_id = ?1`;
+
+const DEVICES = `SELECT id, ua, device, created_at, substr(endpoint, -18) AS tail
+           FROM push_devices
+          WHERE github_id = ?1
+          ORDER BY created_at DESC`;
 
 check("inbox query — newest first, ISO timestamps, read flag", () => {
   const rows = db.prepare(INBOX).all(1, 30);
@@ -279,7 +282,14 @@ check("inbox query — newest first, ISO timestamps, read flag", () => {
 check("badge is a scalar off one primary-key row", () => {
   const m = db.prepare(META).get(1);
   eq(m.unread, 4, "unread");
-  eq(m.devices, 2, "devices");
+});
+
+check("device list — the management page's rows, endpoints withheld", () => {
+  const rows = db.prepare(DEVICES).all(1);
+  eq(rows.length, 2, "alice's devices");
+  eq(rows.every((r) => r.tail.length <= 18), true, "never more than the last 18 characters");
+  eq(rows.map((r) => r.device).sort().join(","), "laptop,mobile", "machine class");
+  return rows.map((r) => r.tail).join(", ");
 });
 
 check("meta returns nothing for a stranger → following:false", () => {

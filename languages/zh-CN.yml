@@ -178,6 +178,7 @@ error_book:
 notifications:
   title: 通知
   close: 关闭
+  back: 返回
   mark_read: 全部标为已读
   signed_out: 使用 GitHub 登录即可关注本博客。
   sign_in: 使用 GitHub 登录
@@ -185,14 +186,39 @@ notifications:
   follow_nav: 关注
   follow_blog: 关注本博客
   following: 已关注
-  unfollow: 取消关注
-  enable_push: 在此设备上开启推送
   empty: 关注后即可收到新文章提醒。
   empty_following: 暂时还没有内容，新文章会出现在这里。
-  push_denied: 浏览器已阻止通知，新内容仍会显示在这里。
-  push_unsupported: 此浏览器不支持推送，新内容仍会显示在这里。
-  push_insecure: 推送需要安全连接（https 或 localhost），新内容仍会显示在这里。
-  push_ios: 在 iPhone 上需先将本站添加到主屏幕，才能接收推送通知。
-  topic_posts: 文章
-  topic_announcements: 公告
-  topic_notes: 随记
+  push_denied: 浏览器设置中已阻止通知。
+  push_unsupported: 此浏览器不支持推送。
+  push_insecure: 推送需要安全连接（https 或 localhost）。
+  push_ios: 在 iPhone 上需先将本站添加到主屏幕。
+  still_inbox: 新内容仍会显示在这里。
+  unreachable: 无法连接通知服务，你的订阅未受影响。
+  retry: 重试
+  manage: 管理订阅
+  manage_title: 管理订阅
+  back_to_inbox: 返回通知
+  section_delivery: 接收内容
+  section_devices: 已注册设备
+  always_on: 始终开启
+  opt_inbox: 在博客内接收消息
+  opt_push: 从此浏览器接收推送通知
+  opt_push_hint: 将此浏览器注册为推送设备。
+  opt_announcements: 接收博客公告
+  opt_notes: 接收新的随记
+  opt_posts: 接收新的文章
+  no_devices: 还没有浏览器注册推送。
+  this_browser: 当前浏览器
+  remove_device: 移除此设备
+  subscribed: 订阅于
+  unknown: 未知
+  device_laptop: 笔记本
+  device_desktop: 台式机
+  device_mobile: 手机
+  device_tablet: 平板
+  logout: 从此浏览器登出
+  logout_confirm: 再按一次以登出
+  logout_note: 从此浏览器登出后，你将无法在文章下评论、在 Masonry 中为照片点赞，也不会再从这个浏览器收到通知与推送。下次登录时博客会尝试自动恢复；若失败，重新点击关注即可找回推送。
+  unfollow_blog: 取消关注博客
+  unfollow_confirm: 再按一次以取消关注
+  unfollow_note: 你将不再关注本博客，也不会在任何浏览器上收到推送通知。收件箱会被清空且无法恢复。你仍保持登录状态 —— 如需登出，可在任意文章下方的评论标签中操作。

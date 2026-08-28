@@ -176,6 +176,7 @@ error_book:
 notifications:
   title: Notifications
   close: Close
+  back: Back
   mark_read: Mark all read
   signed_out: Sign in with GitHub to follow this blog.
   sign_in: Sign in with GitHub
@@ -183,14 +184,39 @@ notifications:
   follow_nav: Follow
   follow_blog: Follow the Blog
   following: Following
-  unfollow: Unfollow
-  enable_push: Enable push on this device
   empty: Follow the blog to get notified about new posts.
   empty_following: Nothing yet. New posts will show up here.
-  push_denied: Notifications are blocked in your browser. New items still appear here.
-  push_unsupported: This browser cannot receive push. New items still appear here.
-  push_insecure: Push needs a secure connection (https, or localhost) — new items still appear here.
-  push_ios: On iPhone, add this site to your Home Screen to receive push notifications.
-  topic_posts: Posts
-  topic_announcements: Announcements
-  topic_notes: Notes
+  push_denied: Notifications are blocked in your browser's settings.
+  push_unsupported: This browser cannot receive push.
+  push_insecure: Push needs a secure connection (https, or localhost).
+  push_ios: On iPhone, add this site to your Home Screen first.
+  still_inbox: New items still appear here.
+  unreachable: Couldn't reach the notification service. Your subscription is unchanged.
+  retry: Try again
+  manage: Manage subscription
+  manage_title: Manage subscription
+  back_to_inbox: Back to notifications
+  section_delivery: What you receive
+  section_devices: Registered devices
+  always_on: Always on
+  opt_inbox: Receive messages inside the blog
+  opt_push: Receive push notifications from this browser
+  opt_push_hint: Registers this browser as a push device.
+  opt_announcements: Receive blog announcements
+  opt_notes: Receive new instant notes
+  opt_posts: Receive new blog posts
+  no_devices: No browser is registered for push yet.
+  this_browser: This browser
+  remove_device: Remove this device
+  subscribed: Subscribed
+  unknown: Unknown
+  device_laptop: Laptop
+  device_desktop: Desktop
+  device_mobile: Mobile
+  device_tablet: Tablet
+  logout: Log out from this browser
+  logout_confirm: Press again to log out
+  logout_note: After logging out of this browser you can no longer comment on posts, react to photos in Masonry, or receive notifications and push here. The next time you sign in the blog tries to restore everything automatically; if that fails, press Follow again to get push back.
+  unfollow_blog: Unfollow the blog
+  unfollow_confirm: Press again to unfollow
+  unfollow_note: You will stop following this blog and will no longer receive push notifications on any browser. Your inbox is cleared and cannot be recovered. You stay signed in - to sign out, use the comments tab under any post.

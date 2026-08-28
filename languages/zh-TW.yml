@@ -177,6 +177,7 @@ error_book:
 notifications:
   title: 通知
   close: 關閉
+  back: 返回
   mark_read: 全部標為已讀
   signed_out: 使用 GitHub 登入即可追蹤本部落格。
   sign_in: 使用 GitHub 登入
@@ -184,14 +185,39 @@ notifications:
   follow_nav: 追蹤
   follow_blog: 追蹤本部落格
   following: 已追蹤
-  unfollow: 取消追蹤
-  enable_push: 在此裝置上開啟推播
   empty: 追蹤後即可收到新文章通知。
   empty_following: 目前還沒有內容，新文章會出現在這裡。
-  push_denied: 瀏覽器已封鎖通知，新內容仍會顯示在這裡。
-  push_unsupported: 此瀏覽器不支援推播，新內容仍會顯示在這裡。
-  push_insecure: 推播需要安全連線（https 或 localhost），新內容仍會顯示在這裡。
-  push_ios: 在 iPhone 上需先將本站加入主畫面，才能接收推播通知。
-  topic_posts: 文章
-  topic_announcements: 公告
-  topic_notes: 隨記
+  push_denied: 瀏覽器設定中已封鎖通知。
+  push_unsupported: 此瀏覽器不支援推播。
+  push_insecure: 推播需要安全連線（https 或 localhost）。
+  push_ios: 在 iPhone 上需先將本站加入主畫面。
+  still_inbox: 新內容仍會顯示在這裡。
+  unreachable: 無法連線通知服務，你的訂閱未受影響。
+  retry: 重試
+  manage: 管理訂閱
+  manage_title: 管理訂閱
+  back_to_inbox: 返回通知
+  section_delivery: 接收內容
+  section_devices: 已註冊裝置
+  always_on: 永遠開啟
+  opt_inbox: 在部落格內接收訊息
+  opt_push: 從此瀏覽器接收推播通知
+  opt_push_hint: 將此瀏覽器註冊為推播裝置。
+  opt_announcements: 接收部落格公告
+  opt_notes: 接收新的隨記
+  opt_posts: 接收新的文章
+  no_devices: 還沒有瀏覽器註冊推播。
+  this_browser: 目前瀏覽器
+  remove_device: 移除此裝置
+  subscribed: 訂閱於
+  unknown: 未知
+  device_laptop: 筆記型電腦
+  device_desktop: 桌上型電腦
+  device_mobile: 手機
+  device_tablet: 平板
+  logout: 從此瀏覽器登出
+  logout_confirm: 再按一次以登出
+  logout_note: 從此瀏覽器登出後，你將無法在文章下留言、在 Masonry 中為照片按讚，也不會再從這個瀏覽器收到通知與推播。下次登入時部落格會嘗試自動恢復；若失敗，重新點擊追蹤即可找回推播。
+  unfollow_blog: 取消追蹤部落格
+  unfollow_confirm: 再按一次以取消追蹤
+  unfollow_note: 你將不再追蹤本部落格，也不會在任何瀏覽器上收到推播通知。收件匣會被清空且無法復原。你仍保持登入狀態 —— 如需登出，可在任意文章下方的留言分頁中操作。

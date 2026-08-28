@@ -29,6 +29,7 @@
   if (window.blogAuth) return; // idempotent across swup / double-loads
 
   var GISCUS_SESSION_KEY = "giscus-session";
+  var GISCUS_PARAM = "giscus";
   var GISCUS_ORIGIN = "https://giscus.app";
   var SESSION_CACHE_KEY = "blog-auth-session"; // sessionStorage: {login,avatar,isAdmin,token,exp}
 
@@ -285,7 +286,24 @@
           body: JSON.stringify({ githubToken: token }),
         })
           .then(function (res) {
-            if (!res.ok) return null;
+            // 401 is GitHub itself refusing the token behind this giscus
+            // session — spent, revoked, or expired. Keeping it would leave every
+            // consumer looking signed in and able to do nothing, which is the
+            // state that reads as "the site is broken". Drop it and say so, the
+            // same conclusion giscus-client reaches from its own widget error.
+            if (res.status === 401) {
+              warn("the stored giscus session is no longer valid — signing out");
+              try {
+                localStorage.removeItem(GISCUS_SESSION_KEY);
+              } catch (e) {}
+              tokenCache = null;
+              setTimeout(emit, 0);
+              return null;
+            }
+            if (!res.ok) {
+              warn("identity check failed (" + res.status + ")");
+              return null;
+            }
             return res.json();
           })
           .then(function (data) {
@@ -312,11 +330,30 @@
   }
 
   // ─── login / logout ──────────────────────────────────────
+  /**
+   * This page's URL with any OAuth session (and hash) taken out of it.
+   *
+   * Load-bearing in two places, for the same reason: `?giscus=` is a ONE-TIME
+   * credential, and a URL that still carries a spent one is a trap. As a
+   * `redirect_uri` it comes back as `?giscus=SPENT&giscus=FRESH`, where the
+   * first value — the dead one — is what `searchParams.get()` returns.
+   */
+  function cleanHref() {
+    try {
+      var u = new URL(location.href);
+      u.searchParams.delete(GISCUS_PARAM);
+      u.hash = "";
+      return u.toString();
+    } catch (e) {
+      return location.href;
+    }
+  }
+
   function getLoginUrl() {
     return (
       GISCUS_ORIGIN +
       "/api/oauth/authorize?redirect_uri=" +
-      encodeURIComponent(location.href)
+      encodeURIComponent(cleanHref())
     );
   }
   function login() {
@@ -414,14 +451,33 @@
   };
 
   // ─── boot ────────────────────────────────────────────────
-  // OAuth callback: when returning from GitHub, the URL carries ?giscus=SESSION.
-  // Persist it FIRST (same key/format as client-self-hosted.ts) so getToken()
-  // works immediately. Don't strip the param — giscus-client still needs it.
+  /**
+   * OAuth callback: when returning from GitHub the URL carries ?giscus=SESSION.
+   * Persist it FIRST (same key/format as client-self-hosted.ts) so getToken()
+   * works immediately — this script runs before giscus-client — and then TAKE IT
+   * OUT OF THE URL.
+   *
+   * Stripping it is not tidying. The session is single-use, and this ran on
+   * every load: any later visit to a URL that still carried one — a reload, a
+   * bookmark, an entry picked out of history — overwrote the reader's good,
+   * current session with the spent one. Everything then failed at once and in
+   * unrelated-looking ways: the bell fell back to a Follow button that did
+   * nothing, and the comment widget reported "Bad credentials" and signed the
+   * reader out. giscus-client does strip it, but it is only loaded on pages that
+   * have a comment widget, so the home page kept one indefinitely.
+   *
+   * The LAST value, not the first: a redirect_uri that still carried a spent
+   * session comes back with two of them, oldest first.
+   */
   (function syncOAuthSession() {
     try {
-      var giscusParam = new URL(location.href).searchParams.get("giscus");
-      if (giscusParam)
-        localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(giscusParam));
+      var sessions = new URL(location.href).searchParams.getAll(GISCUS_PARAM);
+      if (!sessions.length) return;
+      localStorage.setItem(
+        GISCUS_SESSION_KEY,
+        JSON.stringify(sessions[sessions.length - 1])
+      );
+      history.replaceState(undefined, document.title, cleanHref());
     } catch (e) {}
   })();
 
@@ -454,9 +510,10 @@
 
   // Warm the identity cache in the background so window.blogAuth.isAdmin is
   // populated soon after load. Consumers PULL via getSession()/getToken() on
-  // their own init; blog:auth-change is only fired on real changes afterwards
-  // (login/logout/iframe sign-out) — see handleSessionChange().
+  // their own init, but this also has to ANNOUNCE its result: the OAuth return
+  // used to be announced by giscus-client's `giscus:session-change`, and that
+  // now never fires here because the param is consumed and stripped above.
   if (readGiscusSession() && !cachedSession) {
-    getSession(false);
+    getSession(false).then(emit);
   }
 })();

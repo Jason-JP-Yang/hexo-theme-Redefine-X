@@ -175,6 +175,7 @@ error_book:
 notifications:
   title: Notifications
   close: Fermer
+  back: Retour
   mark_read: Tout marquer comme lu
   signed_out: Connectez-vous avec GitHub pour suivre ce blog.
   sign_in: Se connecter avec GitHub
@@ -182,14 +183,39 @@ notifications:
   follow_nav: Suivre
   follow_blog: Suivre le blog
   following: Abonné
-  unfollow: Ne plus suivre
-  enable_push: Activer les notifications sur cet appareil
   empty: Suivez le blog pour être averti des nouveaux articles.
   empty_following: Rien pour le moment. Les nouveaux articles apparaîtront ici.
-  push_denied: Les notifications sont bloquées par votre navigateur. Les nouveautés restent visibles ici.
-  push_unsupported: Ce navigateur ne prend pas en charge le push. Les nouveautés restent visibles ici.
-  push_insecure: Le push exige une connexion sécurisée (https ou localhost). Les nouveautés restent visibles ici.
-  push_ios: Sur iPhone, ajoutez ce site à l'écran d'accueil pour recevoir les notifications.
-  topic_posts: Articles
-  topic_announcements: Annonces
-  topic_notes: Notes
+  push_denied: Les notifications sont bloquées dans les réglages de votre navigateur.
+  push_unsupported: Ce navigateur ne prend pas en charge le push.
+  push_insecure: Le push exige une connexion sécurisée (https ou localhost).
+  push_ios: Sur iPhone, ajoutez d'abord ce site à l'écran d'accueil.
+  still_inbox: Les nouveautés restent visibles ici.
+  unreachable: Service de notifications injoignable. Votre abonnement est inchangé.
+  retry: Réessayer
+  manage: Gérer l'abonnement
+  manage_title: Gérer l'abonnement
+  back_to_inbox: Retour aux notifications
+  section_delivery: Ce que vous recevez
+  section_devices: Appareils enregistrés
+  always_on: Toujours actif
+  opt_inbox: Recevoir les messages dans le blog
+  opt_push: Recevoir les notifications push de ce navigateur
+  opt_push_hint: Enregistre ce navigateur comme appareil de push.
+  opt_announcements: Recevoir les annonces du blog
+  opt_notes: Recevoir les nouvelles notes
+  opt_posts: Recevoir les nouveaux articles
+  no_devices: Aucun navigateur n'est encore enregistré pour le push.
+  this_browser: Ce navigateur
+  remove_device: Supprimer cet appareil
+  subscribed: Abonné
+  unknown: Inconnu
+  device_laptop: Portable
+  device_desktop: Ordinateur de bureau
+  device_mobile: Mobile
+  device_tablet: Tablette
+  logout: Se déconnecter de ce navigateur
+  logout_confirm: Appuyez à nouveau pour vous déconnecter
+  logout_note: Après déconnexion de ce navigateur, vous ne pourrez plus commenter les articles, réagir aux photos dans Masonry, ni recevoir de notifications et de push ici. À votre prochaine connexion, le blog tentera de tout restaurer automatiquement ; en cas d'échec, appuyez de nouveau sur Suivre pour retrouver le push.
+  unfollow_blog: Ne plus suivre le blog
+  unfollow_confirm: Appuyez à nouveau pour ne plus suivre
+  unfollow_note: Vous cesserez de suivre ce blog et ne recevrez plus de notifications push sur aucun navigateur. Votre boîte de réception sera vidée et ne pourra pas être récupérée. Vous restez connecté — pour vous déconnecter, utilisez l'onglet des commentaires sous n'importe quel article.

@@ -3,20 +3,30 @@
 
     Mounted from layout.ejs, OUTSIDE the #swup container: the navbar (and with
     it the bell) is rebuilt on every same-page navigation, but this panel must
-    keep its open state and its fetched list across one. Everything inside
-    .np-body / .np-foot is written by source/js/plugins/notifications-inbox.js —
-    the server renders the shell only, because the contents depend on who is
-    signed in, which is not known at build time.
+    keep its open state and its fetched list across one.
+
+    ONE card, TWO pages. The head is shared — it is the same card throughout, so
+    the close button never moves — and the pages slide vertically past each other
+    inside .np-viewport, whose height is animated to whichever page is showing.
+    Everything inside .np-body / .np-foot / .np-manage is written by
+    source/js/plugins/notifications-inbox.js; the server renders the shell only,
+    because the contents depend on who is signed in, which is not known at build
+    time.
 %>
 <div id="notifications-mask" class="notifications-mask"></div>
 
 <aside id="notifications-panel"
        class="notifications-panel"
+       data-page="inbox"
        role="dialog"
        aria-modal="false"
        aria-label="<%= __('notifications.title') %>"
-       aria-hidden="true">
+       aria-hidden="true"
+       inert>
     <header class="np-head">
+        <button type="button" class="np-back" aria-label="<%= __('notifications.back') %>" hidden>
+            <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+        </button>
         <span class="np-title"><%= __('notifications.title') %></span>
         <button type="button" class="np-mark-read" hidden><%= __('notifications.mark_read') %></button>
         <button type="button" class="np-close" aria-label="<%= __('notifications.close') %>">
@@ -24,11 +34,26 @@
         </button>
     </header>
 
-    <div class="np-body">
-        <div class="np-empty">
-            <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
-        </div>
-    </div>
+    <%# The card has no scrollbar; this is how far down the current page the
+        reader is. Always visible, and 100% when there is nothing to scroll. %>
+    <div class="np-progress"><span class="np-progress-bar"></span></div>
 
-    <footer class="np-foot"></footer>
+    <div class="np-viewport">
+        <section class="np-page is-current" data-page="inbox">
+            <div class="np-scroll">
+                <div class="np-body">
+                    <div class="np-empty">
+                        <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
+                    </div>
+                </div>
+            </div>
+            <footer class="np-foot"></footer>
+        </section>
+
+        <section class="np-page" data-page="manage" aria-hidden="true" inert>
+            <div class="np-scroll">
+                <div class="np-manage"></div>
+            </div>
+        </section>
+    </div>
 </aside>
