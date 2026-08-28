@@ -58,15 +58,6 @@ $bell-badge-overhang = 8px
     opacity 1
     transform scale(1)
 
-// Last item in the desktop row, so the badge hanging off its corner hangs off the
-// navbar — the edge layouts/navbarCollapse.js measures against. The padding takes
-// the overhang back inside the box without moving the badge.
-.navbar-list .notifications-bell
-  padding-right $bell-badge-overhang
-
-  .bell-badge
-    right 0
-
 // ─── follow ─────────────────────────────────────────────────
 // The bell IS the inbox, so it only means anything to a reader who follows;
 // everyone else gets the button in its place. `blog-following` is set from the
@@ -105,11 +96,26 @@ follow-button()
   font-size 1rem
   white-space nowrap
 
-// Sized off .sidebar-links .links, whose row height it has to match.
+// The second, narrower switch layouts/navbarCollapse.js measures: even the
+// mobile row runs out of width under a long site title, and the label is the
+// only part of this button that can go without the button going with it. What
+// is left is still the primary-colour disc, not a third grey glyph.
+.navbar-follow-compact .mobile .navbar-follow .follow-trigger
+  width 30px
+  height 30px
+  padding 0
+  border-radius 50%
+  font-size 15px
+
+  .follow-label
+    display none
+
+// Sized off .sidebar-links .links, whose row metrics it has to match exactly —
+// the button is one more entry in that list, not a footer under it.
 .follow-cta
   follow-button()
   width 100%
-  margin-top 8px
+  margin-top 0
   padding 5px 0
   font-size inherit
 
@@ -119,7 +125,6 @@ follow-button()
 
 // The drawer sets its rows at text-2xl/py-1.5/px-2; the button matches them.
 .drawer-navbar-list .follow-cta
-  margin-top 0
   padding 6px 8px
   font-size 1.5rem
   font-weight 600

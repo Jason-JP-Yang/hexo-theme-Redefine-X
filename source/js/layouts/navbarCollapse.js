@@ -22,15 +22,24 @@
  * the mobile navbar on the first frame, before any of this has run — and this
  * adds the case they cannot see: a window wide enough for the breakpoint and too
  * narrow for the links.
+ *
+ * There is a SECOND, narrower switch below the first, measured the same way. The
+ * mobile row is a site title beside three controls, and a long title on a narrow
+ * phone overflows it too — at which point the Follow button drops its label and
+ * becomes a disc. That is the last thing in the row that can be given up; the
+ * button itself stays, because a reader who cannot see it cannot press it.
  */
 
 // Room the row has to regain before it is allowed back, over and above the
 // width it was collapsed at. Anything smaller and a window dragged slowly
 // across the threshold flickers between the two navbars.
 const HYSTERESIS = 24;
+// The label is worth less than the links, so it is given back sooner.
+const COMPACT_HYSTERESIS = 12;
 
 let content = null;
 let needed = 0;
+let compactNeeded = 0;
 let frame = 0;
 let observer = null;
 
@@ -40,6 +49,8 @@ export default function initNavbarCollapse() {
 
   // A page turn can change the navbar's max-width — the home page runs wider
   // than the rest — so the row that fit a moment ago may not now.
+  // `compactNeeded` is deliberately NOT reset with it: the mobile row is the
+  // same three controls on every page, so what it measured still holds.
   needed = 0;
   observe();
   schedule();
@@ -85,21 +96,44 @@ function update() {
   frame = 0;
   if (!content || !content.isConnected) return;
 
-  const collapsed = document.body.classList.contains("navbar-collapsed");
+  const body = document.body;
+  const collapsed = body.classList.contains("navbar-collapsed");
 
   if (!collapsed) {
     const width = rowWidth();
     if (width > content.clientWidth + 1) {
       needed = width;
-      document.body.classList.add("navbar-collapsed");
+      body.classList.add("navbar-collapsed");
+      // Look again at the row we just switched to: it is a different set of
+      // controls, and it has its own threshold below this one.
+      schedule();
     }
     return;
   }
 
   if (needed && content.clientWidth >= needed + HYSTERESIS) {
-    document.body.classList.remove("navbar-collapsed");
+    body.classList.remove("navbar-collapsed");
+    setCompact(false);
     // And look again: the width remembered was measured in the old layout, and
     // if the links still do not fit this puts them straight back.
     schedule();
+    return;
   }
+
+  // The mobile row, measured on its own terms.
+  if (!body.classList.contains("navbar-follow-compact")) {
+    const width = rowWidth();
+    if (width > content.clientWidth + 1) {
+      compactNeeded = width;
+      setCompact(true);
+    }
+  } else if (compactNeeded && content.clientWidth >= compactNeeded + COMPACT_HYSTERESIS) {
+    setCompact(false);
+    schedule();
+  }
+}
+
+function setCompact(on) {
+  document.body.classList.toggle("navbar-follow-compact", on);
+  if (!on) compactNeeded = 0;
 }

@@ -182,8 +182,16 @@ $logo-image-box-width = 34px
               i
                 color var(--default-text-color)
 
+            // The trailing icon group stands apart from the links. Whichever of
+            // its members comes first carries that gap — the notification slot
+            // when notifications are on, the search icon when they are not.
+            &.notifications-bell,
+            &.navbar-follow,
             &.search
               margin-left 26px
+
+            &.navbar-follow + .search
+              margin-left 0
 
             .sub-menu
               position absolute
