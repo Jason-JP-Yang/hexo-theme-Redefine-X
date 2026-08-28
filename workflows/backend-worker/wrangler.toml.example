@@ -2,6 +2,12 @@ name = "backend-blog"
 main = "src/index.js"
 compatibility_date = "2024-12-01"
 
+# Variables set in the Cloudflare dashboard survive a deploy. WITHOUT this,
+# `wrangler deploy` REPLACES the Worker's entire plain-text variable set with
+# whatever [vars] below lists — silently deleting ALLOWED_ORIGIN, which lives
+# only in the dashboard so the CORS allowlist can change without a redeploy.
+keep_vars = true
+
 # ─── Routes ─────────────────────────────────────────────────
 # One Worker serves the Instant Notes API, the auth endpoints, the giscus CORS
 # proxy (comments + masonry likes), AND the notification pipeline. A single
@@ -11,23 +17,58 @@ compatibility_date = "2024-12-01"
 pattern = "backend.example.com"
 custom_domain = true
 
-# ─── Cron: drain the push queue ─────────────────────────────
-# The SECOND half of sending, not the whole of it. Ingest — a new note, a
-# deployment webhook, an admin broadcast — sends the first bounded batch itself,
-# so a small audience is served in the moment and this never has to run for
-# anything to arrive. What it carries is the remainder of a fan-out too large for
-# one invocation, and a retry for a push service that was down at the time.
-#
-# Five minutes, not one: a backlog still clears in minutes, while an idle queue
-# costs 288 indexed SELECTs a day instead of 1,440.
+# ─── Cron: retention only ───────────────────────────────────
+# Once a day, 03:40 UTC. This used to run every five minutes because it carried
+# the second half of SENDING; Queues does that now, and does it within seconds
+# instead of on the next tick. What is left is the inbox retention sweep, which
+# has no reason to wake up 288 times a day to find nothing expired.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["40 3 * * *"]
 
 # ─── D1 Database Binding ────────────────────────────────────
 [[d1_databases]]
 binding = "DB"
 database_name = "instant-notes-db"
 database_id = ""  # Fill after: wrangler d1 create <db-name>
+
+# ─── Queues: the push pipeline ──────────────────────────────
+# Producer side. One message carries a rendered payload plus up to 25
+# subscriptions (~8 KB), so the consumer needs no database read to send.
+[[queues.producers]]
+binding = "NOTIFY_QUEUE"
+queue = "blog-push"
+
+# Consumer side. The two numbers here are the whole design:
+#
+#   max_batch_size = 1   Not a throughput setting — a subrequest budget. The free
+#                        plan allows 50 subrequests per invocation and counts D1
+#                        and Queues calls among them, so 25 pushes plus the
+#                        dead-device DELETE fits with room to spare while 50 does
+#                        not. Batching would not save a single Queues operation
+#                        either: billing is per message, so "a batch of 10 incurs
+#                        10x write, 10x read and 10x delete". All it could buy is
+#                        fewer Worker invocations, out of 100,000 a day that this
+#                        workload cannot dent. It also gives retry the smallest
+#                        possible blast radius, since an unacked batch is retried
+#                        whole.
+#
+#   max_retries = 1      A safety net for a crash, not the retry mechanism. The
+#                        consumer classifies every push itself — 404/410 deletes
+#                        the device, 4xx stops — and re-enqueues ONLY the
+#                        endpoints that failed transiently, so a platform retry
+#                        of the whole message stays the rare path rather than the
+#                        normal one.
+#
+# No dead-letter queue, deliberately. A DLQ is only worth having if something
+# will act on it, and nothing will replay a failed blog notification by hand —
+# while the notification itself is already durable in `followers.unread`, so what
+# a dropped message costs is the chime, not the message. Workers Logs carries the
+# per-message `[notify] push` line that a DLQ would only duplicate.
+[[queues.consumers]]
+queue = "blog-push"
+max_batch_size = 1
+max_batch_timeout = 0
+max_retries = 1
 
 # ─── Environment Variables ──────────────────────────────────
 # Seven values run this Worker and nothing reads an eighth. Anything that used to

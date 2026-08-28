@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "queue:create": "wrangler queues create blog-push --message-retention-period-secs 86400",
+    "queue:info": "wrangler queues info blog-push",
+    "sql:check": "node scripts/sql-check.mjs",
     "db:backup": "wrangler d1 export instant-notes-db --remote --output ./d1-backup.sql",
     "db:init": "wrangler d1 execute instant-notes-db --remote --file=./schema.sql",
     "db:init:local": "wrangler d1 execute instant-notes-db --local --file=./schema.sql",
@@ -17,5 +20,6 @@
   "devDependencies": {
     "wrangler": "^3.60.0",
     "@cloudflare/workers-types": "^4.20240605.0"
-  }
+  },
+  "type": "module"
 }

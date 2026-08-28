@@ -11,7 +11,9 @@
  *                            likes) with the blog's CORS headers.
  *   4. Notifications       — follow/push subscriptions, the in-site inbox, the
  *                            GitHub webhook that ingests changelog.json, and the
- *                            cron that drains the push queue.
+ *                            producer half of the Queues-based push pipeline.
+ *                            The consumer half is the `queue` export at the
+ *                            bottom of this file; see src/notify.js.
  * Admin writes are authorized ONLY by an isAdmin HMAC session; follower routes
  * take any valid session.
  *
@@ -36,7 +38,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { fetchGitHubUser, isAdminUser, signSession, verifySession } from "./auth.js";
-import { ingestEntries, drainOutbox, pruneOutbox, INLINE_BATCH } from "./notify.js";
+import { ingestEntries, fanOut, consumeBatch, pruneInboxes } from "./notify.js";
 import { verifySignature, fetchChangelog, isLiveDeployment } from "./hooks.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
 
@@ -56,21 +58,11 @@ const NOTE_TITLE = "New note";
 // returns the last 48h) and a pile of them is noise by the time anyone looks.
 const NOTE_TAG = "notes";
 
-/**
- * Run work after the response has gone out.
- *
- * Sending is the slow half of every write path here, and none of it changes what
- * the caller is told — the durable rows are already committed by the time this
- * is reached. GitHub in particular gives a webhook ten seconds before it calls
- * the delivery failed, which is not a budget worth spending on push traffic.
- */
-function background(c, promise) {
-  try {
-    c.executionCtx.waitUntil(promise);
-  } catch {
-    // No execution context (direct invocation in a test): let it run detached.
-  }
-}
+// A `background()` helper used to live here, deferring push sending past the
+// response with waitUntil. Nothing needs it any more: handing a fan-out to the
+// queue is three D1 round trips and one sendBatch, with no crypto and no calls
+// to push services in the request path at all. The slow half now happens in a
+// different invocation entirely, which is the point of the queue.
 
 // ─── CORS ──────────────────────────────────────────────────
 /**
@@ -415,7 +407,6 @@ app.post("/api/admin/notes", authMiddleware, async (c) => {
       ],
       { source: "note" }
     );
-    background(c, drainOutbox(db, c.env, INLINE_BATCH));
   }
 
   return c.json({ ok: true, id, notification }, 201);
@@ -496,8 +487,8 @@ app.post("/api/push/subscribe", userMiddleware, async (c) => {
   const db = c.env.DB;
   // Following and subscribing are one action, so they are one round trip. The
   // endpoint is the identity of a subscription: re-subscribing the same browser
-  // (a key rotation, a reinstall) rewrites the keys and clears the failure count
-  // rather than adding a second row that will never work.
+  // (a key rotation, a reinstall) rewrites the keys rather than adding a second
+  // row that will never work.
   await db.batch([
     upsertFollower(db, session, body.topics),
     db
@@ -505,11 +496,10 @@ app.post("/api/push/subscribe", userMiddleware, async (c) => {
         `INSERT INTO push_devices (github_id, endpoint, p256dh, auth, ua)
          VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(endpoint) DO UPDATE SET
-           github_id  = excluded.github_id,
-           p256dh     = excluded.p256dh,
-           auth       = excluded.auth,
-           ua         = excluded.ua,
-           fail_count = 0`
+           github_id = excluded.github_id,
+           p256dh    = excluded.p256dh,
+           auth      = excluded.auth,
+           ua        = excluded.ua`
       )
       .bind(
         session.id,
@@ -555,37 +545,47 @@ app.get("/api/me/notifications", userMiddleware, async (c) => {
   const session = c.get("user");
   const db = c.env.DB;
 
-  const [items, counts, follower] = await db.batch([
+  // Both halves read the reader's own row by primary key. The inbox arrives as
+  // two JSON arrays on it, so the items cost one row plus one keyed lookup per
+  // notification — where a (notification × follower) table cost an index walk
+  // and a second row for every item on every panel open.
+  const [items, meta] = await db.batch([
     db
       .prepare(
         `SELECT n.id, n.type, n.topic, n.title, n.body, n.url, n.image,
-                n.published_at, d.read_at
-           FROM deliveries d
-           JOIN notifications n ON n.id = d.notification_id
-          WHERE d.github_id = ?1
-          ORDER BY n.published_at DESC
+                strftime('%Y-%m-%dT%H:%M:%SZ', j.value->>1, 'unixepoch') AS published_at,
+                NULL AS read_at
+           FROM followers f, json_each(f.unread) j
+           JOIN notifications n ON n.id = j.value->>0
+          WHERE f.github_id = ?1
+          UNION ALL
+         SELECT n.id, n.type, n.topic, n.title, n.body, n.url, n.image,
+                strftime('%Y-%m-%dT%H:%M:%SZ', j.value->>1, 'unixepoch') AS published_at,
+                strftime('%Y-%m-%dT%H:%M:%SZ', j.value->>2, 'unixepoch') AS read_at
+           FROM followers f, json_each(f.seen) j
+           JOIN notifications n ON n.id = j.value->>0
+          WHERE f.github_id = ?1
+          ORDER BY published_at DESC
           LIMIT ?2`
       )
       .bind(session.id, INBOX_LIMIT),
+    // The badge is a scalar off the same row — no json_each, no counting.
     db
       .prepare(
-        `SELECT (SELECT COUNT(*) FROM deliveries
-                  WHERE github_id = ?1 AND read_at IS NULL) AS unread,
-                (SELECT COUNT(*) FROM push_devices WHERE github_id = ?1) AS devices`
+        `SELECT json_array_length(f.unread) AS unread, f.topics, f.muted_until,
+                (SELECT COUNT(*) FROM push_devices WHERE github_id = ?1) AS devices
+           FROM followers f
+          WHERE f.github_id = ?1`
       )
-      .bind(session.id),
-    db
-      .prepare(`SELECT topics, muted_until FROM followers WHERE github_id = ?1`)
       .bind(session.id),
   ]);
 
-  const totals = (counts.results && counts.results[0]) || { unread: 0, devices: 0 };
-  const row = follower.results && follower.results[0];
+  const row = meta.results && meta.results[0];
 
   return c.json({
     items: items.results || [],
-    unread: totals.unread || 0,
-    devices: totals.devices || 0,
+    unread: row ? row.unread || 0 : 0,
+    devices: row ? row.devices || 0 : 0,
     following: !!row,
     topics: row ? row.topics : "",
     muted_until: row ? row.muted_until : null,
@@ -602,23 +602,45 @@ app.post("/api/me/notifications/read", userMiddleware, async (c) => {
   } catch {}
 
   const db = c.env.DB;
-  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const stamp = Math.floor(Date.now() / 1000);
 
+  // Reading moves an entry from one array to the other and stamps it with the
+  // moment it was read — which is what the 14-day retention counts from. Both
+  // shapes below are ONE statement writing ONE row: the whole operation costs
+  // the reader's own row, whether they marked one item or thirty.
   if (body && Array.isArray(body.ids) && body.ids.length > 0) {
     // Bounded by D1's 100-parameter ceiling, two of which are already spoken for.
     const ids = body.ids.slice(0, 90).map(String);
-    const placeholders = ids.map((_, i) => `?${i + 3}`).join(", ");
+    const list = ids.map((_, i) => `?${i + 3}`).join(", ");
     await db
       .prepare(
-        `UPDATE deliveries SET read_at = ?1
-          WHERE github_id = ?2 AND read_at IS NULL AND notification_id IN (${placeholders})`
+        `UPDATE followers
+            SET unread = (SELECT COALESCE(json_group_array(json(j.value)), '[]')
+                            FROM json_each(followers.unread) j
+                           WHERE j.value->>0 NOT IN (${list})),
+                seen   = (SELECT json_group_array(json(v)) FROM (
+                            SELECT j.value AS v FROM json_each(followers.seen) j
+                            UNION ALL
+                            SELECT json_array(j.value->>0, j.value->>1, ?2)
+                              FROM json_each(followers.unread) j
+                             WHERE j.value->>0 IN (${list})))
+          WHERE github_id = ?1`
       )
-      .bind(stamp, session.id, ...ids)
+      .bind(session.id, stamp, ...ids)
       .run();
   } else {
     await db
-      .prepare(`UPDATE deliveries SET read_at = ?1 WHERE github_id = ?2 AND read_at IS NULL`)
-      .bind(stamp, session.id)
+      .prepare(
+        `UPDATE followers
+            SET seen   = (SELECT json_group_array(json(v)) FROM (
+                            SELECT j.value AS v FROM json_each(followers.seen) j
+                            UNION ALL
+                            SELECT json_array(j.value->>0, j.value->>1, ?2)
+                              FROM json_each(followers.unread) j)),
+                unread = '[]'
+          WHERE github_id = ?1 AND unread <> '[]'`
+      )
+      .bind(session.id, stamp)
       .run();
   }
 
@@ -635,9 +657,7 @@ app.get("/api/me/preferences", userMiddleware, async (c) => {
       .prepare(`SELECT topics, muted_until, created_at FROM followers WHERE github_id = ?1`)
       .bind(session.id),
     db
-      .prepare(
-        `SELECT id, ua, created_at, last_ok_at FROM push_devices WHERE github_id = ?1`
-      )
+      .prepare(`SELECT id, ua, created_at FROM push_devices WHERE github_id = ?1`)
       .bind(session.id),
   ]);
 
@@ -666,9 +686,10 @@ app.put("/api/me/preferences", userMiddleware, async (c) => {
   const db = c.env.DB;
 
   if (body.follow === false) {
+    // Two statements now, not three: the inbox lives on the follower row, so
+    // deleting the reader deletes their history with them.
     await db.batch([
       db.prepare(`DELETE FROM push_devices WHERE github_id = ?1`).bind(session.id),
-      db.prepare(`DELETE FROM deliveries WHERE github_id = ?1`).bind(session.id),
       db.prepare(`DELETE FROM followers WHERE github_id = ?1`).bind(session.id),
     ]);
     return c.json({ ok: true, following: false });
@@ -676,10 +697,18 @@ app.put("/api/me/preferences", userMiddleware, async (c) => {
 
   const statements = [upsertFollower(db, session, body.topics == null ? "" : body.topics)];
   if (body.muted_until !== undefined) {
+    // Stored as a unix epoch. Accept either a number or a date string, so a
+    // caller sending an ISO timestamp is not silently muted until 1970.
+    let until = null;
+    if (body.muted_until) {
+      const raw = body.muted_until;
+      const parsed = typeof raw === "number" ? raw : Math.floor(Date.parse(String(raw)) / 1000);
+      if (Number.isFinite(parsed)) until = parsed;
+    }
     statements.push(
       db
         .prepare(`UPDATE followers SET muted_until = ?1 WHERE github_id = ?2`)
-        .bind(body.muted_until ? String(body.muted_until) : null, session.id)
+        .bind(until, session.id)
     );
   }
   await db.batch(statements);
@@ -706,50 +735,23 @@ app.post("/api/admin/notifications", authMiddleware, async (c) => {
     );
   }
 
-  background(c, drainOutbox(c.env.DB, c.env, INLINE_BATCH));
   return c.json({ ok: true, ...result }, 201);
 });
 
 // ─── ADMIN: notification history + delivery stats ───────────
-// The counts come from two pre-aggregated joins rather than five correlated
-// subqueries per row: the old shape re-scanned `deliveries` and `outbox` 250
-// times to render 50 lines.
+// A plain indexed read of fifty rows. The recipient and device counts were
+// written by the fan-out that produced them, so this no longer aggregates over
+// join tables — which is the whole reason those tables could be deleted.
 app.get("/api/admin/notifications", authMiddleware, async (c) => {
   const db = c.env.DB;
 
   const [history, totals] = await db.batch([
     db.prepare(
-      `WITH recent AS (
-         SELECT id, type, topic, title, url, source, published_at
-           FROM notifications
-          ORDER BY published_at DESC
-          LIMIT 50
-       )
-       SELECT r.id, r.type, r.topic, r.title, r.url, r.source, r.published_at,
-              COALESCE(d.recipients, 0) AS recipients,
-              COALESCE(d.seen, 0)       AS read,
-              COALESCE(o.sent, 0)       AS pushed,
-              COALESCE(o.pending, 0)    AS pending,
-              COALESCE(o.dead, 0)       AS failed
-         FROM recent r
-         LEFT JOIN (
-              SELECT notification_id,
-                     COUNT(*)                        AS recipients,
-                     SUM(read_at IS NOT NULL)        AS seen
-                FROM deliveries
-               WHERE notification_id IN (SELECT id FROM recent)
-               GROUP BY notification_id
-         ) d ON d.notification_id = r.id
-         LEFT JOIN (
-              SELECT notification_id,
-                     SUM(state = 'sent')    AS sent,
-                     SUM(state = 'pending') AS pending,
-                     SUM(state = 'dead')    AS dead
-                FROM outbox
-               WHERE notification_id IN (SELECT id FROM recent)
-               GROUP BY notification_id
-         ) o ON o.notification_id = r.id
-        ORDER BY r.published_at DESC`
+      `SELECT id, type, topic, title, url, source, recipients, devices,
+              strftime('%Y-%m-%dT%H:%M:%SZ', created_at, 'unixepoch') AS published_at
+         FROM notifications
+        ORDER BY created_at DESC
+        LIMIT 50`
     ),
     db.prepare(
       `SELECT (SELECT COUNT(*) FROM followers)    AS followers,
@@ -773,40 +775,20 @@ app.post("/api/admin/notifications/:id/resend", authMiddleware, async (c) => {
   const id = c.req.param("id");
   const db = c.env.DB;
 
-  // Re-queue every device belonging to someone already in this notification's
-  // inbox — the audience is fixed at ingest, so a resend cannot widen it. The
-  // whole thing is one round trip: the existence check rides along with the
-  // requeue so that "unknown id" and "nobody left to send to" stay
-  // distinguishable, which a bare row count could not do.
-  const [known, requeued] = await db.batch([
-    db.prepare(`SELECT 1 AS found FROM notifications WHERE id = ?1`).bind(id),
-    db
-      .prepare(
-        `INSERT INTO outbox (notification_id, device_id, not_before, state, attempts)
-         SELECT ?1, p.id, ?2, 'pending', 0
-           FROM push_devices p
-          WHERE p.github_id IN (SELECT github_id FROM deliveries WHERE notification_id = ?1)
-         ON CONFLICT(notification_id, device_id) DO UPDATE SET
-           state = 'pending', attempts = 0, not_before = ?2, last_error = NULL`
-      )
-      .bind(id, new Date().toISOString().replace(/\.\d{3}Z$/, "Z")),
-  ]);
-
-  if (!known.results || known.results.length === 0) {
+  const { results } = await db
+    .prepare(`SELECT * FROM notifications WHERE id = ?1`)
+    .bind(id)
+    .all();
+  if (!results || results.length === 0) {
     return c.json({ error: "Unknown notification" }, 404);
   }
 
-  const queued = (requeued.meta && requeued.meta.changes) || 0;
-  if (queued > 0) background(c, drainOutbox(db, c.env, INLINE_BATCH));
-
-  return c.json({ ok: true, queued });
-});
-
-// ─── ADMIN: drain the queue now ─────────────────────────────
-// The cron does this every five minutes; this is the same call for a human who
-// does not want to wait for the next tick while testing.
-app.post("/api/admin/notify/drain", authMiddleware, async (c) => {
-  const stats = await drainOutbox(c.env.DB, c.env);
+  // The stored `audience_json` is what makes this a resend rather than a new
+  // broadcast: the audience is recomputed from the same rule the original used,
+  // so a reader who has since muted or unsubscribed is correctly left out, and
+  // one who joined afterwards is not retro-fitted into an old announcement's
+  // reach beyond what that rule already covered.
+  const stats = await fanOut(db, c.env, results[0]);
   return c.json({ ok: true, ...stats });
 });
 
@@ -837,7 +819,6 @@ app.post("/api/admin/notify/ingest", authMiddleware, async (c) => {
   }
 
   const result = await ingestEntries(c.env.DB, c.env, entries, { source: "manual" });
-  background(c, drainOutbox(c.env.DB, c.env, INLINE_BATCH));
   return c.json({ ok: true, url, ...result });
 });
 
@@ -853,38 +834,24 @@ app.get("/api/admin/notify/diagnose", authMiddleware, async (c) => {
 
   const vapid = await checkVapidKeys(c.env);
 
-  const [overview, mine, queue, lastError] = await db.batch([
+  const [overview, mine] = await db.batch([
     db.prepare(
       `SELECT (SELECT COUNT(*) FROM followers)     AS followers,
               (SELECT COUNT(*) FROM push_devices)  AS devices,
-              (SELECT COUNT(*) FROM notifications) AS notifications`
+              (SELECT COUNT(*) FROM notifications) AS notifications,
+              (SELECT COALESCE(SUM(devices), 0) FROM notifications) AS queued`
     ),
     db
       .prepare(
         `SELECT (SELECT COUNT(*) FROM push_devices WHERE github_id = ?1) AS devices,
-                (SELECT COUNT(*) FROM followers    WHERE github_id = ?1) AS following,
-                (SELECT topics    FROM followers   WHERE github_id = ?1) AS topics`
+                json_array_length(unread) AS unread, topics
+           FROM followers WHERE github_id = ?1`
       )
       .bind(admin.id),
-    db
-      .prepare(
-        `SELECT SUM(state = 'pending' AND not_before <= ?1) AS due,
-                SUM(state = 'pending' AND not_before >  ?1) AS later,
-                SUM(state = 'sent')                         AS sent,
-                SUM(state = 'dead')                         AS dead
-           FROM outbox`
-      )
-      .bind(now),
-    db.prepare(
-      `SELECT last_error FROM outbox
-        WHERE last_error IS NOT NULL
-        ORDER BY updated_at DESC LIMIT 1`
-    ),
   ]);
 
   const totals = (overview.results && overview.results[0]) || {};
   const you = (mine.results && mine.results[0]) || {};
-  const pending = (queue.results && queue.results[0]) || {};
 
   // Everything that would stop a push from reaching THIS admin, in the order it
   // would bite. Empty means the pipeline is clear and the problem is elsewhere
@@ -897,7 +864,8 @@ app.get("/api/admin/notify/diagnose", authMiddleware, async (c) => {
   }
   if (!c.env.SESSION_SECRET) blockers.push("SESSION_SECRET is unset — nobody can authenticate");
   if (!c.env.SITE_URL) blockers.push("SITE_URL is unset — notifications have nowhere to link");
-  if (!you.following) {
+  const following = !!(mine.results && mine.results.length > 0);
+  if (!following) {
     blockers.push(
       "you are not a follower in THIS database — click Follow on the site that talks to this Worker"
     );
@@ -907,9 +875,9 @@ app.get("/api/admin/notify/diagnose", authMiddleware, async (c) => {
       "you have no push device registered here — the browser never subscribed, or subscribed against the other Worker"
     );
   }
-  if (pending.due > 0) {
+  if (!c.env.NOTIFY_QUEUE) {
     blockers.push(
-      `${pending.due} push(es) are queued and due but unsent — nothing drained them. wrangler dev does NOT fire cron: call POST /api/admin/notify/drain.`
+      "NOTIFY_QUEUE is not bound — nothing can be enqueued. Check [[queues.producers]] in wrangler.toml."
     );
   }
 
@@ -923,20 +891,21 @@ app.get("/api/admin/notify/diagnose", authMiddleware, async (c) => {
     you: {
       github_id: admin.id,
       login: admin.login,
-      following: !!you.following,
+      following,
       topics: you.topics == null ? null : you.topics === "" ? "(all)" : you.topics,
       devices: you.devices || 0,
+      unread: you.unread || 0,
     },
     totals: {
       followers: totals.followers || 0,
       devices: totals.devices || 0,
       notifications: totals.notifications || 0,
-      sent: pending.sent || 0,
-      dead: pending.dead || 0,
-      pendingDue: pending.due || 0,
-      pendingLater: pending.later || 0,
+      pushesQueued: totals.queued || 0,
     },
-    last_error: (lastError.results && lastError.results[0] && lastError.results[0].last_error) || null,
+    // Delivery state no longer lives in D1 — Queues owns it. What happened to a
+    // given push is in the Worker's own logs, one `[notify] push` line per
+    // message with its sent/failed/dropped counts.
+    delivery: "see Workers Logs — filter for [notify]",
     blockers,
     verdict: blockers.length ? "delivery is blocked — see blockers" : "pipeline looks clear",
   });
@@ -1039,7 +1008,6 @@ app.post("/api/hooks/github", async (c) => {
     source: "changelog",
   });
 
-  background(c, drainOutbox(c.env.DB, c.env, INLINE_BATCH));
   return c.json({ ok: true, source: changelog.url, sha, ...result });
 });
 
@@ -1047,26 +1015,28 @@ app.post("/api/hooks/github", async (c) => {
 app.get("/", (c) => c.json({ service: "redefine-x backend worker", ok: true }));
 
 /**
- * Cron entry point — the sending half of the pipeline.
+ * Cron entry point — retention only, once a day.
  *
- * Ingest already drains the first batch itself, so this is not the fast path; it
- * is what carries a fan-out larger than one invocation can send, and what
- * retries a push service that was down when the notification was created. Every
- * five minutes (see [triggers] in wrangler.toml) — often enough that a backlog
- * clears in minutes, rare enough that an idle queue costs 288 indexed SELECTs a
- * day instead of 1,440.
+ * It used to run every five minutes because it owned the second half of
+ * SENDING: a fan-out too large for one invocation, and the retry for a push
+ * service that was down. Queues owns both of those now, and owns them better —
+ * it starts within seconds instead of on the next tick, and it scales out
+ * instead of draining a fixed batch — so what is left here is housekeeping, and
+ * housekeeping has no reason to wake up 288 times a day to find nothing to do.
  */
 async function scheduled(event, env, ctx) {
-  const stats = await drainOutbox(env.DB, env);
-
-  // Pruning is maintenance, not delivery, and it competes with sending for the
-  // same invocation budget. Once a day, at a quiet hour, is plenty.
-  const now = new Date();
-  if (now.getUTCHours() === 3 && now.getUTCMinutes() < 5) {
-    ctx.waitUntil(pruneOutbox(env.DB));
-  }
-
-  console.log("[notify] drain", JSON.stringify(stats));
+  const stats = await pruneInboxes(env.DB);
+  console.log("[notify] prune", JSON.stringify(stats));
 }
 
-export default { fetch: app.fetch, scheduled };
+/**
+ * Queue consumer entry point — the sending half of the pipeline.
+ *
+ * One message per invocation (`max_batch_size = 1`), 25 pushes per message. See
+ * the header of notify.js for why those two numbers are what they are.
+ */
+async function queue(batch, env, ctx) {
+  await consumeBatch(batch, env);
+}
+
+export default { fetch: app.fetch, scheduled, queue };
