@@ -156,8 +156,12 @@
                     </li>
             <% } } %>
 
-            <%# Add sidebar links %>
-            <% if (theme.home.sidebar.links !== null && theme.home.sidebar.show_on_mobile !== false) {%>
+            <%# The sidebar's links, repeated into the drawer — for the classic
+                layout only. There the rail is display:none on a phone, so the
+                drawer is the only place those links exist; the bento grid keeps
+                the same card as a tile the reader scrolls to like any other, and
+                repeating it here is a second copy of a menu already on screen. %>
+            <% if (theme.home.bento === false && theme.home.sidebar.links !== null && theme.home.sidebar.show_on_mobile !== false) {%>
                 <% for (let i in theme.home.sidebar.links) { %>
                     <% if (theme.navbar.links && theme.navbar.links.hasOwnProperty(i)) {
                         continue;
