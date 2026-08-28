@@ -208,6 +208,17 @@
         <link rel="manifest" href="<%- url_for('/manifest.json') %>">
         <meta name="theme-color" content="<%= theme.colors.primary %>">
         <meta name="apple-mobile-web-app-capable" content="yes">
+
+        <%# The bell is the inbox, so it is only shown to a reader who follows;
+            everyone else gets the Follow button in its place. Answering that needs
+            the network, so the last answer is cached and read back here — before
+            the first paint, or the swap lands as a flash on every page view. %>
+        <script>
+            try {
+                document.documentElement.classList.toggle(
+                    "blog-following", localStorage.getItem("blog-following") === "1");
+            } catch (e) {}
+        </script>
     <% } %>
 
     <%- export_config() %>

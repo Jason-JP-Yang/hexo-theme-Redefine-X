@@ -36,6 +36,7 @@
                             <%- theme.home.sidebar.announcement %>
                         </div>
                     <% } %>
+                    <%- partial("components/notifications/follow-cta") %>
                 </div>
             <% } %>
         <% } else { %>
@@ -65,6 +66,7 @@
                             <%- theme.home.sidebar.announcement %>
                         </div>
                     <% } %>
+                    <%- partial("components/notifications/follow-cta") %>
                 </div>
             <% } %>
             <div class="sidebar-content" <% if (hasSidebarLinks || hasSidebarAnnouncement) { %> marginTop <% } %>>

@@ -181,6 +181,9 @@ notifications:
   signed_out: 使用 GitHub 登入即可追蹤本部落格。
   sign_in: 使用 GitHub 登入
   follow: 追蹤本部落格
+  follow_nav: 追蹤
+  follow_blog: 追蹤本部落格
+  following: 已追蹤
   unfollow: 取消追蹤
   enable_push: 在此裝置上開啟推播
   empty: 追蹤後即可收到新文章通知。

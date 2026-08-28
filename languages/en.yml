@@ -180,6 +180,9 @@ notifications:
   signed_out: Sign in with GitHub to follow this blog.
   sign_in: Sign in with GitHub
   follow: Follow this blog
+  follow_nav: Follow
+  follow_blog: Follow the Blog
+  following: Following
   unfollow: Unfollow
   enable_push: Enable push on this device
   empty: Follow the blog to get notified about new posts.

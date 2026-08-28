@@ -18,9 +18,12 @@
  * listener. The panel lives outside #swup and survives untouched.
  */
 
-import { render, setOpen, isOpen, setBadge, getPanel } from "./notifications-inbox.js";
+import { render, setOpen, isOpen, setBadge, getPanel, t } from "./notifications-inbox.js";
 
 const POLL_MS = 5 * 60 * 1000; // background unread refresh while a tab is open
+// Read by the inline script in head.ejs, which has to choose between the bell
+// and the Follow button before the first paint.
+const FOLLOW_KEY = "blog-following";
 
 let config = null;
 let state = {
@@ -298,6 +301,27 @@ async function reconcileSubscription() {
 // ─── state ───────────────────────────────────────────────────
 function paint() {
   render(state);
+  syncControls();
+}
+
+/**
+ * The bell is the inbox, so it only means anything to a reader who follows.
+ * Everyone else gets the Follow button in its place.
+ */
+function syncControls() {
+  if (state.phase === "loading") return;
+  const following = state.phase === "following";
+
+  document.documentElement.classList.toggle("blog-following", following);
+  try {
+    localStorage.setItem(FOLLOW_KEY, following ? "1" : "0");
+  } catch {}
+
+  document.querySelectorAll(".follow-cta").forEach((cta) => {
+    cta.classList.toggle("is-following", following);
+    const label = cta.querySelector(".follow-label");
+    if (label) label.textContent = following ? t("following", "Following") : t("follow_blog", "Follow the Blog");
+  });
 }
 
 async function refresh({ quiet = false } = {}) {
@@ -438,6 +462,17 @@ function wireDelegation() {
       return;
     }
 
+    // Straight to the outcome: sign in, or follow. Opening a panel to press one
+    // more button is a step that buys the reader nothing.
+    if (event.target.closest(".follow-trigger")) {
+      event.preventDefault();
+      if (!window.blogAuth) return;
+      if (!window.blogAuth.isAuthenticated) window.blogAuth.login();
+      else if (state.phase === "following") togglePanel();
+      else follow();
+      return;
+    }
+
     const panel = getPanel();
     if (!panel) return;
 
@@ -511,9 +546,10 @@ export function initNotifications() {
     });
   }
 
-  // Runs on every page view: the bell is new markup and needs its badge back.
+  // Runs on every page view: the navbar is new markup and needs its state back.
   state = { ...state, pushState: permissionState(), needsInstall: needsHomeScreenInstall() };
   setBadge(state.unread);
+  syncControls();
   refresh({ quiet: true });
 }
 

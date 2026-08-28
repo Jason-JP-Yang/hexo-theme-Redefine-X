@@ -179,6 +179,9 @@ notifications:
   signed_out: Inicia sesión con GitHub para seguir este blog.
   sign_in: Iniciar sesión con GitHub
   follow: Seguir este blog
+  follow_nav: Seguir
+  follow_blog: Seguir el blog
+  following: Siguiendo
   unfollow: Dejar de seguir
   enable_push: Activar notificaciones en este dispositivo
   empty: Sigue el blog para recibir avisos de nuevas entradas.

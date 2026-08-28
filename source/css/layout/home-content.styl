@@ -500,6 +500,10 @@ $bento-split-text  = 'minmax(0, 1fr)'
         min-height 0
         padding 3px 0
 
+      // The links share out the leftover height; the button keeps its own.
+      .sidebar-links .follow-cta
+        flex 0 0 auto
+
     // ── Type by shape ────────────────────────────────────────────────────────
     // The only thing a shape changes is emphasis; the sizes came from the plan.
     // `cqw` is the TEXT COLUMN here, not the tile — the body is the container.

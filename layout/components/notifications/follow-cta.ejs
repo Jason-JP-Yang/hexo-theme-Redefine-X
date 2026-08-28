@@ -1,0 +1,8 @@
+<%# The follow call to action, in the sidebar card and the mobile drawer.
+    Rendered in its "not following" state; plugins/notifications.js relabels it. %>
+<% if (theme.notifications && theme.notifications.enable) { %>
+<button type="button" class="follow-trigger follow-cta">
+    <i class="fa-regular fa-bell" aria-hidden="true"></i>
+    <span class="follow-label"><%= __('notifications.follow_blog') %></span>
+</button>
+<% } %>

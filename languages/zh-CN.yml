@@ -182,6 +182,9 @@ notifications:
   signed_out: 使用 GitHub 登录即可关注本博客。
   sign_in: 使用 GitHub 登录
   follow: 关注本博客
+  follow_nav: 关注
+  follow_blog: 关注本博客
+  following: 已关注
   unfollow: 取消关注
   enable_push: 在此设备上开启推送
   empty: 关注后即可收到新文章提醒。

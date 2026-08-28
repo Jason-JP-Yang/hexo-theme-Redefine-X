@@ -179,6 +179,9 @@ notifications:
   signed_out: GitHub でサインインするとこのブログをフォローできます。
   sign_in: GitHub でサインイン
   follow: このブログをフォロー
+  follow_nav: フォロー
+  follow_blog: ブログをフォロー
+  following: フォロー中
   unfollow: フォロー解除
   enable_push: この端末で通知を有効にする
   empty: フォローすると新着記事をお知らせします。

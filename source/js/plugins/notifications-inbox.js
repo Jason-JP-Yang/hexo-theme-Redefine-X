@@ -53,7 +53,7 @@ function escapeHTML(value) {
     .replace(/'/g, "&#39;");
 }
 
-function t(key, fallback) {
+export function t(key, fallback) {
   const strings = (window.theme && window.theme.notifications_i18n) || {};
   return strings[key] || fallback;
 }

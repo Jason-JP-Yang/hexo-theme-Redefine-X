@@ -59,7 +59,7 @@
                     <% } } %>
                     <% if (theme.navbar.search.enable === true) { %>
                         <li class="navbar-item search search-popup-trigger">
-                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <i class="fa-regular fa-magnifying-glass"></i>
                         </li>
                     <% } %>
                     <% if (theme.notifications && theme.notifications.enable) { %>
@@ -71,13 +71,19 @@
                             <i class="fa-regular fa-bell"></i>
                             <span class="bell-badge">0</span>
                         </li>
+                        <li class="navbar-item navbar-follow">
+                            <button type="button" class="follow-trigger">
+                                <i class="fa-regular fa-bell" aria-hidden="true"></i>
+                                <%= __('notifications.follow_nav') %>
+                            </button>
+                        </li>
                     <% } %>
                 </ul>
             </div>
             <!-- Mobile -->
             <div class="mobile">
                 <% if (theme.navbar.search.enable === true) { %>
-                    <div class="icon-item search search-popup-trigger"><i class="fa-solid fa-magnifying-glass"></i>
+                    <div class="icon-item search search-popup-trigger"><i class="fa-regular fa-magnifying-glass"></i>
                     </div>
                 <% } %>
                 <% if (theme.notifications && theme.notifications.enable) { %>
@@ -89,9 +95,16 @@
                         <i class="fa-regular fa-bell"></i>
                         <span class="bell-badge">0</span>
                     </div>
+                    <div class="navbar-follow">
+                        <button type="button" class="follow-trigger">
+                            <i class="fa-regular fa-bell" aria-hidden="true"></i>
+                            <%= __('notifications.follow_nav') %>
+                        </button>
+                    </div>
                 <% } %>
                 <div class="icon-item navbar-bar">
-                    <div class="navbar-bar-middle"></div>
+                    <i class="fa-regular fa-bars"></i>
+                    <i class="fa-regular fa-xmark"></i>
                 </div>
             </div>
         </div>
@@ -175,6 +188,12 @@
                         </a>
                     </li>
                 <% } %>
+            <% } %>
+
+            <% if (theme.home.bento === false && theme.notifications && theme.notifications.enable) { %>
+                <li class="drawer-navbar-item text-base my-1.5 flex flex-col w-full">
+                    <%- partial("components/notifications/follow-cta") %>
+                </li>
             <% } %>
         </ul>
 

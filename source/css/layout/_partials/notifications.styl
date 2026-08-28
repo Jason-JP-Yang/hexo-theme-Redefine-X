@@ -14,6 +14,7 @@
 $np-width = 380px
 $np-radius = 16px
 $np-gap = 12px
+$bell-badge-overhang = 8px
 
 // ─── bell ───────────────────────────────────────────────────
 .notifications-bell
@@ -37,7 +38,7 @@ $np-gap = 12px
   .bell-badge
     position absolute
     top -4px
-    right -8px
+    right (0 - $bell-badge-overhang)
     min-width 16px
     height 16px
     padding 0 4px
@@ -57,12 +58,71 @@ $np-gap = 12px
     opacity 1
     transform scale(1)
 
-// The desktop navbar item is a bare <li>; give the icon the same optical box the
-// search trigger gets so the two sit on one baseline.
+// Last item in the desktop row, so the badge hanging off its corner hangs off the
+// navbar — the edge layouts/navbarCollapse.js measures against. The padding takes
+// the overhang back inside the box without moving the badge.
 .navbar-list .notifications-bell
+  padding-right $bell-badge-overhang
+
+  .bell-badge
+    right 0
+
+// ─── follow ─────────────────────────────────────────────────
+// The bell IS the inbox, so it only means anything to a reader who follows;
+// everyone else gets the button in its place. `blog-following` is set from the
+// document head, before the first paint. !important because these override the
+// navbar's own responsive display rules.
+html:not(.blog-following) .notifications-bell
+  display none !important
+
+html.blog-following .navbar-follow
+  display none !important
+
+follow-button()
   display flex
   align-items center
   justify-content center
+  gap 6px
+  border none
+  border-radius $redefine-border-radius-small
+  background var(--primary-color)
+  color #fff
+  font-family $default-font-family
+  font-weight 500
+  cursor pointer
+  transition filter 0.2s ease, transform 0.2s ease, background 0.2s ease, color 0.2s ease
+
+  &:hover
+    filter brightness(1.08)
+
+  &:active
+    transform scale(0.98)
+
+// Same 5px vertical padding and 1rem type as the links it stands beside.
+.navbar-follow .follow-trigger
+  follow-button()
+  padding 5px 12px
+  font-size 1rem
+  white-space nowrap
+
+// Sized off .sidebar-links .links, whose row height it has to match.
+.follow-cta
+  follow-button()
+  width 100%
+  margin-top 8px
+  padding 5px 0
+  font-size inherit
+
+  &.is-following
+    background var(--third-background-color-transparent)
+    color var(--second-text-color)
+
+// The drawer sets its rows at text-2xl/py-1.5/px-2; the button matches them.
+.drawer-navbar-list .follow-cta
+  margin-top 0
+  padding 6px 8px
+  font-size 1.5rem
+  font-weight 600
 
 // ─── mask ───────────────────────────────────────────────────
 .notifications-mask
