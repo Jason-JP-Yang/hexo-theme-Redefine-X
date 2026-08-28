@@ -32,6 +32,7 @@ const HYSTERESIS = 24;
 let content = null;
 let needed = 0;
 let frame = 0;
+let observer = null;
 
 export default function initNavbarCollapse() {
   content = document.querySelector(".navbar-content");
@@ -40,6 +41,7 @@ export default function initNavbarCollapse() {
   // A page turn can change the navbar's max-width — the home page runs wider
   // than the rest — so the row that fit a moment ago may not now.
   needed = 0;
+  observe();
   schedule();
 
   if (initNavbarCollapse.wired) return;
@@ -51,9 +53,32 @@ export default function initNavbarCollapse() {
   if (document.fonts) document.fonts.ready.then(schedule);
 }
 
+// The halves, not the row: `.navbar-content` is width:100% and only moves with
+// the window, which `resize` already covers. What changes without the window
+// moving is what is inside them — the bell swapped for the Follow button.
+function observe() {
+  if (typeof ResizeObserver === "undefined") return;
+  if (!observer) observer = new ResizeObserver(schedule);
+  observer.disconnect();
+  for (const child of content.children) observer.observe(child);
+}
+
 function schedule() {
   if (frame || !content) return;
   frame = requestAnimationFrame(update);
+}
+
+// The sum of the halves, not `scrollWidth`: scrollWidth counts decoration that
+// hangs off a corner — the unread badge does, deliberately — and read as
+// overflow that is a permanent "the links do not fit" in a row with room to
+// spare. Neither half can be squeezed below its own content, so this is the
+// width the row would take if it were given it.
+function rowWidth() {
+  let total = 0;
+  for (const child of content.children) {
+    total += child.getBoundingClientRect().width;
+  }
+  return total;
 }
 
 function update() {
@@ -63,10 +88,9 @@ function update() {
   const collapsed = document.body.classList.contains("navbar-collapsed");
 
   if (!collapsed) {
-    // `scrollWidth` is the row's own width once nothing in it may wrap, so this
-    // is "the links stopped fitting" and not an approximation of it.
-    if (content.scrollWidth > content.clientWidth + 1) {
-      needed = content.scrollWidth;
+    const width = rowWidth();
+    if (width > content.clientWidth + 1) {
+      needed = width;
       document.body.classList.add("navbar-collapsed");
     }
     return;
