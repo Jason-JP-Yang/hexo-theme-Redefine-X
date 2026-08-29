@@ -1,0 +1,811 @@
+// ========================================================================================
+//                                     NOTIFICATIONS
+// ========================================================================================
+// Bell (in the navbar) + panel (mounted outside #swup).
+//
+// Material: BASE tier only — a translucent background colour plus a plain
+// blur(). The elevated `backdrop-filter` tier is reserved for surfaces that must
+// read as floating above live content (the home buttons, the instant-notes
+// panel); every pass costs a compositor layer, and a panel that is only visible
+// while it is open does not earn one.
+//
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+$np-width = 440px
+$np-radius = 16px
+$np-gap = 12px
+$bell-badge-overhang = 8px
+// The page slide and the card's own height change are ONE movement, so they
+// share a duration and a curve exactly. Anything else reads as two animations
+// that happen to overlap.
+$np-slide = 0.42s cubic-bezier(0.32, 0.72, 0, 1)
+
+// ─── bell ───────────────────────────────────────────────────
+.notifications-bell
+  position relative
+  cursor pointer
+  user-select none
+
+  i
+    transition transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease
+
+  &:hover i,
+  &.is-active i
+    color var(--primary-color)
+
+  &.is-active i
+    transform rotate(-12deg)
+
+  // The count sits on the icon, so it is positioned against the bell box rather
+  // than flowed after it — a navbar item must not change width when a number
+  // appears inside it.
+  .bell-badge
+    position absolute
+    top -4px
+    right (0 - $bell-badge-overhang)
+    min-width 16px
+    height 16px
+    padding 0 4px
+    border-radius 8px
+    background var(--primary-color)
+    color #fff
+    font-size 10px
+    font-weight 600
+    line-height 16px
+    text-align center
+    pointer-events none
+    opacity 0
+    transform scale(0.6)
+    transition opacity 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)
+
+  &.has-unread .bell-badge
+    opacity 1
+    transform scale(1)
+
+// ─── follow ─────────────────────────────────────────────────
+// The bell IS the inbox, so it only means anything to a reader who follows;
+// everyone else gets the button in its place. `blog-following` is set from the
+// document head, before the first paint. !important because these override the
+// navbar's own responsive display rules.
+html:not(.blog-following) .notifications-bell
+  display none !important
+
+html.blog-following .navbar-follow
+  display none !important
+
+// Following is a state, not a label. Once the reader is in it the call to action
+// has nothing left to ask for, so it goes — rather than turning into a button
+// that reports what pressing it already did. The bell above takes its place.
+html.blog-following .follow-cta,
+html.blog-following .drawer-follow-item
+  display none !important
+
+// Admin-only rows. Hidden until tools/auth.js confirms the session, by the same
+// mechanism as blog-following: a class on <html> written before the first paint
+// from the cached session, so the row never flickers in and then out. Hiding is
+// tidiness, not access control — the page is empty and every route it calls is
+// checked without a session it trusts.
+.blog-admin-only
+  display none !important
+
+html.blog-admin .blog-admin-only
+  display flex !important
+
+follow-button()
+  display flex
+  align-items center
+  justify-content center
+  gap 6px
+  border none
+  border-radius $redefine-border-radius-small
+  background var(--primary-color)
+  color #fff
+  font-family $default-font-family
+  font-weight 500
+  cursor pointer
+  transition filter 0.2s ease, transform 0.2s ease, background 0.2s ease, color 0.2s ease
+
+  &:hover
+    filter brightness(1.08)
+
+  &:active
+    transform scale(0.98)
+
+// Same 5px vertical padding and 1rem type as the links it stands beside.
+.navbar-follow .follow-trigger
+  follow-button()
+  padding 5px 12px
+  font-size 1rem
+  white-space nowrap
+
+// The second, narrower switch layouts/navbarCollapse.js measures: even the
+// mobile row runs out of width under a long site title, and the label is the
+// only part of this button that can go without the button going with it. What
+// is left is still the primary-colour disc, not a third grey glyph.
+.navbar-follow-compact .mobile .navbar-follow .follow-trigger
+  width 30px
+  height 30px
+  padding 0
+  border-radius 50%
+  font-size 15px
+
+  .follow-label
+    display none
+
+// Sized off .sidebar-links .links, whose row metrics it has to match exactly —
+// the button is one more entry in that list, not a footer under it.
+.follow-cta
+  follow-button()
+  width 100%
+  margin-top 0
+  padding 5px 0
+  font-size inherit
+
+// The drawer sets its rows at text-2xl/py-1.5/px-2; the button matches them.
+.drawer-navbar-list .follow-cta
+  padding 6px 8px
+  font-size 1.5rem
+  font-weight 600
+
+// ─── mask ───────────────────────────────────────────────────
+.notifications-mask
+  position fixed
+  inset 0
+  z-index 1000
+  background transparent
+  opacity 0
+  pointer-events none
+  transition opacity 0.25s ease
+
+  &.is-open
+    opacity 1
+    pointer-events auto
+
+  +redefine-tablet()
+    &.is-open
+      background rgba(0, 0, 0, 0.28)
+
+// ─── panel ──────────────────────────────────────────────────
+// ONE card, TWO pages. The head is shared and fixed; everything below it lives
+// in .np-viewport, whose height JS animates to whichever page is showing while
+// the pages themselves slide past each other inside it.
+.notifications-panel
+  position fixed
+  top ($navbar-height + 6px)
+  right 24px
+  z-index 1001
+  display flex
+  flex-direction column
+  width $np-width
+  max-width calc(100vw - 32px)
+  max-height 80svh
+  border-radius $np-radius
+  border 1px solid var(--border-color)
+  // Solid, like the search overlay: a list of text needs a settled ground to be
+  // read against, and the elevated backdrop tier is reserved for surfaces that
+  // sit over live content permanently. Depth comes from the shadow instead.
+  background var(--background-color)
+  box-shadow 0 12px 32px var(--shadow-color-1)
+  overflow hidden
+
+  opacity 0
+  visibility hidden
+  transform translateY(-8px) scale(0.98)
+  transform-origin top right
+  transition opacity 0.22s ease, transform 0.28s cubic-bezier(0.34, 1.2, 0.64, 1), visibility 0.28s
+
+  &.is-open
+    opacity 1
+    visibility visible
+    transform translateY(0) scale(1)
+
+  // Something is in flight. The control that started it shows its own spinner;
+  // this only stops the reader starting a second one on top of it.
+  &.is-busy
+    .np-viewport button
+      pointer-events none
+
+  // On a phone the panel is a sheet: anchoring a 440px card to a corner of a
+  // 375px viewport leaves it neither centred nor full width.
+  +redefine-tablet()
+    top auto
+    right 0
+    bottom 0
+    left 0
+    width 100%
+    max-width 100%
+    max-height 82svh
+    border-radius $np-radius $np-radius 0 0
+    border-bottom none
+    transform-origin bottom center
+    transform translateY(16px)
+
+    &.is-open
+      transform translateY(0)
+
+// ─── head ───────────────────────────────────────────────────
+.np-head
+  display flex
+  align-items center
+  gap 8px
+  padding 14px 16px
+  border-bottom 1px solid var(--border-color)
+
+  .np-title
+    flex 1
+    font-size 0.95rem
+    font-weight 600
+    color var(--first-text-color)
+
+  .np-mark-read
+    font-size 0.78rem
+    color var(--primary-color)
+    background none
+    border none
+    cursor pointer
+    padding 2px 4px
+
+    &:hover
+      text-decoration underline
+
+  .np-back,
+  .np-close
+    display flex
+    align-items center
+    justify-content center
+    flex-shrink 0
+    width 24px
+    height 24px
+    border none
+    border-radius 6px
+    background none
+    color var(--third-text-color)
+    cursor pointer
+    transition background 0.2s ease, color 0.2s ease
+
+    &:hover
+      background var(--third-background-color-transparent)
+      color var(--first-text-color)
+
+  .np-back[hidden]
+    display none
+
+// ─── scroll progress ────────────────────────────────────────
+// Replaces the scrollbar rather than decorating it. A native scrollbar inside a
+// 440px card is a second piece of furniture with its own styling, its own
+// width, and a habit of appearing for one pixel of overflow — and it says
+// nothing the reader wanted to know. This is the same 2px primary rule the site
+// uses for page scroll, in the one place the eye is already resting.
+.np-progress
+  position relative
+  flex 0 0 auto
+  height $scroll-progress-bar-height
+  background var(--third-background-color-transparent)
+
+  .np-progress-bar
+    display block
+    width 100%
+    height 100%
+    background var(--primary-color)
+    transition width 0.14s ease-out
+
+// ─── the two pages ──────────────────────────────────────────
+.np-viewport
+  position relative
+  overflow hidden
+  // JS owns this from the first render; the value here is only what an unmeasured
+  // card shows for one frame, and the floor it never drops below.
+  height 260px
+  transition height $np-slide
+
+.np-page
+  position absolute
+  top 0
+  left 0
+  right 0
+  height 100%
+  display flex
+  flex-direction column
+  // Percentage transforms resolve against the page's own height, which IS the
+  // animating viewport height — so the pages stay locked to its moving edge for
+  // free, instead of needing a second animation to track it.
+  transition transform $np-slide, visibility 0s linear 0.42s
+  visibility hidden
+
+  &.is-current
+    visibility visible
+    transition transform $np-slide, visibility 0s linear 0s
+
+.np-page[data-page="inbox"]
+  transform translateY(0)
+
+.np-page[data-page="manage"]
+  transform translateY(100%)
+
+.notifications-panel[data-page="manage"]
+  .np-page[data-page="inbox"]
+    transform translateY(-100%)
+
+  .np-page[data-page="manage"]
+    transform translateY(0)
+
+.np-scroll
+  flex 1
+  min-height 0
+  overflow-y auto
+  overscroll-behavior contain
+  // The bar above reports the position instead. Scrolling still works by every
+  // means that is not dragging a thumb.
+  scrollbar-width none
+  -ms-overflow-style none
+
+  &::-webkit-scrollbar
+    display none
+
+// ─── inbox ──────────────────────────────────────────────────
+.np-empty
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 10px
+  padding 40px 24px
+  color var(--third-text-color)
+  text-align center
+
+  i
+    font-size 22px
+    opacity 0.6
+
+  p
+    margin 0
+    font-size 0.85rem
+    line-height 1.5
+
+.np-list
+  display flex
+  flex-direction column
+
+.np-item
+  display flex
+  align-items flex-start
+  gap $np-gap
+  padding 12px 16px
+  border-bottom 1px solid var(--border-color)
+  color inherit
+  text-decoration none
+  transition background 0.2s ease
+
+  &:last-child
+    border-bottom none
+
+  &:hover
+    background var(--third-background-color-transparent)
+
+  // Unread is carried by a leading rule rather than a filled row: the list is
+  // read at a glance and a block of tinted rows is harder to scan than an edge.
+  &.is-unread
+    box-shadow inset 2px 0 0 var(--primary-color)
+
+    .np-item-title
+      font-weight 600
+      color var(--first-text-color)
+
+.np-item-icon
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 28px
+  height 28px
+  margin-top 1px
+  border-radius 8px
+  background var(--third-background-color-transparent)
+  color var(--second-text-color)
+  font-size 12px
+
+.np-item-main
+  display flex
+  flex-direction column
+  gap 2px
+  min-width 0
+
+.np-item-title
+  font-size 0.875rem
+  line-height 1.35
+  color var(--second-text-color)
+
+.np-item-body
+  font-size 0.8rem
+  line-height 1.4
+  color var(--third-text-color)
+  // Two lines is the most a list row can give a summary before the list stops
+  // being scannable; the full text is one click away on the page itself.
+  display -webkit-box
+  -webkit-line-clamp 2
+  -webkit-box-orient vertical
+  overflow hidden
+
+.np-item-time
+  margin-top 2px
+  font-size 0.72rem
+  color var(--third-text-color)
+
+// ─── shared buttons ─────────────────────────────────────────
+// The one filled button a page is allowed. Everything destructive is quiet
+// until it is armed, so the only thing wearing the primary colour is the safe
+// way onward.
+.np-action
+  display flex
+  align-items center
+  justify-content center
+  gap 8px
+  width 100%
+  padding 9px 12px
+  border none
+  border-radius 10px
+  background var(--primary-color)
+  color #fff
+  font-size 0.85rem
+  font-weight 500
+  cursor pointer
+  transition filter 0.2s ease, transform 0.2s ease
+
+  &:hover
+    filter brightness(1.08)
+
+  &:active
+    transform scale(0.98)
+
+  &:disabled
+    cursor default
+    filter none
+
+.np-quiet
+  display flex
+  align-items center
+  justify-content center
+  gap 8px
+  width 100%
+  padding 7px 12px
+  border 1px solid transparent
+  border-radius 10px
+  background none
+  color var(--second-text-color)
+  font-size 0.8rem
+  font-family $default-font-family
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease, border-color 0.2s ease
+
+  &:hover
+    border-color var(--border-color)
+    color var(--first-text-color)
+
+  // Armed. Both of these are irreversible, so the second press has to look
+  // unmistakably different from the first — the theme's own red pair, which is a
+  // pale tint in light mode and a solid block in dark.
+  &.is-confirm
+    background var(--box-red-bg)
+    border-color transparent
+    color var(--box-red-text)
+    font-weight 600
+
+.np-note
+  margin 0
+  font-size 0.78rem
+  line-height 1.55
+  color var(--second-text-color)
+
+// ─── inbox foot ─────────────────────────────────────────────
+.np-foot
+  display flex
+  flex-direction column
+  gap 10px
+  padding 12px 16px
+  border-top 1px solid var(--border-color)
+
+  &:empty
+    display none
+
+// ─── management page ────────────────────────────────────────
+.np-manage
+  display flex
+  flex-direction column
+  gap 14px
+  padding 14px 16px 16px
+
+.np-section
+  display flex
+  flex-direction column
+  gap 2px
+
+// `--fourth-text-color` is not a dim colour, it is a nearly invisible one —
+// 90% lightened in light mode, 70% darkened in dark. It belongs to decoration.
+// Every label on this page is something the reader has to actually read, so the
+// whole page sits one step up the hierarchy from where it started.
+.np-section-title
+  display flex
+  align-items center
+  gap 6px
+  margin 0 0 4px
+  font-size 0.73rem
+  font-weight 700
+  letter-spacing 0.06em
+  text-transform uppercase
+  color var(--third-text-color)
+
+  .np-count
+    padding 0 6px
+    border-radius 999px
+    background var(--third-background-color-transparent)
+    font-size 0.7rem
+    letter-spacing 0
+    color var(--third-text-color)
+
+// ─── switch rows ────────────────────────────────────────────
+.np-row
+  display flex
+  align-items center
+  gap 12px
+  padding 7px 0
+
+  &.is-locked,
+  &.is-disabled
+    .np-row-label
+      color var(--third-text-color)
+
+.np-row-main
+  display flex
+  flex-direction column
+  gap 1px
+  min-width 0
+  flex 1
+
+.np-row-label
+  font-size 0.84rem
+  line-height 1.35
+  color var(--first-text-color)
+
+.np-row-hint
+  font-size 0.72rem
+  line-height 1.35
+  color var(--third-text-color)
+
+.np-switch
+  position relative
+  flex-shrink 0
+  width 38px
+  height 22px
+  padding 0
+  border none
+  border-radius 999px
+  background var(--third-background-color)
+  cursor pointer
+  transition background 0.24s ease, opacity 0.2s ease
+
+  &.is-on
+    background var(--primary-color)
+
+  &:disabled
+    cursor default
+    opacity 0.55
+
+  .np-switch-knob
+    position absolute
+    top 3px
+    left 3px
+    display flex
+    align-items center
+    justify-content center
+    width 16px
+    height 16px
+    border-radius 50%
+    background #fff
+    box-shadow 0 1px 3px rgba(0, 0, 0, 0.22)
+    transition transform 0.24s cubic-bezier(0.34, 1.4, 0.64, 1)
+
+    i
+      font-size 9px
+      color var(--primary-color)
+      opacity 0
+      transition opacity 0.15s ease
+
+  &.is-on .np-switch-knob
+    transform translateX(16px)
+
+  // The knob IS the spinner while the preference is being written, so the row
+  // neither grows nor gains a second moving part.
+  &.is-busy .np-switch-knob i
+    opacity 1
+
+// ─── device list ────────────────────────────────────────────
+// Two lines and two ends: what the device is, when it subscribed, and the way
+// to revoke it. No card, no nested frame — the rows are the list.
+.np-devices
+  display flex
+  flex-direction column
+  margin 0
+  padding 0
+  list-style none
+
+.np-device
+  display flex
+  align-items center
+  gap 10px
+  padding 7px 0
+  border-bottom 1px solid var(--border-color)
+
+  &:last-child
+    border-bottom none
+
+.np-device-icon
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 30px
+  height 30px
+  border-radius 9px
+  background var(--third-background-color-transparent)
+  color var(--second-text-color)
+  font-size 13px
+
+.np-device-main
+  display flex
+  flex-direction column
+  gap 1px
+  min-width 0
+  flex 1
+
+.np-device-title
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 5px
+  font-size 0.82rem
+  line-height 1.3
+  color var(--first-text-color)
+
+.np-sep
+  width 3px
+  height 3px
+  border-radius 50%
+  background var(--third-text-color)
+  opacity 0.6
+
+.np-device-tag
+  padding 1px 6px
+  border-radius 999px
+  background var(--primary-color)
+  color #fff
+  font-size 0.66rem
+  font-weight 600
+
+.np-device-time
+  font-size 0.72rem
+  color var(--third-text-color)
+
+.np-device-remove
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 28px
+  height 28px
+  border none
+  border-radius 8px
+  background none
+  color var(--third-text-color)
+  font-size 12px
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease
+
+  &:hover
+    background var(--third-background-color-transparent)
+    color var(--first-text-color)
+
+  // Armed, and unmistakable at 28px: the icon alone has no room for a label, so
+  // the whole control changes colour and the trash becomes a tick.
+  &.is-confirm
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+.np-device.is-banned
+  .np-device-icon
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+  .np-device-title,
+  .np-device-time
+    color var(--third-text-color)
+
+.np-device-tag.is-banned
+  background var(--box-red-bg)
+  color var(--box-red-text)
+
+// The one warning the panel ever raises. Red because it reports a decision made
+// about the reader, not a setting they can change.
+.np-alert
+  display flex
+  align-items flex-start
+  gap 8px
+  margin 10px 0 0
+  padding 9px 11px
+  border-radius 10px
+  background var(--box-red-bg)
+  color var(--box-red-text)
+  font-size 0.76rem
+  line-height 1.5
+
+  i
+    margin-top 2px
+    flex-shrink 0
+
+.np-blank
+  margin 4px 0 0
+  font-size 0.78rem
+  color var(--third-text-color)
+
+// ─── a blocked account ──────────────────────────────────────
+// The settings are still rendered and then taken away: clipped to a fixed
+// height, blurred, and `inert` from JS so nothing inside can be reached by
+// pointer or by tab. Only the veil above it is live.
+.np-manage
+  position relative
+
+.np-veiled
+  display flex
+  flex-direction column
+  gap 14px
+  max-height 260px
+  overflow hidden
+  filter blur(6px) saturate(0.7)
+  opacity 0.5
+  pointer-events none
+  user-select none
+
+.np-banned
+  position absolute
+  inset 0
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 8px
+  padding 20px 22px
+  text-align center
+
+  > i
+    font-size 22px
+    color var(--box-red-text)
+
+.np-banned-title
+  margin 0
+  font-size 0.95rem
+  font-weight 600
+  color var(--first-text-color)
+
+.np-banned-note
+  margin 0
+  max-width 34ch
+  font-size 0.76rem
+  line-height 1.55
+  color var(--second-text-color)
+
+.np-banned .np-quiet
+  width auto
+  margin-top 6px
+  padding 7px 14px
+  border-color var(--border-color)
+
+// ─── the destructive end of the page ────────────────────────
+.np-danger
+  gap 6px
+  padding-top 10px
+  border-top 1px solid var(--border-color)
+
+  .np-quiet
+    margin-bottom 4px
+
+  .np-quiet:last-child
+    margin-bottom 0

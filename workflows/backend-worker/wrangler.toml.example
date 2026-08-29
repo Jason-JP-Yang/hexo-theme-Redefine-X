@@ -1,30 +1,135 @@
-# Copy to `wrangler.toml` (gitignored) and fill in your own values.
-
-name = "your-backend-worker"          # Cloudflare Worker name
+name = "backend-blog"
 main = "src/index.js"
 compatibility_date = "2024-12-01"
 
-# ─── Custom domain (optional) ───────────────────────────────
-# One domain fronts the whole API. `wrangler deploy` provisions the domain +
-# DNS automatically when the zone is on Cloudflare. Omit this block to use the
-# default <name>.<subdomain>.workers.dev URL instead.
-# [[routes]]
-# pattern = "backend.example.com"
-# custom_domain = true
+# Variables set in the Cloudflare dashboard survive a deploy. WITHOUT this,
+# `wrangler deploy` REPLACES the Worker's entire plain-text variable set with
+# whatever [vars] below lists — silently deleting ALLOWED_ORIGIN, which lives
+# only in the dashboard so the CORS allowlist can change without a redeploy.
+keep_vars = true
+
+# ─── Routes ─────────────────────────────────────────────────
+# One Worker serves the Instant Notes API, the auth endpoints, the giscus CORS
+# proxy (comments + masonry likes), AND the notification pipeline. A single
+# custom domain fronts all of it; `wrangler deploy` provisions the domain + DNS
+# automatically (the zone must be on Cloudflare).
+[[routes]]
+pattern = "backend.example.com"
+custom_domain = true
+
+# ─── Cron: retention only ───────────────────────────────────
+# Once a day, 03:40 UTC. This used to run every five minutes because it carried
+# the second half of SENDING; Queues does that now, and does it within seconds
+# instead of on the next tick. What is left is the inbox retention sweep, which
+# has no reason to wake up 288 times a day to find nothing expired.
+[triggers]
+crons = ["40 3 * * *"]
 
 # ─── D1 Database Binding ────────────────────────────────────
 [[d1_databases]]
 binding = "DB"
-database_name = "your-notes-db"
-database_id = "RUN: wrangler d1 create your-notes-db"   # paste the returned id
+database_name = "instant-notes-db"
+database_id = ""  # Fill after: wrangler d1 create <db-name>
 
-# ─── Environment Variables (non-secret) ─────────────────────
+# ─── Queues: the push pipeline ──────────────────────────────
+# Producer side. One message carries a rendered payload plus up to 25
+# subscriptions (~8 KB), so the consumer needs no database read to send.
+[[queues.producers]]
+binding = "NOTIFY_QUEUE"
+queue = "blog-push"
+
+# Consumer side. The two numbers here are the whole design:
+#
+#   max_batch_size = 1   Not a throughput setting — a subrequest budget. The free
+#                        plan allows 50 subrequests per invocation and counts D1
+#                        and Queues calls among them, so 25 pushes plus the
+#                        dead-device DELETE fits with room to spare while 50 does
+#                        not. Batching would not save a single Queues operation
+#                        either: billing is per message, so "a batch of 10 incurs
+#                        10x write, 10x read and 10x delete". All it could buy is
+#                        fewer Worker invocations, out of 100,000 a day that this
+#                        workload cannot dent. It also gives retry the smallest
+#                        possible blast radius, since an unacked batch is retried
+#                        whole.
+#
+#   max_retries = 1      A safety net for a crash, not the retry mechanism. The
+#                        consumer classifies every push itself — 404/410 deletes
+#                        the device, 4xx stops — and re-enqueues ONLY the
+#                        endpoints that failed transiently, so a platform retry
+#                        of the whole message stays the rare path rather than the
+#                        normal one.
+#
+# No dead-letter queue, deliberately. A DLQ is only worth having if something
+# will act on it, and nothing will replay a failed blog notification by hand —
+# while the notification itself is already durable in `followers.unread`, so what
+# a dropped message costs is the chime, not the message. Workers Logs carries the
+# per-message `[notify] push` line that a DLQ would only duplicate.
+[[queues.consumers]]
+queue = "blog-push"
+max_batch_size = 1
+max_batch_timeout = 0
+max_retries = 1
+
+# ─── Environment Variables ──────────────────────────────────
+# Seven values run this Worker and nothing reads an eighth. Anything that used to
+# be a feature flag is now simply how the Worker behaves — a flag whose only
+# correct value is "on" is not configuration, it is an unexercised code path.
 [vars]
-# CORS allowlist — your blog origin(s), comma-separated. localhost is always allowed.
-ALLOWED_ORIGIN = "https://your-blog-domain.example"
-# Admin allowlist — GitHub NUMERIC id(s) (immutable) preferred; login names also work.
-ADMIN_LOGINS = "your-github-id-or-login"
+# ─── ALLOWED_ORIGIN is deliberately NOT declared here ───────
+# It lives in the Cloudflare dashboard instead (Workers & Pages → <worker> →
+# Settings → Variables and Secrets), so the CORS allowlist can be changed and
+# take effect WITHOUT a redeploy. `keep_vars` above is what makes that stick —
+# without it, a deploy replaces the Worker's whole plain-text variable set with
+# whatever this file lists, and a dashboard-only value is deleted.
+#
+# Format — comma-separated DOMAINS. Scheme and port are ignored.
+#   blog.example.com      that host, any scheme, any port
+#   *.example.com         any single-label subdomain (never crosses a dot)
+#   local                 any private address: localhost, 127.x, 10.x,
+#                         172.16-31.x, 192.168.x, *.local
+#   192.168.*.*           one specific LAN range
+#   *                     everything (not recommended)
+#
+# Unset, it falls back to the SITE_URL domain. With BOTH unset it allows NOBODY —
+# a blank allowlist fails closed, because a wildcard produced by a configuration
+# mistake is exactly the wildcard nobody chose.
 
-# ─── Secrets (NEVER commit; set out-of-band) ────────────────
-# HMAC signing key for admin session tokens:
+# Comma-separated admin allowlist. GitHub NUMERIC ids are preferred: they are
+# immutable, whereas a login name can be released and re-registered by someone
+# else. Find yours at https://api.github.com/users/<you>
+ADMIN_LOGINS = ""
+
+# The site this backend belongs to. The ONE place a URL comes from: the changelog
+# fallback source, the click target of a note notification and of a test push,
+# the VAPID `sub` claim that identifies this server to the push services, and the
+# fallback CORS origin. No trailing slash.
+SITE_URL = "https://blog.example.com"
+
+# VAPID application server PUBLIC key. NOT a secret — it is shipped to every
+# subscribing browser. Generate a pair with `npm run vapid:keygen`. Must stay
+# byte-identical to `notifications.vapid_public_key` in the theme config; a
+# mismatch makes every push fail with 401/403 at the push service.
+VAPID_PUBLIC_KEY = ""
+
+# ─── Secrets (do NOT put values here; set via Wrangler) ─────
+# HMAC signing key for session tokens. Any long random value:
 #   wrangler secret put SESSION_SECRET
+#
+# VAPID application server private key — the 32-byte P-256 scalar (base64url)
+# printed alongside the public key by `npm run vapid:keygen`:
+#   wrangler secret put VAPID_PRIVATE_KEY
+#
+# Shared secret entered in the webhook form on the DEPLOY repo. It is also what
+# tells the Worker which repository to trust: only the repo holding this secret
+# can produce a valid signature, so no DEPLOY_REPO variable is needed.
+#   wrangler secret put GITHUB_WEBHOOK_SECRET
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true

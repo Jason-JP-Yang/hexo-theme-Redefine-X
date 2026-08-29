@@ -94,7 +94,14 @@ export default function initInstantNotes() {
   const panel = document.getElementById("instant-notes");
   if (!panel) return;
 
-  const apiUrl = theme.home_banner?.instant_notes?.api_url;
+  // Resolve THROUGH blogAuth, never straight from the config. Admin writes carry
+  // a session token that blogAuth obtained, and that token only verifies at the
+  // Worker instance which signed it — reading api_url directly here meant notes
+  // posted to production with a token the LOCAL worker had issued, so every
+  // admin write 403'd while public reads appeared to work.
+  const apiUrl = window.blogAuth
+    ? window.blogAuth.resolveApiBase(theme.home_banner?.instant_notes?.api_url)
+    : theme.home_banner?.instant_notes?.api_url;
   if (!apiUrl) return;
   panel._apiUrl = apiUrl;
 

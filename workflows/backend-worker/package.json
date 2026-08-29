@@ -1,13 +1,18 @@
 {
   "name": "redefine-x-backend-worker",
   "version": "1.0.0",
-  "description": "Headless Cloudflare Worker (Hono + D1) for the Redefine-X theme: instant-notes API, GitHub-OAuth admin auth, and giscus CORS proxy",
+  "description": "Headless Cloudflare Worker (Hono + D1) for the Redefine-X theme: instant-notes API, GitHub-OAuth auth, giscus CORS proxy, and follow/push notifications",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "queue:create": "wrangler queues create blog-push --message-retention-period-secs 86400",
+    "queue:info": "wrangler queues info blog-push",
+    "sql:check": "node scripts/sql-check.mjs",
+    "db:backup": "wrangler d1 export instant-notes-db --remote --output ./d1-backup.sql",
     "db:init": "wrangler d1 execute instant-notes-db --remote --file=./schema.sql",
-    "db:init:local": "wrangler d1 execute instant-notes-db --local --file=./schema.sql"
+    "db:init:local": "wrangler d1 execute instant-notes-db --local --file=./schema.sql",
+    "vapid:keygen": "node scripts/vapid-keygen.mjs"
   },
   "dependencies": {
     "hono": "^4.4.0"
@@ -15,5 +20,6 @@
   "devDependencies": {
     "wrangler": "^3.60.0",
     "@cloudflare/workers-types": "^4.20240605.0"
-  }
+  },
+  "type": "module"
 }

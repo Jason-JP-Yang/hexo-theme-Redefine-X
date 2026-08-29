@@ -1,0 +1,835 @@
+// ========================================================================================
+//                                   BLOG MANAGEMENT
+// ========================================================================================
+// The admin console at /blog-management/. Deliberately built from the same parts
+// as the notification panel — section titles, quiet buttons, chip-free rows,
+// the red confirm state — because it is the same subsystem seen from the other
+// side, and a second visual vocabulary for it would only have to be learned.
+//
+// Material: BASE tier only. Nothing here floats over live content, so nothing
+// here earns a backdrop-filter compositor layer.
+//
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+$bm-gap = 12px
+$bm-radius = 14px
+$bm-morph = 0.28s cubic-bezier(0.32, 0.72, 0, 1)
+
+.bm
+  display flex
+  flex-direction column
+  gap 26px
+  padding-bottom 40px
+
+// ─── head ───────────────────────────────────────────────────
+// The page title and the section titles borrow the markdown h2 / h3 metrics
+// verbatim (common/markdown.styl). This is a page of the blog, not a separate
+// application, and a console with its own type scale reads as one.
+.bm-heading
+  display flex
+  align-items center
+  gap 12px
+  margin 0
+  padding 3px 0
+  border-bottom solid 2px var(--fourth-text-color)
+  font-size 2.5rem
+  font-weight 650
+  letter-spacing -0.025em
+  line-height 1.1
+  color var(--second-text-color)
+
+  i
+    flex-shrink 0
+    font-size 0.62em
+    color var(--primary-color)
+
+  +redefine-tablet()
+    font-size 1.6rem
+
+.bm-lede
+  margin 10px 0 0
+  font-size 0.9rem
+  line-height 1.65
+  color var(--third-text-color)
+
+// ─── gate ───────────────────────────────────────────────────
+.bm-gate
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 12px
+  padding 64px 24px
+  border 1px solid var(--border-color)
+  border-radius $bm-radius
+  color var(--third-text-color)
+  text-align center
+
+  > i
+    font-size 22px
+    opacity 0.7
+
+  .bm-gate-text
+    margin 0
+    max-width 40ch
+    font-size 0.86rem
+    line-height 1.6
+
+  .bm-quiet
+    width auto
+    padding 7px 14px
+    border-color var(--border-color)
+
+.bm-console
+  display flex
+  flex-direction column
+  gap 30px
+
+// ─── shared furniture ───────────────────────────────────────
+.bm-section
+  display flex
+  flex-direction column
+  gap 12px
+
+  // A list that is fetching says so, without throwing away what is on screen.
+  &.is-loading
+    .bm-notifs,
+    .bm-followers
+      opacity 0.55
+      pointer-events none
+      transition opacity 0.2s ease
+
+// h3, and therefore NOT the panel's small-caps treatment: uppercase with wide
+// tracking is a label, and at 1.8rem it would shout rather than title.
+.bm-section-title
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 10px
+  margin 0
+  font-size 1.8rem
+  font-weight 600
+  letter-spacing -0.025em
+  line-height 1.3
+  color var(--second-text-color)
+
+  i
+    flex-shrink 0
+    font-size 0.6em
+    color var(--primary-color)
+
+  +redefine-tablet()
+    font-size 1.5rem
+
+// One step further in, so one step down: these sit inside a section, not beside
+// the others.
+.bm-sub-title
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
+  margin 0 0 2px
+  font-size 1.1rem
+  font-weight 600
+  letter-spacing -0.02em
+  color var(--second-text-color)
+
+.bm-count
+  padding 1px 9px
+  border-radius 999px
+  background var(--third-background-color-transparent)
+  font-size 0.72rem
+  font-weight 600
+  letter-spacing 0
+  color var(--third-text-color)
+
+.bm-card
+  padding 16px
+  border 1px solid var(--border-color)
+  border-radius $bm-radius
+  background var(--background-color)
+
+.bm-hint
+  margin 0
+  font-size 0.74rem
+  line-height 1.5
+  color var(--third-text-color)
+
+.bm-blank
+  padding 22px 4px
+  font-size 0.8rem
+  color var(--third-text-color)
+  text-align center
+  list-style none
+
+.bm-sep
+  display inline-block
+  width 3px
+  height 3px
+  margin 0 7px
+  border-radius 50%
+  background var(--third-text-color)
+  opacity 0.55
+  vertical-align middle
+
+.bm-field
+  width 100%
+  padding 9px 11px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--second-background-color)
+  color var(--first-text-color)
+  font-family $default-font-family
+  font-size 0.86rem
+  line-height 1.5
+  transition border-color 0.2s ease, background 0.2s ease
+
+  &:focus
+    outline none
+    border-color var(--primary-color)
+
+  &::placeholder
+    color var(--fourth-text-color)
+
+textarea.bm-field
+  resize vertical
+  min-height 76px
+
+// ─── buttons ────────────────────────────────────────────────
+.bm-primary
+  display flex
+  align-items center
+  justify-content center
+  gap 8px
+  padding 9px 16px
+  border none
+  border-radius 10px
+  background var(--primary-color)
+  color #fff
+  font-family $default-font-family
+  font-size 0.84rem
+  font-weight 500
+  cursor pointer
+  transition filter 0.2s ease, transform 0.2s ease, opacity 0.2s ease
+
+  &:hover:not(:disabled)
+    filter brightness(1.08)
+
+  &:active:not(:disabled)
+    transform scale(0.98)
+
+  &:disabled
+    opacity 0.45
+    cursor not-allowed
+
+.bm-quiet
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 7px
+  padding 6px 11px
+  border 1px solid transparent
+  border-radius 9px
+  background none
+  color var(--second-text-color)
+  font-family $default-font-family
+  font-size 0.78rem
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease, border-color 0.2s ease
+
+  &:hover
+    border-color var(--border-color)
+    color var(--first-text-color)
+
+  &.is-on
+    border-color var(--border-color)
+    color var(--first-text-color)
+
+  // The armed second press, identical to the panel's: the theme's red pair,
+  // a pale tint in light mode and a solid block in dark.
+  &.is-confirm
+    background var(--box-red-bg)
+    border-color transparent
+    color var(--box-red-text)
+    font-weight 600
+
+.bm-icon
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 30px
+  height 30px
+  border none
+  border-radius 8px
+  background none
+  color var(--third-text-color)
+  font-size 12px
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease
+
+  &:hover
+    background var(--third-background-color-transparent)
+    color var(--first-text-color)
+
+  &.is-confirm
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+// Segmented control — audience mode, and the notification type filter.
+//
+// Wraps. Three labels of unknown translated length inside a column whose width
+// is a fraction of the content area WILL eventually be wider than it, and an
+// inline-flex row that cannot wrap does not stay inside its grid track — it
+// spills across the next one.
+.bm-seg
+  display inline-flex
+  flex-wrap wrap
+  gap 2px
+  align-self flex-start
+  max-width 100%
+  padding 3px
+  border-radius 10px
+  background var(--third-background-color-transparent)
+
+  button
+    padding 5px 12px
+    border none
+    border-radius 8px
+    background none
+    color var(--third-text-color)
+    font-family $default-font-family
+    font-size 0.78rem
+    font-weight 500
+    white-space nowrap
+    cursor pointer
+    transition background 0.2s ease, color 0.2s ease
+
+    &:hover
+      color var(--first-text-color)
+
+    &.is-on
+      background var(--background-color)
+      color var(--first-text-color)
+      box-shadow 0 1px 3px var(--shadow-color-1)
+
+.bm-foot
+  display flex
+  justify-content center
+
+  &:empty
+    display none
+
+.bm-more
+  width 100%
+  border-color var(--border-color)
+
+// ─── chip picker ────────────────────────────────────────────
+.bm-picker
+  cursor text
+
+.bm-chips
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 6px
+  min-height 40px
+  padding 6px 8px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--second-background-color)
+  transition border-color 0.2s ease
+
+  &:focus-within
+    border-color var(--primary-color)
+
+.bm-picker.has-unknown .bm-chips
+  border-color var(--box-red-text)
+
+.bm-chip-input
+  flex 1
+  min-width 160px
+  padding 4px 2px
+  border none
+  background none
+  color var(--first-text-color)
+  font-family $default-font-family
+  font-size 0.8rem
+
+  &:focus
+    outline none
+
+  &::placeholder
+    color var(--fourth-text-color)
+
+.bm-chip
+  display inline-flex
+  align-items center
+  gap 6px
+  max-width 100%
+  padding 3px 4px 3px 4px
+  border-radius 999px
+  background var(--third-background-color-transparent)
+  font-size 0.76rem
+  line-height 1.4
+  color var(--first-text-color)
+
+  &.is-checking
+    padding-left 9px
+    color var(--third-text-color)
+
+  &.is-unknown
+    padding-left 9px
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+.bm-chip-avatar
+  width 18px
+  height 18px
+  border-radius 50%
+  object-fit cover
+  background var(--third-background-color)
+
+.bm-chip-name
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.bm-chip-id
+  font-size 0.7rem
+  color var(--third-text-color)
+
+.bm-chip-x
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 17px
+  height 17px
+  border none
+  border-radius 50%
+  background none
+  color inherit
+  font-size 9px
+  opacity 0.55
+  cursor pointer
+  transition opacity 0.15s ease, background 0.15s ease
+
+  &:hover
+    opacity 1
+    background var(--third-background-color)
+
+// ─── A · compose ────────────────────────────────────────────
+// Audience on the left, the message on the right, and the one button that sends
+// it in the bottom-right corner — the last thing read before it goes.
+//
+// `minmax(0, …)` on both tracks, not `minmax(240px, …)`: a track with a floor
+// wider than its share does not shrink, it overflows into the next one, which is
+// how the audience control ended up printed across the title field.
+.bm-compose
+  display grid
+  grid-template-columns minmax(0, 0.9fr) minmax(0, 1.1fr)
+  gap 18px
+
+  // Two columns need room for a segmented control AND a text field side by side.
+  // Below that the fields are narrower than the words in them.
+  @media (max-width 900px)
+    grid-template-columns minmax(0, 1fr)
+
+.bm-compose-audience,
+.bm-compose-fields
+  display flex
+  flex-direction column
+  gap 10px
+  min-width 0
+
+.bm-compose-foot
+  grid-column 1 / -1
+  display flex
+  align-items center
+  justify-content flex-end
+  gap 14px
+  padding-top 4px
+  border-top 1px solid var(--border-color)
+
+.bm-counter
+  font-size 0.72rem
+  color var(--third-text-color)
+  font-variant-numeric tabular-nums
+
+// ─── receipt ────────────────────────────────────────────────
+// Two columns of facts and no nesting: the point is to be read in one pass, not
+// to be a card inside a card.
+.bm-receipt
+  padding 12px 14px
+  border-radius 12px
+  font-size 0.78rem
+
+  &.is-good
+    background var(--box-green-bg)
+    color var(--box-green-text)
+
+  &.is-bad
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+.bm-receipt-head
+  display flex
+  align-items center
+  gap 8px
+  font-weight 600
+
+.bm-receipt-note
+  margin 6px 0 0
+  line-height 1.5
+
+.bm-receipt-grid
+  display grid
+  grid-template-columns max-content minmax(0, 1fr)
+  gap 3px 14px
+  margin 9px 0 0
+
+  dt
+    font-weight 600
+    opacity 0.8
+
+  dd
+    margin 0
+    min-width 0
+    overflow-wrap anywhere
+
+// ─── B · notification list ──────────────────────────────────
+.bm-notifs
+  display flex
+  flex-direction column
+  margin 0
+  padding 0
+  list-style none
+
+.bm-notif
+  // An explicit height is written onto this row while it morphs, and a flex item
+  // that may shrink would not honour it.
+  flex-shrink 0
+  border-bottom 1px solid var(--border-color)
+
+  &:last-child
+    border-bottom none
+
+  &.is-bad
+    background var(--box-red-bg)
+
+.bm-notif-inner
+  display flex
+  align-items flex-start
+  gap $bm-gap
+  padding 12px 2px
+
+  &.is-editing
+    gap 10px
+
+    .bm-notif-main
+      gap 8px
+
+.bm-notif-icon
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 30px
+  height 30px
+  margin-top 1px
+  border-radius 9px
+  background var(--third-background-color-transparent)
+  color var(--second-text-color)
+  font-size 12px
+
+.bm-notif-main
+  display flex
+  flex-direction column
+  gap 3px
+  flex 1
+  min-width 0
+
+.bm-notif-title
+  font-size 0.88rem
+  font-weight 600
+  line-height 1.35
+  color var(--first-text-color)
+
+.bm-notif-body
+  margin 0
+  font-size 0.8rem
+  line-height 1.5
+  color var(--second-text-color)
+
+.bm-notif-url
+  font-size 0.74rem
+  color var(--link-color)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+// Everything the row knows, on one line. The separators are what let it stay
+// one line instead of becoming a definition list nobody reads.
+.bm-notif-meta
+  margin-top 2px
+  font-size 0.71rem
+  line-height 1.6
+  color var(--third-text-color)
+
+.bm-notif-actions
+  display flex
+  align-items center
+  gap 2px
+  flex-shrink 0
+
+// ─── C · followers ──────────────────────────────────────────
+.bm-blocklists
+  display flex
+  flex-direction column
+  gap 10px
+
+.bm-blocklist
+  display flex
+  flex-direction column
+  gap 5px
+
+.bm-blocklist-label
+  display flex
+  align-items center
+  gap 7px
+  font-size 0.76rem
+  font-weight 500
+  color var(--second-text-color)
+
+.bm-save-state
+  display inline-flex
+  align-items center
+  font-size 10px
+  color var(--primary-color)
+
+// The one standing note on the page: what moderation here does NOT do.
+.bm-notice
+  display flex
+  align-items flex-start
+  gap 9px
+  padding 11px 13px
+  border-radius 11px
+  background var(--box-blue-bg)
+  color var(--box-blue-text)
+  font-size 0.76rem
+  line-height 1.55
+
+  i
+    margin-top 3px
+    flex-shrink 0
+
+  a
+    text-decoration underline
+    text-underline-offset 2px
+
+.bm-followers
+  display flex
+  flex-direction column
+  gap 4px
+  margin 0
+  padding 0
+  list-style none
+
+.bm-follower
+  padding 12px 0
+  border-bottom 1px solid var(--border-color)
+
+  &:last-child
+    border-bottom none
+
+  &.is-muted .bm-avatar
+    opacity 0.6
+
+  &.is-banned .bm-avatar
+    filter grayscale(1)
+    opacity 0.6
+
+.bm-follower-head
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 11px
+
+.bm-avatar
+  width 36px
+  height 36px
+  flex-shrink 0
+  border-radius 50%
+  object-fit cover
+  background var(--third-background-color)
+
+// A flex BASIS, not `flex: 1`. `flex: 1` means basis 0, so the text column
+// shrinks to nothing and the buttons beside it — which must not shrink — carry
+// the row off the edge of the screen instead of wrapping under it.
+.bm-follower-main
+  display flex
+  flex-direction column
+  gap 2px
+  flex 1 1 220px
+  min-width 0
+
+.bm-follower-name
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 7px
+  font-size 0.87rem
+  font-weight 600
+  color var(--first-text-color)
+
+.bm-login
+  font-weight 400
+  font-size 0.78rem
+  color var(--third-text-color)
+
+  &:hover
+    color var(--primary-color)
+
+.bm-follower-meta
+  font-size 0.71rem
+  line-height 1.6
+  color var(--third-text-color)
+
+.bm-follower-actions,
+.bm-device-actions
+  display flex
+  align-items center
+  flex-wrap wrap
+  justify-content flex-end
+  gap 4px
+  flex-shrink 0
+  margin-left auto
+
+.bm-tag
+  padding 1px 7px
+  border-radius 999px
+  font-size 0.65rem
+  font-weight 600
+  letter-spacing 0.02em
+  text-transform uppercase
+
+  &.is-banned
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+  &.is-muted
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
+
+  &.is-admin
+    background var(--third-background-color-transparent)
+    color var(--third-text-color)
+
+// The tree: devices hang off their owner on a rule, so the nesting is one line
+// rather than another box.
+.bm-devices
+  display flex
+  flex-direction column
+  margin 8px 0 0 17px
+  padding 0 0 0 20px
+  border-left 1px solid var(--border-color)
+  list-style none
+
+.bm-device
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 10px
+  padding 7px 0
+
+.bm-device-icon
+  display flex
+  align-items center
+  justify-content center
+  flex-shrink 0
+  width 28px
+  height 28px
+  border-radius 8px
+  background var(--third-background-color-transparent)
+  color var(--second-text-color)
+  font-size 12px
+
+.bm-device-main
+  display flex
+  flex-direction column
+  gap 1px
+  flex 1 1 200px
+  min-width 0
+
+.bm-device-title
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 5px
+  font-size 0.8rem
+  color var(--first-text-color)
+
+.bm-device-meta
+  font-size 0.69rem
+  color var(--third-text-color)
+
+.bm-no-devices
+  margin 6px 0 0 37px
+  padding 0
+  font-size 0.74rem
+  text-align left
+
+.bm-orphans
+  display flex
+  flex-direction column
+  gap 8px
+
+  &:empty
+    display none
+
+  .bm-devices
+    margin-left 0
+    padding-left 0
+    border-left none
+
+// ─── narrow ─────────────────────────────────────────────────
+// A phone cannot fit an avatar, three labels and two labelled buttons on one
+// line, so the buttons take a line of their own. That needs BOTH halves of the
+// change: `width: 100%` alone, on a row that could not wrap, is what pushed the
+// whole tree off the right edge of the screen.
++redefine-tablet()
+  .bm-follower-actions,
+  .bm-device-actions
+    width 100%
+    margin-left 0
+    justify-content flex-start
+
+  // Aligned under the text rather than under the icon, so the two rows read as
+  // one entry.
+  .bm-follower-actions
+    padding-left 47px
+
+  .bm-device-actions
+    padding-left 38px
+
+  .bm-devices
+    margin-left 0
+    padding-left 12px
+
+  .bm-no-devices
+    margin-left 12px
+
+  .bm-notif-inner
+    flex-wrap wrap
+
+  .bm-notif-actions
+    width 100%
+    justify-content flex-end
+
+  .bm-notif-meta
+    line-height 1.8
+
+  .bm-compose-foot
+    flex-wrap wrap
+    justify-content space-between

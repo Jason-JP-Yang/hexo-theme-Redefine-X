@@ -7,13 +7,16 @@
  *
  *   • masonry-reactions  → uses getToken() to like photos via GitHub GraphQL.
  *   • instant-notes admin → uses getSession()/getSessionToken() to write notes.
+ *   • notifications       → uses getSessionToken() to follow the blog, register
+ *                           a push device, and read its own inbox.
  *   • (future) a unified "signed in as …" UI.
  *
  * It exchanges the giscus session for a GitHub user token (via the merged
  * Worker's /api/oauth/token proxy), and asks the Worker /api/auth/login "who am
- * I + am I admin?". Admins receive a short-lived HMAC session token used for
- * admin writes. Non-admins simply get isAdmin:false — comments and likes keep
- * working unchanged.
+ * I + am I admin?". EVERY verified user receives a short-lived HMAC session
+ * token; the isAdmin claim inside it is what admin writes require. A reader who
+ * is not an admin still holds a usable token — that is what lets them follow the
+ * blog — and comments and likes keep working unchanged either way.
  *
  * Loaded as a CLASSIC script (see scripts.ejs) BEFORE masonry-reactions so the
  * global is ready and the OAuth-callback session sync runs synchronously.
@@ -26,8 +29,13 @@
   if (window.blogAuth) return; // idempotent across swup / double-loads
 
   var GISCUS_SESSION_KEY = "giscus-session";
+  var GISCUS_PARAM = "giscus";
   var GISCUS_ORIGIN = "https://giscus.app";
   var SESSION_CACHE_KEY = "blog-auth-session"; // sessionStorage: {login,avatar,isAdmin,token,exp}
+  // localStorage, read by the inline script in head.ejs so the admin-only rows
+  // in the sidebar are decided BEFORE the first paint rather than appearing a
+  // round trip later. Same pattern as "blog-following".
+  var ADMIN_KEY = "blog-admin";
 
   // ─── state ───────────────────────────────────────────────
   var tokenCache = null; // { session, token } — giscus session → GitHub token
@@ -47,13 +55,128 @@
       return null;
     }
   }
+  // ─── backend selection ───────────────────────────────────
+  // EXACTLY three combinations are permitted; nothing else can be expressed:
+  //
+  //   A  localhost page  → local Worker        developer.backend: local
+  //   B  localhost page  → production Worker   developer.backend: production
+  //   C  production page → production Worker   (forced, config is ignored)
+  //
+  // The fourth combination — a deployed page talking to a local Worker — is
+  // rejected in code, not by convention, so a stray `backend: local` committed
+  // by accident degrades to C instead of shipping a broken or leaky site.
+  //
+  // The selection must sit at the BASE and apply to EVERY consumer at once: a
+  // session token is HMAC-signed with the Worker's SESSION_SECRET, and
+  // `wrangler dev` reads a different one from .dev.vars than production does.
+  // Minting a token at one instance and spending it at the other is a guaranteed
+  // 403 — which is precisely what a half-applied override used to cause.
+
+  /**
+   * Is this host somewhere only a developer can reach?
+   *
+   * Broader than "localhost" on purpose: testing push on a phone means loading
+   * the dev site over the LAN, so the private ranges count too. All of these are
+   * unroutable from the public internet, which is the property that matters —
+   * a host on this list cannot be a deployed site.
+   *
+   *   localhost, *.localhost, *.local (mDNS)
+   *   127.0.0.0/8, ::1
+   *   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+   */
+  function isPrivateHost(host) {
+    var h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+    if (h === "localhost" || h === "::1") return true;
+    if (/(^|\.)localhost$/.test(h) || /\.local$/.test(h)) return true;
+    if (/^127\.\d+\.\d+\.\d+$/.test(h)) return true;
+    if (/^10\.\d+\.\d+\.\d+$/.test(h)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(h)) return true;
+    var m = /^172\.(\d+)\.\d+\.\d+$/.exec(h);
+    if (m) {
+      var second = parseInt(m[1], 10);
+      return second >= 16 && second <= 31;
+    }
+    return false;
+  }
+
+  function isLocalhostPage() {
+    return isPrivateHost(location.hostname);
+  }
+
+  /**
+   * Push and service workers require a SECURE CONTEXT. Browsers grant that to
+   * localhost and 127.0.0.1 over plain http, but NOT to a LAN address — so
+   * http://192.168.1.50:4000 can select the local backend and use the in-site
+   * inbox, yet can never receive a push. Nothing in this codebase can change
+   * that; it needs https (a tunnel, or a locally-trusted certificate).
+   */
+  function isSecureDevContext() {
+    return typeof window.isSecureContext === "boolean" ? window.isSecureContext : true;
+  }
+
+  /**
+   * A local Worker URL is only accepted if it points somewhere private. Without
+   * this the developer hook would be a general-purpose redirect for every
+   * authenticated API call — a place to point the blog's session tokens at
+   * somebody else's host by editing one line of config.
+   */
+  function isLoopbackUrl(raw) {
+    try {
+      var u = new URL(raw, location.href);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      return isPrivateHost(u.hostname);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  var devBaseResolved = false;
+  var devBase = null;
+
+  function getDevBase() {
+    if (devBaseResolved) return devBase;
+    devBaseResolved = true;
+    devBase = null;
+
+    var d = (window.theme && window.theme.developer) || {};
+    if (String(d.backend || "production") !== "local") return devBase;
+
+    if (!isLocalhostPage()) {
+      warn(
+        "developer.backend is 'local' but " +
+          location.hostname +
+          " is not a private host (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x, *.local) — " +
+          "ignoring it and using the production backend."
+      );
+      return devBase;
+    }
+    if (!d.local_api_url || !isLoopbackUrl(d.local_api_url)) {
+      warn(
+        "developer.local_api_url must be a localhost/127.0.0.1 URL — " +
+          "ignoring it and using the production backend."
+      );
+      return devBase;
+    }
+
+    devBase = strip(d.local_api_url);
+    return devBase;
+  }
+
+  function warn(message) {
+    try {
+      console.warn("[blogAuth] " + message);
+    } catch (e) {}
+  }
+
   /**
    * Resolve the merged-Worker base URL. Both custom domains route to the same
    * Worker, so either works for /api/oauth/token and /api/auth/login.
-   * Prefer the masonry page's giscusProxy (keeps likes on their usual domain),
-   * else the globally-exported instant_notes.api_url.
+   * The selected backend wins; otherwise the masonry page's giscusProxy (keeps
+   * likes on their usual domain), else the exported instant_notes.api_url.
    */
   function getApiBase() {
+    var dev = getDevBase();
+    if (dev) return dev;
     var mc = getMasonryConfig();
     if (mc && mc.giscusProxy) return strip(mc.giscusProxy);
     var t =
@@ -63,6 +186,18 @@
       window.theme.home_banner.instant_notes.api_url;
     if (t) return strip(t);
     return null;
+  }
+
+  /**
+   * Resolve a Worker base for any other consumer.
+   *
+   * EVERY module that talks to the Worker must go through this — instant notes,
+   * notifications, anything later. Reading `api_url` straight from the config
+   * is what produced the split brain this replaced: notes posting to production
+   * with a token the local Worker had signed.
+   */
+  function resolveApiBase(fallback) {
+    return getDevBase() || (fallback ? strip(fallback) : getApiBase());
   }
 
   function readGiscusSession() {
@@ -76,11 +211,20 @@
   }
 
   // ─── session cache (avoid re-verifying on every page load) ─
+  function syncAdminClass(isAdmin) {
+    try {
+      document.documentElement.classList.toggle("blog-admin", !!isAdmin);
+      if (isAdmin) localStorage.setItem(ADMIN_KEY, "1");
+      else localStorage.removeItem(ADMIN_KEY);
+    } catch (e) {}
+  }
+
   function persist(data) {
     try {
       if (data) sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(data));
       else sessionStorage.removeItem(SESSION_CACHE_KEY);
     } catch (e) {}
+    syncAdminClass(data && data.isAdmin);
   }
   function hydrate() {
     if (!readGiscusSession()) {
@@ -91,8 +235,10 @@
       var raw = sessionStorage.getItem(SESSION_CACHE_KEY);
       if (!raw) return;
       var data = JSON.parse(raw);
-      if (data && (!data.exp || Date.now() < data.exp)) cachedSession = data;
-      else persist(null);
+      if (data && (!data.exp || Date.now() < data.exp)) {
+        cachedSession = data;
+        syncAdminClass(data.isAdmin);
+      } else persist(null);
     } catch (e) {}
   }
 
@@ -155,7 +301,24 @@
           body: JSON.stringify({ githubToken: token }),
         })
           .then(function (res) {
-            if (!res.ok) return null;
+            // 401 is GitHub itself refusing the token behind this giscus
+            // session — spent, revoked, or expired. Keeping it would leave every
+            // consumer looking signed in and able to do nothing, which is the
+            // state that reads as "the site is broken". Drop it and say so, the
+            // same conclusion giscus-client reaches from its own widget error.
+            if (res.status === 401) {
+              warn("the stored giscus session is no longer valid — signing out");
+              try {
+                localStorage.removeItem(GISCUS_SESSION_KEY);
+              } catch (e) {}
+              tokenCache = null;
+              setTimeout(emit, 0);
+              return null;
+            }
+            if (!res.ok) {
+              warn("identity check failed (" + res.status + ")");
+              return null;
+            }
             return res.json();
           })
           .then(function (data) {
@@ -182,11 +345,30 @@
   }
 
   // ─── login / logout ──────────────────────────────────────
+  /**
+   * This page's URL with any OAuth session (and hash) taken out of it.
+   *
+   * Load-bearing in two places, for the same reason: `?giscus=` is a ONE-TIME
+   * credential, and a URL that still carries a spent one is a trap. As a
+   * `redirect_uri` it comes back as `?giscus=SPENT&giscus=FRESH`, where the
+   * first value — the dead one — is what `searchParams.get()` returns.
+   */
+  function cleanHref() {
+    try {
+      var u = new URL(location.href);
+      u.searchParams.delete(GISCUS_PARAM);
+      u.hash = "";
+      return u.toString();
+    } catch (e) {
+      return location.href;
+    }
+  }
+
   function getLoginUrl() {
     return (
       GISCUS_ORIGIN +
       "/api/oauth/authorize?redirect_uri=" +
-      encodeURIComponent(location.href)
+      encodeURIComponent(cleanHref())
     );
   }
   function login() {
@@ -249,38 +431,105 @@
     getLoginUrl: getLoginUrl,
     login: login,
     logout: logout,
+    resolveApiBase: resolveApiBase,
+    get apiBase() {
+      return getApiBase();
+    },
+    // "local" or "production" — which of the three permitted combinations is
+    // actually in force, after the guards above have had their say.
+    get backend() {
+      return getDevBase() ? "local" : "production";
+    },
+    get isLocalDev() {
+      return !!getDevBase();
+    },
     get isAuthenticated() {
       return !!readGiscusSession();
     },
     get isAdmin() {
       return !!(cachedSession && cachedSession.isAdmin);
     },
+    // The GitHub NUMERIC id — stable across a username change, which is why the
+    // backend keys followers by it rather than by login.
+    get githubId() {
+      return (cachedSession && cachedSession.id) || null;
+    },
     get user() {
       return cachedSession
-        ? { login: cachedSession.login, avatar: cachedSession.avatar }
+        ? {
+            id: cachedSession.id || null,
+            login: cachedSession.login,
+            name: cachedSession.name || "",
+            avatar: cachedSession.avatar,
+          }
         : null;
     },
   };
 
   // ─── boot ────────────────────────────────────────────────
-  // OAuth callback: when returning from GitHub, the URL carries ?giscus=SESSION.
-  // Persist it FIRST (same key/format as client-self-hosted.ts) so getToken()
-  // works immediately. Don't strip the param — giscus-client still needs it.
+  /**
+   * OAuth callback: when returning from GitHub the URL carries ?giscus=SESSION.
+   * Persist it FIRST (same key/format as client-self-hosted.ts) so getToken()
+   * works immediately — this script runs before giscus-client — and then TAKE IT
+   * OUT OF THE URL.
+   *
+   * Stripping it is not tidying. The session is single-use, and this ran on
+   * every load: any later visit to a URL that still carried one — a reload, a
+   * bookmark, an entry picked out of history — overwrote the reader's good,
+   * current session with the spent one. Everything then failed at once and in
+   * unrelated-looking ways: the bell fell back to a Follow button that did
+   * nothing, and the comment widget reported "Bad credentials" and signed the
+   * reader out. giscus-client does strip it, but it is only loaded on pages that
+   * have a comment widget, so the home page kept one indefinitely.
+   *
+   * The LAST value, not the first: a redirect_uri that still carried a spent
+   * session comes back with two of them, oldest first.
+   */
   (function syncOAuthSession() {
     try {
-      var giscusParam = new URL(location.href).searchParams.get("giscus");
-      if (giscusParam)
-        localStorage.setItem(GISCUS_SESSION_KEY, JSON.stringify(giscusParam));
+      var sessions = new URL(location.href).searchParams.getAll(GISCUS_PARAM);
+      if (!sessions.length) return;
+      localStorage.setItem(
+        GISCUS_SESSION_KEY,
+        JSON.stringify(sessions[sessions.length - 1])
+      );
+      history.replaceState(undefined, document.title, cleanHref());
     } catch (e) {}
   })();
+
+  // Say which backend is in force, once, on localhost only. Every consumer
+  // shares this base, so getting it wrong breaks notes, likes and notifications
+  // together and in ways that read as unrelated bugs — worth one console line.
+  if (isLocalhostPage()) {
+    try {
+      console.info(
+        "[blogAuth] backend: " +
+          (getDevBase() ? "LOCAL" : "PRODUCTION") +
+          " → " +
+          (getApiBase() || "(none configured)")
+      );
+      // The failure this prevents is silent and very confusing: on a LAN address
+      // over http the browser withholds serviceWorker entirely, so Follow
+      // "works", the inbox fills up, and no push ever arrives.
+      if (!isSecureDevContext()) {
+        warn(
+          location.origin +
+            " is not a secure context, so push notifications CANNOT work here " +
+            "(the in-site inbox still does). Use http://localhost:4000, or serve " +
+            "the dev site over https."
+        );
+      }
+    } catch (e) {}
+  }
 
   hydrate();
 
   // Warm the identity cache in the background so window.blogAuth.isAdmin is
   // populated soon after load. Consumers PULL via getSession()/getToken() on
-  // their own init; blog:auth-change is only fired on real changes afterwards
-  // (login/logout/iframe sign-out) — see handleSessionChange().
+  // their own init, but this also has to ANNOUNCE its result: the OAuth return
+  // used to be announced by giscus-client's `giscus:session-change`, and that
+  // now never fires here because the param is consumed and stripped above.
   if (readGiscusSession() && !cachedSession) {
-    getSession(false);
+    getSession(false).then(emit);
   }
 })();

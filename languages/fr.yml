@@ -168,3 +168,134 @@ error_book:
   check: Vérifier
   clear: Effacer
   placeholder: Réponse finale
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: Notifications
+  close: Fermer
+  back: Retour
+  mark_read: Tout marquer comme lu
+  signed_out: Connectez-vous avec GitHub pour suivre ce blog.
+  sign_in: Se connecter avec GitHub
+  follow: Suivre ce blog
+  follow_nav: Suivre
+  follow_blog: Suivre le blog
+  empty: Suivez le blog pour être averti des nouveaux articles.
+  empty_following: Rien pour le moment. Les nouveaux articles apparaîtront ici.
+  push_denied: Les notifications sont bloquées dans les réglages de votre navigateur.
+  push_unsupported: Ce navigateur ne prend pas en charge le push.
+  push_insecure: Le push exige une connexion sécurisée (https ou localhost).
+  push_ios: Sur iPhone, ajoutez d'abord ce site à l'écran d'accueil.
+  still_inbox: Les nouveautés restent visibles ici.
+  unreachable: Service de notifications injoignable. Votre abonnement est inchangé.
+  retry: Réessayer
+  manage: Gérer l'abonnement
+  manage_title: Gérer l'abonnement
+  back_to_inbox: Retour aux notifications
+  section_delivery: Ce que vous recevez
+  section_devices: Appareils enregistrés
+  always_on: Toujours actif
+  opt_inbox: Recevoir les messages dans le blog
+  opt_push: Recevoir les notifications push de ce navigateur
+  opt_push_hint: Enregistre ce navigateur comme appareil de push.
+  opt_announcements: Recevoir les annonces du blog
+  opt_notes: Recevoir les nouvelles notes
+  opt_posts: Recevoir les nouveaux articles
+  no_devices: Aucun navigateur n'est encore enregistré pour le push.
+  this_browser: Ce navigateur
+  remove_device: Supprimer cet appareil
+  subscribed: Abonné
+  unknown: Inconnu
+  device_laptop: Portable
+  device_desktop: Ordinateur de bureau
+  device_mobile: Mobile
+  device_tablet: Tablette
+  logout: Se déconnecter de ce navigateur
+  logout_confirm: Appuyez à nouveau pour vous déconnecter
+  logout_note: Après déconnexion de ce navigateur, vous ne pourrez plus commenter les articles, réagir aux photos dans Masonry, ni recevoir de notifications et de push ici. À votre prochaine connexion, le blog tentera de tout restaurer automatiquement ; en cas d'échec, appuyez de nouveau sur Suivre pour retrouver le push.
+  unfollow_blog: Ne plus suivre le blog
+  unfollow_confirm: Appuyez à nouveau pour ne plus suivre
+  unfollow_note: Vous cesserez de suivre ce blog et ne recevrez plus de notifications push sur aucun navigateur. Votre boîte de réception sera vidée et ne pourra pas être récupérée. Vous restez connecté — pour vous déconnecter, utilisez l'onglet des commentaires sous n'importe quel article.
+  blog_management: Administration du blog
+  banned: Bloque
+  push_device_banned: Le push de ce navigateur a ete desactive par l'auteur du blog.
+  device_banned_note: L'un des navigateurs ci-dessus a ete empeche de recevoir des notifications par l'auteur du blog, et ne peut pas etre supprime. Cela fait generalement suite a un usage abusif de l'abonnement. Merci d'utiliser le blog avec consideration ; si vous pensez qu'il s'agit d'une erreur, dites-le dans les commentaires sous n'importe quel article.
+  account_banned: Votre compte a ete bloque
+  account_banned_note: Vous restez connecte et pouvez continuer a commenter les articles ; seule la possibilite de vous abonner a ce blog a ete retiree. Si l'auteur vous a egalement bloque sur GitHub, les commentaires s'arretent aussi.
+
+management:
+  title: Administration du blog
+  lede: Les annonces, ce que la base de notifications conserve encore, et chaque abonne avec ses appareils.
+  checking: Verification de votre session...
+  denied: Cette page est reservee a l'administrateur du blog.
+  unreachable: Impossible de joindre le service de notifications.
+  retry: Reessayer
+  announce: Envoyer une annonce
+  audience: Destinataires
+  aud_all: Tout le monde
+  aud_only: Uniquement ceux-ci
+  aud_except: Tout le monde sauf
+  aud_topic: Par sujet
+  aud_all_hint: Chaque abonne la recoit.
+  aud_only_hint: Seuls les lecteurs listes ici la recoivent.
+  aud_except_hint: Tous les abonnes sauf les lecteurs listes ici.
+  aud_placeholder: Identifiant GitHub ou id numerique, puis Entree
+  chip_unknown: Lecteur inconnu
+  chip_error: Echec de la recherche
+  remove: Retirer
+  f_title: Titre
+  f_body: Ce qui s'est passe, en une ou deux phrases
+  f_url: Lien - la destination lorsqu'on appuie sur la notification
+  post: Publier l'annonce
+  send_ok: Envoyee
+  send_failed: Non envoyee
+  offline: Le Worker n'a pas repondu.
+  r_id: Id
+  r_recipients: Boites ecrites
+  r_devices: Appareils push
+  r_messages: Messages en file
+  r_audience: Destinataires
+  r_matched: Correspondances
+  r_ignored: Ignores
+  r_skipped: Deja envoye
+  r_absorbed: Absorbe
+  r_absorbed_v: enregistre, non distribue
+  notifications: Liste des notifications
+  f_announcements: Annonces
+  f_posts: Articles
+  f_notes: Notes rapides
+  f_all: Tout
+  m_inboxes: boites
+  m_devices: appareils
+  m_unread: non lus
+  m_blocked: Bloque
+  edit: Modifier
+  delete: Supprimer
+  save: Enregistrer
+  cancel: Annuler
+  edit_hint: La modification ne change que la copie de la boite de reception. Rien n'est renvoye.
+  no_notifications: Rien dans la base pour ce filtre.
+  load_more: Charger plus
+  followers: Abonnes
+  blocklists: Listes de blocage globales
+  blocklists_hint: Toute personne listee ici est ecartee de ce type de notification, silencieusement et partout. Enregistre des qu'une entree est resolue.
+  topic_posts: Nouveaux articles
+  topic_notes: Notes rapides
+  topic_announcements: Annonces
+  moderation_notice: Couper le son ou bloquer ici n'affecte que les notifications. Cela n'empeche personne de commenter le blog ; les commentaires sont des GitHub Discussions, donc le blocage d'un commentateur se fait dans les reglages Moderation de votre compte GitHub.
+  moderation_docs: Documentation GitHub
+  no_followers: Personne ne suit encore le blog.
+  no_devices: Aucun appareil push enregistre.
+  subscribed: Abonne
+  banned: Bloque
+  muted: Silencieux
+  admin: Administrateur
+  mute: Couper
+  unmute: Reactiver
+  ban: Bloquer
+  unban: Debloquer
+  confirm: Appuyez a nouveau
+  orphans: Appareils sans proprietaire
+  orphans_hint: Abonnements dont le proprietaire s'est desabonne. Seuls les bloques sont conserves - le balayage quotidien supprime les autres.

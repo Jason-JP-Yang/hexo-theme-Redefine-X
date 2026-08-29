@@ -57,21 +57,56 @@
                                 <% } %>
                             </li>
                     <% } } %>
+                    <% if (theme.notifications && theme.notifications.enable) { %>
+                        <li class="navbar-item notifications-bell"
+                            role="button"
+                            tabindex="0"
+                            aria-expanded="false"
+                            aria-label="<%= __('notifications.title') %>">
+                            <i class="fa-regular fa-bell"></i>
+                            <span class="bell-badge">0</span>
+                        </li>
+                        <li class="navbar-item navbar-follow">
+                            <button type="button" class="follow-trigger"
+                                    aria-label="<%= __('notifications.follow_blog') %>">
+                                <i class="fa-regular fa-bell" aria-hidden="true"></i>
+                                <span class="follow-label"><%= __('notifications.follow_nav') %></span>
+                            </button>
+                        </li>
+                    <% } %>
                     <% if (theme.navbar.search.enable === true) { %>
                         <li class="navbar-item search search-popup-trigger">
-                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <i class="fa-regular fa-magnifying-glass"></i>
                         </li>
                     <% } %>
                 </ul>
             </div>
             <!-- Mobile -->
             <div class="mobile">
+                <% if (theme.notifications && theme.notifications.enable) { %>
+                    <div class="icon-item notifications-bell"
+                         role="button"
+                         tabindex="0"
+                         aria-expanded="false"
+                         aria-label="<%= __('notifications.title') %>">
+                        <i class="fa-regular fa-bell"></i>
+                        <span class="bell-badge">0</span>
+                    </div>
+                    <div class="navbar-follow">
+                        <button type="button" class="follow-trigger"
+                                aria-label="<%= __('notifications.follow_blog') %>">
+                            <i class="fa-regular fa-bell" aria-hidden="true"></i>
+                            <span class="follow-label"><%= __('notifications.follow_nav') %></span>
+                        </button>
+                    </div>
+                <% } %>
                 <% if (theme.navbar.search.enable === true) { %>
-                    <div class="icon-item search search-popup-trigger"><i class="fa-solid fa-magnifying-glass"></i>
+                    <div class="icon-item search search-popup-trigger"><i class="fa-regular fa-magnifying-glass"></i>
                     </div>
                 <% } %>
                 <div class="icon-item navbar-bar">
-                    <div class="navbar-bar-middle"></div>
+                    <i class="fa-regular fa-bars"></i>
+                    <i class="fa-regular fa-xmark"></i>
                 </div>
             </div>
         </div>
@@ -155,6 +190,22 @@
                         </a>
                     </li>
                 <% } %>
+            <% } %>
+
+            <% if (theme.notifications && theme.notifications.enable) { %>
+                <li class="drawer-navbar-item blog-admin-only text-base my-1.5 flex flex-col w-full">
+                    <a class="py-1.5 px-2 flex flex-row items-center justify-between gap-1 hover:!text-primary active:!text-primary text-2xl font-semibold group border-b border-border-color hover:border-primary w-full active"
+                       href="<%= url_for('/blog-management/') %>">
+                        <span><%= __('notifications.blog_management') %></span>
+                        <i class="fa-solid fa-screwdriver-wrench fa-sm fa-fw"></i>
+                    </a>
+                </li>
+            <% } %>
+
+            <% if (theme.home.bento === false && theme.notifications && theme.notifications.enable) { %>
+                <li class="drawer-navbar-item drawer-follow-item text-base my-1.5 flex flex-col w-full">
+                    <%- partial("components/notifications/follow-cta") %>
+                </li>
             <% } %>
         </ul>
 

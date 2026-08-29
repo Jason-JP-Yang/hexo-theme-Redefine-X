@@ -1,6 +1,7 @@
 $logo-title-font-size = 1.7rem
-$desktop-search-icon-font-size = 1.5rem
-$navbar-bar-line-height = 2.5px
+// One size for every icon control in the row — search, bell, drawer toggle.
+$navbar-icon-font-size = 1.5rem
+$mobile-icon-font-size = 18px
 $logo-image-box-width = 34px
 
 @require '../../common/variables'
@@ -171,12 +172,26 @@ $logo-image-box-width = 34px
                 .navbar-shrink &
                   bottom -($navbar-shrink-height / 2 - 17)
 
-            &.search
-              font-size $desktop-search-icon-font-size
-              margin-left 26px
+            &.search,
+            &.notifications-bell
+              display flex
+              align-items center
+              justify-content center
+              font-size $navbar-icon-font-size
 
               i
                 color var(--default-text-color)
+
+            // The trailing icon group stands apart from the links. Whichever of
+            // its members comes first carries that gap — the notification slot
+            // when notifications are on, the search icon when they are not.
+            &.notifications-bell,
+            &.navbar-follow,
+            &.search
+              margin-left 26px
+
+            &.navbar-follow + .search
+              margin-left 0
 
             .sub-menu
               position absolute
@@ -226,22 +241,21 @@ $logo-image-box-width = 34px
         display flex
         justify-content space-between
         align-items center
+        // A gap rather than a margin per item: the bell and the Follow button are
+        // one slot with two occupants and only one of them is ever displayed.
+        gap 12px
 
         .icon-item
           display none
           position relative
           cursor pointer
-          font-size 18px
-          margin-left 12px
+          font-size $mobile-icon-font-size
           width 20px
           height 20px
           color var(--default-text-color)
 
           i
             color var(--default-text-color)
-
-          &:first-child
-            margin-left 0
 
           +redefine-tablet()
             display flex
@@ -253,36 +267,33 @@ $logo-image-box-width = 34px
             justify-content center
             align-items center
 
+        // On the same switch as the icons; its own look is in notifications.styl.
+        .navbar-follow
+          display none
+
+          +redefine-tablet()
+            display block
+
+          .navbar-collapsed &
+            display block
+
         .navbar-bar
-          .navbar-bar-middle
-            width 18px
-            height $navbar-bar-line-height
-            position relative
-            background var(--default-text-color)
+          i
+            position absolute
+            transition opacity 0.25s ease, transform 0.25s ease
 
-            .navbar-drawer-show &
-              background transparent
+          .fa-xmark
+            opacity 0
+            transform rotate(-90deg)
 
-            &::before, &::after
-              content ''
-              position absolute
-              left 0
-              width 100%
-              height $navbar-bar-line-height
-              background var(--default-text-color)
-              transition-t('transform', '0', '0.38', 'ease')
+          .navbar-drawer-show &
+            .fa-bars
+              opacity 0
+              transform rotate(90deg)
 
-            &::before
-              top -6px
-
-              .navbar-drawer-show &
-                transform translateY(6px) rotate(45deg)
-
-            &::after
-              bottom -6px
-
-              .navbar-drawer-show &
-                transform translateY(-6px) rotate(-45deg)
+            .fa-xmark
+              opacity 1
+              transform rotate(0)
 
   .navbar-drawer
     padding $navbar-height 0 20px 0
