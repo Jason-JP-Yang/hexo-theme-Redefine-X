@@ -301,3 +301,30 @@ management:
   confirm: 再按一次
   orphans: 無歸屬裝置
   orphans_hint: 原擁有者已取消追蹤的訂閱。只有被封鎖的會被保留 —— 其餘的由每日清理工作移除。
+  v_title: 加密文章
+  v_lede: 站點已發佈的全部加密文章，以及誰可以開啟它們。這裡從不儲存文章本身，只儲存金鑰。
+  v_empty: 還沒有啟用任何加密文章。
+  v_add: 啟用一篇文章
+  v_add_hint: 貼上建置輸出裡的一行。重複貼上同一行等同於更新。
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: 啟用
+  v_added: 已啟用
+  v_bad: 這不是一行啟用資訊。
+  v_revoke: 撤銷
+  v_revoke_hint: 之後沒有人能再開啟它，包括你自己。
+  v_audience: 可以閱讀的人
+  v_save: 儲存名單
+  v_saved: 已儲存
+  v_slug: 路徑
+  v_reader: 人
+  v_readers: 人
+  v_unreadable: 無法讀取 —— 金鑰與本次建置不符
+  v_none: 暫無
+
+vault:
+  unlocking: 正在檢查存取權限
+  badge: 加密
+  authorized: 你已獲授權閱讀這篇加密文章
+  signed_out: 已登出
+  signed_out_hint: 這篇文章是加密的，金鑰只發放給你剛才的工作階段。重新登入即可繼續閱讀。
+  go_home: 返回首頁

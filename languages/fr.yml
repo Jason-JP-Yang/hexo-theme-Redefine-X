@@ -299,3 +299,30 @@ management:
   confirm: Appuyez a nouveau
   orphans: Appareils sans proprietaire
   orphans_hint: Abonnements dont le proprietaire s'est desabonne. Seuls les bloques sont conserves - le balayage quotidien supprime les autres.
+  v_title: Articles chiffres
+  v_lede: Tous les articles chiffres publies et qui peut les ouvrir. Seules leurs cles sont conservees ici, jamais leur contenu.
+  v_empty: Aucun article chiffre n'a encore ete active.
+  v_add: Activer un article
+  v_add_hint: Collez une ligne de la sortie de compilation. La recoller la met a jour.
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: Activer
+  v_added: Active
+  v_bad: Ce n'est pas une ligne d'activation.
+  v_revoke: Revoquer
+  v_revoke_hint: Plus personne ne pourra l'ouvrir, vous compris.
+  v_audience: Qui peut le lire
+  v_save: Enregistrer les lecteurs
+  v_saved: Enregistre
+  v_slug: Chemin
+  v_reader: lecteur
+  v_readers: lecteurs
+  v_unreadable: Illisible - la cle ne correspond pas a cette compilation
+  v_none: personne pour l'instant
+
+vault:
+  unlocking: Verification de votre acces
+  badge: Chiffre
+  authorized: Vous avez acces a cet article chiffre
+  signed_out: Deconnecte
+  signed_out_hint: Cet article est chiffre et la cle n'a ete remise qu'a votre session. Reconnectez-vous pour continuer.
+  go_home: Retour a l'accueil

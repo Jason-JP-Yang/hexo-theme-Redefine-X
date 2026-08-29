@@ -94,6 +94,12 @@ const pageData = {
 		partial: "pages/management/blog-management",
 		layout: "default",
 	},
+	vault: {
+		titles: [],
+		types: ["vault"],
+		partial: "pages/vault/vault-gate",
+		layout: "raw",
+	},
 	pageTemplate: {
 		titles: [],
 		types: [],

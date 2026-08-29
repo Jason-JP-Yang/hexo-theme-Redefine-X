@@ -15,6 +15,7 @@ import initCoverParallax from "./layouts/coverParallax.js";
 import initHomePagination from "./layouts/homePagination.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 import initInstantNotes from "./plugins/instantNotes.js";
+import initVault from "./plugins/vault.js";
 import { initNotoAnim } from "./plugins/noto-anim.js";
 
 export const main = {
@@ -120,6 +121,10 @@ export const main = {
     ) {
       initInstantNotes();
     }
+
+    // Last: it reflows the grid the passes above have just settled, and only
+    // for a reader the Worker has authorized.
+    initVault();
   },
 };
 

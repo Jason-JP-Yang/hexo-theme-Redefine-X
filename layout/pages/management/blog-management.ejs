@@ -28,5 +28,8 @@
         <section class="bm-section" data-part="announce"></section>
         <section class="bm-section" data-part="notifications"></section>
         <section class="bm-section" data-part="followers"></section>
+        <% if (theme.backend && theme.backend.vault_enable) { %>
+        <section class="bm-section" data-part="vault"></section>
+        <% } %>
     </div>
 </div>

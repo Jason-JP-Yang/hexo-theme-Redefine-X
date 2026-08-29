@@ -328,7 +328,13 @@ hexo.extend.helper.register("articleRecommendationGenerator", function (post) {
     }
   }
   const recommendationSet = hexo.locals.get("recommendationSet");
-  const recommendedArticles = recommendationSet[post.path];
+  // A post the library never saw — an encrypted one, which is taken out of
+  // locals before any generator runs — has no precomputed set. Falling back to
+  // the most recent articles is what keeps it from rendering nothing (or, as it
+  // did, throwing on an undefined iterable).
+  const recommendedArticles =
+    recommendationSet[post.path] || articleLibrary.slice(0, cfg.limit);
+  if (!recommendedArticles.length) return "";
   return userInterface(recommendedArticles, cfg);
 });
 
@@ -359,9 +365,20 @@ function userInterface(recommendedArticles, cfg) {
 }
 
 function itemInterface(item) {
-  const url = hexo.extend.helper.get('url_for').call(hexo, item.path);
+  const urlFor = hexo.extend.helper.get("url_for");
+  const url = urlFor.call(hexo, item.path);
+
+  // `headimg` comes straight from front matter, so it may already be absolute,
+  // may be remote, and on Windows may carry backslashes. Prefixing "/" blindly
+  // produced "//images/..." (a protocol-relative URL) and "/images\cover-img\x"
+  // — both 404s, and both invisible to the AVIF rewrite that runs after this.
+  const raw = String(item.headimg || "").replace(/\\/g, "/");
+  const src = /^(https?:|\/\/|data:)/i.test(raw)
+    ? raw
+    : urlFor.call(hexo, raw.startsWith("/") ? raw : "/" + raw);
+
   return `<a class="recommended-article-item" href="${url}" title="${item.title}" rel="bookmark">
-  <img src="/${item.headimg}" alt="${item.title}" class="!max-w-none">
+  <img src="${src}" alt="${item.title}" class="!max-w-none">
   <span class="title">${item.title}</span>
 </a>`;
 }

@@ -18,7 +18,7 @@
  * take any valid session.
  *
  * ─── configuration ──────────────────────────────────────────
- * Seven values, no more, and nothing here reads anything else off `env`:
+ * Eight values, no more, and nothing here reads anything else off `env`:
  *
  *   ADMIN_LOGINS          who gets the isAdmin claim
  *   ALLOWED_ORIGIN        the CORS allowlist (kept in the dashboard, so it can
@@ -30,6 +30,8 @@
  *   VAPID_PRIVATE_KEY     secret
  *   SESSION_SECRET        secret — signs the session tokens
  *   GITHUB_WEBHOOK_SECRET secret — authenticates the deployment webhook
+ *   VAULT_MASTER          secret — unwraps the per-post keys in `vault_posts`.
+ *                         Must be byte-identical to the build machine's .env.
  *
  * Everything that used to be a feature flag is now simply how the Worker
  * behaves. A flag whose only correct value is "on" is not configuration, it is
@@ -47,6 +49,7 @@ import {
   BODY_MAX,
 } from "./notify.js";
 import { verifySignature, fetchChangelog, isLiveDeployment } from "./hooks.js";
+import { grantedPosts, listPosts, registerPost, deletePost, setAudience } from "./vault.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
 
 const app = new Hono();
@@ -227,6 +230,7 @@ app.use("/api/auth/*", apiCors);
 app.use("/api/admin/*", apiCors);
 app.use("/api/push/*", apiCors);
 app.use("/api/me/*", apiCors);
+app.use("/api/vault/*", apiCors);
 // The webhook is deliberately NOT in this list: it is called server-to-server by
 // GitHub, authenticated by HMAC, and must not be reachable from a browser.
 
@@ -1490,6 +1494,74 @@ app.post("/api/admin/notify/test", authMiddleware, async (c) => {
     out.push({ endpoint: d.endpoint.slice(0, 60) + "…", ...res });
   }
   return c.json({ ok: out.every((r) => r.ok), results: out });
+});
+
+// ─── VAULT: keys for the encrypted posts this reader may open ─
+//
+// The whole reader-facing surface of the vault: ONE request, and for a reader
+// with no grants ONE primary-key row. The response is the post ids, their
+// obfuscated path segments and their unwrapped keys — never any content, which
+// the browser fetches from the CDN and decrypts itself.
+//
+// `no-store` because the body is key material: a shared cache holding it would
+// hand the next reader on that hop everything this one may read.
+app.post("/api/vault/keys", userMiddleware, async (c) => {
+  if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
+
+  const session = c.get("user");
+  const posts = await grantedPosts(c.env.DB, c.env, session);
+
+  c.header("Cache-Control", "no-store");
+  return c.json({ posts, admin: !!session.isAdmin });
+});
+
+// ─── ADMIN: encrypted post registry ─────────────────────────
+app.get("/api/admin/vault", authMiddleware, async (c) => {
+  const offset = Math.max(0, Number(c.req.query("offset")) || 0);
+  const { posts, more } = await listPosts(c.env.DB, ADMIN_PAGE, offset);
+  return c.json({ posts, more, offset });
+});
+
+// Activation. The build prints one JSON line per post and it is pasted here;
+// re-pasting the same line is an update, so a repeated paste cannot duplicate.
+app.post("/api/admin/vault", authMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+
+  const id = String(body?.id || "").trim();
+  const slug = String(body?.slug || "").trim();
+  const wrapped = String(body?.wrapped || "").trim();
+  if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: "Bad id" }, 400);
+  if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: "Bad slug" }, 400);
+  if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: "Bad key" }, 400);
+
+  await registerPost(c.env.DB, { id, slug, wrapped });
+  return c.json({ ok: true, id, slug });
+});
+
+app.delete("/api/admin/vault/:id", authMiddleware, async (c) => {
+  const removed = await deletePost(c.env.DB, c.req.param("id"));
+  return c.json({ ok: removed });
+});
+
+// The complete new audience for one post, not a delta: the panel always sends
+// the whole chip list, and only the identities that actually changed are written.
+app.put("/api/admin/vault/:id/audience", authMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+  const ids = Array.isArray(body?.audience) ? body.audience : [];
+  if (ids.length > ADMIN_LOOKUP_MAX) return c.json({ error: "Too many" }, 400);
+
+  const written = await setAudience(c.env.DB, c.req.param("id"), ids);
+  return c.json({ ok: true, written });
 });
 
 // ─── WEBHOOK: the deploy repo finished deploying ────────────

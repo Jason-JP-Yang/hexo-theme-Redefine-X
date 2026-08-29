@@ -13,6 +13,7 @@
 
 const https = require("https");
 const path = require("path");
+const secrets = require("./lib/secrets");
 
 const PREFIX = "[masonry-reactions] ";
 let rlRemaining = null;
@@ -527,9 +528,15 @@ hexo.extend.filter.register("before_generate", async function () {
   const g = hexo.theme.config?.comment?.config?.giscus;
   if (!g) return;
 
-  const { author_pat: pat, repo, repo_id: repoId, category_id: catId, proxy } = g;
+  const { repo, repo_id: repoId, category_id: catId } = g;
+  const pat = secrets.env("GISCUS_AUTHOR_PAT");
+  const proxy = String(hexo.theme.config?.backend?.api_url || "").replace(/\/+$/, "");
   if (!pat || !repo || !repoId || !catId || !proxy) {
-    hexo.log.info("[masonry-reactions] Skipping: incomplete giscus config");
+    hexo.log.info(
+      pat
+        ? "[masonry-reactions] Skipping: incomplete giscus/backend config"
+        : "[masonry-reactions] Skipping: GISCUS_AUTHOR_PAT is not set in .env"
+    );
     return;
   }
   if (!hexo.theme.config?.comment?.enable) {

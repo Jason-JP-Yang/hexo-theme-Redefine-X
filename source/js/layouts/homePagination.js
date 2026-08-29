@@ -487,7 +487,7 @@ const FLIP_IN_FRAMES = [
   { offset: 1, transform: "perspective(1200px) translateZ(0px) rotateX(0deg)", filter: "brightness(1)", opacity: 1 },
 ];
 
-function primeForFlipIn(card) {
+export function primeForFlipIn(card) {
   card.style.willChange = "transform, opacity";
   card.style.backfaceVisibility = "hidden";
   card.style.transform = "perspective(1200px) translateZ(-60px) rotateX(90deg)";
@@ -502,7 +502,7 @@ function clearFlipStyles(card) {
   card.style.filter = "";
 }
 
-function runFlip(cards, direction) {
+export function runFlip(cards, direction) {
   if (!cards.length) return Promise.resolve();
 
   const frames = direction === "out" ? FLIP_OUT_FRAMES : FLIP_IN_FRAMES;
@@ -544,7 +544,7 @@ function runFlip(cards, direction) {
  * rotating around two that do not read as two tiles that failed to animate, not
  * as furniture, and the eye goes straight to them.
  */
-function cardsInViewport(list, shift) {
+export function cardsInViewport(list, shift) {
   const viewportH = window.innerHeight;
   const offset = shift || 0;
   const tiles = list.querySelectorAll(".home-article-item, .home-feature-tile");
@@ -687,7 +687,7 @@ function setButtonBusy(busy) {
  * now wants. Everything below — the button, the paginator, the footer — travels
  * on the same curve instead of snapping to the new position.
  */
-async function animateHeight(element, mutate, duration = 420) {
+export async function animateHeight(element, mutate, duration = 420) {
   // The height is pinned BEFORE mutating. Appending first and animating
   // afterwards leaves one frame rendered at the full new height before the
   // animation's first sample pulls it back — that frame is the visible lurch

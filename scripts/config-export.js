@@ -34,8 +34,10 @@ hexo.extend.helper.register("export_config", function () {
     page_templates: this.theme.page_templates,
     home: this.theme.home,
     notifications: this.theme.notifications,
-    // Carries developer.local_api_url, which tools/auth.js reads to point every
-    // Worker call at `wrangler dev` while the site is served from localhost.
+    // The one Worker URL, plus the local-dev override tools/auth.js reads to
+    // point every Worker call at `wrangler dev`. No secret is ever in here —
+    // GISCUS_AUTHOR_PAT and VAULT_MASTER live in .env and never leave Node.
+    backend: this.theme.backend,
     developer: this.theme.developer,
 
     footerStart: this.theme.footer.start,
@@ -62,6 +64,17 @@ hexo.extend.helper.register("export_config", function () {
   // on the client from what the Worker returns.
   if (languageContent && languageContent["management"]) {
     theme_config.management_i18n = languageContent["management"];
+  }
+  // The encrypted-post gate and its admin audience field are painted after the
+  // Worker answers, so their strings travel the same way.
+  if (languageContent && languageContent["management"]) {
+    theme_config.vault_i18n = {
+      audience: languageContent["management"].v_audience,
+      placeholder: languageContent["management"].aud_placeholder,
+      remove: languageContent["management"].remove,
+      chip_unknown: languageContent["management"].chip_unknown,
+      chip_error: languageContent["management"].chip_error,
+    };
   }
 
   let data_config = {

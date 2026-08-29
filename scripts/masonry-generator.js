@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const yaml = require("js-yaml");
+const secrets = require("./lib/secrets");
 
 // Optional: exif-parser for auto-exif reading from image files
 let ExifParser = null;
@@ -466,12 +467,15 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   // Masonry reactions config: pass only config data for the frontend client.
   // All reaction data is fetched LIVE from giscus.app API by the client script.
   const giscusConfig = hexo.theme.config?.comment?.config?.giscus || {};
+  const giscusProxy = String(
+    hexo.theme.config?.backend?.api_url || ""
+  ).replace(/\/+$/, "");
   const hasGiscusReactions =
     commentEnabled &&
     giscusConfig.repo &&
     giscusConfig.category &&
-    giscusConfig.proxy &&
-    giscusConfig.author_pat;
+    giscusProxy &&
+    secrets.env("GISCUS_AUTHOR_PAT");
 
   categories.forEach(category => {
     category.list.forEach(item => {
@@ -500,7 +504,7 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                         category: giscusConfig.category || 'General',
                         discussionTerm: `[masonry-reactions] ${pagePath}`,
                         imageIds: imageIds,
-                        giscusProxy: (giscusConfig.proxy || '').replace(/\/+$/, '') || null,
+                        giscusProxy: giscusProxy || null,
                     } : null,
                 },
                 layout: 'page'

@@ -302,3 +302,30 @@ management:
   confirm: 再按一次
   orphans: 无归属设备
   orphans_hint: 原主人已取消关注的订阅。只有被封禁的会被保留 —— 其余的由每日清理任务移除。
+  v_title: 加密文章
+  v_lede: 站点已发布的全部加密文章，以及谁可以打开它们。这里从不存储文章本身，只存储密钥。
+  v_empty: 还没有激活任何加密文章。
+  v_add: 激活一篇文章
+  v_add_hint: 粘贴构建输出里的一行。重复粘贴同一行等同于更新。
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: 激活
+  v_added: 已激活
+  v_bad: 这不是一行激活信息。
+  v_revoke: 吊销
+  v_revoke_hint: 之后没有人能再打开它，包括你自己。
+  v_audience: 可以阅读的人
+  v_save: 保存名单
+  v_saved: 已保存
+  v_slug: 路径
+  v_reader: 人
+  v_readers: 人
+  v_none: 暂无
+  v_unreadable: 无法读取 —— 密钥与本次构建不匹配
+
+vault:
+  unlocking: 正在校验访问权限
+  badge: 加密
+  authorized: 你已获授权阅读这篇加密文章
+  signed_out: 已退出登录
+  signed_out_hint: 这篇文章是加密的，密钥只发放给你刚才的会话。重新登录即可继续阅读。
+  go_home: 返回首页

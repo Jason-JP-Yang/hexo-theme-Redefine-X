@@ -299,3 +299,30 @@ management:
   confirm: Pulsa otra vez
   orphans: Dispositivos sin propietario
   orphans_hint: Suscripciones cuyo propietario dejo de seguir. Solo se conservan las bloqueadas; el barrido diario elimina el resto.
+  v_title: Entradas cifradas
+  v_lede: Todas las entradas cifradas publicadas y quien puede abrirlas. Aqui solo se guardan sus claves, nunca su contenido.
+  v_empty: Aun no se ha activado ninguna entrada cifrada.
+  v_add: Activar una entrada
+  v_add_hint: Pega una linea de la salida de compilacion. Repetirla la actualiza.
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: Activar
+  v_added: Activada
+  v_bad: Esa no es una linea de activacion.
+  v_revoke: Revocar
+  v_revoke_hint: Nadie podra volver a abrirla, tu incluido.
+  v_audience: Quien puede leerla
+  v_save: Guardar lectores
+  v_saved: Guardado
+  v_slug: Ruta
+  v_reader: lector
+  v_readers: lectores
+  v_unreadable: "Ilegible - la clave no corresponde a esta compilacion"
+  v_none: nadie todavia
+
+vault:
+  unlocking: Comprobando tu acceso
+  badge: Cifrada
+  authorized: Tienes acceso concedido a esta entrada cifrada
+  signed_out: Sesion cerrada
+  signed_out_hint: Esta entrada esta cifrada y la clave se entrego solo a tu sesion. Inicia sesion de nuevo para seguir leyendo.
+  go_home: Volver al inicio
