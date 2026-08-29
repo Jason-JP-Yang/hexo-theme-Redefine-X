@@ -151,3 +151,151 @@ image_exif:
   value:
     program_with_number: "Prog %s"
     mode_with_number: "Modo %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: Opción múltiple
+  written: Respuesta escrita
+  open: Respuesta abierta
+  review: Último error
+  answer: Ver la respuesta
+  mine: Yo respondí
+  yours: Tú respondiste
+  correct: Respuesta correcta
+  solution: Solución
+  check: Comprobar
+  clear: Borrar
+  placeholder: Respuesta final
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: Notificaciones
+  close: Cerrar
+  back: Volver
+  mark_read: Marcar todo como leído
+  signed_out: Inicia sesión con GitHub para seguir este blog.
+  sign_in: Iniciar sesión con GitHub
+  follow: Seguir este blog
+  follow_nav: Seguir
+  follow_blog: Seguir el blog
+  empty: Sigue el blog para recibir avisos de nuevas entradas.
+  empty_following: Nada por ahora. Las nuevas entradas aparecerán aquí.
+  push_denied: Tu navegador bloquea las notificaciones en su configuración.
+  push_unsupported: Este navegador no admite push.
+  push_insecure: El push necesita una conexión segura (https o localhost).
+  push_ios: En iPhone, añade primero este sitio a la pantalla de inicio.
+  still_inbox: Las novedades siguen apareciendo aquí.
+  unreachable: No se pudo contactar con el servicio de notificaciones. Tu suscripción no ha cambiado.
+  retry: Reintentar
+  manage: Gestionar suscripción
+  manage_title: Gestionar suscripción
+  back_to_inbox: Volver a las notificaciones
+  section_delivery: Qué recibes
+  section_devices: Dispositivos registrados
+  always_on: Siempre activo
+  opt_inbox: Recibir mensajes dentro del blog
+  opt_push: Recibir notificaciones push desde este navegador
+  opt_push_hint: Registra este navegador como dispositivo de push.
+  opt_announcements: Recibir anuncios del blog
+  opt_notes: Recibir notas nuevas
+  opt_posts: Recibir entradas nuevas
+  no_devices: Todavía no hay ningún navegador registrado para push.
+  this_browser: Este navegador
+  remove_device: Eliminar este dispositivo
+  subscribed: Suscrito
+  unknown: Desconocido
+  device_laptop: Portátil
+  device_desktop: Sobremesa
+  device_mobile: Móvil
+  device_tablet: Tableta
+  logout: Cerrar sesión en este navegador
+  logout_confirm: Pulsa otra vez para cerrar sesión
+  logout_note: Tras cerrar sesión en este navegador ya no podrás comentar en las entradas, reaccionar a las fotos en Masonry ni recibir notificaciones y push aquí. La próxima vez que inicies sesión el blog intentará restaurarlo todo automáticamente; si falla, vuelve a pulsar Seguir para recuperar el push.
+  unfollow_blog: Dejar de seguir el blog
+  unfollow_confirm: Pulsa otra vez para dejar de seguir
+  unfollow_note: Dejarás de seguir este blog y no recibirás notificaciones push en ningún navegador. Tu bandeja de entrada se vaciará y no podrá recuperarse. Seguirás con la sesión iniciada; para cerrarla, usa la pestaña de comentarios de cualquier entrada.
+  blog_management: Administracion del blog
+  banned: Bloqueado
+  push_device_banned: El autor del blog ha desactivado el push en este navegador.
+  device_banned_note: Uno de los navegadores anteriores tiene bloqueada la recepcion de notificaciones por decision del autor del blog y no se puede eliminar. Suele deberse a un uso indebido de la suscripcion. Usa el blog con consideracion; si crees que es un error, dilo en los comentarios de cualquier entrada.
+  account_banned: Tu cuenta ha sido bloqueada
+  account_banned_note: Puedes seguir con la sesion iniciada y comentar en las entradas; solo se ha retirado la posibilidad de suscribirte a este blog. Si el autor tambien te ha bloqueado en GitHub, los comentarios tambien se detienen.
+
+management:
+  title: Administracion del blog
+  lede: Anuncios, lo que aun guarda la base de datos de notificaciones y cada seguidor con sus dispositivos.
+  checking: Comprobando tu sesion...
+  denied: Esta pagina es para el administrador del blog.
+  unreachable: No se pudo contactar con el servicio de notificaciones.
+  retry: Reintentar
+  announce: Enviar un anuncio
+  audience: Destinatarios
+  aud_all: Todos
+  aud_only: Solo estos
+  aud_except: Todos excepto
+  aud_topic: Por tema
+  aud_all_hint: Lo recibe cada seguidor.
+  aud_only_hint: Solo lo reciben los lectores indicados aqui.
+  aud_except_hint: Lo reciben todos los seguidores salvo los indicados aqui.
+  aud_placeholder: Usuario de GitHub o id numerico, luego Enter
+  chip_unknown: No es un lector conocido
+  chip_error: Fallo la busqueda
+  remove: Quitar
+  f_title: Titulo
+  f_body: Que ha pasado, en una o dos frases
+  f_url: Enlace - adonde lleva pulsar la notificacion
+  post: Publicar anuncio
+  send_ok: Enviado
+  send_failed: No enviado
+  offline: El Worker no respondio.
+  r_id: Id
+  r_recipients: Bandejas escritas
+  r_devices: Dispositivos push
+  r_messages: Mensajes en cola
+  r_audience: Destinatarios
+  r_matched: Coincidencias
+  r_ignored: Ignorados
+  r_skipped: Ya enviado
+  r_absorbed: Absorbido
+  r_absorbed_v: registrado, no entregado
+  notifications: Lista de notificaciones
+  f_announcements: Anuncios
+  f_posts: Entradas
+  f_notes: Notas rapidas
+  f_all: Todo
+  m_inboxes: bandejas
+  m_devices: dispositivos
+  m_unread: sin leer
+  m_blocked: Bloqueado
+  edit: Editar
+  delete: Eliminar
+  save: Guardar
+  cancel: Cancelar
+  edit_hint: Editar solo cambia el texto de la bandeja. No se vuelve a enviar nada.
+  no_notifications: No hay nada en la base de datos para este filtro.
+  load_more: Cargar mas
+  followers: Seguidores
+  blocklists: Listas de bloqueo globales
+  blocklists_hint: Quien figure aqui queda excluido de ese tipo de notificacion, en silencio y en todas partes. Se guarda en cuanto una entrada se resuelve.
+  topic_posts: Entradas nuevas
+  topic_notes: Notas rapidas
+  topic_announcements: Anuncios
+  moderation_notice: Silenciar o bloquear aqui solo afecta a las notificaciones. No impide comentar en el blog; los comentarios son GitHub Discussions, asi que para bloquear a alguien usa el apartado Moderation de tu cuenta de GitHub.
+  moderation_docs: Documentacion de GitHub
+  no_followers: Todavia nadie sigue el blog.
+  no_devices: Ningun dispositivo push registrado.
+  subscribed: Suscrito
+  banned: Bloqueado
+  muted: Silenciado
+  admin: Administrador
+  mute: Silenciar
+  unmute: Reactivar
+  ban: Bloquear
+  unban: Desbloquear
+  confirm: Pulsa otra vez
+  orphans: Dispositivos sin propietario
+  orphans_hint: Suscripciones cuyo propietario dejo de seguir. Solo se conservan las bloqueadas; el barrido diario elimina el resto.

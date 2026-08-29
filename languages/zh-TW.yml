@@ -153,3 +153,151 @@ image_exif:
   value:
     program_with_number: "程式 %s"
     mode_with_number: "模式 %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: 選擇題
+  written: 填空題
+  open: 簡答題
+  review: 上次的錯誤作答
+  answer: 查看答案
+  mine: 我當時選了
+  yours: 你填的是
+  correct: 正確答案
+  solution: 解析
+  check: 檢查
+  clear: 清除
+  placeholder: 最終答案
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: 通知
+  close: 關閉
+  back: 返回
+  mark_read: 全部標為已讀
+  signed_out: 使用 GitHub 登入即可追蹤本部落格。
+  sign_in: 使用 GitHub 登入
+  follow: 追蹤本部落格
+  follow_nav: 追蹤
+  follow_blog: 追蹤本部落格
+  empty: 追蹤後即可收到新文章通知。
+  empty_following: 目前還沒有內容，新文章會出現在這裡。
+  push_denied: 瀏覽器設定中已封鎖通知。
+  push_unsupported: 此瀏覽器不支援推播。
+  push_insecure: 推播需要安全連線（https 或 localhost）。
+  push_ios: 在 iPhone 上需先將本站加入主畫面。
+  still_inbox: 新內容仍會顯示在這裡。
+  unreachable: 無法連線通知服務，你的訂閱未受影響。
+  retry: 重試
+  manage: 管理訂閱
+  manage_title: 管理訂閱
+  back_to_inbox: 返回通知
+  section_delivery: 接收內容
+  section_devices: 已註冊裝置
+  always_on: 永遠開啟
+  opt_inbox: 在部落格內接收訊息
+  opt_push: 從此瀏覽器接收推播通知
+  opt_push_hint: 將此瀏覽器註冊為推播裝置。
+  opt_announcements: 接收部落格公告
+  opt_notes: 接收新的隨記
+  opt_posts: 接收新的文章
+  no_devices: 還沒有瀏覽器註冊推播。
+  this_browser: 目前瀏覽器
+  remove_device: 移除此裝置
+  subscribed: 訂閱於
+  unknown: 未知
+  device_laptop: 筆記型電腦
+  device_desktop: 桌上型電腦
+  device_mobile: 手機
+  device_tablet: 平板
+  logout: 從此瀏覽器登出
+  logout_confirm: 再按一次以登出
+  logout_note: 從此瀏覽器登出後，你將無法在文章下留言、在 Masonry 中為照片按讚，也不會再從這個瀏覽器收到通知與推播。下次登入時部落格會嘗試自動恢復；若失敗，重新點擊追蹤即可找回推播。
+  unfollow_blog: 取消追蹤部落格
+  unfollow_confirm: 再按一次以取消追蹤
+  unfollow_note: 你將不再追蹤本部落格，也不會在任何瀏覽器上收到推播通知。收件匣會被清空且無法復原。你仍保持登入狀態 —— 如需登出，可在任意文章下方的留言分頁中操作。
+  blog_management: 部落格管理
+  banned: 已封鎖
+  push_device_banned: 站長已關閉此瀏覽器的推播。
+  device_banned_note: 上方有一個瀏覽器已被站長禁止接收通知，且無法刪除。這通常是因為訂閱遭到濫用。請善意使用本部落格；如果你認為這是誤判，可在任意文章下方的留言中說明。
+  account_banned: 你的帳號已被封鎖
+  account_banned_note: 你仍可保持登入並在文章下留言 —— 被收回的只是訂閱本部落格的權限。如果站長同時在 GitHub 上封鎖了你的帳號，留言也會一併停止。
+
+management:
+  title: 部落格管理
+  lede: 發布公告、查看通知資料庫中現存的內容，以及每一位追蹤者與其名下的推播裝置。
+  checking: 正在檢查你的登入狀態…
+  denied: 此頁面僅供部落格管理員使用。
+  unreachable: 無法連線通知服務。
+  retry: 重試
+  announce: 發送公告
+  audience: 接收範圍
+  aud_all: 所有人
+  aud_only: 僅以下使用者
+  aud_except: 除以下使用者外
+  aud_topic: 依主題
+  aud_all_hint: 每一位追蹤者都會收到。
+  aud_only_hint: 只有列出的讀者會收到。
+  aud_except_hint: 除列出的讀者外，所有追蹤者都會收到。
+  aud_placeholder: 輸入 GitHub 使用者名稱或數字 ID，按 Enter 確認
+  chip_unknown: 不是已知讀者
+  chip_error: 查詢失敗
+  remove: 移除
+  f_title: 標題
+  f_body: 用一兩句話說明發生了什麼
+  f_url: 連結 —— 點擊通知後前往的位置
+  post: 發送公告
+  send_ok: 已發送
+  send_failed: 未發送
+  offline: Worker 沒有回應。
+  r_id: ID
+  r_recipients: 寫入收件匣
+  r_devices: 推播裝置
+  r_messages: 佇列訊息
+  r_audience: 接收範圍
+  r_matched: 已比對
+  r_ignored: 已忽略
+  r_skipped: 先前已發送
+  r_absorbed: 已吸收
+  r_absorbed_v: 已記錄，未投遞
+  notifications: 通知列表
+  f_announcements: 公告
+  f_posts: 文章
+  f_notes: 即時短箋
+  f_all: 全部
+  m_inboxes: 個收件匣
+  m_devices: 台裝置
+  m_unread: 則未讀
+  m_blocked: 已封鎖
+  edit: 編輯
+  delete: 刪除
+  save: 儲存
+  cancel: 取消
+  edit_hint: 編輯只會改動站內收件匣中的內容，不會重新推播。
+  no_notifications: 目前篩選下資料庫中沒有內容。
+  load_more: 載入更多
+  followers: 追蹤者
+  blocklists: 全域封鎖名單
+  blocklists_hint: 名單中的使用者會在該類通知中被靜默略過，且對所有管道生效。驗證通過後立即自動儲存。
+  topic_posts: 新文章
+  topic_notes: 即時短箋
+  topic_announcements: 公告
+  moderation_notice: 此處的靜音與封鎖只影響通知，不會限制任何人在部落格中留言 —— 留言由 GitHub Discussions 承載，如需禁止某人留言，請在 GitHub 帳號設定的 Moderation 中封鎖該使用者。
+  moderation_docs: GitHub 文件
+  no_followers: 目前還沒有人追蹤本部落格。
+  no_devices: 未註冊任何推播裝置。
+  subscribed: 訂閱於
+  banned: 已封鎖
+  muted: 已靜音
+  admin: 管理員
+  mute: 靜音
+  unmute: 取消靜音
+  ban: 封鎖
+  unban: 解除封鎖
+  confirm: 再按一次
+  orphans: 無歸屬裝置
+  orphans_hint: 原擁有者已取消追蹤的訂閱。只有被封鎖的會被保留 —— 其餘的由每日清理工作移除。

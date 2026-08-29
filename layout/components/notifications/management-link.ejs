@@ -1,0 +1,13 @@
+<%# One more entry in the sidebar links list, for admins only.
+
+    Rendered for everyone and hidden by CSS until `html.blog-admin` is set —
+    tools/auth.js writes that class from the cached session before the first
+    paint, the same way `blog-following` works. Nothing is protected by hiding
+    it: the page behind it is empty without an admin session, and every route it
+    calls is checked by the Worker. %>
+<% if (theme.notifications && theme.notifications.enable) { %>
+<a class="links blog-admin-only" href="<%= url_for('/blog-management/') %>">
+    <i class="fa-solid fa-screwdriver-wrench icon-space"></i>
+    <span class="link-name"><%= __('notifications.blog_management') %></span>
+</a>
+<% } %>

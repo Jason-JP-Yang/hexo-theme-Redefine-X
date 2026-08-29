@@ -1,6 +1,40 @@
-# Local-only secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored) and fill.
-# In production these are set with `wrangler secret put`, NOT from this file.
+# Local-only values for `wrangler dev`. Copy to `.dev.vars` (gitignored) and fill.
+# In production the secrets are set with `wrangler secret put`, NOT from a file.
+#
+# Entries here also OVERRIDE the [vars] block of wrangler.toml during
+# `wrangler dev`, which is how a local run points at the local site instead of
+# the production one (see SITE_URL below).
 
-# HMAC signing key for admin session tokens. Generate a random 32+ byte value, e.g.:
+# HMAC signing key for session tokens. Generate a random 32+ byte value, e.g.:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#
+# This does NOT have to match production — but note that a token minted by one
+# Worker will not verify at the other, so the front-end must talk to exactly one
+# of them. That is what `developer.local_api_url` in the theme config arranges.
 SESSION_SECRET=replace-with-a-long-random-value
+
+# VAPID application server PRIVATE key — base64url, the 32-byte P-256 scalar.
+# Generate a pair with:  npm run vapid:keygen
+# Use the SAME pair as production, or set VAPID_PUBLIC_KEY here to the local
+# public half as well — the two halves must always match each other.
+VAPID_PRIVATE_KEY=
+
+# Shared secret you also enter in the webhook form on the deploy repo. Only
+# needed locally if you are replaying webhook deliveries through a tunnel;
+# POST /api/admin/notify/ingest exercises the same pipeline without one.
+GITHUB_WEBHOOK_SECRET=
+
+# Point the local Worker at the local site, so /api/admin/notify/ingest reads the
+# changelog.json that `hexo server` is serving rather than the deployed one.
+#
+# This is also the VAPID `sub` claim, and push services accept only https: or
+# mailto: there — so while this is http://localhost the Worker substitutes the
+# push endpoint's own origin. Local pushes still work; nothing to configure.
+SITE_URL=http://localhost:4000
+
+# ALLOWED_ORIGIN is authoritative — the Worker has no built-in localhost
+# exception, and with this and SITE_URL both unset it allows nobody at all.
+# `local` covers every private address (localhost, 127.x, 10.x, 172.16-31.x,
+# 192.168.x, *.local), so a phone on the LAN can reach this Worker during
+# testing. Setting it here keeps the production allowlist untouched.
+ALLOWED_ORIGIN=local

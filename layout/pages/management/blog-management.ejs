@@ -1,0 +1,32 @@
+<%#
+    Blog Management — the admin console for the notification subsystem.
+
+    The server renders the shell only. Everything inside the three sections
+    depends on who is signed in, which is not known at build time, so
+    source/js/plugins/blog-management.js paints them from the Worker's answers.
+
+    The page is generated for everybody (a route Swup can navigate to has to
+    exist) and shows nothing but the locked notice until an admin session comes
+    back. That is presentation: authorisation lives in the Worker, and every
+    route this page calls checks the isAdmin claim on its own.
+%>
+<div id="blog-management" class="bm" data-phase="loading">
+    <header class="bm-head">
+        <h1 class="bm-heading">
+            <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
+            <%= __('management.title') %>
+        </h1>
+        <p class="bm-lede"><%= __('management.lede') %></p>
+    </header>
+
+    <div class="bm-gate">
+        <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
+        <p class="bm-gate-text"><%= __('management.checking') %></p>
+    </div>
+
+    <div class="bm-console" hidden>
+        <section class="bm-section" data-part="announce"></section>
+        <section class="bm-section" data-part="notifications"></section>
+        <section class="bm-section" data-part="followers"></section>
+    </div>
+</div>

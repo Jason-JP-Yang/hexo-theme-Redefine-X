@@ -6,26 +6,30 @@
  * from giscus and sends it to POST /api/auth/login. This module:
  *
  *   1. fetchGitHubUser()  — verifies the token by asking GitHub "who am I?".
- *   2. signSession()      — mints a short-lived HMAC-signed session token once
- *                           the user is confirmed to be an admin, so that every
- *                           subsequent admin write is verified LOCALLY (no extra
- *                           GitHub call per request).
+ *   2. signSession()      — mints a short-lived HMAC-signed session token for
+ *                           EVERY verified user, carrying `isAdmin` in the
+ *                           payload, so that each later request is authorized
+ *                           LOCALLY (no extra GitHub call per request). Admin
+ *                           routes additionally require isAdmin; follower routes
+ *                           (/api/me/*, /api/push/*) take any valid token.
  *   3. verifySession()    — validates that HMAC token + its expiry.
  *
  * The session token is a compact JWT-ish string: base64url(payload).base64url(sig)
- * Uses Web Crypto (available in Workers) — no external dependencies.
+ * Uses Web Crypto (available in Workers) — no external dependencies. The
+ * base64url helpers are exported because Web Push needs the same encoding for
+ * its keys.
  */
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function bytesToB64url(bytes) {
+export function bytesToB64url(bytes) {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function b64urlToBytes(str) {
+export function b64urlToBytes(str) {
   const b64 = str.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((str.length + 3) % 4);
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
@@ -33,14 +37,25 @@ function b64urlToBytes(str) {
   return bytes;
 }
 
+// The session key is imported on EVERY authenticated request, and the secret
+// behind it changes only when the deployment does. Caching the imported
+// CryptoKey at module scope takes one Web Crypto call out of the hot path
+// without changing what is signed or verified. Isolate-local, so nothing here
+// needs invalidating beyond the secret changing under it.
+let hmacKeyCache = null; // { secret, key }
+
 async function importKey(secret) {
-  return crypto.subtle.importKey(
+  if (hmacKeyCache && hmacKeyCache.secret === secret) return hmacKeyCache.key;
+
+  const key = await crypto.subtle.importKey(
     "raw",
     enc.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"]
   );
+  hmacKeyCache = { secret, key };
+  return key;
 }
 
 /**
@@ -89,7 +104,7 @@ export async function verifySession(token, secret) {
  * Works with the giscus-app user token (a standard GitHub user-to-server token):
  * GET /user returns the authenticated user regardless of which app issued it.
  * @param {string} token  GitHub OAuth user token (e.g. gho_…)
- * @returns {Promise<{id:number, login:string, avatar_url:string}|null>}
+ * @returns {Promise<{id:number, login:string, name:string, avatar_url:string}|null>}
  */
 export async function fetchGitHubUser(token) {
   if (!token) return null;
@@ -104,7 +119,7 @@ export async function fetchGitHubUser(token) {
     if (!res.ok) return null;
     const u = await res.json();
     if (!u || !u.login) return null;
-    return { id: u.id, login: u.login, avatar_url: u.avatar_url };
+    return { id: u.id, login: u.login, name: u.name || "", avatar_url: u.avatar_url };
   } catch {
     return null;
   }

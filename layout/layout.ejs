@@ -4,6 +4,11 @@
 
 <body>
 	<%- body %>
+	<%# Outside #swup on purpose — the panel keeps its state across a same-page
+	    navigation, unlike the navbar bell that opens it. %>
+	<% if (theme.notifications && theme.notifications.enable) { %>
+	<%- partial('components/notifications/inbox') %>
+	<% } %>
 	<%- partial('components/scripts') %>
 	<% if (theme.plugins.aplayer.enable) { %>
 	<%- partial('components/plugins/aplayer') %>

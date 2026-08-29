@@ -154,3 +154,151 @@ image_exif:
   value:
     program_with_number: "程序 %s"
     mode_with_number: "模式 %s"
+
+# ----------------------------------------
+# Error Book
+# ----------------------------------------
+error_book:
+  mc: 选择题
+  written: 填空题
+  open: 简答题
+  review: 上次的错误作答
+  answer: 查看答案
+  mine: 我当时选了
+  yours: 你填的是
+  correct: 正确答案
+  solution: 解析
+  check: 检查
+  clear: 清除
+  placeholder: 最终答案
+
+# ----------------------------------------
+# Notifications
+# ----------------------------------------
+notifications:
+  title: 通知
+  close: 关闭
+  back: 返回
+  mark_read: 全部标为已读
+  signed_out: 使用 GitHub 登录即可关注本博客。
+  sign_in: 使用 GitHub 登录
+  follow: 关注本博客
+  follow_nav: 关注
+  follow_blog: 关注本博客
+  empty: 关注后即可收到新文章提醒。
+  empty_following: 暂时还没有内容，新文章会出现在这里。
+  push_denied: 浏览器设置中已阻止通知。
+  push_unsupported: 此浏览器不支持推送。
+  push_insecure: 推送需要安全连接（https 或 localhost）。
+  push_ios: 在 iPhone 上需先将本站添加到主屏幕。
+  still_inbox: 新内容仍会显示在这里。
+  unreachable: 无法连接通知服务，你的订阅未受影响。
+  retry: 重试
+  manage: 管理订阅
+  manage_title: 管理订阅
+  back_to_inbox: 返回通知
+  section_delivery: 接收内容
+  section_devices: 已注册设备
+  always_on: 始终开启
+  opt_inbox: 在博客内接收消息
+  opt_push: 从此浏览器接收推送通知
+  opt_push_hint: 将此浏览器注册为推送设备。
+  opt_announcements: 接收博客公告
+  opt_notes: 接收新的随记
+  opt_posts: 接收新的文章
+  no_devices: 还没有浏览器注册推送。
+  this_browser: 当前浏览器
+  remove_device: 移除此设备
+  subscribed: 订阅于
+  unknown: 未知
+  device_laptop: 笔记本
+  device_desktop: 台式机
+  device_mobile: 手机
+  device_tablet: 平板
+  logout: 从此浏览器登出
+  logout_confirm: 再按一次以登出
+  logout_note: 从此浏览器登出后，你将无法在文章下评论、在 Masonry 中为照片点赞，也不会再从这个浏览器收到通知与推送。下次登录时博客会尝试自动恢复；若失败，重新点击关注即可找回推送。
+  unfollow_blog: 取消关注博客
+  unfollow_confirm: 再按一次以取消关注
+  unfollow_note: 你将不再关注本博客，也不会在任何浏览器上收到推送通知。收件箱会被清空且无法恢复。你仍保持登录状态 —— 如需登出，可在任意文章下方的评论标签中操作。
+  blog_management: 博客管理
+  banned: 已封禁
+  push_device_banned: 博主已关闭此浏览器的推送。
+  device_banned_note: 上方有一个浏览器已被博主禁止接收通知，且无法删除。这通常是因为订阅被滥用。请善意使用本博客；如果你认为这是误判，可在任意文章下方的评论中说明。
+  account_banned: 你的账号已被封禁
+  account_banned_note: 你仍可保持登录并在文章下评论 —— 被收回的只是订阅本博客的权限。如果博主同时在 GitHub 上封禁了你的账号，评论也会一并停止。
+
+management:
+  title: 博客管理
+  lede: 发布公告、查看通知数据库中现存的内容，以及每一位关注者与其名下的推送设备。
+  checking: 正在检查你的登录状态…
+  denied: 此页面仅供博客管理员使用。
+  unreachable: 无法连接通知服务。
+  retry: 重试
+  announce: 发送公告
+  audience: 接收范围
+  aud_all: 所有人
+  aud_only: 仅以下用户
+  aud_except: 除以下用户外
+  aud_topic: 按主题
+  aud_all_hint: 每一位关注者都会收到。
+  aud_only_hint: 只有列出的读者会收到。
+  aud_except_hint: 除列出的读者外，所有关注者都会收到。
+  aud_placeholder: 输入 GitHub 用户名或数字 ID，回车确认
+  chip_unknown: 不是已知读者
+  chip_error: 查询失败
+  remove: 移除
+  f_title: 标题
+  f_body: 用一两句话说明发生了什么
+  f_url: 链接 —— 点击通知后跳转的位置
+  post: 发送公告
+  send_ok: 已发送
+  send_failed: 未发送
+  offline: Worker 没有响应。
+  r_id: ID
+  r_recipients: 写入收件箱
+  r_devices: 推送设备
+  r_messages: 队列消息
+  r_audience: 接收范围
+  r_matched: 已匹配
+  r_ignored: 已忽略
+  r_skipped: 此前已发送
+  r_absorbed: 已吸收
+  r_absorbed_v: 已记录，未投递
+  notifications: 通知列表
+  f_announcements: 公告
+  f_posts: 文章
+  f_notes: 即时便签
+  f_all: 全部
+  m_inboxes: 个收件箱
+  m_devices: 台设备
+  m_unread: 条未读
+  m_blocked: 已屏蔽
+  edit: 编辑
+  delete: 删除
+  save: 保存
+  cancel: 取消
+  edit_hint: 编辑只会改动站内收件箱中的内容，不会重新推送。
+  no_notifications: 当前筛选下数据库中没有内容。
+  load_more: 加载更多
+  followers: 关注者
+  blocklists: 全局黑名单
+  blocklists_hint: 名单中的用户会在该类通知中被静默跳过，且对所有渠道生效。验证通过后立即自动保存。
+  topic_posts: 新文章
+  topic_notes: 即时便签
+  topic_announcements: 公告
+  moderation_notice: 此处的静音与封禁只影响通知，不会限制任何人在博客中评论 —— 评论由 GitHub Discussions 承载，如需禁止某人评论，请在 GitHub 账号设置的 Moderation 中封禁该用户。
+  moderation_docs: GitHub 文档
+  no_followers: 目前还没有人关注本博客。
+  no_devices: 未注册任何推送设备。
+  subscribed: 订阅于
+  banned: 已封禁
+  muted: 已静音
+  admin: 管理员
+  mute: 静音
+  unmute: 取消静音
+  ban: 封禁
+  unban: 解除封禁
+  confirm: 再按一次
+  orphans: 无归属设备
+  orphans_hint: 原主人已取消关注的订阅。只有被封禁的会被保留 —— 其余的由每日清理任务移除。

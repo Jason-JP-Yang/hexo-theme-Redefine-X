@@ -88,6 +88,12 @@ const pageData = {
 		partial: "pages/bookmarks/bookmarks",
 		layout: "raw",
 	},
+	blogManagement: {
+		titles: [],
+		types: ["blog-management"],
+		partial: "pages/management/blog-management",
+		layout: "default",
+	},
 	pageTemplate: {
 		titles: [],
 		types: [],
