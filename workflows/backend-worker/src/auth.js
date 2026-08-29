@@ -104,7 +104,7 @@ export async function verifySession(token, secret) {
  * Works with the giscus-app user token (a standard GitHub user-to-server token):
  * GET /user returns the authenticated user regardless of which app issued it.
  * @param {string} token  GitHub OAuth user token (e.g. gho_…)
- * @returns {Promise<{id:number, login:string, avatar_url:string}|null>}
+ * @returns {Promise<{id:number, login:string, name:string, avatar_url:string}|null>}
  */
 export async function fetchGitHubUser(token) {
   if (!token) return null;
@@ -119,7 +119,7 @@ export async function fetchGitHubUser(token) {
     if (!res.ok) return null;
     const u = await res.json();
     if (!u || !u.login) return null;
-    return { id: u.id, login: u.login, avatar_url: u.avatar_url };
+    return { id: u.id, login: u.login, name: u.name || "", avatar_url: u.avatar_url };
   } catch {
     return null;
   }

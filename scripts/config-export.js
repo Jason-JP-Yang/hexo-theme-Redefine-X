@@ -58,6 +58,11 @@ hexo.extend.helper.register("export_config", function () {
   if (languageContent && languageContent["notifications"]) {
     theme_config.notifications_i18n = languageContent["notifications"];
   }
+  // Same reason, one page further: the management console is rendered entirely
+  // on the client from what the Worker returns.
+  if (languageContent && languageContent["management"]) {
+    theme_config.management_i18n = languageContent["management"];
+  }
 
   let data_config = {
     masonry: false,

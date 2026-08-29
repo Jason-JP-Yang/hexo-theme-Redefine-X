@@ -182,7 +182,6 @@ notifications:
   follow: このブログをフォロー
   follow_nav: フォロー
   follow_blog: ブログをフォロー
-  following: フォロー中
   empty: フォローすると新着記事をお知らせします。
   empty_following: まだ何もありません。新着はここに表示されます。
   push_denied: ブラウザの設定で通知がブロックされています。
@@ -219,3 +218,84 @@ notifications:
   unfollow_blog: ブログのフォローを解除
   unfollow_confirm: もう一度押すと解除
   unfollow_note: このブログのフォローを解除すると、どのブラウザでもプッシュ通知を受け取らなくなります。受信箱は消去され、復元できません。サインインは維持されます。サインアウトするには、記事下のコメントタブをご利用ください。
+  blog_management: ブログ管理
+  banned: ブロック中
+  push_device_banned: このブラウザへのプッシュはブログ管理者によって停止されています。
+  device_banned_note: 上記のブラウザのいずれかが、ブログ管理者によって通知の受信を禁止されており、削除できません。多くの場合、購読の不正利用が理由です。ブログのご利用にはご配慮ください。誤りだと思われる場合は、記事下のコメントでお知らせください。
+  account_banned: アカウントがブロックされています
+  account_banned_note: サインインしたまま記事へのコメントは続けられます。取り消されたのはこのブログを購読する権限だけです。管理者が GitHub 上でもブロックしている場合は、コメントもできなくなります。
+
+management:
+  title: ブログ管理
+  lede: お知らせの配信、通知データベースに残っている内容、そしてフォロワーとそれぞれの登録デバイス。
+  checking: セッションを確認しています...
+  denied: このページはブログ管理者専用です。
+  unreachable: 通知サービスに接続できませんでした。
+  retry: 再試行
+  announce: お知らせを送信
+  audience: 配信範囲
+  aud_all: 全員
+  aud_only: 次のユーザーのみ
+  aud_except: 次のユーザー以外
+  aud_topic: トピック別
+  aud_all_hint: すべてのフォロワーが受け取ります。
+  aud_only_hint: ここに挙げた読者だけが受け取ります。
+  aud_except_hint: ここに挙げた読者を除く、すべてのフォロワーが受け取ります。
+  aud_placeholder: GitHub のログイン名または数値 ID を入力し Enter
+  chip_unknown: 既知の読者ではありません
+  chip_error: 照会に失敗しました
+  remove: 削除
+  f_title: タイトル
+  f_body: 何が起きたのかを一言か二言で
+  f_url: リンク - 通知を押したときの遷移先
+  post: お知らせを送信
+  send_ok: 送信しました
+  send_failed: 送信されませんでした
+  offline: Worker から応答がありませんでした。
+  r_id: ID
+  r_recipients: 書き込まれた受信箱
+  r_devices: プッシュデバイス
+  r_messages: キューメッセージ
+  r_audience: 配信範囲
+  r_matched: 一致
+  r_ignored: 無視
+  r_skipped: 送信済み
+  r_absorbed: 吸収済み
+  r_absorbed_v: 記録のみ、配信なし
+  notifications: 通知一覧
+  f_announcements: お知らせ
+  f_posts: 記事
+  f_notes: インスタントノート
+  f_all: すべて
+  m_inboxes: 件の受信箱
+  m_devices: 台のデバイス
+  m_unread: 件の未読
+  m_blocked: ブロック中
+  edit: 編集
+  delete: 削除
+  save: 保存
+  cancel: キャンセル
+  edit_hint: 編集はサイト内受信箱の表示だけを変更します。再送信は行われません。
+  no_notifications: この絞り込みに該当するものはデータベースにありません。
+  load_more: さらに読み込む
+  followers: フォロワー
+  blocklists: グローバルブロックリスト
+  blocklists_hint: ここに挙げたユーザーは、その種類の通知からどこでも静かに除外されます。照会が通り次第、自動的に保存されます。
+  topic_posts: 新着記事
+  topic_notes: インスタントノート
+  topic_announcements: お知らせ
+  moderation_notice: ここでのミュートやブロックは通知にのみ影響し、ブログへのコメントは止められません。コメントは GitHub Discussions のため、コメントを禁止するには GitHub アカウント設定の Moderation でユーザーをブロックしてください。
+  moderation_docs: GitHub ドキュメント
+  no_followers: まだフォロワーはいません。
+  no_devices: プッシュデバイスは登録されていません。
+  subscribed: 登録
+  banned: ブロック中
+  muted: ミュート中
+  admin: 管理者
+  mute: ミュート
+  unmute: ミュート解除
+  ban: ブロック
+  unban: ブロック解除
+  confirm: もう一度押す
+  orphans: 所有者のいないデバイス
+  orphans_hint: 所有者がフォローを解除した購読です。ブロック済みのものだけが残り、それ以外は日次の掃除で削除されます。

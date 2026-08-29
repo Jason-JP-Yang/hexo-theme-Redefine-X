@@ -61,6 +61,7 @@ let state = {
   pushState: "off",
   pushHere: false,
   needsInstall: false,
+  banned: false,
   busy: false,
 };
 let registration = null;
@@ -436,11 +437,9 @@ function syncControls() {
     localStorage.setItem(FOLLOW_KEY, following ? "1" : "0");
   } catch {}
 
-  document.querySelectorAll(".follow-cta").forEach((cta) => {
-    cta.classList.toggle("is-following", following);
-    const label = cta.querySelector(".follow-label");
-    if (label) label.textContent = following ? t("following", "Following") : t("follow_blog", "Follow the Blog");
-  });
+  // No relabelling: `html.blog-following` takes the call to action off the page
+  // entirely, because "Following" is a button that reports what pressing it
+  // already did. The bell is where the state lives from then on.
   // Whatever a Follow press left spinning is finished the moment the state it
   // was waiting for has arrived.
   if (!state.busy) {
@@ -513,6 +512,7 @@ async function refresh({ quiet = false } = {}) {
     pushState: permissionState(),
     pushHere: !!tail && devices.some((d) => d.tail === tail),
     needsInstall: needsHomeScreenInstall(),
+    banned: !!inbox.banned,
     busy: false,
   };
   paint();
@@ -531,6 +531,7 @@ async function refresh({ quiet = false } = {}) {
  */
 async function restorePush() {
   if (restoreTried) return;
+  if (state.banned) return;
   if (state.phase !== "following" || state.pushHere) return;
   if (permissionState() !== "granted" || needsHomeScreenInstall()) return;
   if (optedOutOfPush()) return;
@@ -555,6 +556,10 @@ async function follow(trigger) {
   if (pushSupported() && !needsHomeScreenInstall()) await subscribeDevice();
 
   await refresh({ quiet: true });
+
+  // The Worker refuses a blocked identity silently, by writing nothing. Opening
+  // the panel is what turns "the button did nothing" into an explanation.
+  if (state.banned && !isOpen()) setOpen(true);
 }
 
 async function unfollow(trigger) {
@@ -649,10 +654,20 @@ async function removeDevice(id, trigger) {
   await refresh({ quiet: true });
 }
 
+/**
+ * The one action that stays optimistic: the list flips before the round trip,
+ * because a reader clearing their own badge should not wait on a Worker to see
+ * it happen. What it now does is put the badge BACK if the write failed —
+ * silently claiming to have recorded something is worse than a slow button.
+ */
 async function markAllRead() {
+  const before = { unread: state.unread, items: state.items };
   state = { ...state, unread: 0, items: state.items.map((i) => ({ ...i, read_at: "now" })) };
   paint();
-  await api("/api/me/notifications/read", { method: "POST", body: {} });
+
+  if (await api("/api/me/notifications/read", { method: "POST", body: {} })) return;
+  state = { ...state, ...before };
+  paint();
 }
 
 async function markOneRead(id) {
@@ -856,6 +871,13 @@ export function initNotifications() {
   setBadge(state.unread);
   syncControls();
   refresh({ quiet: true });
+
+  // The admin console is a page of its own and several times the size of this
+  // file. Fetched only when its markup is actually on screen, so no reader ever
+  // downloads a console they cannot open.
+  if (document.getElementById("blog-management")) {
+    import("./blog-management.js").then((module) => module.initBlogManagement()).catch(() => {});
+  }
 }
 
 document.addEventListener("DOMContentLoaded", initNotifications);

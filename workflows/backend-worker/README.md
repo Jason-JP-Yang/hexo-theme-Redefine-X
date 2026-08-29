@@ -15,29 +15,32 @@ Four concerns, one Worker, one custom domain:
 ## How a notification travels
 
 ```
-  a deployment succeeds ─┐
-  an admin posts a note ─┼─→ ingestEntries()  ─→ notifications  (the content, deduped by id)
-  an admin broadcasts ───┘         │              deliveries    (the in-site inbox, per reader)
-                                   │              outbox        (the push queue, per device)
-                                   │
-                                   ├─→ drainOutbox(6)     immediately, after the response
-                                   └─→ drainOutbox(12)    every 5 minutes, from the cron
-                                              │
-                                              └─→ sendWebPush() → sent | retried | dead
+  a deployment succeeds ─┐                     ┌─ notifications      the content, deduped by id
+  an admin posts a note ─┼─→ ingestEntries() ──┤
+  an admin broadcasts ───┘        │            └─ followers.unread  the inbox, ONE row per reader
+                                  │
+                                  └─→ NOTIFY_QUEUE.sendBatch()   25 subscriptions per message
+                                                 │
+                    (a separate invocation)      └─→ consumeBatch()
+                                                        └─→ sendWebPush() ×25 in parallel
+                                                              → ack | drop the device | re-enqueue
 ```
 
-Two properties are worth knowing because everything else follows from them:
+Three properties are worth knowing because everything else follows from them:
 
 **Idempotency lives in `notifications.id`.** An entry that already exists is a
 no-op. That is what makes a webhook retry, a re-run over the same changelog, and
 an edit to an already-announced post all cost nothing and send nothing.
 
-**Fan-out and sending are separate.** Ingest resolves the audience entirely
-inside SQLite (`INSERT … SELECT`), so a broadcast to any number of followers is
-the same two round trips. Sending is one subrequest and one round of public-key
-crypto per device, so it is bounded: ingest sends the first six itself and the
-cron carries the rest. A fan-out therefore cannot exceed the per-invocation CPU
-or subrequest ceiling however many followers there are.
+**Fan-out is one UPDATE.** Ingest resolves the audience entirely inside SQLite,
+so a broadcast to any number of followers is the same three round trips — and it
+writes one un-indexed row per reader, because the inbox lives in
+`followers.unread` as JSON rather than in a (notification × reader) table.
+
+**Producing and sending happen in different invocations.** The request path does
+no crypto and calls no push service; it hands the payload and the subscription
+keys to a queue and returns. The consumer reads no D1 on the happy path, because
+the message already carries everything it needs.
 
 ## Configuration
 
@@ -88,25 +91,43 @@ instead. The allowlist earns its keep through least privilege and honesty.
 
 ## Database
 
-Six tables. `wrangler d1 execute <db> --remote --file=./schema.sql` creates them
-and is safe to re-run.
+Five tables.
 
 | Table | Holds | Grows with |
 | --- | --- | --- |
 | `notes` | Instant Notes. A separate feature that happens to share the Worker. | notes written |
-| `followers` | One row per GitHub identity that has followed: `topics` (comma-separated allowlist, empty means everything) and `muted_until`. | readers |
-| `push_devices` | Push subscriptions — `endpoint` (the natural key), `p256dh`, `auth`, `fail_count`. Several devices may hang off one follower. | readers × devices |
-| `notifications` | The notification itself, independent of who receives it. `id` is the dedupe key supplied by the source. | notifications |
-| `deliveries` | The in-site inbox: one row per (notification, follower), carrying `read_at`. Written even for a follower with no push device, which is what lets the bell work for someone who declined the OS prompt. | notifications × readers |
-| `outbox` | The push queue: one row per (notification, device), carrying `state`, `attempts` and `not_before`. Pruned after 90 days. | notifications × devices |
+| `followers` | One row per GitHub identity that has followed — **and that reader's inbox**: `topics` (comma-separated allowlist, empty means everything), `muted_until`, and the `unread` / `seen` JSON arrays. | readers |
+| `push_devices` | Push subscriptions — `endpoint` (the natural key), `p256dh`, `auth`, plus `state` for admin moderation. Several devices may hang off one follower. | readers × devices |
+| `notifications` | The notification itself, independent of who receives it. `id` is the dedupe key supplied by the source; `recipients` / `devices` are the fan-out's own counts. | notifications |
+| `moderation` | Everything an admin decides ABOUT a reader: `state` (`''` \| `muted` \| `banned`) and `blocked` (topics excluded globally). Only moderated identities have a row. | moderated readers |
 
-A seventh table, `settings`, is dropped by `schema.sql`. It held `dry_run` and
-`bootstrap_at` — a hand-flipped guard against a fresh database announcing the
-entire back catalogue — and `last_push_sha`, which nothing read. The guard is now
-stateless: an ingest that finds more than ten *new* entries at once records them
-and delivers none, because a burst that size is never news. It needs no
-migration, cannot be left in the wrong position, and keeps working on a database
-that is years old.
+Two tables are gone: `deliveries` (one row per notification × follower) and
+`outbox` (one per notification × device). D1 bills rows written and charges again
+per index touched, so those two made a broadcast to 150 readers cost ~450 writes
+before a single push left the building. The inbox now lives in two un-indexed
+JSON columns on the reader's own row, and the push queue is Cloudflare Queues,
+which costs D1 nothing. A `settings` table is gone for the same reason it was
+never needed: the bootstrap guard is stateless — an ingest finding more than ten
+*new* entries at once records them and delivers none.
+
+`moderation` is deliberately separate from `followers` rather than a column on
+it. Unfollowing deletes the follower row (it is the reader's own privacy switch,
+and it has to be a real deletion), so a ban stored there could be shed with one
+click.
+
+**Creating vs migrating.** `schema.sql` REBUILDS — it drops and recreates the
+notification tables — and is only right for an empty database:
+
+```sh
+wrangler d1 execute instant-notes-db --remote --file=./schema.sql
+```
+
+A database that already has followers and live push subscriptions is brought
+forward with the numbered files in `migrations/` instead, each run once:
+
+```sh
+wrangler d1 execute instant-notes-db --remote --file=./migrations/0001-moderation.sql
+```
 
 ## API reference
 
@@ -263,28 +284,99 @@ Broadcast by hand. One entry, or `{ "entries": [ … ] }` for several.
   "url": "https://…",                  // required
   "body": "", "type": "announcement", "topic": "announcements",
   "image": "", "tag": "announcements", "silent": false,
-  "audience": { "kind": "topic" }      // "topic" | "all" | { "kind": "users", "users": [id|login] }
+  // "topic" | "all" | { "kind": "users", "users": [id|login] }
+  //                  | { "kind": "except", "users": [id|login] }
+  "audience": { "kind": "topic" }
 }
 ```
-→ `201 { "ok": true, "ingested": ["…"], "skipped": [], "deliveries": 12, "queued": 17 }`
+→ `201 { "ok": true, "ingested": ["…"], "skipped": [], "recipients": 12,
+        "devices": 17, "messages": 1, "counts": [ … ],
+        "audience": { "matched": [{ "id": 1, "login": "…" }], "unknown": ["typo"] } }`
 
 `400` if nothing was new — a missing `id`/`title`/`url`, or an id already sent.
+An audience id that matches nobody is reported in `audience.unknown` and then
+**ignored**; it is never a reason to refuse the send.
 
 #### `GET /api/admin/notifications`
-History and delivery stats for the last 50, plus totals.
+`?type=announcement|post|note` (omit for all) · `?cursor=<offset>`.
 
 ```jsonc
-{ "items": [{ "id": "…", "type": "post", "topic": "posts", "title": "…", "url": "…",
-              "source": "changelog", "published_at": "…",
-              "recipients": 12, "read": 5, "pushed": 17, "pending": 0, "failed": 1 }],
-  "followers": 12, "devices": 17 }
+{ "items": [{ "id": "…", "type": "post", "topic": "posts", "title": "…",
+              "body": "…", "url": "…", "image": "", "tag": "", "silent": 0,
+              "audience_json": "{\"kind\":\"topic\"}", "source": "changelog",
+              "published_at": "…", "recipients": 12, "devices": 17 }],
+  "cursor": 20, "followers": 12, "devices": 17 }
 ```
+
+`cursor` is `null` on the last page.
+
+#### `PUT /api/admin/notifications/:id`
+`{ title, body, url }` — corrects what the in-site inbox shows from here on.
+Does **not** re-announce: the copy already in an OS tray cannot be recalled, and
+a second buzz for a fixed typo is how a channel teaches people to mute it.
+→ `{ "ok": true }`, `404` for an unknown id.
+
+#### `DELETE /api/admin/notifications/:id`
+Removes the row and strips the id from every inbox that held it.
+→ `{ "ok": true, "inboxes": 12, "removed": 1 }`
+
+A push already handed to the queue still lands: the consumer carries its own
+payload and reads no D1, so chasing one would cost a database read on every push
+forever to close a race measured in seconds.
 
 #### `POST /api/admin/notifications/:id/resend`
 The deliberate override of the dedupe rule. Re-queues every device belonging to
 someone already in that notification's inbox — the audience is fixed at ingest,
 so a resend cannot widen it. → `{ "ok": true, "queued": 17 }`, `404` for an
 unknown id.
+
+#### `POST /api/admin/lookup`
+`{ "ids": ["Jason-JP-Yang", 108601445] }` — names the identities typed into an
+audience or blocklist field.
+→ `{ "matched": [{ "id": 108601445, "login": "…", "name": "…", "follower": 1 }],
+      "unknown": ["typo"] }`
+
+Resolved against **this blog's own** followers and moderation rows, never
+against GitHub. An account the blog has never seen cannot receive a notification
+either way, so "unknown here" is the answer that matters — and it costs no
+subrequest and no rate limit.
+
+#### `GET /api/admin/followers`
+`?cursor=<offset>`. The first page carries everything the management screen
+paints once; later pages carry only more followers.
+
+```jsonc
+{ "items": [{ "id": 1, "login": "…", "name": "…", "created_at": 1756339200,
+              "unread": 3, "state": "", "blocked": "", "is_admin": false,
+              "devices": [{ "id": 7, "ua": "…", "device": "laptop",
+                            "state": "", "created_at": 1756339200, "tail": "…" }] }],
+  "cursor": 20,
+  "orphans": [ … ],                        // first page only — devices whose owner left
+  "blocklists": { "posts": [], "notes": [], "announcements": [] },
+  "totals": { "followers": 12, "devices": 17 } }
+```
+
+#### `PUT /api/admin/moderation`
+`{ github_id, state }` moderates an identity; `{ device_id, state }` a single
+subscription. `state` is `""`, `"muted"` or `"banned"` — three mutually
+exclusive positions, because a banned reader is already muted and the pair would
+only be a second way to say so.
+
+Both stop delivery. Only `banned` is visible to the reader: their panel is
+locked to one page behind a veil, every write route refuses them, and the
+subscription cannot be deleted and re-created to escape it. `muted` changes
+nothing they can see.
+
+`403` if the target is an admin — enforced inside the statement, so it is a
+property of the SQL rather than a check that can be forgotten.
+
+#### `PUT /api/admin/blocklists`
+`{ topic, users: [id|login] }` where topic is `posts`, `notes` or
+`announcements`. Send the **whole** intended list, not a diff.
+→ `{ "ok": true, "topic": "…", "users": [ … ], "unknown": [ … ] }`
+
+Anyone on a topic's list is skipped for that kind of notification, silently and
+everywhere, whatever audience an announcement names.
 
 #### `POST /api/admin/notify/ingest`
 The same ingest the webhook performs, triggered by hand — which is how the
@@ -294,10 +386,6 @@ pipeline is exercised locally, where GitHub has no route to the Worker. Reads
 
 `"absorbed": true` in the response means more than ten entries were new at once:
 they were recorded (and are deduped from now on) but deliberately not delivered.
-
-#### `POST /api/admin/notify/drain`
-Sends one batch now instead of waiting for the next cron tick.
-→ `{ "ok": true, "sent": 12, "dropped": 0, "retried": 0, "dead": 0, "remaining": 5 }`
 
 #### `POST /api/admin/notify/test`
 Sends a test push straight to your own devices, bypassing ingest — so it proves
@@ -324,6 +412,22 @@ nothing drained it.
 `blockers` lists everything that would stop a push reaching **you**, in the order
 it would bite. Empty means the problem is elsewhere — browser permission, or the
 notification simply not created yet.
+
+### Retention (cron, 03:40 UTC daily)
+
+One round trip, four statements, in this order because each depends on what the
+previous left behind:
+
+1. **Expire inbox entries** — unread after 30 days, read after 14. Guarded by a
+   `WHERE EXISTS`, so only rows that actually lost an entry are written.
+2. **Delete aged notifications** — older than 60 days, **except announcements**.
+   An announcement is the admin's own record and goes only when they delete it,
+   so the management list is what the database actually still holds.
+3. **Delete unreferenced posts and notes** — once step 1 has taken the last
+   inbox entry pointing at one, the row can never be rendered again.
+4. **Delete orphan devices** — subscriptions whose owner unfollowed, **except
+   banned ones**. Those stay: it is why unfollow leaves them behind, and a sweep
+   that removed them would hand back the one-click escape the ban closes.
 
 ### Webhook
 
@@ -473,7 +577,8 @@ with `blogAuth.backend` in the console.
 | CORS | **yes** | `.dev.vars` sets `ALLOWED_ORIGIN=local`. There is no built-in localhost exception. |
 | Instant notes admin | **yes** | Writes land in the local D1. |
 | Masonry likes | **yes**, via production | They only use the stateless giscus proxy, so they stay on the deployed Worker. Nothing is written there. |
-| Cron drain | **no** | `wrangler dev` does not fire triggers. Use `POST /api/admin/notify/drain`, or `wrangler dev --test-scheduled` and hit `/__scheduled`. Ingest still sends its own first batch. |
+| Queue consumer | **yes** | `wrangler dev` runs the consumer locally against the same process, so a local ingest really does send. |
+| Cron sweep | **no** | `wrangler dev` does not fire triggers. Use `wrangler dev --test-scheduled` and hit `/__scheduled`. It is retention only — nothing is sent from it. |
 | GitHub webhook | **no** | GitHub cannot reach localhost. `POST /api/admin/notify/ingest` runs the same ingest. |
 
 ### A full local round trip
@@ -496,8 +601,8 @@ curl -X POST -H "Authorization: Bearer <admin token>" \
 ```
 
 Grab `<admin token>` from the console with `await blogAuth.getSessionToken()`.
-Ingest sends its own first batch, so a small local audience needs no drain call;
-add `POST /api/admin/notify/drain` if more was queued than that.
+Ingest enqueues; `wrangler dev` runs the consumer in the same process, so the
+push arrives on its own. Watch the `[notify] push` line in terminal 2.
 
 ## Operating notes
 
@@ -511,18 +616,21 @@ add `POST /api/admin/notify/drain` if more was queued than that.
   becomes undeliverable and each follower has to enable push again. The inbox
   survives, so nothing is lost, but treat the pair as permanent once deployed.
 - **Failure handling.** `404`/`410` from a push service deletes the device (the
-  subscription is gone for good); `429`/`5xx`/network retries with exponential
-  backoff (60s → 3h, five attempts); `413` retries once with no payload so the
-  service worker can show a generic notification; anything else is our fault, not
-  the device's, and stops immediately.
-- **Privacy.** Per follower the Worker stores a GitHub id and login, the push
-  endpoint and its two public keys, and which notifications they were sent.
-  `PUT /api/me/preferences {"follow": false}` deletes all of it.
-- **Cost.** An idle deployment is 288 cron invocations a day, each one indexed
-  `SELECT` against an empty queue. Ingest is two D1 round trips regardless of
-  audience size; a drain is two more regardless of batch size.
-- **Batch sizes** live in `src/notify.js` as `DRAIN_BATCH` (12) and
-  `INLINE_BATCH` (6), sized for the Workers **free** plan — 50 subrequests but
-  only 10ms of CPU per invocation, and a single push costs an ECDH key pair, an
-  ECDH agreement, three HKDF chains and an AES-GCM seal. On the paid plan
-  (30s CPU) `DRAIN_BATCH` can go to ~45 before the subrequest ceiling matters.
+  subscription is gone for good); `429`/`5xx`/network re-enqueues **only the
+  endpoints that failed**, once, 60 s later — letting the platform retry the
+  whole message instead would re-send to the two dozen devices that already
+  succeeded; anything else (`400`, `401`, `403`, `413`) is our fault, not the
+  device's, and stops immediately with a `[notify] push` line in the logs.
+- **Privacy.** Per follower the Worker stores a GitHub id, login and display
+  name, the push endpoint and its two public keys, and the ids of the
+  notifications in their inbox. `PUT /api/me/preferences {"follow": false}`
+  deletes all of it — except a subscription an admin has banned, which is the
+  one thing leaving cannot clear.
+- **Cost.** An idle deployment is **one** cron invocation a day. Ingest is three
+  D1 round trips regardless of audience size, plus one `sendBatch` per 500
+  devices; the consumer costs no D1 at all unless a device has died.
+- **Batch sizes** live in `src/notify.js` as `PUSH_PER_MESSAGE` (25) and in
+  `wrangler.toml` as `max_batch_size` (1). Both are bounded by the **free**
+  plan's 50 subrequests per invocation — which counts D1 and Queues calls, not
+  just `fetch()` — rather than by CPU, which measures ~7.2 ms against a tolerant
+  10 ms (`dev/queue-cpu-probe`, 482/482 invocations at n=25).

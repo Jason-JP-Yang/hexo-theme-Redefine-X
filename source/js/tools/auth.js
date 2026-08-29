@@ -32,6 +32,10 @@
   var GISCUS_PARAM = "giscus";
   var GISCUS_ORIGIN = "https://giscus.app";
   var SESSION_CACHE_KEY = "blog-auth-session"; // sessionStorage: {login,avatar,isAdmin,token,exp}
+  // localStorage, read by the inline script in head.ejs so the admin-only rows
+  // in the sidebar are decided BEFORE the first paint rather than appearing a
+  // round trip later. Same pattern as "blog-following".
+  var ADMIN_KEY = "blog-admin";
 
   // ─── state ───────────────────────────────────────────────
   var tokenCache = null; // { session, token } — giscus session → GitHub token
@@ -207,11 +211,20 @@
   }
 
   // ─── session cache (avoid re-verifying on every page load) ─
+  function syncAdminClass(isAdmin) {
+    try {
+      document.documentElement.classList.toggle("blog-admin", !!isAdmin);
+      if (isAdmin) localStorage.setItem(ADMIN_KEY, "1");
+      else localStorage.removeItem(ADMIN_KEY);
+    } catch (e) {}
+  }
+
   function persist(data) {
     try {
       if (data) sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(data));
       else sessionStorage.removeItem(SESSION_CACHE_KEY);
     } catch (e) {}
+    syncAdminClass(data && data.isAdmin);
   }
   function hydrate() {
     if (!readGiscusSession()) {
@@ -222,8 +235,10 @@
       var raw = sessionStorage.getItem(SESSION_CACHE_KEY);
       if (!raw) return;
       var data = JSON.parse(raw);
-      if (data && (!data.exp || Date.now() < data.exp)) cachedSession = data;
-      else persist(null);
+      if (data && (!data.exp || Date.now() < data.exp)) {
+        cachedSession = data;
+        syncAdminClass(data.isAdmin);
+      } else persist(null);
     } catch (e) {}
   }
 
@@ -444,6 +459,7 @@
         ? {
             id: cachedSession.id || null,
             login: cachedSession.login,
+            name: cachedSession.name || "",
             avatar: cachedSession.avatar,
           }
         : null;

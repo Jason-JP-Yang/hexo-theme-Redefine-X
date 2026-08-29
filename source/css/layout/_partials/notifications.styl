@@ -73,6 +73,24 @@ html:not(.blog-following) .notifications-bell
 html.blog-following .navbar-follow
   display none !important
 
+// Following is a state, not a label. Once the reader is in it the call to action
+// has nothing left to ask for, so it goes — rather than turning into a button
+// that reports what pressing it already did. The bell above takes its place.
+html.blog-following .follow-cta,
+html.blog-following .drawer-follow-item
+  display none !important
+
+// Admin-only rows. Hidden until tools/auth.js confirms the session, by the same
+// mechanism as blog-following: a class on <html> written before the first paint
+// from the cached session, so the row never flickers in and then out. Hiding is
+// tidiness, not access control — the page is empty and every route it calls is
+// checked without a session it trusts.
+.blog-admin-only
+  display none !important
+
+html.blog-admin .blog-admin-only
+  display flex !important
+
 follow-button()
   display flex
   align-items center
@@ -122,10 +140,6 @@ follow-button()
   margin-top 0
   padding 5px 0
   font-size inherit
-
-  &.is-following
-    background var(--third-background-color-transparent)
-    color var(--second-text-color)
 
 // The drawer sets its rows at text-2xl/py-1.5/px-2; the button matches them.
 .drawer-navbar-list .follow-cta
@@ -696,10 +710,93 @@ follow-button()
     background var(--box-red-bg)
     color var(--box-red-text)
 
+.np-device.is-banned
+  .np-device-icon
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+  .np-device-title,
+  .np-device-time
+    color var(--third-text-color)
+
+.np-device-tag.is-banned
+  background var(--box-red-bg)
+  color var(--box-red-text)
+
+// The one warning the panel ever raises. Red because it reports a decision made
+// about the reader, not a setting they can change.
+.np-alert
+  display flex
+  align-items flex-start
+  gap 8px
+  margin 10px 0 0
+  padding 9px 11px
+  border-radius 10px
+  background var(--box-red-bg)
+  color var(--box-red-text)
+  font-size 0.76rem
+  line-height 1.5
+
+  i
+    margin-top 2px
+    flex-shrink 0
+
 .np-blank
   margin 4px 0 0
   font-size 0.78rem
   color var(--third-text-color)
+
+// ─── a blocked account ──────────────────────────────────────
+// The settings are still rendered and then taken away: clipped to a fixed
+// height, blurred, and `inert` from JS so nothing inside can be reached by
+// pointer or by tab. Only the veil above it is live.
+.np-manage
+  position relative
+
+.np-veiled
+  display flex
+  flex-direction column
+  gap 14px
+  max-height 260px
+  overflow hidden
+  filter blur(6px) saturate(0.7)
+  opacity 0.5
+  pointer-events none
+  user-select none
+
+.np-banned
+  position absolute
+  inset 0
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 8px
+  padding 20px 22px
+  text-align center
+
+  > i
+    font-size 22px
+    color var(--box-red-text)
+
+.np-banned-title
+  margin 0
+  font-size 0.95rem
+  font-weight 600
+  color var(--first-text-color)
+
+.np-banned-note
+  margin 0
+  max-width 34ch
+  font-size 0.76rem
+  line-height 1.55
+  color var(--second-text-color)
+
+.np-banned .np-quiet
+  width auto
+  margin-top 6px
+  padding 7px 14px
+  border-color var(--border-color)
 
 // ─── the destructive end of the page ────────────────────────
 .np-danger

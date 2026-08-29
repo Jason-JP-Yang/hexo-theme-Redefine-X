@@ -192,8 +192,18 @@
                 <% } %>
             <% } %>
 
+            <% if (theme.notifications && theme.notifications.enable) { %>
+                <li class="drawer-navbar-item blog-admin-only text-base my-1.5 flex flex-col w-full">
+                    <a class="py-1.5 px-2 flex flex-row items-center justify-between gap-1 hover:!text-primary active:!text-primary text-2xl font-semibold group border-b border-border-color hover:border-primary w-full active"
+                       href="<%= url_for('/blog-management/') %>">
+                        <span><%= __('notifications.blog_management') %></span>
+                        <i class="fa-solid fa-screwdriver-wrench fa-sm fa-fw"></i>
+                    </a>
+                </li>
+            <% } %>
+
             <% if (theme.home.bento === false && theme.notifications && theme.notifications.enable) { %>
-                <li class="drawer-navbar-item text-base my-1.5 flex flex-col w-full">
+                <li class="drawer-navbar-item drawer-follow-item text-base my-1.5 flex flex-col w-full">
                     <%- partial("components/notifications/follow-cta") %>
                 </li>
             <% } %>

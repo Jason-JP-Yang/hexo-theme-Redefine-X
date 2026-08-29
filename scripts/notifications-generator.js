@@ -248,3 +248,28 @@ hexo.extend.generator.register("redefine_manifest", function () {
 
   return [{ path: "manifest.json", data: JSON.stringify(manifest, null, 2) }];
 });
+
+// ─── the admin management page ──────────────────────────────
+// A real page rather than a panel: it holds three long-lived lists that outgrow
+// a 440px card. It renders for everybody — the route has to exist for Swup to
+// navigate to it — and shows nothing but a locked notice until the front end has
+// confirmed an admin session. Authorisation is the Worker's, not this page's.
+hexo.extend.generator.register("redefine_blog_management", function () {
+  const theme = hexo.theme.config || {};
+  if (!theme.notifications || !theme.notifications.enable) return [];
+
+  return [
+    {
+      path: "blog-management/index.html",
+      layout: "page",
+      data: {
+        type: "blog-management",
+        title: "Blog Management",
+        layout: "page",
+        content: "",
+        comment: false,
+        robots: "noindex,nofollow",
+      },
+    },
+  ];
+});

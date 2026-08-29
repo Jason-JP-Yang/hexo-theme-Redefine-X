@@ -273,20 +273,56 @@ window.addEventListener(
 );
 
 // Content growing (images decoding in, EXIF cards re-laying out, MathJax
-// resizing) changes scrollHeight without a scroll or resize event.
-if (typeof ResizeObserver !== "undefined") {
+// resizing, an admin console that paints itself once the network answers)
+// changes scrollHeight without a scroll or resize event.
+//
+// The observed element is the PAGE CONTAINER, not the document root, and that is
+// the whole fix: common/basic.styl sets `html, body { height: 100% }`, which
+// pins both root boxes to the viewport. A ResizeObserver on either one fires
+// exactly once, on observe, and never again however much content arrives —
+// which left `bodyH` frozen at whatever the page measured on load. On a page
+// that paints itself after a fetch, `y + viewportH >= bodyH - 20` was then true
+// at every scroll position, so the side-tools hid themselves as "already at the
+// bottom" the moment the reader scrolled, and never came back.
+//
+// It also has to SCHEDULE, not merely dirty the cache: scroll percentage is
+// scrollTop over (scrollHeight - viewport), so a page that grows changes it
+// while standing still, and every consumer of that number is only ever called
+// from a pass. schedule() is rAF-coalesced, so a burst still costs one pass.
+//
+// Swup replaces `.page-container` on every navigation, so the observation is
+// re-pointed from the page:view hook rather than set up once.
+let contentObserver = null;
+
+function observeContent() {
+  if (!contentObserver) return;
+  contentObserver.disconnect();
   try {
-    new ResizeObserver(() => {
-      metricsDirty = true;
-    }).observe(document.documentElement);
+    contentObserver.observe(document.querySelector(".page-container") || document.body);
   } catch (e) {
     /* non-fatal: metrics are still invalidated on resize + page:view */
   }
 }
 
+if (typeof ResizeObserver !== "undefined") {
+  try {
+    contentObserver = new ResizeObserver(() => {
+      metricsDirty = true;
+      schedule();
+    });
+    observeContent();
+  } catch (e) {
+    contentObserver = null;
+  }
+}
+
 // Batched signal (one per group of swaps / EXIF relayouts), not the per-image
-// `redefine:image-loaded`.
-window.addEventListener("redefine:content-resized", invalidateMetrics);
+// `redefine:image-loaded`. Same reasoning as above: invalidating without
+// scheduling only helps a page that is about to be scrolled anyway.
+window.addEventListener("redefine:content-resized", () => {
+  metricsDirty = true;
+  schedule();
+});
 
 // Swup's scroll plugin creates these hooks in its mount(). swup.ejs renders
 // AFTER scripts.ejs, so the first attempt can legitimately fail — retry once
@@ -300,6 +336,7 @@ function wireSwup() {
     s.hooks.on("scroll:start", beginFlight);
     s.hooks.on("scroll:end", endFlight);
     s.hooks.on("page:view", () => {
+      observeContent();
       metricsDirty = true;
       schedule();
     });

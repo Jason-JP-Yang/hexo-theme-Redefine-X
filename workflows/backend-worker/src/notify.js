@@ -76,7 +76,11 @@ const MAX_TRIES = 2;
 const RETRY_DELAY_SEC = 60;
 
 // D1 allows 100 bound parameters per query, and ?1/?2 are spoken for.
-const MAX_EXPLICIT_USERS = 90;
+const MAX_EXPLICIT_USERS = 80;
+
+// Longest stored notification body. Held here rather than as a CHECK so that
+// raising it does not need a table rebuild.
+export const BODY_MAX = 500;
 
 // Above this many NEW entries in one ingest, record them and deliver none.
 //
@@ -86,13 +90,16 @@ const MAX_EXPLICIT_USERS = 90;
 // absorb it silently so that everything in it is deduped forever afterwards.
 const MAX_ANNOUNCED_PER_INGEST = 10;
 
-// Retention, in days. Unread entries outlive read ones because an unread badge
-// is a promise to the reader; a read one is only history.
+// Retention, in days — and it applies to INBOX REFERENCES only. Unread entries
+// outlive read ones because an unread badge is a promise to the reader; a read
+// one is only history.
+//
+// The `notifications` rows themselves have NO age limit. A post or a note is
+// deleted the day nothing references it any more, which is a consequence of the
+// two numbers below rather than a third clock; an announcement is the admin's
+// own record and goes only when the admin deletes it.
 const UNREAD_DAYS = 30;
 const SEEN_DAYS = 14;
-// Notifications themselves must outlive the longest path a reference to them can
-// take — delivered, left unread for 29 days, then read and held for 14 more.
-const NOTIFICATION_DAYS = 60;
 
 const now = () => Math.floor(Date.now() / 1000);
 const changesOf = (result) => (result && result.meta && result.meta.changes) || 0;
@@ -116,8 +123,8 @@ export function normalizeEntry(raw, defaults = {}) {
     title: String(raw.title).slice(0, 120),
     // Truncated here rather than at send time: the inbox and the OS tray should
     // show the same text, and the 4 KB payload ceiling is easiest to respect by
-    // never storing more than fits.
-    body: String(raw.body || "").slice(0, 200),
+    // never storing more than fits. 500 UTF-8 characters is at most ~1.5 KB.
+    body: String(raw.body || "").slice(0, BODY_MAX),
     url: String(raw.url),
     image: String(raw.image || ""),
     tag: String(raw.tag || raw.topic || "posts"),
@@ -148,9 +155,14 @@ export function payloadOf(row) {
  *   topic  — followers subscribed to it (an empty `topics` means "everything")
  *   all    — every follower, ignoring topic preferences
  *   users  — an explicit allowlist of GitHub logins and/or numeric ids
+ *   except — everyone EXCEPT that list, also ignoring topic preferences
  *
  * A follower muted past `muted_until` is skipped in every case: muting is about
- * the reader's attention, not about what the author considers important.
+ * the reader's attention, not about what the author considers important. So is
+ * anyone the admin has muted or banned, and anyone on the global blocklist for
+ * this entry's topic — the moderation probe below is appended to every kind,
+ * because an audience the admin picked by hand must not be able to reach
+ * somebody the same admin already excluded.
  *
  * Returned as SQL rather than as a list of ids so the audience is resolved
  * inside SQLite and the follower list never crosses the wire.
@@ -181,28 +193,43 @@ export function audienceWhere(entry, { alias = "", at = 1 } = {}) {
   const next = at + 1;
   const unmuted = `(${q}muted_until IS NULL OR ${q}muted_until < ?${at})`;
 
-  if (audience.kind === "all") {
-    return { where: unmuted, params: [] };
-  }
+  let where;
+  let params;
 
-  if (audience.kind === "users") {
+  if (audience.kind === "all") {
+    where = unmuted;
+    params = [];
+  } else if (audience.kind === "users" || audience.kind === "except") {
     const wanted = (Array.isArray(audience.users) ? audience.users : [])
       .slice(0, MAX_EXPLICIT_USERS)
       .map(String);
-    // An explicit audience of nobody is a no-op, not a broadcast.
-    if (wanted.length === 0) return null;
-    const list = wanted.map((_, i) => `?${next + i}`).join(", ");
-    return {
-      where: `${unmuted} AND (CAST(${q}github_id AS TEXT) IN (${list}) OR ${q}login IN (${list}))`,
-      params: wanted,
-    };
+    // An explicit allowlist of nobody is a no-op, not a broadcast. An exclusion
+    // list of nobody is simply everybody.
+    if (wanted.length === 0) {
+      if (audience.kind === "users") return null;
+      where = unmuted;
+      params = [];
+    } else {
+      const list = wanted.map((_, i) => `?${next + i}`).join(", ");
+      const named = `(CAST(${q}github_id AS TEXT) IN (${list}) OR ${q}login IN (${list}))`;
+      where = `${unmuted} AND ${audience.kind === "except" ? `NOT ${named}` : named}`;
+      params = wanted;
+    }
+  } else {
+    // Default: topic. `topics = ''` is an explicit "no filter", which is the
+    // state a reader is in until they touch the preference toggles.
+    where = `${unmuted} AND (${q}topics = '' OR (',' || ${q}topics || ',') LIKE '%,' || ?${next} || ',%')`;
+    params = [entry.topic];
   }
 
-  // Default: topic. `topics = ''` is an explicit "no filter", which is the state
-  // a reader is in until they touch the preference toggles.
+  // One primary-key probe into a table that only holds moderated identities.
+  const owner = alias ? `${alias}.github_id` : "followers.github_id";
+  const topicParam = next + params.length;
   return {
-    where: `${unmuted} AND (${q}topics = '' OR (',' || ${q}topics || ',') LIKE '%,' || ?${next} || ',%')`,
-    params: [entry.topic],
+    where:
+      `${where} AND NOT EXISTS (SELECT 1 FROM moderation m WHERE m.github_id = ${owner} ` +
+      `AND (m.state <> '' OR instr(',' || m.blocked || ',', ',' || ?${topicParam} || ',') > 0))`,
+    params: [...params, entry.topic],
   };
 }
 
@@ -286,13 +313,15 @@ export async function fanOut(db, env, row) {
       )
       .bind(entry, stamp, ...inbox.params, row.id),
     // Same audience, one join further out. Independent of the statement above,
-    // which is why both fit in a single round trip.
+    // which is why both fit in a single round trip. `d.state = ''` is the
+    // device-level half of moderation: a single browser can be silenced without
+    // touching the rest of its owner's subscription.
     db
       .prepare(
         `SELECT d.id, d.endpoint, d.p256dh, d.auth
            FROM push_devices d
            JOIN followers f ON f.github_id = d.github_id
-          WHERE ${lookup.where}`
+          WHERE d.state = '' AND ${lookup.where}`
       )
       .bind(stamp, ...lookup.params),
   ]);
@@ -383,6 +412,10 @@ export async function ingestEntries(db, env, rawEntries, defaults = {}) {
     result.messages += stats.messages;
     counts.push({ id: entry.id, ...stats });
   }
+
+  // Per-entry, for the admin receipt: a broadcast of several entries reaching
+  // different audiences is otherwise reported as one indistinguishable total.
+  result.counts = counts;
 
   // The audit numbers, folded into one round trip. They come from writes that
   // already happened, so this replaces what used to be an aggregate query over
@@ -530,21 +563,26 @@ async function handleMessage(message, env) {
 
 // ─── retention ───────────────────────────────────────────────
 /**
- * The daily sweep. One round trip, two statements.
+ * The daily sweep. One round trip, three statements, in this order because each
+ * one depends on what the previous left behind.
  *
  * The guard on the UPDATE is the point of it: without the WHERE EXISTS, every
  * follower row would be rewritten every day whether or not anything in it had
  * expired — a write per follower per day, in the scarce direction, to change
  * nothing. With it, the sweep scans all of them (reads are 5M/day) and writes
  * only the rows that actually lost an entry.
+ *
+ * Age expires REFERENCES, never rows. A notification is deleted because nothing
+ * points at it any more, not because a clock ran out — so an announcement
+ * nobody has read is still there next year, and a post is gone the day its last
+ * reader's inbox entry expires.
  */
 export async function pruneInboxes(db) {
   const t = now();
   const unreadCutoff = t - UNREAD_DAYS * 86400;
   const seenCutoff = t - SEEN_DAYS * 86400;
-  const rowCutoff = t - NOTIFICATION_DAYS * 86400;
 
-  const [swept, removed] = await db.batch([
+  const [swept, unreferenced, orphans] = await db.batch([
     db
       .prepare(
         `UPDATE followers
@@ -558,12 +596,64 @@ export async function pruneInboxes(db) {
              OR EXISTS (SELECT 1 FROM json_each(followers.seen)   j WHERE j.value->>2 < ?2)`
       )
       .bind(unreadCutoff, seenCutoff),
-    // Safe to delete outright: a notification this old cannot still be referenced
-    // by an unread entry (30 days) or by a read one (14 days after a read that
-    // itself had to happen inside those 30), and the inbox query inner-joins, so
-    // even a stale id would simply not render.
-    db.prepare(`DELETE FROM notifications WHERE created_at < ?1`).bind(rowCutoff),
+    // Posts and notes have no life of their own: once the sweep above has taken
+    // the last inbox entry pointing at one, the row can never be rendered again.
+    // Runs after that UPDATE, in the same transaction, so it sees the result.
+    //
+    // Announcements are never swept. They are the admin's own record, and the
+    // management list is meant to be what the database actually still holds —
+    // including one that reached an audience of nobody.
+    db.prepare(
+      `DELETE FROM notifications
+        WHERE type IN ('post', 'note')
+          AND id NOT IN (
+                SELECT j.value->>0 FROM followers f, json_each(f.unread) j
+                 WHERE j.value->>0 IS NOT NULL
+                 UNION
+                SELECT j.value->>0 FROM followers f, json_each(f.seen) j
+                 WHERE j.value->>0 IS NOT NULL)`
+    ),
+    // A subscription whose owner unfollowed. Banned ones stay: that is the whole
+    // reason unfollow leaves them behind, and a sweep that removed them would
+    // hand back the one-click escape the ban is meant to close.
+    db.prepare(
+      `DELETE FROM push_devices
+        WHERE state <> 'banned'
+          AND NOT EXISTS (SELECT 1 FROM followers f WHERE f.github_id = push_devices.github_id)`
+    ),
   ]);
 
-  return { followersSwept: changesOf(swept), notificationsRemoved: changesOf(removed) };
+  return {
+    followersSwept: changesOf(swept),
+    unreferenced: changesOf(unreferenced),
+    orphanDevices: changesOf(orphans),
+  };
+}
+
+/**
+ * Delete one notification and every reference to it.
+ *
+ * The EXISTS guards mean only the readers who actually hold the id pay a row
+ * write. A push already handed to the queue still lands — the consumer carries
+ * its own payload and reads no D1 — which is deliberate: chasing a message
+ * that is already in flight would cost a database read on every push forever,
+ * to catch a race measured in seconds.
+ */
+export async function deleteNotification(db, id) {
+  const [swept, removed] = await db.batch([
+    db
+      .prepare(
+        `UPDATE followers
+            SET unread = (SELECT COALESCE(json_group_array(json(j.value)), '[]')
+                            FROM json_each(followers.unread) j WHERE j.value->>0 <> ?1),
+                seen   = (SELECT COALESCE(json_group_array(json(j.value)), '[]')
+                            FROM json_each(followers.seen)   j WHERE j.value->>0 <> ?1)
+          WHERE EXISTS (SELECT 1 FROM json_each(followers.unread) j WHERE j.value->>0 = ?1)
+             OR EXISTS (SELECT 1 FROM json_each(followers.seen)   j WHERE j.value->>0 = ?1)`
+      )
+      .bind(id),
+    db.prepare(`DELETE FROM notifications WHERE id = ?1`).bind(id),
+  ]);
+
+  return { inboxes: changesOf(swept), removed: changesOf(removed) };
 }

@@ -38,7 +38,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { fetchGitHubUser, isAdminUser, signSession, verifySession } from "./auth.js";
-import { ingestEntries, fanOut, consumeBatch, pruneInboxes } from "./notify.js";
+import {
+  ingestEntries,
+  fanOut,
+  consumeBatch,
+  pruneInboxes,
+  deleteNotification,
+  BODY_MAX,
+} from "./notify.js";
 import { verifySignature, fetchChangelog, isLiveDeployment } from "./hooks.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
 
@@ -67,6 +74,29 @@ const DEVICE_CLASSES = new Set(["laptop", "desktop", "mobile", "tablet"]);
 // device list, and not enough to be one. Push endpoints are bearer URLs — whoever
 // holds one can send to it — so the full string never leaves the database.
 const ENDPOINT_TAIL = 18;
+
+// Rows per page on the management screens. Followers carry their devices in a
+// second statement bound by D1's 100-parameter ceiling, so this is also the
+// widest IN () list either query builds.
+const ADMIN_PAGE = 20;
+
+// What `?type=` on the notification history may filter by. A closed set, because
+// the value is interpolated into nothing but a bound parameter and an unknown
+// one should read as "no filter" rather than as an empty result.
+const NOTIFICATION_TYPES = new Set(["announcement", "post", "note"]);
+
+// The three moderation states. Anything else is rejected outright rather than
+// stored — an unknown state would silently mean "not moderated" everywhere.
+const MODERATION_STATES = new Set(["", "muted", "banned"]);
+
+// Topics that can carry a global blocklist. The same three the reader sees as
+// delivery switches.
+const BLOCKLIST_TOPICS = new Set(["posts", "notes", "announcements"]);
+
+// Identities one lookup may resolve. Bounded by D1's 100-parameter ceiling, and
+// by MAX_EXPLICIT_USERS in notify.js — an audience larger than the fan-out can
+// actually bind would validate and then silently under-deliver.
+const ADMIN_LOOKUP_MAX = 80;
 
 // A `background()` helper used to live here, deferring push sending past the
 // response with waitUntil. Nothing needs it any more: handing a fan-out to the
@@ -344,8 +374,10 @@ app.post("/api/auth/login", async (c) => {
   let exp = null;
   if (c.env.SESSION_SECRET) {
     exp = Date.now() + SESSION_TTL_MS;
+    // `name` rides along so that upserting a follower — which happens on routes
+    // that never see GitHub — can store the display name without a second call.
     token = await signSession(
-      { id: user.id, login: user.login, isAdmin, exp },
+      { id: user.id, login: user.login, name: user.name || "", isAdmin, exp },
       c.env.SESSION_SECRET
     );
   }
@@ -353,6 +385,7 @@ app.post("/api/auth/login", async (c) => {
   return c.json({
     id: user.id,
     login: user.login,
+    name: user.name || "",
     avatar: user.avatar_url,
     isAdmin,
     token,
@@ -452,23 +485,36 @@ app.delete("/api/admin/notes/:id", authMiddleware, async (c) => {
  * Create or refresh the follower row for the signed-in user.
  * Following is implied by any of the follow actions — there is no separate
  * "follow" button to get out of sync with the subscription state.
+ *
+ * The INSERT ... SELECT form exists for the WHERE: a banned identity must not be
+ * able to re-create its own follower row, and doing that check inside the
+ * statement costs nothing, where a preceding SELECT would cost a round trip on
+ * every subscribe.
  */
 function upsertFollower(db, session, topics) {
   return db
     .prepare(
-      `INSERT INTO followers (github_id, login, avatar, topics)
-       VALUES (?1, ?2, '', ?3)
+      `INSERT INTO followers (github_id, login, name, avatar, topics)
+       SELECT ?1, ?2, ?3, '', ?4
+        WHERE NOT EXISTS (SELECT 1 FROM moderation
+                           WHERE github_id = ?1 AND state = 'banned')
        ON CONFLICT(github_id) DO UPDATE SET
          login  = excluded.login,
-         topics = COALESCE(?4, followers.topics)`
+         name   = excluded.name,
+         topics = COALESCE(?5, followers.topics)`
     )
     .bind(
       session.id,
       session.login || "",
+      session.name || "",
       topics == null ? "" : String(topics),
       topics == null ? null : String(topics)
     );
 }
+
+/** SQL fragment: true when this identity is not banned. `?N` takes the id. */
+const notBanned = (p) =>
+  `NOT EXISTS (SELECT 1 FROM moderation WHERE github_id = ?${p} AND state = 'banned')`;
 
 // ─── PUBLIC: the VAPID application server key ───────────────
 // Public by definition — every subscribing browser is given this key. Exposed as
@@ -499,12 +545,12 @@ app.post("/api/push/subscribe", userMiddleware, async (c) => {
   // endpoint is the identity of a subscription: re-subscribing the same browser
   // (a key rotation, a reinstall) rewrites the keys rather than adding a second
   // row that will never work.
-  await db.batch([
+  const [follower] = await db.batch([
     upsertFollower(db, session, body.topics),
     db
       .prepare(
         `INSERT INTO push_devices (github_id, endpoint, p256dh, auth, ua, device)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE ${notBanned(1)}
          ON CONFLICT(endpoint) DO UPDATE SET
            github_id = excluded.github_id,
            p256dh    = excluded.p256dh,
@@ -523,6 +569,12 @@ app.post("/api/push/subscribe", userMiddleware, async (c) => {
         DEVICE_CLASSES.has(String(body.device)) ? String(body.device) : ""
       ),
   ]);
+
+  // Nothing written means the guard inside the statement refused it, which is
+  // the one reason it can refuse. Reported rather than swallowed so the panel
+  // does not sit claiming to have subscribed a browser that received nothing.
+  const wrote = (follower && follower.meta && follower.meta.changes) || 0;
+  if (!wrote) return c.json({ error: "banned" }, 403);
 
   return c.json({ ok: true, following: true });
 });
@@ -544,9 +596,14 @@ app.delete("/api/push/subscribe", userMiddleware, async (c) => {
   } catch {}
 
   const db = c.env.DB;
+  // `state <> 'banned'` is the backend half of the hidden delete button. Without
+  // it, a reader could revoke the banned row and simply re-subscribe the same
+  // browser into a clean one — the ban would be a front-end suggestion.
+  const keepBanned = `state <> 'banned' AND ${notBanned(2)}`;
+
   if (body && body.endpoint) {
     await db
-      .prepare(`DELETE FROM push_devices WHERE endpoint = ?1 AND github_id = ?2`)
+      .prepare(`DELETE FROM push_devices WHERE endpoint = ?1 AND github_id = ?2 AND ${keepBanned}`)
       .bind(String(body.endpoint), session.id)
       .run();
   } else if (body && body.id != null) {
@@ -554,11 +611,14 @@ app.delete("/api/push/subscribe", userMiddleware, async (c) => {
     // browser: the id space is global and guessable, so the scope is what stops
     // one reader revoking another's device.
     await db
-      .prepare(`DELETE FROM push_devices WHERE id = ?1 AND github_id = ?2`)
+      .prepare(`DELETE FROM push_devices WHERE id = ?1 AND github_id = ?2 AND ${keepBanned}`)
       .bind(Number(body.id) || 0, session.id)
       .run();
   } else {
-    await db.prepare(`DELETE FROM push_devices WHERE github_id = ?1`).bind(session.id).run();
+    await db
+      .prepare(`DELETE FROM push_devices WHERE github_id = ?1 AND state <> 'banned' AND ${notBanned(1)}`)
+      .bind(session.id)
+      .run();
   }
   return c.json({ ok: true });
 });
@@ -578,7 +638,7 @@ app.get("/api/me/notifications", userMiddleware, async (c) => {
   // two JSON arrays on it, so the items cost one row plus one keyed lookup per
   // notification — where a (notification × follower) table cost an index walk
   // and a second row for every item on every panel open.
-  const [items, meta, devices] = await db.batch([
+  const [items, meta, devices, moderated] = await db.batch([
     db
       .prepare(
         `SELECT n.id, n.type, n.topic, n.title, n.body, n.url, n.image,
@@ -608,24 +668,37 @@ app.get("/api/me/notifications", userMiddleware, async (c) => {
       .bind(session.id),
     // Browser and OS are parsed from `ua` in the panel rather than here: the
     // strings are long, the rules change often, and a Worker invocation has ten
-    // milliseconds to spend on things only it can do.
+    // milliseconds to spend on things only it can do. A muted device is reported
+    // as ordinary — that is what makes muting silent.
     db
       .prepare(
-        `SELECT id, ua, device, created_at, substr(endpoint, -${ENDPOINT_TAIL}) AS tail
+        `SELECT id, ua, device, created_at,
+                CASE WHEN state = 'banned' THEN 1 ELSE 0 END AS banned,
+                substr(endpoint, -${ENDPOINT_TAIL}) AS tail
            FROM push_devices
           WHERE github_id = ?1
           ORDER BY created_at DESC`
       )
       .bind(session.id),
+    // Keyed at a table that only holds moderated identities, so it costs one row
+    // and usually none. Asked separately from the follower row because a banned
+    // reader who has unfollowed HAS no follower row, and must still be told.
+    // This route stays readable to them precisely so the panel can say so; every
+    // write route refuses.
+    db
+      .prepare(`SELECT state FROM moderation WHERE github_id = ?1`)
+      .bind(session.id),
   ]);
 
   const row = meta.results && meta.results[0];
+  const flag = moderated.results && moderated.results[0];
 
   return c.json({
     items: items.results || [],
     unread: row ? row.unread || 0 : 0,
     devices: devices.results || [],
     following: !!row,
+    banned: !!flag && flag.state === "banned",
     topics: row ? row.topics : "",
     muted_until: row ? row.muted_until : null,
   });
@@ -663,7 +736,7 @@ app.post("/api/me/notifications/read", userMiddleware, async (c) => {
                             SELECT json_array(j.value->>0, j.value->>1, ?2)
                               FROM json_each(followers.unread) j
                              WHERE j.value->>0 IN (${list})))
-          WHERE github_id = ?1`
+          WHERE github_id = ?1 AND ${notBanned(1)}`
       )
       .bind(session.id, stamp, ...ids)
       .run();
@@ -677,7 +750,7 @@ app.post("/api/me/notifications/read", userMiddleware, async (c) => {
                             SELECT json_array(j.value->>0, j.value->>1, ?2)
                               FROM json_each(followers.unread) j)),
                 unread = '[]'
-          WHERE github_id = ?1 AND unread <> '[]'`
+          WHERE github_id = ?1 AND unread <> '[]' AND ${notBanned(1)}`
       )
       .bind(session.id, stamp)
       .run();
@@ -729,10 +802,19 @@ app.put("/api/me/preferences", userMiddleware, async (c) => {
 
   if (body.follow === false) {
     // Two statements now, not three: the inbox lives on the follower row, so
-    // deleting the reader deletes their history with them.
+    // deleting the reader deletes their history with them. Banned subscriptions
+    // are the one thing left behind — see the DELETE route above for why — and
+    // a banned identity cannot leave at all, because leaving would clear the
+    // follower row the ban is enforced through on the way back in.
     await db.batch([
-      db.prepare(`DELETE FROM push_devices WHERE github_id = ?1`).bind(session.id),
-      db.prepare(`DELETE FROM followers WHERE github_id = ?1`).bind(session.id),
+      db
+        .prepare(
+          `DELETE FROM push_devices WHERE github_id = ?1 AND state <> 'banned' AND ${notBanned(1)}`
+        )
+        .bind(session.id),
+      db
+        .prepare(`DELETE FROM followers WHERE github_id = ?1 AND ${notBanned(1)}`)
+        .bind(session.id),
     ]);
     return c.json({ ok: true, following: false });
   }
@@ -749,7 +831,7 @@ app.put("/api/me/preferences", userMiddleware, async (c) => {
     }
     statements.push(
       db
-        .prepare(`UPDATE followers SET muted_until = ?1 WHERE github_id = ?2`)
+        .prepare(`UPDATE followers SET muted_until = ?1 WHERE github_id = ?2 AND ${notBanned(2)}`)
         .bind(until, session.id)
     );
   }
@@ -759,6 +841,10 @@ app.put("/api/me/preferences", userMiddleware, async (c) => {
 });
 
 // ─── ADMIN: broadcast one notification by hand ──────────────
+// The audience is resolved to real identities BEFORE ingest, purely so the
+// receipt can say which ids matched. Delivery does not depend on it: an id that
+// matches nobody is reported and then ignored, never a reason to refuse the
+// whole send.
 app.post("/api/admin/notifications", authMiddleware, async (c) => {
   let body;
   try {
@@ -768,6 +854,13 @@ app.post("/api/admin/notifications", authMiddleware, async (c) => {
   }
 
   const entries = Array.isArray(body.entries) ? body.entries : [body];
+  const named = [];
+  for (const entry of entries) {
+    const users = entry && entry.audience && entry.audience.users;
+    if (Array.isArray(users)) named.push(...users);
+  }
+
+  const audience = named.length ? await resolveIdentities(c.env.DB, named) : null;
   const result = await ingestEntries(c.env.DB, c.env, entries, { source: "admin" });
 
   if (result.ingested.length === 0) {
@@ -777,35 +870,428 @@ app.post("/api/admin/notifications", authMiddleware, async (c) => {
     );
   }
 
-  return c.json({ ok: true, ...result }, 201);
+  return c.json({ ok: true, ...result, audience }, 201);
 });
 
 // ─── ADMIN: notification history + delivery stats ───────────
-// A plain indexed read of fifty rows. The recipient and device counts were
-// written by the fan-out that produced them, so this no longer aggregates over
-// join tables — which is the whole reason those tables could be deleted.
+// A plain indexed read, paged. The recipient and device counts were written by
+// the fan-out that produced them, so this no longer aggregates over join tables
+// — which is the whole reason those tables could be deleted.
 app.get("/api/admin/notifications", authMiddleware, async (c) => {
   const db = c.env.DB;
+  const type = String(c.req.query("type") || "");
+  const offset = Math.max(0, Number(c.req.query("cursor")) || 0);
+  const wanted = NOTIFICATION_TYPES.has(type) ? type : "";
 
+  // One extra row is fetched, never returned: its existence is the whole answer
+  // to "is there a next page", and it costs less than a COUNT(*).
   const [history, totals] = await db.batch([
-    db.prepare(
-      `SELECT id, type, topic, title, url, source, recipients, devices,
-              strftime('%Y-%m-%dT%H:%M:%SZ', created_at, 'unixepoch') AS published_at
-         FROM notifications
-        ORDER BY created_at DESC
-        LIMIT 50`
-    ),
+    db
+      .prepare(
+        `SELECT id, type, topic, title, body, url, image, tag, source, silent,
+                audience_json, recipients, devices,
+                strftime('%Y-%m-%dT%H:%M:%SZ', created_at, 'unixepoch') AS published_at
+           FROM notifications
+          WHERE ?1 = '' OR type = ?1
+          ORDER BY created_at DESC
+          LIMIT ?2 OFFSET ?3`
+      )
+      .bind(wanted, ADMIN_PAGE + 1, offset),
     db.prepare(
       `SELECT (SELECT COUNT(*) FROM followers)    AS followers,
               (SELECT COUNT(*) FROM push_devices) AS devices`
     ),
   ]);
 
+  const rows = history.results || [];
+  const more = rows.length > ADMIN_PAGE;
   const counts = (totals.results && totals.results[0]) || { followers: 0, devices: 0 };
+
   return c.json({
-    items: history.results || [],
+    items: more ? rows.slice(0, ADMIN_PAGE) : rows,
+    cursor: more ? offset + ADMIN_PAGE : null,
     followers: counts.followers || 0,
     devices: counts.devices || 0,
+  });
+});
+
+// ─── ADMIN: edit one notification ───────────────────────────
+// Corrects what the inbox shows from here on. It does NOT re-announce: the copy
+// already in an OS notification tray cannot be recalled, and a second buzz for a
+// fixed typo is how a channel teaches people to mute it.
+app.put("/api/admin/notifications/:id", authMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+
+  const title = String(body.title || "").trim();
+  if (!title) return c.json({ error: "Title is required" }, 400);
+
+  const result = await c.env.DB.prepare(
+    `UPDATE notifications SET title = ?2, body = ?3, url = COALESCE(NULLIF(?4, ''), url)
+      WHERE id = ?1`
+  )
+    .bind(
+      c.req.param("id"),
+      title.slice(0, 120),
+      String(body.body || "").slice(0, BODY_MAX),
+      String(body.url || "").trim()
+    )
+    .run();
+
+  if (!(result.meta && result.meta.changes)) return c.json({ error: "Unknown notification" }, 404);
+  return c.json({ ok: true });
+});
+
+// ─── ADMIN: delete one notification ─────────────────────────
+app.delete("/api/admin/notifications/:id", authMiddleware, async (c) => {
+  const stats = await deleteNotification(c.env.DB, c.req.param("id"));
+  if (!stats.removed) return c.json({ error: "Unknown notification" }, 404);
+  return c.json({ ok: true, ...stats });
+});
+
+// ════════════════════════════════════════════════════════════
+// ADMIN — moderation
+// ════════════════════════════════════════════════════════════
+
+/** ADMIN_LOGINS as a list of bindable tokens (numeric ids and/or login names). */
+function adminTokens(env) {
+  return String(env.ADMIN_LOGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * A SQL fragment that is FALSE for any admin identity, with its parameters.
+ *
+ * Written as SQL rather than as a JS check because the JS version would need a
+ * round trip to learn the target's login first. This way "an admin cannot be
+ * muted or banned" is a property of the statement itself.
+ *
+ * @param {string} idCol     column holding the numeric GitHub id
+ * @param {string} loginExpr expression yielding the login for that row
+ * @param {number} from      first free parameter number
+ */
+function notAdmin(env, idCol, loginExpr, from) {
+  const tokens = adminTokens(env);
+  if (tokens.length === 0) return { clause: "1", params: [] };
+  const list = tokens.map((_, i) => `?${from + i}`).join(", ");
+  return {
+    clause: `CAST(${idCol} AS TEXT) NOT IN (${list}) AND ${loginExpr} NOT IN (${list})`,
+    params: tokens,
+  };
+}
+
+/**
+ * Resolve typed GitHub ids or logins against identities this blog knows about.
+ *
+ * Followers first; moderation rows second, so an identity that was blocked and
+ * has since unfollowed still resolves to a name instead of turning back into a
+ * bare number. Nothing is asked of GitHub: an account this blog has never seen
+ * cannot receive a notification either way, so "unknown here" is the answer that
+ * matters, and it costs no subrequest and no rate limit.
+ */
+async function resolveIdentities(db, raw) {
+  const wanted = [...new Set((raw || []).map((v) => String(v).trim()).filter(Boolean))].slice(
+    0,
+    ADMIN_LOOKUP_MAX
+  );
+  if (wanted.length === 0) return { matched: [], unknown: [] };
+
+  const keys = wanted.map((v) => v.toLowerCase());
+  const list = keys.map((_, i) => `?${i + 1}`).join(", ");
+  const { results } = await db
+    .prepare(
+      `SELECT github_id AS id, login, name, 1 AS follower FROM followers
+        WHERE CAST(github_id AS TEXT) IN (${list}) OR lower(login) IN (${list})
+        UNION ALL
+       SELECT github_id AS id, login, '' AS name, 0 AS follower FROM moderation
+        WHERE (CAST(github_id AS TEXT) IN (${list}) OR lower(login) IN (${list}))
+          AND github_id NOT IN (SELECT github_id FROM followers)`
+    )
+    .bind(...keys)
+    .all();
+
+  const matched = results || [];
+  const found = new Set();
+  for (const row of matched) {
+    found.add(String(row.id));
+    found.add(String(row.login).toLowerCase());
+  }
+
+  return { matched, unknown: wanted.filter((v) => !found.has(v.toLowerCase())) };
+}
+
+// ─── ADMIN: name the ids typed into an audience field ───────
+app.post("/api/admin/lookup", authMiddleware, async (c) => {
+  let body = {};
+  try {
+    body = await c.req.json();
+  } catch {}
+  return c.json(await resolveIdentities(c.env.DB, body.ids));
+});
+
+// ─── ADMIN: followers, their devices, and the blocklists ────
+// The first page carries everything the management screen paints once — orphan
+// devices, the three blocklists, the totals — and later pages carry only more
+// followers, because that is the only part that grows.
+app.get("/api/admin/followers", authMiddleware, async (c) => {
+  const db = c.env.DB;
+  const offset = Math.max(0, Number(c.req.query("cursor")) || 0);
+  const first = offset === 0;
+
+  const statements = [
+    // Devices arrive as a JSON array from a correlated subquery over
+    // idx_devices_owner, which keeps the whole page to ONE statement — the
+    // alternative is a second round trip that cannot start until this one has
+    // returned the ids to look up.
+    db
+      .prepare(
+        `SELECT f.github_id AS id, f.login, f.name, f.created_at,
+                json_array_length(f.unread) AS unread,
+                COALESCE(m.state, '')   AS state,
+                COALESCE(m.blocked, '') AS blocked,
+                (SELECT json_group_array(json_array(
+                          d.id, d.ua, d.device, d.state, d.created_at,
+                          substr(d.endpoint, -${ENDPOINT_TAIL})))
+                   FROM push_devices d WHERE d.github_id = f.github_id) AS devices
+           FROM followers f
+           LEFT JOIN moderation m ON m.github_id = f.github_id
+          ORDER BY f.created_at DESC
+          LIMIT ?1 OFFSET ?2`
+      )
+      .bind(ADMIN_PAGE + 1, offset),
+  ];
+
+  if (first) {
+    statements.push(
+      // Subscriptions whose owner has gone. Only banned ones can be here — the
+      // daily sweep removes the rest — so this list is short by construction.
+      db.prepare(
+        `SELECT d.id, d.github_id, d.ua, d.device, d.state, d.created_at,
+                substr(d.endpoint, -${ENDPOINT_TAIL}) AS tail
+           FROM push_devices d
+          WHERE NOT EXISTS (SELECT 1 FROM followers f WHERE f.github_id = d.github_id)
+          ORDER BY d.created_at DESC`
+      ),
+      db.prepare(`SELECT github_id AS id, login, blocked FROM moderation WHERE blocked <> ''`),
+      db.prepare(
+        `SELECT (SELECT COUNT(*) FROM followers)    AS followers,
+                (SELECT COUNT(*) FROM push_devices) AS devices`
+      )
+    );
+  }
+
+  const [page, orphanRows, blockRows, totalRow] = await db.batch(statements);
+
+  const rows = page.results || [];
+  const more = rows.length > ADMIN_PAGE;
+  const items = (more ? rows.slice(0, ADMIN_PAGE) : rows).map((row) => ({
+    id: row.id,
+    login: row.login,
+    name: row.name || "",
+    created_at: row.created_at,
+    unread: row.unread || 0,
+    state: row.state || "",
+    blocked: row.blocked || "",
+    is_admin: isAdminUser({ id: row.id, login: row.login }, c.env.ADMIN_LOGINS),
+    devices: unpackDevices(row.devices),
+  }));
+
+  const body = { items, cursor: more ? offset + ADMIN_PAGE : null };
+
+  if (first) {
+    const blocklists = { posts: [], notes: [], announcements: [] };
+    for (const row of blockRows.results || []) {
+      for (const topic of String(row.blocked).split(",")) {
+        if (blocklists[topic]) blocklists[topic].push({ id: row.id, login: row.login });
+      }
+    }
+    const totals = (totalRow.results && totalRow.results[0]) || {};
+    body.orphans = orphanRows.results || [];
+    body.blocklists = blocklists;
+    body.totals = { followers: totals.followers || 0, devices: totals.devices || 0 };
+  }
+
+  return c.json(body);
+});
+
+/** json_group_array of positional device tuples → the object shape the UI reads. */
+function unpackDevices(json) {
+  if (!json) return [];
+  let rows;
+  try {
+    rows = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  return (rows || []).map(([id, ua, device, state, created_at, tail]) => ({
+    id,
+    ua,
+    device,
+    state,
+    created_at,
+    tail,
+  }));
+}
+
+// ─── ADMIN: mute / ban one follower or one device ───────────
+// `{ github_id, state }` moderates an identity, `{ device_id, state }` a single
+// subscription. Three states, mutually exclusive: '' | 'muted' | 'banned'.
+app.put("/api/admin/moderation", authMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+
+  const state = String(body.state == null ? "" : body.state);
+  if (!MODERATION_STATES.has(state)) return c.json({ error: "Unknown state" }, 400);
+
+  const db = c.env.DB;
+
+  if (body.device_id != null) {
+    const guard = notAdmin(
+      c.env,
+      "github_id",
+      "COALESCE((SELECT login FROM followers WHERE github_id = push_devices.github_id), '')",
+      3
+    );
+    const result = await db
+      .prepare(`UPDATE push_devices SET state = ?2 WHERE id = ?1 AND ${guard.clause}`)
+      .bind(Number(body.device_id) || 0, state, ...guard.params)
+      .run();
+    if (!(result.meta && result.meta.changes)) {
+      return c.json({ error: "Unknown device, or it belongs to an admin" }, 404);
+    }
+    return c.json({ ok: true, device_id: Number(body.device_id), state });
+  }
+
+  const id = Number(body.github_id) || 0;
+  if (!id) return c.json({ error: "github_id or device_id is required" }, 400);
+
+  // The login is taken from the follower row when there is one, and only falls
+  // back to what the client sent — which the admin guard must not trust alone.
+  const login = `COALESCE((SELECT login FROM followers WHERE github_id = ?1), ?3, '')`;
+  const guard = notAdmin(c.env, "?1", login, 4);
+
+  // Nothing cascades onto push_devices: a moderated identity is already dropped
+  // by the fan-out's own probe, and its devices hang off that same join. Writing
+  // a state onto each of them would be a row per device to change no outcome.
+  const [written] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO moderation (github_id, login, state)
+         SELECT ?1, ${login}, ?2 WHERE ${guard.clause}
+         ON CONFLICT(github_id) DO UPDATE SET
+           state      = excluded.state,
+           login      = COALESCE(NULLIF(excluded.login, ''), moderation.login),
+           updated_at = unixepoch()`
+      )
+      .bind(id, state, String(body.login || ""), ...guard.params),
+    // A cleared row holds nothing. Dropping it keeps the table to the identities
+    // that are actually moderated, which is what makes the fan-out's probe cheap.
+    db
+      .prepare(`DELETE FROM moderation WHERE github_id = ?1 AND state = '' AND blocked = ''`)
+      .bind(id),
+  ]);
+
+  if (!(written.meta && written.meta.changes)) {
+    return c.json({ error: "That identity is an admin" }, 403);
+  }
+  return c.json({ ok: true, github_id: id, state });
+});
+
+// ─── ADMIN: the three global blocklists ─────────────────────
+// One topic per call, sent as the WHOLE intended list. Saving a diff instead
+// would make two admins editing the same list silently merge their mistakes.
+app.put("/api/admin/blocklists", authMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+
+  const topic = String(body.topic || "");
+  if (!BLOCKLIST_TOPICS.has(topic)) return c.json({ error: "Unknown topic" }, 400);
+
+  const db = c.env.DB;
+  const [resolved, current] = await Promise.all([
+    resolveIdentities(db, body.users),
+    db
+      .prepare(
+        `SELECT github_id AS id, login, blocked FROM moderation
+          WHERE instr(',' || blocked || ',', ',' || ?1 || ',') > 0`
+      )
+      .bind(topic)
+      .all(),
+  ]);
+
+  const admins = adminTokens(c.env);
+  const wanted = new Map();
+  for (const row of resolved.matched) {
+    if (isAdminUser({ id: row.id, login: row.login }, c.env.ADMIN_LOGINS)) continue;
+    wanted.set(row.id, row.login);
+  }
+
+  const statements = [];
+  const held = new Set();
+
+  // Rows that already carry this topic: keep it, or take it away.
+  for (const row of current.results || []) {
+    held.add(row.id);
+    if (wanted.has(row.id)) continue;
+    const kept = String(row.blocked)
+      .split(",")
+      .filter((t) => t && t !== topic)
+      .join(",");
+    statements.push(
+      db
+        .prepare(`UPDATE moderation SET blocked = ?2, updated_at = unixepoch() WHERE github_id = ?1`)
+        .bind(row.id, kept)
+    );
+    statements.push(
+      db
+        .prepare(`DELETE FROM moderation WHERE github_id = ?1 AND state = '' AND blocked = ''`)
+        .bind(row.id)
+    );
+  }
+
+  // Rows that need it added. The topic list is computed in SQL from whatever the
+  // row already holds, so adding `notes` cannot drop a `posts` set by another
+  // call between the read above and this write.
+  for (const [id, login] of wanted) {
+    if (held.has(id)) continue;
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO moderation (github_id, login, blocked)
+           VALUES (?1, ?2, ?3)
+           ON CONFLICT(github_id) DO UPDATE SET
+             blocked    = CASE WHEN instr(',' || moderation.blocked || ',', ',' || ?3 || ',') > 0
+                               THEN moderation.blocked
+                               WHEN moderation.blocked = '' THEN ?3
+                               ELSE moderation.blocked || ',' || ?3 END,
+             login      = COALESCE(NULLIF(excluded.login, ''), moderation.login),
+             updated_at = unixepoch()`
+        )
+        .bind(id, login || "", topic)
+    );
+  }
+
+  if (statements.length > 0) await db.batch(statements);
+
+  return c.json({
+    ok: true,
+    topic,
+    users: [...wanted].map(([id, login]) => ({ id, login })),
+    unknown: resolved.unknown,
   });
 });
 

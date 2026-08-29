@@ -183,7 +183,6 @@ notifications:
   follow: Follow this blog
   follow_nav: Follow
   follow_blog: Follow the Blog
-  following: Following
   empty: Follow the blog to get notified about new posts.
   empty_following: Nothing yet. New posts will show up here.
   push_denied: Notifications are blocked in your browser's settings.
@@ -220,3 +219,84 @@ notifications:
   unfollow_blog: Unfollow the blog
   unfollow_confirm: Press again to unfollow
   unfollow_note: You will stop following this blog and will no longer receive push notifications on any browser. Your inbox is cleared and cannot be recovered. You stay signed in - to sign out, use the comments tab under any post.
+  blog_management: Blog Management
+  banned: Banned
+  push_device_banned: Push from this browser has been turned off by the blog owner.
+  device_banned_note: One of the browsers above has been blocked from receiving notifications by the blog owner, and cannot be removed. This usually follows misuse of the subscription. Please use the blog considerately; if you believe this is a mistake, say so in the comments under any post.
+  account_banned: Your account has been blocked
+  account_banned_note: You can stay signed in and keep commenting on posts - only the ability to subscribe to this blog has been withdrawn. If the owner has also blocked you on GitHub, commenting stops too.
+
+management:
+  title: Blog Management
+  lede: Announcements, what the notification database still holds, and every follower with the devices hanging off them.
+  checking: Checking your session...
+  denied: This page is for the blog's administrator.
+  unreachable: Couldn't reach the notification service.
+  retry: Try again
+  announce: Send an announcement
+  audience: Audience
+  aud_all: Everyone
+  aud_only: Only these
+  aud_except: Everyone except
+  aud_topic: By topic
+  aud_all_hint: Every follower receives this.
+  aud_only_hint: Only the readers listed here receive this.
+  aud_except_hint: Every follower except the readers listed here.
+  aud_placeholder: GitHub login or numeric id, then Enter
+  chip_unknown: Not a known reader
+  chip_error: Lookup failed
+  remove: Remove
+  f_title: Title
+  f_body: What happened, in a sentence or two
+  f_url: Link - where pressing the notification goes
+  post: Post announcement
+  send_ok: Sent
+  send_failed: Not sent
+  offline: The Worker did not answer.
+  r_id: Id
+  r_recipients: Inboxes written
+  r_devices: Push devices
+  r_messages: Queue messages
+  r_audience: Audience
+  r_matched: Matched
+  r_ignored: Ignored
+  r_skipped: Already sent
+  r_absorbed: Absorbed
+  r_absorbed_v: recorded, not delivered
+  notifications: Notification list
+  f_announcements: Announcements
+  f_posts: Posts
+  f_notes: Notes
+  f_all: All
+  m_inboxes: inboxes
+  m_devices: devices
+  m_unread: unread
+  m_blocked: Blocked
+  edit: Edit
+  delete: Delete
+  save: Save
+  cancel: Cancel
+  edit_hint: Editing changes the inbox copy only. Nothing is pushed again.
+  no_notifications: Nothing in the database for this filter.
+  load_more: Load more
+  followers: Followers
+  blocklists: Global blocklists
+  blocklists_hint: Anyone listed here is skipped for that kind of notification, silently and everywhere. Saved as soon as an entry resolves.
+  topic_posts: New posts
+  topic_notes: Instant notes
+  topic_announcements: Announcements
+  moderation_notice: Muting or banning here only affects notifications. It does not stop anyone commenting on the blog - comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation.
+  moderation_docs: GitHub docs
+  no_followers: Nobody follows the blog yet.
+  no_devices: No push device registered.
+  subscribed: Subscribed
+  banned: Banned
+  muted: Muted
+  admin: Admin
+  mute: Mute
+  unmute: Unmute
+  ban: Ban
+  unban: Unblock
+  confirm: Press again
+  orphans: Unowned devices
+  orphans_hint: Subscriptions whose owner unfollowed. Only banned ones are kept - the daily sweep removes the rest.

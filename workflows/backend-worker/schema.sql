@@ -53,11 +53,15 @@ CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);
 -- Notifications  (rebuilt)
 -- ════════════════════════════════════════════════════════════
 
+-- This file REBUILDS. A database that already has followers and live push
+-- subscriptions is brought forward with the numbered files in migrations/
+-- instead — running this against it would delete data no reader can recreate.
 DROP TABLE IF EXISTS outbox;
 DROP TABLE IF EXISTS deliveries;
 DROP TABLE IF EXISTS notifications;
 DROP TABLE IF EXISTS push_devices;
 DROP TABLE IF EXISTS followers;
+DROP TABLE IF EXISTS moderation;
 DROP TABLE IF EXISTS settings;
 
 -- One row per GitHub identity, created the first time a reader follows.
@@ -81,12 +85,17 @@ DROP TABLE IF EXISTS settings;
 -- Deliberately carries NO secondary index. Every index here would be a second
 -- row written per recipient per broadcast, and nothing queries followers by
 -- anything but the primary key or a full scan that has to happen anyway.
+-- `name` is the GitHub display name, carried in the session token and stored on
+-- upsert. `avatar` is NOT stored: it is derivable from the id
+-- (avatars.githubusercontent.com/u/<id>), so holding a copy would only let it
+-- go stale.
 CREATE TABLE followers (
   github_id   INTEGER PRIMARY KEY,
   login       TEXT    NOT NULL,
+  name        TEXT    NOT NULL DEFAULT '',
   avatar      TEXT    NOT NULL DEFAULT '',
   topics      TEXT    NOT NULL DEFAULT '',     -- comma-separated; '' means all
-  muted_until INTEGER,                          -- unix epoch, NULL when not muted
+  muted_until INTEGER,                         -- unix epoch, NULL when not muted
   unread      TEXT    NOT NULL DEFAULT '[]',
   seen        TEXT    NOT NULL DEFAULT '[]',
   created_at  INTEGER NOT NULL DEFAULT (unixepoch())
@@ -112,10 +121,14 @@ CREATE TABLE followers (
 -- here. Empty means the client declined to guess, which the panel shows as
 -- "Unknown" rather than picking one.
 --
--- Existing databases take it as a migration rather than a rebuild — this table
+-- `state` is admin moderation of ONE subscription: '' | 'muted' | 'banned'.
+-- Both stop the fan-out from selecting the row; only 'banned' is shown to its
+-- owner, and only 'banned' survives an unfollow — otherwise leaving and
+-- re-following would shed the ban with one click. See migrations/.
+--
+-- Existing databases take these as migrations rather than a rebuild — this table
 -- holds live subscriptions that cannot be recreated without every reader
--- re-granting permission:
---   ALTER TABLE push_devices ADD COLUMN device TEXT NOT NULL DEFAULT '';
+-- re-granting permission.
 CREATE TABLE push_devices (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   github_id  INTEGER NOT NULL,
@@ -124,6 +137,7 @@ CREATE TABLE push_devices (
   auth       TEXT    NOT NULL,
   ua         TEXT    NOT NULL DEFAULT '',
   device     TEXT    NOT NULL DEFAULT '',
+  state      TEXT    NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -158,3 +172,27 @@ CREATE TABLE notifications (
 );
 
 CREATE INDEX idx_notifications_recent ON notifications(created_at DESC);
+
+-- ════════════════════════════════════════════════════════════
+-- Moderation
+-- ════════════════════════════════════════════════════════════
+
+-- Everything an admin decides ABOUT a reader, kept apart from the reader's own
+-- row so that unfollowing — which deletes that row and is the reader's own
+-- privacy switch — cannot also clear a ban.
+--
+--   state    '' | 'muted' | 'banned'. Both stop delivery; only 'banned' is
+--            visible to the reader and blocks their writes.
+--   blocked  comma-separated TOPICS this reader is excluded from
+--            (posts, notes, announcements) — the global per-type blocklists.
+--   login    kept so the admin list can name someone who has since unfollowed.
+--
+-- A row exists only for a moderated identity, so this table stays in the tens of
+-- rows and the fan-out's NOT EXISTS against it is a primary-key probe.
+CREATE TABLE moderation (
+  github_id  INTEGER PRIMARY KEY,
+  login      TEXT    NOT NULL DEFAULT '',
+  state      TEXT    NOT NULL DEFAULT '',
+  blocked    TEXT    NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);

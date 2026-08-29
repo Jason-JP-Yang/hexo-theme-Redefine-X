@@ -53,7 +53,7 @@ const UNITS = [
  * epoch in seconds (device rows, which it does not — formatting them server-side
  * would spend a Worker's CPU on something the browser does for free).
  */
-function timeAgo(value) {
+export function timeAgo(value) {
   const then = typeof value === "number" ? value * 1000 : new Date(value).getTime();
   const strings = window.lang_ago || {};
   if (isNaN(then)) return "";
@@ -69,7 +69,7 @@ function timeAgo(value) {
   return "";
 }
 
-function escapeHTML(value) {
+export function escapeHTML(value) {
   return String(value == null ? "" : value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -332,6 +332,8 @@ export function setPage(name, animate = true) {
 // shared between the pages and has to be re-decided on a page switch, which is
 // not a re-render.
 let canMarkRead = false;
+// A blocked identity has one page, not two, so the head loses the way back.
+let isBanned = false;
 
 function syncHead(panel) {
   const manage = currentPage === "manage";
@@ -343,7 +345,7 @@ function syncHead(panel) {
       ? t("manage_title", "Manage subscription")
       : t("title", "Notifications");
   }
-  if (back) back.hidden = !manage;
+  if (back) back.hidden = !manage || isBanned;
   if (markRead) markRead.hidden = manage || !canMarkRead;
 }
 
@@ -519,7 +521,7 @@ function matchFirst(table, ua) {
  * that column existed fall back to what the UA can still prove, which is mobile
  * versus tablet versus "some desktop-class machine".
  */
-function describeDevice(row) {
+export function describeDevice(row) {
   const ua = String(row.ua || "");
   let kind = String(row.device || "").toLowerCase();
 
@@ -544,9 +546,13 @@ function describeDevice(row) {
 function deviceHTML(row, isThis) {
   const info = describeDevice(row);
   const when = timeAgo(row.created_at);
+  const banned = !!row.banned;
 
+  // A banned subscription loses its remove button, and the Worker refuses the
+  // delete either way: revoking the row and re-subscribing the same browser
+  // would otherwise walk straight out of the ban.
   return `
-    <li class="np-device${isThis ? " is-this" : ""}">
+    <li class="np-device${isThis ? " is-this" : ""}${banned ? " is-banned" : ""}">
       <span class="np-device-icon"><i class="${info.icon}" aria-hidden="true"></i></span>
       <span class="np-device-main">
         <span class="np-device-title">${escapeHTML(info.browser)}<span class="np-sep"></span>${escapeHTML(
@@ -555,15 +561,23 @@ function deviceHTML(row, isThis) {
           isThis
             ? `<span class="np-device-tag">${escapeHTML(t("this_browser", "This browser"))}</span>`
             : ""
+        }${
+          banned
+            ? `<span class="np-device-tag is-banned">${escapeHTML(t("banned", "Banned"))}</span>`
+            : ""
         }</span>
         <span class="np-device-time">${escapeHTML(
           when ? `${t("subscribed", "Subscribed")} ${when}` : t("subscribed", "Subscribed")
         )}</span>
       </span>
-      <button type="button" class="np-device-remove" data-device="${escapeHTML(row.id)}"
+      ${
+        banned
+          ? ""
+          : `<button type="button" class="np-device-remove" data-device="${escapeHTML(row.id)}"
               aria-label="${escapeHTML(t("remove_device", "Remove this device"))}">
         <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
-      </button>
+      </button>`
+      }
     </li>`;
 }
 
@@ -594,8 +608,17 @@ function switchHTML({ key, label, hint, on, locked = false, disabled = false }) 
     </div>`;
 }
 
+/** Is THIS browser's own subscription the one an admin has banned? */
+function thisDeviceBanned(state) {
+  const tail = state.endpointTail || "";
+  return !!tail && (state.devices || []).some((d) => d.tail === tail && d.banned);
+}
+
 /** Why the push switch cannot be turned on here, or "" when it can. */
 function pushBlocker(state) {
+  if (thisDeviceBanned(state)) {
+    return t("push_device_banned", "Push from this browser has been turned off by the blog owner.");
+  }
   if (state.pushState === "denied") {
     return t("push_denied", "Blocked in your browser's settings.");
   }
@@ -609,6 +632,36 @@ function pushBlocker(state) {
     return t("push_ios", "On iPhone, add this site to your Home Screen first.");
   }
   return "";
+}
+
+// ─── the banned account ──────────────────────────────────────
+/**
+ * What a banned reader sees instead of the settings.
+ *
+ * The page underneath is still rendered — blurred, clipped, and `inert`, so it
+ * reads as a card that has been taken away rather than a feature that was never
+ * there. Nothing in it can be focused or pressed, and the Worker refuses every
+ * write from this identity anyway; the only live control is Log out, which sits
+ * on top of the veil rather than under it.
+ */
+function bannedHTML() {
+  return `
+    <div class="np-banned">
+      <i class="fa-solid fa-ban" aria-hidden="true"></i>
+      <p class="np-banned-title">${escapeHTML(
+        t("account_banned", "Your account has been blocked")
+      )}</p>
+      <p class="np-banned-note">${escapeHTML(
+        t(
+          "account_banned_note",
+          "You can stay signed in and keep commenting on posts — only the ability to subscribe to this blog has been withdrawn. If the owner has also blocked you on GitHub, commenting stops too."
+        )
+      )}</p>
+      <button type="button" class="np-quiet np-logout">
+        <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+        <span class="np-btn-label">${escapeHTML(t("logout", "Log out from this browser"))}</span>
+      </button>
+    </div>`;
 }
 
 // ─── the management page ─────────────────────────────────────
@@ -635,7 +688,9 @@ function renderManage(panel, state) {
       key: "push",
       label: t("opt_push", "Receive push notifications from this browser"),
       hint: blocked || t("opt_push_hint", "Registers this browser as a push device."),
-      on: !!state.pushHere,
+      // A banned browser reads as OFF whatever the database still holds for it,
+      // because off is what it now behaves like.
+      on: !!state.pushHere && !thisDeviceBanned(state),
       disabled: !!blocked,
     }),
   ];
@@ -682,6 +737,21 @@ function renderManage(panel, state) {
         t("no_devices", "No browser is registered for push yet.")
       )}</p>`;
 
+  // Said once, under the list, and only when there is something to say. A banned
+  // device is the one moderation state the reader is told about, so it has to
+  // come with the reason and with what to do about it.
+  const bannedNote = devices.some((d) => d.banned)
+    ? `<p class="np-alert">
+         <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+         <span>${escapeHTML(
+           t(
+             "device_banned_note",
+             "One of the browsers above has been blocked from receiving notifications by the blog owner, and cannot be removed. This usually follows abuse of the subscription. Please use the blog considerately; if you believe this is a mistake, get in touch through the comments."
+           )
+         )}</span>
+       </p>`
+    : "";
+
   host.innerHTML = `
     <section class="np-section">
       <h3 class="np-section-title">${escapeHTML(t("section_delivery", "What you receive"))}</h3>
@@ -694,6 +764,7 @@ function renderManage(panel, state) {
         <span class="np-count">${devices.length}</span>
       </h3>
       ${list}
+      ${bannedNote}
     </section>
 
     <section class="np-section np-danger">
@@ -724,6 +795,18 @@ function renderManage(panel, state) {
       <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
       <span class="np-btn-label">${escapeHTML(t("back_to_inbox", "Back to notifications"))}</span>
     </button>`;
+
+  if (!state.banned) return;
+
+  // Everything written above becomes the backdrop: wrapped, clipped, blurred and
+  // taken out of the tab order in one move.
+  const veiled = document.createElement("div");
+  veiled.className = "np-veiled";
+  veiled.setAttribute("inert", "");
+  veiled.setAttribute("aria-hidden", "true");
+  while (host.firstChild) veiled.appendChild(host.firstChild);
+  host.appendChild(veiled);
+  host.insertAdjacentHTML("beforeend", bannedHTML());
 }
 
 // ─── render ──────────────────────────────────────────────────
@@ -755,12 +838,17 @@ export function render(state) {
   const following = state.phase === "following";
 
   panel.classList.toggle("is-busy", !!state.busy);
+  isBanned = !!state.banned;
+  panel.classList.toggle("is-banned", isBanned);
   setBadge(state.unread || 0);
-  canMarkRead = following && state.unread > 0;
+  canMarkRead = following && state.unread > 0 && !isBanned;
 
   // Settings belong to a follower. Anyone else who somehow lands on that page —
-  // a session that expired while it was open — is put back on the inbox.
-  if (!following && currentPage === "manage") setPage("inbox");
+  // a session that expired while it was open — is put back on the inbox. A
+  // blocked identity is pushed the other way and held there: the inbox is the
+  // one thing they have no business acting on.
+  if (isBanned) setPage("manage");
+  else if (!following && currentPage === "manage") setPage("inbox");
   else syncHead(panel);
 
   // ── inbox body ──
@@ -837,7 +925,9 @@ export function render(state) {
   foot.innerHTML = parts.join("");
 
   // ── management page ──
-  if (following) renderManage(panel, state);
+  // Also for a blocked identity that is no longer a follower: the veil is the
+  // only page they get, and an empty one would say nothing.
+  if (following || isBanned) renderManage(panel, state);
 
   fitViewport(isOpen());
 }
