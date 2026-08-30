@@ -31,9 +31,10 @@ import { Picker, avatarOf } from "../tools/chipPicker.js";
 import {
   b64urlToBytes,
   importAesKey,
-  openText,
+  openJSON,
   fetchSealed,
   vaultPrefix,
+  siteRoot,
 } from "../tools/vaultCrypto.js";
 
 // The morph used for inline editing: content fades out, the box resizes, content
@@ -969,9 +970,9 @@ function renderVaultShell(section) {
 
 /**
  * The Worker stores no metadata for an encrypted post — only its key. An admin
- * holds every key, so the panel decrypts each post's own card blob to learn its
- * title, date and taxonomy. Nothing readable is ever added to the database for
- * the sake of this list.
+ * holds every key, so the panel decrypts each post's own `c.bin` (the same
+ * record every listing on the site is built from) and reads its `meta` field.
+ * Nothing readable is ever added to the database for the sake of this list.
  */
 async function hydrateVaultMeta(rows) {
   await Promise.all(
@@ -980,21 +981,18 @@ async function hydrateVaultMeta(rows) {
       row.meta = {};
       try {
         const key = await importAesKey(b64urlToBytes(row.key));
-        const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/c.html`);
+        const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/c.bin`);
         if (!sealed) return;
-        const holder = document.createElement("div");
-        holder.innerHTML = await openText(key, sealed);
-        const card = holder.firstElementChild;
-        if (!card) return;
+        const meta = (await openJSON(key, sealed)).meta || {};
         row.meta = {
-          title: card.querySelector(".home-article-title a")?.textContent.trim() || "",
-          date: card.querySelector("[data-date]")?.dataset.date || "",
-          category: card.querySelector(".home-article-eyebrow")?.textContent.trim() || "",
-          tags: Array.from(card.querySelectorAll(".home-article-tag a"), (a) => a.textContent.trim()),
-          excerpt: card.querySelector(".home-article-content")?.textContent.trim().slice(0, 150) || "",
+          title: meta.title || "",
+          date: meta.date || "",
+          category: (meta.categories || []).map((c) => c.name).join(" / "),
+          tags: (meta.tags || []).map((t2) => t2.name),
+          excerpt: (meta.excerpt || "").slice(0, 150),
         };
       } catch (err) {
-        /* a post whose key no longer opens its card still lists by slug */
+        /* a post whose key no longer opens its record still lists by slug */
       }
     })
   );
@@ -1219,21 +1217,26 @@ function showGate(kind) {
   gate.hidden = false;
   panel.hidden = true;
 
+  // Waiting is the encrypted-post gate's card, verbatim; the two outcomes are
+  // the console's own, because only one of them is about access at all.
+  if (kind === "loading") {
+    gate.innerHTML = `<div class="access-probe" role="status">
+      <div class="access-probe-lock"><i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i></div>
+      <p class="access-probe-text">${escapeHTML(t("checking", "Checking your session…"))}</p>
+      <div class="access-probe-bar"><span></span></div></div>`;
+    return;
+  }
+
   const copy = {
-    loading: ["fa-circle-notch fa-spin", t("checking", "Checking your session…")],
     denied: ["fa-lock", t("denied", "This page is for the blog's administrator.")],
     error: ["fa-plug-circle-xmark", t("unreachable", "Couldn't reach the notification service.")],
   }[kind];
 
   gate.innerHTML = `<i class="fa-solid ${copy[0]}" aria-hidden="true"></i>
     <p class="bm-gate-text">${escapeHTML(copy[1])}</p>
-    ${
-      kind === "loading"
-        ? ""
-        : `<button type="button" class="bm-quiet bm-retry">
-             <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
-             <span class="np-btn-label">${e("retry", "Try again")}</span></button>`
-    }`;
+    <button type="button" class="bm-quiet bm-retry">
+      <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+      <span class="np-btn-label">${e("retry", "Try again")}</span></button>`;
 }
 
 function wire() {
@@ -1363,5 +1366,20 @@ export function initBlogManagement() {
   // The page lives INSIDE #swup, so this element is new markup on every visit —
   // the listener goes with it and nothing has to be torn down.
   wire();
+  wireSignOut();
   boot();
+}
+
+/** Every panel here is data this browser is no longer entitled to. Same answer
+ *  as an encrypted post: leave, without leaving a Back entry to return by. */
+let signOutWired = false;
+
+function wireSignOut() {
+  if (signOutWired) return;
+  signOutWired = true;
+  window.addEventListener("blog:auth-change", async () => {
+    if (!document.getElementById("blog-management")) return;
+    const session = window.blogAuth && (await window.blogAuth.getSession());
+    if (!session || !session.token) location.replace(siteRoot() + "/");
+  });
 }

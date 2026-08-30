@@ -2,19 +2,19 @@
     // The whole public surface of an encrypted post: the slug and nothing else.
     // No title, no date, no tags, no excerpt, no cover.
     //
-    // It opens on the unlocking card rather than on the not-found page — a 404
+    // It opens on the access probe rather than on the not-found page — a 404
     // that flashes before the article arrives reads as a broken link. The
     // not-found page is what an unauthorized visitor lands on instead, so a
     // correct slug still cannot be told apart from a mistyped one.
+    //
+    // There is no signed-out state. Losing authorization mid-read navigates
+    // home: the plaintext is in the DOM, and the only correct thing to do with
+    // it is leave the page that is holding it.
 %>
 <div class="vault-gate" data-vault-slug="<%= page.vault_slug %>" data-vault-state="probing">
 
-    <div class="vault-gate-card" role="status">
-        <div class="vault-gate-lock">
-            <i class="fa-solid fa-lock-keyhole"></i>
-        </div>
-        <p class="vault-gate-text"><%= __('vault.unlocking') %></p>
-        <div class="vault-gate-bar"><span></span></div>
+    <div class="vault-gate-probe">
+        <%- partial('components/access-probe', { text: __('vault.unlocking') }) %>
     </div>
 
     <div class="vault-gate-notfound" hidden>
@@ -22,16 +22,4 @@
     </div>
 
     <div class="vault-article-host"></div>
-
-    <div class="vault-signout" hidden>
-        <div class="vault-signout-card">
-            <i class="fa-solid fa-arrow-right-from-bracket"></i>
-            <h2><%= __('vault.signed_out') %></h2>
-            <p><%= __('vault.signed_out_hint') %></p>
-            <a class="vault-signout-home" href="<%- url_for('/') %>">
-                <i class="fa-solid fa-house"></i><%= __('vault.go_home') %>
-                <span class="vault-signout-count"></span>
-            </a>
-        </div>
-    </div>
 </div>

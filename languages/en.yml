@@ -178,7 +178,6 @@ notifications:
   close: Close
   back: Back
   mark_read: Mark all read
-  signed_out: Sign in with GitHub to follow this blog.
   sign_in: Sign in with GitHub
   follow: Follow this blog
   follow_nav: Follow
@@ -324,6 +323,8 @@ vault:
   unlocking: Checking your access
   badge: Encrypted
   authorized: You have been granted access to this encrypted post
-  signed_out: Signed out
-  signed_out_hint: This post is encrypted, and the key was released to your session only. Sign in again to keep reading.
-  go_home: Back to the home page
+  list_tag: Encrypted posts tagged
+  list_category: Encrypted posts in
+  list_empty: No encrypted post here is readable by this identity.
+  no_comments: Comments are closed on encrypted posts
+  no_comments_hint: A public thread under a post only some readers can open would put its title and its substance back in the open.

@@ -1,0 +1,84 @@
+// ========================================================================================
+//                                     ACCESS PROBE
+// ========================================================================================
+// The card the theme shows while a Worker decides what this identity may see.
+// One implementation, three callers: the encrypted-post gate, the taxonomy gate
+// and the management console. A second spinner somewhere else would read as a
+// different kind of wait for what is the same one.
+//
+// Material: BASE tier only. Nothing here floats over live content.
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+.access-probe
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 18px
+  min-height 58vh
+  padding 40px 20px
+
+.access-probe-lock
+  display flex
+  align-items center
+  justify-content center
+  width 62px
+  height 62px
+  border 1px solid var(--border-color)
+  border-radius 50%
+  background var(--second-background-color)
+  font-size 1.35rem
+  color var(--primary-color)
+  animation access-probe-breathe 2.4s ease-in-out infinite
+
+.access-probe-text
+  margin 0
+  max-width 40ch
+  font-size 0.9rem
+  font-weight 500
+  letter-spacing 0.01em
+  text-align center
+  color var(--third-text-color)
+
+.access-probe-bar
+  position relative
+  overflow hidden
+  width 168px
+  height 3px
+  border-radius 999px
+  background var(--third-background-color-transparent)
+
+  span
+    position absolute
+    top 0
+    left 0
+    width 42%
+    height 100%
+    border-radius inherit
+    background var(--primary-color)
+    animation access-probe-sweep 1.25s cubic-bezier(0.65, 0, 0.35, 1) infinite
+
+// The console frames its own waits, so the card sits inside a panel there rather
+// than taking over the page the way a gate does.
+.bm-gate .access-probe
+  min-height 0
+  padding 0
+
+@keyframes access-probe-breathe
+  0%, 100%
+    transform scale(1)
+    opacity 0.72
+  50%
+    transform scale(1.06)
+    opacity 1
+
+@keyframes access-probe-sweep
+  0%
+    transform translateX(-110%)
+  100%
+    transform translateX(270%)
+
+@media (prefers-reduced-motion: reduce)
+  .access-probe-lock,
+  .access-probe-bar span
+    animation none

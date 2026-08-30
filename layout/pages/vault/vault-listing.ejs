@@ -1,0 +1,22 @@
+<%
+    // The taxonomy gate. ONE page in the whole build, and it names nothing:
+    // which tag or category it is showing arrives as a hash in the URL fragment,
+    // which no server ever sees and which a forwarded link does not disclose.
+    //
+    // Everything below the gate is drawn by the client from the metadata it has
+    // already decrypted, so no listing has to be pre-generated per taxonomy —
+    // and no taxonomy that exists only inside an encrypted post can be inferred
+    // from the shape of public/.
+%>
+<div class="vault-gate vault-listing" data-vault-listing="1" data-vault-state="probing">
+
+    <div class="vault-gate-probe">
+        <%- partial('components/access-probe', { text: __('vault.unlocking') }) %>
+    </div>
+
+    <div class="vault-gate-notfound" hidden>
+        <%- partial('pages/notfound/notfound') %>
+    </div>
+
+    <div class="vault-listing-host"></div>
+</div>

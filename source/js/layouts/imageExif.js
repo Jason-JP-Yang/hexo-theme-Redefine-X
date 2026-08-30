@@ -499,6 +499,9 @@
 
   document.addEventListener('swup:contentReplaced', initImageExif);
   document.addEventListener('pjax:complete', initImageExif);
+  // Content decrypted into a page that is already open never reaches Swup's
+  // `page:view`; plugins/vault.js announces it here instead.
+  window.addEventListener('redefine:content-injected', initImageExif);
   try {
     if (typeof swup !== 'undefined' && swup?.hooks?.on) {
       swup.hooks.on('page:view', () => {

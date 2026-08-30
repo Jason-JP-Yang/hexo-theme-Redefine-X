@@ -53,6 +53,11 @@ function load() {
   return state;
 }
 
+// Written by hand into .vault/keys.json to retire a post's key. The slug is NOT
+// reissued: links already handed out keep working, and the point of the exercise
+// is that the old ciphertext stops opening.
+const REKEY_FLAGS = new Set(["regenerate", "regen"]);
+
 /**
  * The key and slug for a post, minting them on first sight.
  * @returns {{key: Buffer, slug: string, fresh: boolean}}
@@ -60,6 +65,18 @@ function load() {
 function ensurePost(id, title) {
   const s = load();
   let entry = s.keys[id];
+
+  let rekeyed = false;
+  if (entry && REKEY_FLAGS.has(String(entry.registered).toLowerCase())) {
+    entry.key = vc.b64url(vc.randomKey());
+    rekeyed = true;
+    // Back to unregistered: D1 still holds the OLD wrapped key, so until the
+    // new activation line is pasted, nobody — the author included — can open
+    // this post. `report()` prints that line at the end of the build.
+    entry.registered = false;
+    s.dirty = true;
+    s.minted.push(id);
+  }
 
   if (!entry) {
     entry = {
@@ -83,7 +100,7 @@ function ensurePost(id, title) {
   if (key.length !== vc.KEY_BYTES) {
     fail(`.vault/keys.json entry "${id}" has a malformed key.`);
   }
-  return { key, slug: entry.slug, fresh: s.minted.includes(id) };
+  return { key, slug: entry.slug, fresh: s.minted.includes(id), rekeyed };
 }
 
 function flush() {

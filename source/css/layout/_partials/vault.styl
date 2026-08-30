@@ -16,147 +16,15 @@ $vault-radius = 14px
 // the table of contents column, the content width, the table styling — and two
 // extra wrappers in between silently defeated all of it. `display: contents`
 // puts the decrypted article exactly where a public post's markup sits.
+//
+// The waiting card itself is shared with the management console; it lives in
+// _partials/access-probe.styl. Losing authorization mid-read has no state here
+// at all — the page navigates home instead (plugins/vault.js).
 .vault-gate[data-vault-state="open"]
   display contents
 
   .vault-article-host
     display contents
-
-// It opens on the unlocking card, never on the not-found page: a 404 that
-// flashes before the article arrives reads as a broken link.
-.vault-gate-card
-  display flex
-  flex-direction column
-  align-items center
-  justify-content center
-  gap 18px
-  min-height 58vh
-  padding 40px 20px
-
-.vault-gate-lock
-  display flex
-  align-items center
-  justify-content center
-  width 62px
-  height 62px
-  border 1px solid var(--border-color)
-  border-radius 50%
-  background var(--second-background-color)
-  font-size 1.35rem
-  color var(--primary-color)
-  animation vault-breathe 2.4s ease-in-out infinite
-
-.vault-gate-text
-  margin 0
-  font-size 0.9rem
-  font-weight 500
-  letter-spacing 0.01em
-  color var(--third-text-color)
-
-.vault-gate-bar
-  position relative
-  overflow hidden
-  width 168px
-  height 3px
-  border-radius 999px
-  background var(--third-background-color-transparent)
-
-  span
-    position absolute
-    top 0
-    left 0
-    width 42%
-    height 100%
-    border-radius inherit
-    background var(--primary-color)
-    animation vault-sweep 1.25s cubic-bezier(0.65, 0, 0.35, 1) infinite
-
-@keyframes vault-breathe
-  0%, 100%
-    transform scale(1)
-    opacity 0.72
-  50%
-    transform scale(1.06)
-    opacity 1
-
-@keyframes vault-sweep
-  0%
-    transform translateX(-110%)
-  100%
-    transform translateX(270%)
-
-// ─── signed out mid-read ────────────────────────────────────
-// The plaintext is removed rather than hidden, and the page says why instead of
-// silently turning into a 404 under the reader.
-.vault-signout
-  display flex
-  align-items center
-  justify-content center
-  min-height 62vh
-  padding 40px 20px
-
-.vault-signout-card
-  display flex
-  flex-direction column
-  align-items center
-  gap 12px
-  max-width 420px
-  padding 34px 30px
-  border 1px solid var(--border-color)
-  border-radius 18px
-  background var(--second-background-color)
-  text-align center
-
-  > i
-    font-size 1.6rem
-    color var(--primary-color)
-
-  h2
-    margin 0
-    font-size 1.35rem
-    font-weight 650
-    color var(--second-text-color)
-
-  p
-    margin 0
-    font-size 0.84rem
-    line-height 1.6
-    color var(--third-text-color)
-
-.vault-signout-home
-  display inline-flex
-  align-items center
-  gap 8px
-  margin-top 8px
-  padding 9px 18px
-  border-radius 999px
-  background var(--primary-color)
-  font-size 0.82rem
-  font-weight 600
-  color var(--background-color)
-  transition transform 0.2s ease, opacity 0.2s ease
-
-  &:hover
-    transform translateY(-1px)
-    opacity 0.92
-
-.vault-signout-count
-  opacity 0.7
-  font-variant-numeric tabular-nums
-
-// Everything but the navbar goes inert behind the notice — the same treatment
-// the notification panel gives a banned account. Driven by a class on <html>
-// rather than a sibling selector, because the gate is an only child and had
-// nothing to select.
-html.vault-locked
-  .main-content-footer,
-  .post-tools,
-  .right-side-tools-container,
-  .home-banner
-    filter blur(6px) saturate(0.6)
-    pointer-events none
-    user-select none
-    transition filter 0.4s ease
 
 // ─── the authorized badge ───────────────────────────────────
 // Sits where the sticky badge sits: the same kind of statement about the card,
@@ -387,3 +255,129 @@ html.vault-locked
   margin-top 6px
   padding-top 12px
   border-top 1px dashed var(--border-color)
+
+// ─── the audience field's own box ───────────────────────────
+// It sits OUTSIDE `.article-content` for a reason (plugins/vault.js): inside it,
+// `.markdown-body img` — display:block, width:auto, a 1rem margin and a zoom
+// cursor — outranks the chip avatar and turns each reader into a full-width
+// photograph. This is the belt to that braces, in case the box ever moves back.
+.vault-admin
+  .bm-chip-avatar
+    display inline-block
+    width 18px
+    height 18px
+    max-height none
+    margin 0
+    border-radius 50%
+    cursor inherit
+
+// ─── decrypted rows in a listing ────────────────────────────
+// Archive, tag page, category page and the taxonomy gate all render through
+// utils/posts-list, so one rule covers every one of them. The timeline node is
+// recoloured rather than displaced: an inset or a border on the row would move
+// the dot out of line with the public rows above it.
+.vault-archive-link
+  .article-title
+    color var(--primary-color)
+
+    &::after
+      background var(--primary-color)
+      border-color var(--primary-color)
+
+.vault-archive-lock
+  margin-right 7px
+  font-size 0.66em
+  vertical-align middle
+  opacity 0.9
+
+// ─── a taxonomy only encrypted posts carry ──────────────────
+// No page for it exists in the public build, so the chip points at the taxonomy
+// gate and says as much: primary outline, and the same lock the cards carry.
+.vault-tax-link
+  border 1px solid var(--primary-color)
+
+  &.all-category-list-link
+    border none
+    color var(--primary-color)
+
+.vault-tax-lock
+  margin-right 6px
+  font-size 0.72em
+  color var(--primary-color)
+
+// ─── the taxonomy gate ──────────────────────────────────────
+.vault-listing-head
+  display flex
+  flex-direction column
+  gap 4px
+  margin 0 0 26px
+
+.vault-listing-kind
+  font-size 0.78rem
+  font-weight 600
+  letter-spacing 0.04em
+  text-transform uppercase
+  color var(--third-text-color)
+
+.vault-listing-name
+  display flex
+  align-items center
+  gap 12px
+  margin 0
+  font-size 2.4rem
+  font-weight 700
+  letter-spacing -0.02em
+  color var(--second-text-color)
+
+  i
+    font-size 1.4rem
+    color var(--primary-color)
+
+.vault-listing-empty
+  margin 0
+  padding 28px 0
+  font-size 0.9rem
+  color var(--third-text-color)
+
+// ─── the article's own wrappers ─────────────────────────────
+// The article body is inset by a Tailwind utility on `.article-content`, not by
+// a width on the container, so anything mounted beside it has to carry the same
+// utility or it runs to the very edge of the card.
+.vault-admin-wrap
+  margin-top 28px
+  margin-bottom 4px
+
+// ─── comments are not offered ───────────────────────────────
+// A public discussion thread under a post only some readers can open would put
+// the title, the participants and the substance back in the open. The notice
+// says so, in the theme's ordinary card language.
+.vault-no-comments
+  display flex
+  align-items flex-start
+  gap 14px
+  padding 18px 20px
+  border 1px solid var(--border-color)
+  border-radius $vault-radius
+  background var(--second-background-color)
+
+  > i
+    flex-shrink 0
+    margin-top 2px
+    font-size 1rem
+    color var(--primary-color)
+
+.vault-no-comments-body
+  display flex
+  flex-direction column
+  gap 3px
+  min-width 0
+
+  strong
+    font-size 0.92rem
+    font-weight 620
+    color var(--second-text-color)
+
+  span
+    font-size 0.82rem
+    line-height 1.6
+    color var(--third-text-color)

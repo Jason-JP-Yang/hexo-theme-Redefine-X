@@ -39,8 +39,12 @@ export function initTocToggle() {
       this.toggleClassName(this.mainContentDom, "has-toc", isOpen);
     },
 
+    // The toggle lives in the post tools rail, which not every page carrying an
+    // article puts on screen. Reaching straight through it threw, and the throw
+    // took the rest of the article's wiring — the table of contents itself
+    // included — down with it.
     pageAsideHandleOfTOC(isOpen) {
-      this.toggleBar.style.display = "flex";
+      if (this.toggleBar) this.toggleBar.style.display = "flex";
       this.isOpenPageAside = isOpen;
       this.changePageLayoutWhenOpenToggle(isOpen);
     },

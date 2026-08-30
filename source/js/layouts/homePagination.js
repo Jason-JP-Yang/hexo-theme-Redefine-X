@@ -73,6 +73,33 @@ const state = {
   globalWired: false,
 };
 
+/**
+ * Encrypted posts, if this reader has any, are not in the markup the server
+ * sends for a page — plugins/vault.js registers here so the arrangement it holds
+ * can be folded into a page turn instead of landing as a second, visible reflow
+ * after it.
+ *
+ * Two steps rather than one, deliberately. The hook is AWAITED while the
+ * previous page is still on screen and returns a SYNCHRONOUS applier, which runs
+ * on the incoming list while it is still off-document. Doing the fetching after
+ * the insertion would hand the browser a paint in which the new cards are flat,
+ * visible, and about to be flipped.
+ */
+let vaultHook = null;
+
+export function setHomeVaultHook(fn) {
+  vaultHook = fn;
+}
+
+async function prepareVault(list) {
+  if (!vaultHook) return null;
+  try {
+    return await vaultHook(list);
+  } catch (e) {
+    return null;
+  }
+}
+
 export default function initHomePagination() {
   const root = document.querySelector(".home-pagination");
   const list = document.querySelector(".home-article-list");
@@ -243,18 +270,20 @@ async function goToPage(n, options) {
     return;
   }
 
+  const applyVault = await prepareVault(payload.list);
+
   // Not `scroll.finished`: the two motions overlap.
   await scroll.overlap;
 
   try {
-    await flipToPage(payload, n, options, scroll);
+    await flipToPage(payload, n, options, scroll, applyVault);
   } finally {
     state.busy = false;
     state.root.removeAttribute("aria-busy");
   }
 }
 
-async function flipToPage(payload, n, options, scroll) {
+async function flipToPage(payload, n, options, scroll, applyVault) {
   const animate = !prefersReducedMotion();
 
   // The scroll is something the reader WATCHES, and it starts before anything
@@ -274,7 +303,7 @@ async function flipToPage(payload, n, options, scroll) {
   // It stops looking until the cards are flat again.
   setCoverParallaxSuspended(true);
   try {
-    await swapAndFlipIn(payload, n, options, oldCards, animate, scroll);
+    await swapAndFlipIn(payload, n, options, oldCards, animate, scroll, applyVault);
   } finally {
     // Never leave the parallax switched off, whatever went wrong in between.
     setCoverParallaxSuspended(false);
@@ -283,7 +312,7 @@ async function flipToPage(payload, n, options, scroll) {
   prefetchNeighbours(n);
 }
 
-async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
+async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll, applyVault) {
   if (oldCards.length) await runFlip(oldCards, "out");
 
   // The out-flip normally outlasts the tail of the scroll, but nothing may be
@@ -297,6 +326,15 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll) {
   // seen mid-morph — there is nothing on screen to morph. No geometry has to be
   // paired up, measured or interpolated between the two layouts.
   const incoming = document.importNode(payload.list, true);
+
+  // Still off-document, so the reflow costs nothing and is never seen.
+  if (applyVault) {
+    try {
+      applyVault(incoming);
+    } catch (e) {
+      console.error("[homePagination] the encrypted arrangement did not apply:", e);
+    }
+  }
 
   // Tiles carry a scroll-driven entrance animation, and a freshly inserted tile
   // is at the start of its range. Left on, it would hold every card at opacity 0
@@ -566,7 +604,15 @@ async function loadMore() {
 
   try {
     const payload = await fetchPage(next);
+    const applyVault = await prepareVault(payload.list);
     const incoming = document.importNode(payload.list, true);
+    if (applyVault) {
+      try {
+        applyVault(incoming);
+      } catch (e) {
+        console.error("[homePagination] the encrypted arrangement did not apply:", e);
+      }
+    }
     const cards = Array.from(incoming.children);
     shiftRows(cards, incoming);
     await appendCards(cards);

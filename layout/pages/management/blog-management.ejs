@@ -19,9 +19,11 @@
         <p class="bm-lede"><%= __('management.lede') %></p>
     </header>
 
+    <%# The same card the encrypted-post gate waits behind: both are one Worker
+        deciding what this identity may see, and they should not look like two
+        different kinds of wait. %>
     <div class="bm-gate">
-        <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
-        <p class="bm-gate-text"><%= __('management.checking') %></p>
+        <%- partial('components/access-probe', { text: __('management.checking') }) %>
     </div>
 
     <div class="bm-console" hidden>

@@ -179,7 +179,6 @@ notifications:
   close: 關閉
   back: 返回
   mark_read: 全部標為已讀
-  signed_out: 使用 GitHub 登入即可追蹤本部落格。
   sign_in: 使用 GitHub 登入
   follow: 追蹤本部落格
   follow_nav: 追蹤
@@ -325,6 +324,8 @@ vault:
   unlocking: 正在檢查存取權限
   badge: 加密
   authorized: 你已獲授權閱讀這篇加密文章
-  signed_out: 已登出
-  signed_out_hint: 這篇文章是加密的，金鑰只發放給你剛才的工作階段。重新登入即可繼續閱讀。
-  go_home: 返回首頁
+  list_tag: 帶此標籤的加密文章
+  list_category: 此分類下的加密文章
+  list_empty: 目前身分沒有可閱讀的加密文章。
+  no_comments: 加密文章不開放留言
+  no_comments_hint: 只有部分讀者能開啟的文章，若掛上公開討論串，標題與內容會重新暴露在外。

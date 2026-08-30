@@ -177,7 +177,6 @@ notifications:
   close: 閉じる
   back: 戻る
   mark_read: すべて既読にする
-  signed_out: GitHub でサインインするとこのブログをフォローできます。
   sign_in: GitHub でサインイン
   follow: このブログをフォロー
   follow_nav: フォロー
@@ -323,6 +322,8 @@ vault:
   unlocking: アクセス権を確認しています
   badge: 暗号化
   authorized: この暗号化記事へのアクセスが許可されています
-  signed_out: ログアウトしました
-  signed_out_hint: この記事は暗号化されており、鍵は先ほどのセッションにのみ発行されました。続きを読むには再度ログインしてください。
-  go_home: ホームに戻る
+  list_tag: このタグの暗号化記事
+  list_category: このカテゴリの暗号化記事
+  list_empty: この識別子で読める暗号化記事はありません。
+  no_comments: 暗号化記事のコメントは閉じています
+  no_comments_hint: 一部の読者しか開けない記事に公開スレッドを置くと、題名と内容が再び公開されてしまいます。

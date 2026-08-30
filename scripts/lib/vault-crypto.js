@@ -145,6 +145,19 @@ function variantKey(page, postKeys) {
   return hkdf(Buffer.from(variantMaterial(page, postKeys), "utf8"), "rdfx-grid-key");
 }
 
+/**
+ * How a tag or a category is named in the taxonomy gate's URL fragment. Mirrors
+ * `taxHash` in source/js/tools/vaultCrypto.js — the browser has to arrive at the
+ * same digest from the name it decrypts.
+ */
+function taxHash(kind, name) {
+  return crypto
+    .createHash("sha256")
+    .update("rdfx-tax|" + kind + "|" + name, "utf8")
+    .digest("hex")
+    .slice(0, 16);
+}
+
 module.exports = {
   IV_BYTES,
   KEY_BYTES,
@@ -162,4 +175,5 @@ module.exports = {
   assetHash,
   variantPath,
   variantKey,
+  taxHash,
 };

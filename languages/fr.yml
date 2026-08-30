@@ -177,7 +177,6 @@ notifications:
   close: Fermer
   back: Retour
   mark_read: Tout marquer comme lu
-  signed_out: Connectez-vous avec GitHub pour suivre ce blog.
   sign_in: Se connecter avec GitHub
   follow: Suivre ce blog
   follow_nav: Suivre
@@ -323,6 +322,8 @@ vault:
   unlocking: Verification de votre acces
   badge: Chiffre
   authorized: Vous avez acces a cet article chiffre
-  signed_out: Deconnecte
-  signed_out_hint: Cet article est chiffre et la cle n'a ete remise qu'a votre session. Reconnectez-vous pour continuer.
-  go_home: Retour a l'accueil
+  list_tag: Articles chiffres etiquetes
+  list_category: Articles chiffres dans
+  list_empty: Aucun article chiffre ici n'est lisible par cette identite.
+  no_comments: Les commentaires sont fermes sur les articles chiffres
+  no_comments_hint: Un fil public sous un article que seuls certains lecteurs peuvent ouvrir exposerait de nouveau son titre et son contenu.

@@ -59,6 +59,10 @@ export async function openText(key, sealed) {
   return new TextDecoder().decode(await openBlob(key, sealed));
 }
 
+export async function openJSON(key, sealed) {
+  return JSON.parse(await openText(key, sealed));
+}
+
 export function vaultPrefix() {
   return String((window.theme && window.theme.backend && window.theme.backend.vault_prefix) || "/v")
     .replace(/\/+$/, "");
@@ -68,8 +72,15 @@ export function siteRoot() {
   return String((window.config && window.config.root) || "/").replace(/\/+$/, "");
 }
 
+/**
+ * Every blob this fetches is ciphertext, so it is cached like any other static
+ * file. `no-store` here used to force a fresh download of every card, every
+ * image and every grid on every navigation — a cost paid for no secrecy, since
+ * what a cache would be holding is unreadable without a key that never leaves
+ * this module.
+ */
 export async function fetchSealed(path) {
-  const res = await fetch(siteRoot() + path, { cache: "no-store" });
+  const res = await fetch(siteRoot() + path);
   return res.ok ? res.arrayBuffer() : null;
 }
 
@@ -90,6 +101,16 @@ export function variantKey(page, rawKeys) {
 
 export function assetKey(rawPostKey, hash) {
   return hkdfKey(rawPostKey, "rdfx-asset|" + hash);
+}
+
+/**
+ * How a tag or a category is named in a URL fragment. A fragment never reaches
+ * a server, but it does survive being copied out of the address bar, so what
+ * travels is a hash: only a reader who can already decrypt the metadata can turn
+ * it back into a name.
+ */
+export function taxHash(kind, name) {
+  return sha256Hex("rdfx-tax|" + kind + "|" + name).then((hex) => hex.slice(0, 16));
 }
 
 function sniffType(bytes) {

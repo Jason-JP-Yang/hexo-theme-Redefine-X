@@ -177,7 +177,6 @@ notifications:
   close: Cerrar
   back: Volver
   mark_read: Marcar todo como leído
-  signed_out: Inicia sesión con GitHub para seguir este blog.
   sign_in: Iniciar sesión con GitHub
   follow: Seguir este blog
   follow_nav: Seguir
@@ -323,6 +322,8 @@ vault:
   unlocking: Comprobando tu acceso
   badge: Cifrada
   authorized: Tienes acceso concedido a esta entrada cifrada
-  signed_out: Sesion cerrada
-  signed_out_hint: Esta entrada esta cifrada y la clave se entrego solo a tu sesion. Inicia sesion de nuevo para seguir leyendo.
-  go_home: Volver al inicio
+  list_tag: Entradas cifradas etiquetadas
+  list_category: Entradas cifradas en
+  list_empty: Ninguna entrada cifrada aqui es legible por esta identidad.
+  no_comments: Los comentarios estan cerrados en las entradas cifradas
+  no_comments_hint: Un hilo publico bajo una entrada que solo algunos lectores pueden abrir volveria a exponer su titulo y su contenido.

@@ -27,3 +27,7 @@ try {
 } catch (e) {}
 
 document.addEventListener("DOMContentLoaded", setTabs);
+
+// Content decrypted into a page that is already open never reaches Swup's
+// `page:view`; plugins/vault.js announces it here instead.
+window.addEventListener("redefine:content-injected", setTabs);

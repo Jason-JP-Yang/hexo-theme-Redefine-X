@@ -13,6 +13,10 @@
     const body = typeof contentOverride === "undefined" ? post.content : contentOverride;
     const chars = typeof excerptChars === "undefined" ? 520 : excerptChars;
     const target = typeof href === "undefined" ? url_for(post.path) : href;
+    // A vault cover is a sealed hash rather than a path, and it is still a
+    // cover: `no-cover` sizes the tile as though the thumbnail were not there.
+    const asset = typeof coverAsset === "undefined" ? "" : coverAsset;
+    const hasCover = !!(cover || asset);
     const accent = coverAccent(post);
     const tier = t ? t.tier : "standard";
     const style = [
@@ -20,7 +24,7 @@
         accent ? "--tile-accent:" + accent : "",
     ].filter(Boolean).join(";");
 %>
-<li class="home-article-item<%= t ? " tier-" + tier : "" %><%= cover ? "" : " no-cover" %><%= accent ? " has-accent" : "" %><%= vault ? " is-vault" : "" %><%= bento && t ? bentoClasses(t) : "" %>"
+<li class="home-article-item<%= t ? " tier-" + tier : "" %><%= hasCover ? "" : " no-cover" %><%= accent ? " has-accent" : "" %><%= vault ? " is-vault" : "" %><%= bento && t ? bentoClasses(t) : "" %>"
     <%- vault ? ' data-vault-id="' + vaultId + '"' : "" %>
     <%- style ? ' style="' + style + '"' : "" %>>
 
@@ -34,8 +38,7 @@
         </div>
     <% } %>
 
-    <% const asset = typeof coverAsset === "undefined" ? "" : coverAsset; %>
-    <% if (cover || asset) { %>
+    <% if (hasCover) { %>
         <div class="home-article-thumbnail">
             <%# aria-hidden + tabindex="-1": this links to the same place as the
                 title below it, so it is decorative to a screen reader and should

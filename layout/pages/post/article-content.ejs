@@ -144,7 +144,21 @@
 		<% } %>
 
 
-		<% if (theme.comment.enable === true && theme.comment.hasOwnProperty('system') && page.comment !== false) { %>
+		<%# An encrypted post carries no thread. A public discussion under a post only
+			some readers can open would put its title, its participants and its
+			substance back in the open, so the notice takes the thread's place
+			rather than the section quietly disappearing. %>
+		<% if (page.vault && theme.comment.enable === true) { %>
+		<div class="comment-container px-2 sm:px-6 md:px-8 pb-8">
+			<div class="vault-no-comments">
+				<i class="fa-regular fa-comment-slash" aria-hidden="true"></i>
+				<div class="vault-no-comments-body">
+					<strong><%= __('vault.no_comments') %></strong>
+					<span><%= __('vault.no_comments_hint') %></span>
+				</div>
+			</div>
+		</div>
+		<% } else if (theme.comment.enable === true && theme.comment.hasOwnProperty('system') && page.comment !== false) { %>
 		<div class="comment-container px-2 sm:px-6 md:px-8 pb-8">
 			<%- partial('components/comments/comment') %>
 		</div>

@@ -10,11 +10,18 @@
  *   <prefix>/<slug>/index.html   the gate. Carries the slug and NOTHING else —
  *                                no title, no date, no tags, no excerpt.
  *   <prefix>/<slug>/b.bin        iv ‖ AES-256-GCM(postKey) of the article body
- *   <prefix>/<slug>/c.html       the same sealing of the post's HOME CARD, so an
- *                                authorized reader can be shown the post in a
- *                                listing without the Worker holding any metadata
+ *   <prefix>/<slug>/c.bin        the same sealing of a JSON record: the post's
+ *                                HOME CARD plus the metadata every OTHER listing
+ *                                is built from — title, date, href, taxonomy. The
+ *                                Worker therefore holds no metadata at all, and
+ *                                one fetch serves every listing on the site.
  *   <prefix>/a/<hash>.bin        one image, sealed under HKDF(postKey, hash)
  *   <prefix>/g/<variant>.bin     one pre-solved bento geometry (see below)
+ *   <prefix>/l/index.html        the taxonomy gate: ONE page, carrying no name.
+ *                                Which tag or category it is showing arrives in
+ *                                the URL fragment, which never leaves the
+ *                                browser, and as a hash rather than a name, so a
+ *                                forwarded link discloses nothing either.
  *
  * ── Why the geometry is pre-solved ──────────────────────────────────────────
  *
@@ -32,6 +39,10 @@
  *
  * Cards are NOT duplicated into a variant — a variant is geometry only, a few
  * hundred bytes — so the cost is 2^k small files per page, not 2^k pages.
+ *
+ * The OTHER listings — archive, tags, categories — are not pre-solved at all.
+ * Their markup is a function of the metadata and nothing else, so the client
+ * builds it from the same record it already had to fetch.
  */
 
 const path = require("path");
@@ -44,6 +55,8 @@ const store = require("./lib/vault-store");
 // a decision about build time and public/ size, so it fails loudly rather than
 // quietly skipping the reflow.
 const MAX_VARIANT_POSTS = 8;
+
+const EXCERPT_CHARS = 220;
 
 function prefix() {
   return String(hexo.theme.config?.backend?.vault_prefix || "/v").replace(/^\/+|\/+$/g, "");
@@ -242,6 +255,111 @@ function avifCandidates(relPath) {
   ];
 }
 
+/* ─── Metadata ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The taxonomy snapshot, shaped like the Query the templates were written
+ * against. `filters/vault.js` empties the relation index that backs `post.tags`
+ * and `post.categories`, which is what withholds the taxonomy from the public
+ * build; every template that renders THIS post is handed the snapshot instead.
+ */
+function taxList(items) {
+  const list = (items || []).slice();
+  list.toArray = () => list.slice();
+  return list;
+}
+
+function plainExcerpt(post, body) {
+  const source = post.excerpt && post.excerpt !== "false" ? post.excerpt : body || "";
+  const text = String(source)
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&(nbsp|#160);/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > EXCERPT_CHARS ? text.slice(0, EXCERPT_CHARS).trimEnd() + "…" : text;
+}
+
+/**
+ * What every listing OTHER than the home grid is drawn from. Names and paths
+ * only: the client re-creates the theme's own markup around them, so archive,
+ * tag and category pages need nothing pre-rendered and cannot drift from the
+ * public ones.
+ */
+function withRoot(p) {
+  return (String(hexo.config.root || "/") + String(p)).replace(/\/{2,}/g, "/");
+}
+
+/**
+ * Where a link to this post's tag or category has to point.
+ *
+ * A taxonomy the post SHARES with a public one still has its page, and the link
+ * is the ordinary one. A taxonomy only encrypted posts carry has no page at all
+ * — generating one would disclose its name to anyone who guessed the URL — so
+ * the link goes to the taxonomy gate, naming it by hash in a fragment.
+ *
+ * `locals.tags` and `locals.categories` are already the withheld view (the
+ * relation index behind their counts was emptied in filters/vault.js), so
+ * presence in them IS the test for "a page exists for this".
+ */
+function taxTarget(kind, name) {
+  const published = hexo.locals.get(kind === "tag" ? "tags" : "categories");
+  const live = published.findOne ? published.findOne({ name }) : null;
+  if (live) return { href: withRoot(live.path), published: true };
+  return {
+    href: `${withRoot(prefix())}/l/#${kind === "tag" ? "t" : "c"}=${vc.taxHash(kind, name)}`,
+    published: false,
+  };
+}
+
+function metaFor(entry, href, coverAsset, body) {
+  const Category = hexo.model("Category");
+
+  const categories = (entry.categories || []).map((cat) => {
+    const parent = cat.parent ? Category.findById(cat.parent) : null;
+    return {
+      name: cat.name,
+      path: withRoot(cat.path),
+      parent: parent ? withRoot(parent.path) : "",
+      ...taxTarget("category", cat.name),
+    };
+  });
+
+  return {
+    id: entry.id,
+    slug: entry.slug,
+    title: entry.post.title || "",
+    date: entry.post.date ? entry.post.date.toISOString() : null,
+    updated: entry.post.updated ? entry.post.updated.toISOString() : null,
+    href,
+    cover: coverAsset || "",
+    excerpt: plainExcerpt(entry.post, body),
+    tags: (entry.tags || []).map((tag) => ({
+      name: tag.name,
+      path: withRoot(tag.path),
+      ...taxTarget("tag", tag.name),
+    })),
+    categories,
+  };
+}
+
+/**
+ * The templates write every taxonomy link with `url_for(tag.path)`, which for a
+ * tag only this post carries is a link to a page that was deliberately never
+ * generated. Rewriting them here rather than in the browser keeps ONE answer to
+ * "where does this tag go" and keeps the client from having to probe for pages.
+ */
+function retargetTaxonomy(html, meta) {
+  let out = html;
+  for (const item of meta.tags.concat(meta.categories)) {
+    if (item.published) continue;
+    out = out.split(`href="${item.path}"`).join(`href="${item.href}"`);
+  }
+  return out;
+}
+
 /* ─── Pagination model ─────────────────────────────────────────────────────── */
 
 /**
@@ -335,13 +453,14 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   const articleView = hexo.theme.getView("pages/post/article-content.ejs");
   const avifRewrite = hexo.extend.helper.get("avifRewriteHtml");
 
-  // ── articles, assets and cards ────────────────────────────────────────────
+  // ── articles, assets, cards and metadata ──────────────────────────────────
   for (const entry of entries) {
     // Only the BODY's images are sealed, never the surrounding chrome: the
     // author avatar and other template assets are public site-wide, and
     // withholding one would break every page that uses it.
     const body = await sealAssets(entry, entry.plain, routes);
     const coverAsset = await sealCover(entry, routes);
+    const href = `${hexo.config.root || "/"}${p}/${entry.slug}/`.replace(/\/{2,}/g, "/");
 
     // The whole article, not just its text — banner, title, author, meta, tags,
     // copyright, recommendations, prev/next and the table of contents. A reader
@@ -351,8 +470,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     page.comment = false; // encrypted posts carry no comment thread
     page.content = body;
     Object.assign(page, neighbours(entry.post));
+    // The taxonomy getters are backed by the relation index this build has
+    // already emptied for this post (filters/vault.js). Hand back the snapshot
+    // taken before it went, or the article renders with no tags and no category.
+    Object.defineProperty(page, "tags", { value: taxList(entry.tags), enumerable: true });
+    Object.defineProperty(page, "categories", { value: taxList(entry.categories), enumerable: true });
 
-    let article = await articleView.render(cardLocals({ page, post: entry.post }));
+    let article = await articleView.render(cardLocals({ page, post: page }));
 
     // The banner cover is written by the template as a plain path. Swapping it
     // for the sealed hash BEFORE the filter chain below leaves it with an empty
@@ -375,25 +499,33 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     // withdrawn: a 404 on every encrypted post.
     if (avifRewrite) article = avifRewrite(article);
 
-    routes.set(`${p}/${entry.slug}/b.bin`, vc.seal(entry.key, article));
+    const meta = metaFor(entry, href, coverAsset, body);
+    routes.set(`${p}/${entry.slug}/b.bin`, vc.seal(entry.key, retargetTaxonomy(article, meta)));
 
     const card = await cardView.render(
       cardLocals({
         page: {},
-        post: entry.post,
+        post: page,
         contentOverride: body,
         isVault: true,
         vaultId: entry.id,
         tile: null,
         cover: "",
         coverAsset,
-        href: `${hexo.config.root || "/"}${p}/${entry.slug}/`.replace(/\/{2,}/g, "/"),
+        href,
         postNumber: 0,
         bentoEnabled: false,
         excerptChars: 1400,
       })
     );
-    routes.set(`${p}/${entry.slug}/c.html`, vc.seal(entry.key, card));
+
+    // One blob, two consumers: the home grid takes `card`, every other listing
+    // is built from `meta`. Splitting them would have cost a second fetch per
+    // post on the archive, tag and category pages.
+    routes.set(
+      `${p}/${entry.slug}/c.bin`,
+      vc.seal(entry.key, JSON.stringify({ card: retargetTaxonomy(card, meta), meta }))
+    );
 
     // Goes through the normal theme chain, so the gate carries the real navbar,
     // footer and scripts — an unauthorized visitor sees an ordinary 404.
@@ -403,6 +535,15 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
       data: { type: "vault", vault_slug: entry.slug, title: "", comment: false },
     });
   }
+
+  // The taxonomy gate. One page for every tag and every category, carrying no
+  // name of either: which one it is showing travels in the URL fragment, as a
+  // hash, and the fragment is never sent to a server.
+  pages.push({
+    path: `${p}/l/index.html`,
+    layout: "page",
+    data: { type: "vault-listing", title: "", comment: false },
+  });
 
   // ── pre-solved geometry ───────────────────────────────────────────────────
   const bentoPlan = hexo.extend.helper.get("bentoPlan");
@@ -441,8 +582,16 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
 
         const plan = bentoPlan(merged, { features: withFeatures });
         const tiles = {};
+        // The site cards are laid out by the SAME solve, and a different set of
+        // posts moves them: their row on each grid is part of the arrangement,
+        // not furniture. Leaving them on the public plan's rows is what dropped
+        // tiles behind them when the grid reflowed.
+        const features = [];
         for (const tile of plan) {
-          if (tile.kind === "feature") continue;
+          if (tile.kind === "feature") {
+            features.push({ style: bentoStyle(tile), classes: bentoClasses(tile) });
+            continue;
+          }
           const post = merged[tile.postIndex];
           tiles[idOf(post)] = {
             tier: tile.tier,
@@ -457,6 +606,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
           `${p}/g/${vc.variantPath(pages[i].index, keys)}.bin`,
           vc.seal(vc.variantKey(pages[i].index, keys), JSON.stringify({
             tiles,
+            features,
             lgRows: bentoRows(plan, "lg"),
             mdRows: bentoRows(plan, "md"),
             order: plan
@@ -475,6 +625,10 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   // An image a PUBLIC post also uses is already public, so withholding it would
   // break that post without protecting anything. Bodies AND covers: a cover
   // comes from front matter and never appears in any post's rendered content.
+  //
+  // The route itself is dropped in filters/vault.js at `after_generate`, not
+  // here: Hexo sets every generator's routes AFTER all of them have run, so a
+  // removal made from inside a generator is undone before it can take effect.
   const shared = await publicCoverRoutes();
   const publicHtml = hexo.locals
     .get("posts")
@@ -491,15 +645,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   for (const entry of entries) {
     for (const routePath of entry.assets || []) {
       if (shared.has(routePath)) continue;
-      hexo.route.remove(routePath);
-      // Removing the route is only half of it — see filters/vault.js.
       state.withhold(routePath);
       withheld++;
     }
   }
 
   hexo.log.info(
-    `[vault] sealed ${entries.length} post(s), ${routes.size} blob(s); withheld ${withheld} image(s)`
+    `[vault] sealed ${entries.length} post(s), ${routes.size} blob(s); withholding ${withheld} image(s)`
   );
 
   return pages.concat(Array.from(routes, ([path, data]) => ({ path, data })));
