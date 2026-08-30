@@ -1,0 +1,26 @@
+<%
+    // The whole public surface of an encrypted post: the slug and nothing else.
+    // No title, no date, no tags, no excerpt, no cover.
+    //
+    // It opens on the access probe rather than on the not-found page — a 404
+    // that flashes before the article arrives reads as a broken link. The
+    // not-found page is what an unauthorized visitor lands on instead, so a
+    // correct slug still cannot be told apart from a mistyped one.
+    //
+    // There is no signed-out state. Losing authorization mid-read navigates
+    // home: the plaintext is in the DOM, and the only correct thing to do with
+    // it is leave the page that is holding it.
+%>
+<div class="vault-gate" data-vault-slug="<%= page.vault_slug %>"
+    data-vault-kind="<%= page.vault_kind || 'post' %>" data-vault-state="probing">
+
+    <div class="vault-gate-probe">
+        <%- partial('components/access-probe', { text: __('vault.unlocking') }) %>
+    </div>
+
+    <div class="vault-gate-notfound" hidden>
+        <%- partial('pages/notfound/notfound') %>
+    </div>
+
+    <div class="vault-article-host"></div>
+</div>

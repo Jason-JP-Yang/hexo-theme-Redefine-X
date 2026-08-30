@@ -1,0 +1,440 @@
+// ========================================================================================
+//                                    ENCRYPTED POSTS
+// ========================================================================================
+// The gate an encrypted post's page renders, the badge an authorized card
+// carries in a listing, the audience field an admin gets above the article, and
+// the management console's registry.
+//
+// Material: BASE tier only. Nothing here floats over live content.
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+$vault-radius = 14px
+
+// ─── the gate ───────────────────────────────────────────────
+// Once the article is in, the gate and its host STOP BEING BOXES. Every rule the
+// post layout has is written against `.main-content > .post-page-container` —
+// the table of contents column, the content width, the table styling — and two
+// extra wrappers in between silently defeated all of it. `display: contents`
+// puts the decrypted article exactly where a public post's markup sits.
+//
+// The waiting card itself is shared with the management console; it lives in
+// _partials/access-probe.styl. Losing authorization mid-read has no state here
+// at all — the page navigates home instead (plugins/vault.js).
+.vault-gate[data-vault-state="open"]
+  display contents
+
+  .vault-article-host
+    display contents
+
+// ─── the authorized badge ───────────────────────────────────
+// ONE badge for the whole site, rendered from components/vault-badge: the home
+// tile and the album card make the same statement about the same thing, so they
+// wear the same object rather than two rules that drift apart.
+//
+// The ink is a LITERAL white, not `var(--background-color)`. That token inverts
+// with the theme, so in dark mode the label was printed in near-black on the
+// primary fill and became unreadable — the fill does not invert, so neither may
+// what sits on it.
+$vault-badge-ink = #fff
+
+.vault-badge
+  position absolute
+  top 10px
+  left 10px
+  z-index 3
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 4px 9px
+  border-radius 999px
+  background var(--primary-color)
+  font-size 0.68rem
+  font-weight 600
+  color $vault-badge-ink
+
+  i
+    font-size 0.68rem
+
+  // common/basic.styl colours `a i` and `a:hover i` DIRECTLY, and `a:hover i`
+  // (0,0,1,2) outranks `.vault-badge i`. The album badge lives INSIDE the card's
+  // link, which is what turned its lock black and then red-on-red — invisible —
+  // on hover. The class is doubled to win on specificity rather than with
+  // `!important`.
+  &.vault-badge
+    i, span
+      color $vault-badge-ink
+
+// In flow, for a card with no picture to sit on: the home tile with no cover,
+// where the body starts at the tile's top edge, and the album card with no
+// thumbnail, which is one 64px row of avatar and text. An overlay there lands on
+// content, so the badge takes a place of its own instead.
+.vault-badge.is-inline
+  position static
+  flex-shrink 0
+
+  // The tile's head is a flex COLUMN, so the cross axis is the width: left
+  // alone the badge stretches the whole text column. The album row is a flex
+  // ROW and centres it, which is what that one wants.
+  .home-article-head > &
+    align-self flex-start
+
+.home-article-item.is-vault
+  position relative
+
+  &::after
+    content ''
+    position absolute
+    inset 0
+    border-radius inherit
+    border 1px solid var(--primary-color)
+    opacity 0.34
+    pointer-events none
+
+// ─── admin: who can read this ───────────────────────────────
+// Inside the article body, above the first paragraph — where the decision it
+// controls is actually being made.
+.vault-admin
+  display flex
+  flex-direction column
+  gap 8px
+  margin 0 0 28px
+  padding 14px 16px
+  border 1px solid var(--border-color)
+  border-radius $vault-radius
+  background var(--second-background-color)
+
+.vault-admin-label
+  display flex
+  align-items center
+  gap 8px
+  font-size 0.76rem
+  font-weight 600
+  color var(--third-text-color)
+
+.vault-admin-state
+  margin-left auto
+  font-size 0.76rem
+  color var(--primary-color)
+
+// ─── management console ─────────────────────────────────────
+.bm-vault-add-row
+  display flex
+  gap 8px
+  margin-top 10px
+
+  @media screen and (max-width: 600px)
+    flex-direction column
+
+.bm-vault-line
+  flex 1
+  min-width 0
+  padding 9px 11px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--second-background-color)
+  font-family var(--code-font)
+  font-size 0.74rem
+  color var(--text-color)
+
+  &:focus
+    border-color var(--primary-color)
+    outline none
+
+.bm-vault-add-state
+  margin 8px 0 0
+  font-size 0.74rem
+  color var(--third-text-color)
+
+  &[data-tone="ok"]
+    color var(--primary-color)
+
+  &[data-tone="bad"]
+    color var(--box-red-text)
+
+  &:empty
+    display none
+
+.bm-vault-list
+  display flex
+  flex-direction column
+  gap 12px
+  margin 0
+  padding 0
+  list-style none
+
+// Two columns for the identity of the post, a third row spanning both for the
+// audience — the field is the widest thing here and reads badly in a gutter.
+.bm-vault
+  display grid
+  grid-template-columns minmax(0, 1fr) auto
+  gap 6px 18px
+  padding 16px 18px
+  border 1px solid var(--border-color)
+  border-radius $vault-radius
+  background var(--background-color)
+  transition border-color 0.2s ease
+
+  &:hover
+    border-color var(--shadow-color-1)
+
+  @media screen and (max-width: 640px)
+    grid-template-columns minmax(0, 1fr)
+
+.bm-vault-main
+  display flex
+  flex-direction column
+  gap 6px
+  min-width 0
+
+.bm-vault-title
+  display flex
+  align-items center
+  gap 9px
+  font-size 1rem
+  font-weight 620
+  letter-spacing -0.01em
+  color var(--second-text-color)
+
+  i
+    flex-shrink 0
+    font-size 0.82rem
+    color var(--primary-color)
+
+  a
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color inherit
+
+    &:hover
+      color var(--primary-color)
+
+.bm-vault-meta
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 4px 14px
+  font-size 0.72rem
+  color var(--third-text-color)
+
+  span
+    display inline-flex
+    align-items center
+    gap 5px
+
+  i
+    font-size 0.68rem
+    opacity 0.75
+
+.bm-vault-slug
+  font-family var(--code-font)
+  opacity 0.8
+
+.bm-vault-excerpt
+  overflow hidden
+  display -webkit-box
+  -webkit-line-clamp 2
+  -webkit-box-orient vertical
+  margin 2px 0 0
+  font-size 0.76rem
+  line-height 1.55
+  color var(--third-text-color)
+
+.bm-vault-side
+  display flex
+  flex-direction column
+  align-items flex-end
+  gap 8px
+
+  @media screen and (max-width: 640px)
+    flex-direction row
+    align-items center
+    justify-content space-between
+
+.bm-vault-readers
+  display inline-flex
+  align-items baseline
+  gap 6px
+  padding 4px 10px
+  border-radius 999px
+  background var(--third-background-color-transparent)
+  font-size 0.72rem
+  color var(--third-text-color)
+  white-space nowrap
+
+  i
+    align-self center
+    font-size 0.68rem
+    color var(--primary-color)
+
+  strong
+    font-size 0.86rem
+    font-weight 650
+    color var(--second-text-color)
+    font-variant-numeric tabular-nums
+
+  &[data-empty="1"]
+    i
+      color var(--third-text-color)
+      opacity 0.6
+
+.bm-vault-audience
+  grid-column 1 / -1
+  display flex
+  flex-direction column
+  gap 6px
+  margin-top 6px
+  padding-top 12px
+  border-top 1px dashed var(--border-color)
+
+// ─── the audience field's own box ───────────────────────────
+// It sits OUTSIDE `.article-content` for a reason (plugins/vault.js): inside it,
+// `.markdown-body img` — display:block, width:auto, a 1rem margin and a zoom
+// cursor — outranks the chip avatar and turns each reader into a full-width
+// photograph. This is the belt to that braces, in case the box ever moves back.
+.vault-admin
+  .bm-chip-avatar
+    display inline-block
+    width 18px
+    height 18px
+    max-height none
+    margin 0
+    border-radius 50%
+    cursor inherit
+
+// ─── decrypted rows in a listing ────────────────────────────
+// Archive, tag page, category page and the taxonomy gate all render through
+// utils/posts-list, so one rule covers every one of them. The timeline node is
+// recoloured rather than displaced: an inset or a border on the row would move
+// the dot out of line with the public rows above it.
+.vault-archive-link
+  .article-title
+    color var(--primary-color)
+
+    &::after
+      background var(--primary-color)
+      border-color var(--primary-color)
+
+.vault-archive-lock
+  margin-right 7px
+  font-size 0.66em
+  vertical-align middle
+  opacity 0.9
+
+// ─── a taxonomy only encrypted posts carry ──────────────────
+// No page for it exists in the public build, so the chip points at the taxonomy
+// gate and says as much: primary outline, and the same lock the cards carry.
+.vault-tax-link
+  border 1px solid var(--primary-color)
+
+  &.all-category-list-link
+    border none
+    color var(--primary-color)
+
+.vault-tax-lock
+  margin-right 6px
+  font-size 0.72em
+  color var(--primary-color)
+
+// ─── the taxonomy gate ──────────────────────────────────────
+.vault-listing-head
+  display flex
+  flex-direction column
+  gap 4px
+  margin 0 0 26px
+
+.vault-listing-kind
+  font-size 0.78rem
+  font-weight 600
+  letter-spacing 0.04em
+  text-transform uppercase
+  color var(--third-text-color)
+
+.vault-listing-name
+  display flex
+  align-items center
+  gap 12px
+  margin 0
+  font-size 2.4rem
+  font-weight 700
+  letter-spacing -0.02em
+  color var(--second-text-color)
+
+  i
+    font-size 1.4rem
+    color var(--primary-color)
+
+.vault-listing-empty
+  margin 0
+  padding 28px 0
+  font-size 0.9rem
+  color var(--third-text-color)
+
+// ─── the article's own wrappers ─────────────────────────────
+// The article body is inset by a Tailwind utility on `.article-content`, not by
+// a width on the container, so anything mounted beside it has to carry the same
+// utility or it runs to the very edge of the card.
+.vault-admin-wrap
+  margin-top 28px
+  margin-bottom 4px
+
+// ─── comments are not offered ───────────────────────────────
+// A public discussion thread under a post only some readers can open would put
+// the title, the participants and the substance back in the open. The notice
+// says so, in the theme's ordinary card language.
+.vault-no-comments
+  display flex
+  align-items flex-start
+  gap 14px
+  padding 18px 20px
+  border 1px solid var(--border-color)
+  border-radius $vault-radius
+  background var(--second-background-color)
+
+  > i
+    flex-shrink 0
+    margin-top 2px
+    font-size 1rem
+    color var(--primary-color)
+
+.vault-no-comments-body
+  display flex
+  flex-direction column
+  gap 3px
+  min-width 0
+
+  strong
+    font-size 0.92rem
+    font-weight 620
+    color var(--second-text-color)
+
+  span
+    font-size 0.82rem
+    line-height 1.6
+    color var(--third-text-color)
+
+// ─── an encrypted album on the collection page ──────────────
+// Exactly the statement the home tile makes — the primary outline and the
+// shared `.vault-badge` above — and nothing else. The public card's `group`,
+// its press-scale and its hover recolour are all left off in the template
+// (pages/masonry/masonry-collection-card), so the card is inert under the
+// cursor: an entry granted to this reader is a fact about the card, not a
+// control to be pointed at.
+//
+// 0.5rem is `rounded-lg`, which the inner card carries and the `li` does not —
+// the two boxes are coincident, so the outline traces the visible card.
+.is-vault-album
+  position relative
+
+  &::after
+    content ''
+    position absolute
+    inset 0
+    border-radius 0.5rem
+    border 1px solid var(--primary-color)
+    opacity 0.34
+    pointer-events none
+
+  > a
+    position relative
+    display block

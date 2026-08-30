@@ -212,6 +212,33 @@ function showError(preloader, src) {
   window.dispatchEvent(new CustomEvent('redefine:force-exif-check'));
 }
 
+// ─── Deferred sources ────────────────────────────────────────────────────────
+// A preloader whose bytes are not addressable by URL. An encrypted post's images
+// are ciphertext at a hashed path and only become a blob: URL once the reader's
+// key has opened them, so `data-src` is empty and the hash sits in
+// `data-vault-asset` instead.
+//
+// Resolving them HERE rather than at unlock time is the whole point: the article
+// mounts immediately, and each image is fetched and decrypted when it is about
+// to be seen — the same request pattern, and the same ordering, every other
+// image on the site gets.
+let srcResolver = null;
+
+export function registerSrcResolver(fn) {
+  srcResolver = fn;
+}
+
+async function srcFor(preloader) {
+  const direct = preloader.dataset.src;
+  if (direct) return direct;
+  if (!srcResolver) return "";
+  try {
+    return (await srcResolver(preloader)) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
 /**
  * Load a single preloader (for viewport intersection)
  */
@@ -219,10 +246,11 @@ async function processPreloader(preloader) {
   // Skip if already processed
   if (loadedPreloaders.has(preloader)) return;
   loadedPreloaders.add(preloader);
-  
-  const src = preloader.dataset.src;
+
   const alt = preloader.dataset.alt || "";
-  
+  const src = await srcFor(preloader);
+  if (!src) return void showError(preloader, preloader.dataset.src || "");
+
   try {
     const img = await requestImageBySrc(src, alt);
     replacePreloader(preloader, img);
@@ -236,16 +264,13 @@ async function processPreloader(preloader) {
  * Preload image to cache without rendering
  */
 async function preloadImageToCache(preloader) {
-  const src = preloader.dataset.src;
-  const alt = preloader.dataset.alt || "";
-  
-  // Skip if already cached or loaded
-  if (preloadedImages.has(src) || loadedPreloaders.has(preloader)) {
-    return;
-  }
-  
+  if (loadedPreloaders.has(preloader)) return;
+
+  const src = await srcFor(preloader);
+  if (!src || preloadedImages.has(src)) return;
+
   try {
-    await ensureImageCached(src, alt);
+    await ensureImageCached(src, preloader.dataset.alt || "");
   } catch (error) {
     // Silently fail for preload, will show error when entering viewport
     console.warn("[lazyload preload]", error);

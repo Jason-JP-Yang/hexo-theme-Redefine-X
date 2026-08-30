@@ -1,14 +1,16 @@
 /**
  * Blog Management — the admin console at /blog-management/.
  *
- * Three sections, each fetched and painted independently so a slow list never
- * holds up the other two:
+ * Four sections, each fetched and painted independently so a slow list never
+ * holds up the others:
  *
  *   A · Announce   compose and send one announcement, with an allowlist or a
  *                  blocklist of GitHub identities, and a full server receipt.
  *   B · Notifications  what the database still holds — edit the wording, or
  *                  delete a row and every inbox reference to it.
- *   C · Followers  the global per-topic blocklists, then every follower with the
+ *   C · Encrypted Posts  the key registry: register a post, revoke it, and set
+ *                  who may open it.
+ *   D · Followers  the global per-topic blocklists, then every follower with the
  *                  devices hanging off them, each mutable or bannable.
  *
  * Loaded on demand: notifications.js dynamic-imports this file only when the
@@ -27,6 +29,15 @@ import {
   escapeHTML,
   describeDevice,
 } from "./notifications-inbox.js";
+import { Picker, avatarOf } from "../tools/chipPicker.js";
+import {
+  b64urlToBytes,
+  importAesKey,
+  openJSON,
+  fetchSealed,
+  vaultPrefix,
+  siteRoot,
+} from "../tools/vaultCrypto.js";
 
 // The morph used for inline editing: content fades out, the box resizes, content
 // fades back. Same shape and the same feel as editing an instant-note bubble.
@@ -85,6 +96,7 @@ const state = {
   compose: { mode: "all" },
   notifications: { type: "", items: [], cursor: 0, more: false, error: false, loading: false },
   followers: { items: [], cursor: 0, more: false, orphans: [], totals: null, error: false, loading: false },
+  vault: { items: [], offset: 0, more: false, error: false, loading: false, keys: null },
   blocklists: { posts: [], notes: [], announcements: [] },
 };
 
@@ -202,160 +214,16 @@ function morph(host, inner, mutate) {
 }
 
 // ─── chip picker ─────────────────────────────────────────────
-/**
- * The multi-identity field used by the composer and by all three blocklists.
- *
- * Each committed token is checked against the Worker the moment it is entered,
- * and carries its own state: resolving, resolved (rendered as the GitHub name
- * and numeric id), or unknown. A field holding an unknown chip blocks its own
- * submit — but the Worker never refuses a send over one, it simply skips the id
- * it could not match, so a chip that goes stale between typing and sending
- * costs that recipient and nobody else.
- */
-class Picker {
-  constructor(key, host, { onCommit, placeholder }) {
-    this.key = key;
-    this.host = host;
-    this.onCommit = onCommit || (() => {});
-    this.chips = [];
-    this.busy = 0;
-
-    host.className = "bm-picker";
-    host.innerHTML = `<div class="bm-chips"><input class="bm-chip-input" type="text"
-      spellcheck="false" autocomplete="off" placeholder="${escapeHTML(placeholder)}"></div>`;
-    this.list = host.querySelector(".bm-chips");
-    this.input = host.querySelector(".bm-chip-input");
-
-    this.input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === "," || event.key === " ") {
-        event.preventDefault();
-        this.commit();
-      } else if (event.key === "Backspace" && !this.input.value && this.chips.length) {
-        this.remove(this.chips[this.chips.length - 1].raw);
-      }
-    });
-    this.input.addEventListener("blur", () => this.commit());
-    this.input.addEventListener("paste", (event) => {
-      const text = (event.clipboardData || window.clipboardData).getData("text");
-      if (!/[\s,]/.test(text)) return;
-      event.preventDefault();
-      text.split(/[\s,]+/).forEach((part) => this.add(part));
-    });
-    host.addEventListener("click", (event) => {
-      const remove = event.target.closest(".bm-chip-x");
-      if (remove) {
-        this.remove(remove.dataset.raw);
-        return;
-      }
-      if (!event.target.closest(".bm-chip")) this.input.focus();
-    });
-  }
-
-  /** Resolved ids only — what an audience or a blocklist is actually made of. */
-  get ids() {
-    return this.chips.filter((c) => c.status === "ok").map((c) => c.id);
-  }
-
-  get settled() {
-    return this.busy === 0 && this.chips.every((c) => c.status === "ok");
-  }
-
-  set(entries) {
-    this.chips = (entries || []).map((row) => ({
-      raw: String(row.login || row.id),
-      id: row.id,
-      login: row.login || "",
-      name: row.name || "",
-      status: "ok",
-    }));
-    this.paint();
-  }
-
-  clear() {
-    this.chips = [];
-    this.paint();
-  }
-
-  commit() {
-    const value = this.input.value.trim();
-    this.input.value = "";
-    if (value) this.add(value);
-  }
-
-  add(raw) {
-    const value = String(raw).replace(/^@/, "").trim();
-    if (!value) return;
-    if (this.chips.some((c) => c.raw.toLowerCase() === value.toLowerCase())) return;
-
-    this.chips.push({ raw: value, id: null, login: "", name: "", status: "checking" });
-    this.paint();
-    this.resolve(value);
-  }
-
-  remove(raw) {
-    const before = this.chips.length;
-    this.chips = this.chips.filter((c) => c.raw !== raw);
-    if (this.chips.length === before) return;
-    this.paint();
-    this.onCommit(this);
-  }
-
-  async resolve(raw) {
-    this.busy++;
-    const result = await api("/api/admin/lookup", { method: "POST", body: { ids: [raw] } });
-    this.busy--;
-
-    const chip = this.chips.find((c) => c.raw === raw);
-    if (!chip) return;
-
-    const match = result.ok && result.data && (result.data.matched || [])[0];
-    if (match) {
-      chip.id = match.id;
-      chip.login = match.login;
-      chip.name = match.name || "";
-      chip.status = "ok";
-    } else {
-      chip.status = result.ok ? "unknown" : "error";
-    }
-    this.paint();
-    this.onCommit(this);
-  }
-
-  paint() {
-    this.list.querySelectorAll(".bm-chip").forEach((el) => el.remove());
-    const html = this.chips.map((chip) => chipHTML(chip)).join("");
-    this.input.insertAdjacentHTML("beforebegin", html);
-    this.host.classList.toggle("has-unknown", this.chips.some((c) => c.status !== "ok"));
-  }
+// The class itself lives in tools/chipPicker.js so the encrypted-post page can
+// put the same control above an article. Only the two dependencies it refuses
+// to assume — the identity lookup and the translator — are supplied here.
+async function lookupIdentity(raw) {
+  const result = await api("/api/admin/lookup", { method: "POST", body: { ids: [raw] } });
+  return { ok: result.ok, matched: (result.data && result.data.matched) || [] };
 }
 
-function chipHTML(chip) {
-  if (chip.status === "checking") {
-    return `<span class="bm-chip is-checking">
-      <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
-      <span class="bm-chip-name">${escapeHTML(chip.raw)}</span></span>`;
-  }
-  if (chip.status !== "ok") {
-    const why = chip.status === "error" ? t("chip_error", "Lookup failed") : t("chip_unknown", "Not a known reader");
-    return `<span class="bm-chip is-unknown" title="${escapeHTML(why)}">
-      <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-      <span class="bm-chip-name">${escapeHTML(chip.raw)}</span>
-      <button type="button" class="bm-chip-x" data-raw="${escapeHTML(chip.raw)}"
-              aria-label="${e("remove", "Remove")}">
-        <i class="fa-solid fa-xmark" aria-hidden="true"></i></button></span>`;
-  }
-  return `<span class="bm-chip is-ok">
-    <img class="bm-chip-avatar" src="${avatarOf(chip.id)}" alt="" loading="lazy">
-    <span class="bm-chip-name">${escapeHTML(chip.name || chip.login)}</span>
-    <span class="bm-chip-id">#${escapeHTML(chip.id)}</span>
-    <button type="button" class="bm-chip-x" data-raw="${escapeHTML(chip.raw)}"
-            aria-label="${e("remove", "Remove")}">
-      <i class="fa-solid fa-xmark" aria-hidden="true"></i></button></span>`;
-}
-
-/** Derived, never stored: a GitHub avatar is addressable by numeric id alone. */
-function avatarOf(id) {
-  return `https://avatars.githubusercontent.com/u/${encodeURIComponent(id)}?s=64&v=4`;
+function makePicker(key, host, options) {
+  return new Picker(key, host, { ...options, lookup: lookupIdentity, t });
 }
 
 // ─── A · compose ─────────────────────────────────────────────
@@ -399,7 +267,7 @@ function renderCompose(section) {
   const host = section.querySelector('[data-picker="audience"]');
   pickers.set(
     "audience",
-    new Picker("audience", host, {
+    makePicker("audience", host, {
       placeholder: t("aud_placeholder", "GitHub login or numeric id, then Enter"),
       onCommit: () => syncCompose(),
     })
@@ -798,7 +666,280 @@ function collapseAway(item, after) {
   setTimeout(after, MORPH_MS);
 }
 
-// ─── C · followers ───────────────────────────────────────────
+// ─── C · encrypted posts ─────────────────────────────────────
+
+/**
+ * The registry of encrypted posts and, per post, who may open it.
+ *
+ * Activation is a paste, not a form: the build prints one JSON line per new
+ * post — id, obfuscated slug, wrapped key — and that line goes in whole. The
+ * key is already wrapped under VAULT_MASTER when it is printed, so it is opaque
+ * to this page, to the network, and to the database it lands in.
+ */
+function renderVaultShell(section) {
+  section.innerHTML = `
+    <h2 class="bm-section-title">
+      <i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i>${e("v_title", "Encrypted posts")}
+      <span class="bm-count bm-vault-count"></span>
+    </h2>
+    <p class="bm-lede">${e("v_lede", "Every encrypted post the site has published, and who may open it.")}</p>
+
+    <div class="bm-card bm-vault-add-card">
+      <h3 class="bm-sub-title">${e("v_add", "Activate a post")}</h3>
+      <p class="bm-hint">${e("v_add_hint", "Paste one line from the build output.")}</p>
+      <div class="bm-vault-add-row">
+        <input type="text" class="bm-input bm-vault-line" spellcheck="false" autocomplete="off"
+               placeholder='${escapeHTML(t("v_paste", '{"id":"...","slug":"...","wrapped":"..."}'))}' />
+        <button type="button" class="bm-primary bm-vault-add">
+          <span class="np-btn-label">${e("v_activate", "Activate")}</span>
+        </button>
+      </div>
+      <p class="bm-vault-add-state" role="status"></p>
+    </div>
+
+    <ul class="bm-vault-list"></ul>
+    <div class="bm-foot"></div>`;
+}
+
+/**
+ * The Worker stores no metadata for an encrypted post — only its key. An admin
+ * holds every key, so the panel decrypts each post's own `c.bin` (the same
+ * record every listing on the site is built from) and reads its `meta` field.
+ * Nothing readable is ever added to the database for the sake of this list.
+ */
+async function hydrateVaultMeta(rows) {
+  await Promise.all(
+    rows.map(async (row) => {
+      if (row.meta) return;
+      row.meta = {};
+      try {
+        const key = await importAesKey(b64urlToBytes(row.key));
+        const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/c.bin`);
+        if (!sealed) return;
+        const meta = (await openJSON(key, sealed)).meta || {};
+        const album = meta.kind === "album";
+        row.meta = {
+          album,
+          title: (album ? meta.name : meta.title) || meta.title || "",
+          date: meta.date || "",
+          category: album
+            ? meta.category || ""
+            : (meta.categories || []).map((c) => c.name).join(" / "),
+          tags: (meta.tags || []).map((t2) => t2.name),
+          excerpt: ((album ? meta.description : meta.excerpt) || "").slice(0, 150),
+        };
+      } catch (err) {
+        /* a post whose key no longer opens its record still lists by slug */
+      }
+    })
+  );
+}
+
+function vaultRowHTML(row) {
+  const m = row.meta || {};
+  const when = m.date ? new Date(m.date) : null;
+  const readers = row.audience.length;
+
+  return `
+    <li class="bm-vault" data-id="${escapeHTML(row.id)}">
+      <div class="bm-vault-main">
+        <div class="bm-vault-title">
+          <i class="fa-solid ${m.album ? "fa-images" : "fa-lock-keyhole"}" aria-hidden="true"></i>
+          <a href="${escapeHTML(vaultPrefix() + "/" + row.slug + "/")}" target="_blank" rel="noopener">
+            ${escapeHTML(m.title || t("v_unreadable", "Unreadable — key does not match"))}
+          </a>
+        </div>
+        <div class="bm-vault-meta">
+          ${when ? `<span><i class="fa-solid fa-calendars"></i>${when.toISOString().slice(0, 10)}</span>` : ""}
+          ${m.category ? `<span><i class="fa-solid fa-folders"></i>${escapeHTML(m.category)}</span>` : ""}
+          ${(m.tags || []).length ? `<span><i class="fa-solid fa-tags"></i>${m.tags.map(escapeHTML).join(", ")}</span>` : ""}
+          <span class="bm-vault-slug"><i class="fa-solid fa-link"></i>${escapeHTML(row.slug)}</span>
+        </div>
+        ${m.excerpt ? `<p class="bm-vault-excerpt">${escapeHTML(m.excerpt)}…</p>` : ""}
+      </div>
+
+      <div class="bm-vault-side">
+        <div class="bm-vault-readers" data-empty="${readers ? "0" : "1"}">
+          <i class="fa-solid fa-user-lock" aria-hidden="true"></i>
+          <strong>${readers}</strong>
+          <span>${escapeHTML(t(readers === 1 ? "v_reader" : "v_readers", "readers"))}</span>
+        </div>
+        <button type="button" class="bm-quiet bm-danger bm-vault-revoke" title="${escapeHTML(t("v_revoke_hint", ""))}">
+          <i class="fa-solid fa-trash" aria-hidden="true"></i>
+          <span class="np-btn-label">${e("v_revoke", "Revoke")}</span>
+        </button>
+      </div>
+
+      <div class="bm-vault-audience">
+        <label class="bm-blocklist-label">
+          ${e("v_audience", "Who can read this")}
+          <span class="bm-save-state" data-save="vault:${escapeHTML(row.id)}"></span>
+        </label>
+        <div class="bm-picker-host" data-picker="vault:${escapeHTML(row.id)}"></div>
+      </div>
+    </li>`;
+}
+
+function paintVault() {
+  const section = root.querySelector('[data-part="vault"]');
+  if (!section) return;
+  const list = section.querySelector(".bm-vault-list");
+  const foot = section.querySelector(".bm-foot");
+  const box = state.vault;
+
+  section.querySelector(".bm-vault-count").textContent = box.items.length || "";
+  section.classList.toggle("is-loading", box.loading);
+
+  if (box.loading && !box.items.length) {
+    list.innerHTML = SPINNER_ROW;
+  } else if (box.error) {
+    list.innerHTML = `<li class="bm-blank">${e("unreachable", "Couldn't reach the service.")}</li>`;
+  } else if (!box.items.length) {
+    list.innerHTML = `<li class="bm-blank">${e("v_empty", "No encrypted post has been activated yet.")}</li>`;
+  } else {
+    list.innerHTML = box.items.map(vaultRowHTML).join("");
+  }
+
+  foot.innerHTML = box.more
+    ? `<button type="button" class="bm-quiet bm-more" data-more="vault">
+         <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+         <span class="np-btn-label">${e("load_more", "Load more")}</span></button>`
+    : "";
+
+  // One picker per post, rebuilt with the list because the rows it hangs off
+  // are replaced wholesale. Unlike the blocklists these do NOT autosave: a
+  // half-typed audience must not silently take someone's access away.
+  for (const row of box.items) {
+    const key = `vault:${row.id}`;
+    const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
+    if (!host) continue;
+    const picker = makePicker(key, host, {
+      placeholder: t("aud_placeholder", "GitHub login or numeric id, then Enter"),
+      onCommit: (p) => saveVaultAudience(row.id, p),
+    });
+    picker.set(row.audience);
+    pickers.set(key, picker);
+  }
+
+  contentChanged();
+}
+
+async function loadVault({ reset = false, trigger = null } = {}) {
+  const box = state.vault;
+  if (reset) {
+    box.items = [];
+    box.offset = 0;
+    box.more = false;
+    box.keys = null;
+  }
+  if (trigger) setBusy(trigger, true);
+  box.loading = true;
+  paintVault();
+
+  // The registry and the keys, together: the listing has no metadata in it, and
+  // the titles this panel shows come from decrypting each post's own card.
+  const [result, keys] = await Promise.all([
+    api(`/api/admin/vault?offset=${box.offset}`),
+    box.keys ? Promise.resolve(null) : api("/api/vault/keys", { method: "POST", body: {} }),
+  ]);
+  box.loading = false;
+  box.error = !result.ok;
+
+  if (keys && keys.ok && keys.data) {
+    box.keys = new Map((keys.data.posts || []).map((p) => [p.id, p.key]));
+  }
+
+  if (result.ok && result.data) {
+    const rows = (result.data.posts || []).map((r) => ({ ...r, key: box.keys?.get(r.id) }));
+    await hydrateVaultMeta(rows.filter((r) => r.key));
+    box.items = box.items.concat(rows);
+    box.more = !!result.data.more;
+    box.offset = box.items.length;
+  }
+  paintVault();
+}
+
+async function activateVault(trigger) {
+  const section = root.querySelector('[data-part="vault"]');
+  const field = section.querySelector(".bm-vault-line");
+  const flag = section.querySelector(".bm-vault-add-state");
+  const raw = field.value.trim();
+  if (!raw) return;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    flag.textContent = t("v_bad", "That is not an activation line.");
+    flag.dataset.tone = "bad";
+    return;
+  }
+
+  setBusy(trigger, true);
+  const result = await api("/api/admin/vault", {
+    method: "POST",
+    body: { id: parsed.id, slug: parsed.slug, wrapped: parsed.wrapped },
+  });
+  setBusy(trigger, false);
+
+  flag.textContent = result.ok ? t("v_added", "Activated") : t("v_bad", "That is not an activation line.");
+  flag.dataset.tone = result.ok ? "ok" : "bad";
+  if (result.ok) {
+    field.value = "";
+    loadVault({ reset: true });
+  }
+}
+
+async function saveVaultAudience(postId, picker) {
+  const flag = root.querySelector(`[data-save="${CSS.escape("vault:" + postId)}"]`);
+  if (!picker.settled) {
+    if (flag) flag.innerHTML = "";
+    return;
+  }
+  if (flag) flag.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`;
+
+  // Full chips, not bare ids: the login travels with the grant so the panel can
+  // render a name rather than a number the next time it loads.
+  const audience = picker.entries;
+  const result = await api(`/api/admin/vault/${encodeURIComponent(postId)}/audience`, {
+    method: "PUT",
+    body: { audience },
+  });
+
+  if (flag) {
+    flag.innerHTML = result.ok
+      ? `<i class="fa-solid fa-check" aria-hidden="true"></i>`
+      : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
+    if (result.ok) setTimeout(() => (flag.innerHTML = ""), 1800);
+  }
+  if (result.ok) {
+    const row = state.vault.items.find((r) => r.id === postId);
+    if (row) {
+      row.audience = audience;
+      const badge = root.querySelector(`.bm-vault[data-id="${CSS.escape(postId)}"] .bm-vault-readers`);
+      if (badge) {
+        badge.querySelector("strong").textContent = audience.length;
+        badge.dataset.empty = audience.length ? "0" : "1";
+      }
+    }
+  }
+}
+
+async function revokeVault(item, trigger) {
+  const id = item.dataset.id;
+  setBusy(trigger, true);
+  const result = await api(`/api/admin/vault/${encodeURIComponent(id)}`, { method: "DELETE" });
+  setBusy(trigger, false);
+  if (!result.ok) return;
+
+  collapseAway(item, () => {
+    state.vault.items = state.vault.items.filter((r) => r.id !== id);
+    pickers.delete(`vault:${id}`);
+    paintVault();
+  });
+}
+
+// ─── D · followers ───────────────────────────────────────────
 function renderFollowersShell(section) {
   section.innerHTML = `
     <h2 class="bm-section-title">
@@ -828,7 +969,7 @@ function renderFollowersShell(section) {
       <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
       <span>${e(
         "moderation_notice",
-        "Muting or banning here only affects notifications. It does not stop anyone commenting on the blog — comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation."
+        "Muting or banning here can only affect notifications and access to encrypted posts. It does not stop anyone commenting on the blog — comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation."
       )}
       <a href="${MODERATION_DOCS}" target="_blank" rel="noopener">${e("moderation_docs", "GitHub docs")}</a></span>
     </p>
@@ -841,7 +982,7 @@ function renderFollowersShell(section) {
     const host = section.querySelector(`[data-picker="${topic}"]`);
     pickers.set(
       topic,
-      new Picker(topic, host, {
+      makePicker(topic, host, {
         placeholder: t("aud_placeholder", "GitHub login or numeric id, then Enter"),
         onCommit: (picker) => saveBlocklist(topic, picker),
       })
@@ -1082,21 +1223,26 @@ function showGate(kind) {
   gate.hidden = false;
   panel.hidden = true;
 
+  // Waiting is the encrypted-post gate's card, verbatim; the two outcomes are
+  // the console's own, because only one of them is about access at all.
+  if (kind === "loading") {
+    gate.innerHTML = `<div class="access-probe" role="status">
+      <div class="access-probe-lock"><i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i></div>
+      <p class="access-probe-text">${escapeHTML(t("checking", "Checking your session…"))}</p>
+      <div class="access-probe-bar"><span></span></div></div>`;
+    return;
+  }
+
   const copy = {
-    loading: ["fa-circle-notch fa-spin", t("checking", "Checking your session…")],
     denied: ["fa-lock", t("denied", "This page is for the blog's administrator.")],
     error: ["fa-plug-circle-xmark", t("unreachable", "Couldn't reach the notification service.")],
   }[kind];
 
   gate.innerHTML = `<i class="fa-solid ${copy[0]}" aria-hidden="true"></i>
     <p class="bm-gate-text">${escapeHTML(copy[1])}</p>
-    ${
-      kind === "loading"
-        ? ""
-        : `<button type="button" class="bm-quiet bm-retry">
-             <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
-             <span class="np-btn-label">${e("retry", "Try again")}</span></button>`
-    }`;
+    <button type="button" class="bm-quiet bm-retry">
+      <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+      <span class="np-btn-label">${e("retry", "Try again")}</span></button>`;
 }
 
 function wire() {
@@ -1122,9 +1268,13 @@ function wire() {
     const more = target.closest(".bm-more");
     if (more) {
       if (more.dataset.more === "followers") loadFollowers({ trigger: more });
+      else if (more.dataset.more === "vault") loadVault({ trigger: more });
       else loadNotifications({ trigger: more });
       return;
     }
+
+    const activate = target.closest(".bm-vault-add");
+    if (activate) return void activateVault(activate);
 
     const edit = target.closest(".bm-edit");
     if (edit) return void startEdit(edit.closest(".bm-notif"));
@@ -1151,6 +1301,15 @@ function wire() {
       return;
     }
 
+    const revoke = target.closest(".bm-vault-revoke");
+    if (revoke) {
+      const item = revoke.closest(".bm-vault");
+      if (confirmStep(revoke, `vault:${item.dataset.id}`, t("confirm", "Press again"))) {
+        revokeVault(item, revoke);
+      }
+      return;
+    }
+
     disarmConfirm();
   });
 }
@@ -1173,10 +1332,12 @@ async function boot(force = false) {
     announce: root.querySelector('[data-part="announce"]'),
     notifications: root.querySelector('[data-part="notifications"]'),
     followers: root.querySelector('[data-part="followers"]'),
+    vault: root.querySelector('[data-part="vault"]'),
   };
 
   renderCompose(sections.announce);
   renderNotificationsShell(sections.notifications);
+  if (sections.vault) renderVaultShell(sections.vault);
   renderFollowersShell(sections.followers);
 
   const box = state.notifications;
@@ -1185,6 +1346,7 @@ async function boot(force = false) {
   box.cursor = probe.data.cursor || 0;
   paintNotifications();
 
+  if (sections.vault) loadVault({ reset: true });
   loadFollowers({ reset: true });
 }
 
@@ -1198,16 +1360,32 @@ export function initBlogManagement() {
   state.notifications.type = "";
   state.notifications.loading = false;
   state.followers.loading = false;
+  state.vault.loading = false;
   reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  const notifications = (window.theme && window.theme.notifications) || {};
+  const backend = (window.theme && window.theme.backend) || {};
   base = window.blogAuth
-    ? window.blogAuth.resolveApiBase(notifications.api_url)
-    : String(notifications.api_url || "").replace(/\/+$/, "");
+    ? window.blogAuth.resolveApiBase()
+    : String(backend.api_url || "").replace(/\/+$/, "");
   if (!base) return void showGate("error");
 
   // The page lives INSIDE #swup, so this element is new markup on every visit —
   // the listener goes with it and nothing has to be torn down.
   wire();
+  wireSignOut();
   boot();
+}
+
+/** Every panel here is data this browser is no longer entitled to. Same answer
+ *  as an encrypted post: leave, without leaving a Back entry to return by. */
+let signOutWired = false;
+
+function wireSignOut() {
+  if (signOutWired) return;
+  signOutWired = true;
+  window.addEventListener("blog:auth-change", async () => {
+    if (!document.getElementById("blog-management")) return;
+    const session = window.blogAuth && (await window.blogAuth.getSession());
+    if (!session || !session.token) location.replace(siteRoot() + "/");
+  });
 }

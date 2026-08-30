@@ -187,8 +187,6 @@ home_banner:
   instant_notes:
     # Whether to enable instant notes
     enable: false
-    # API endpoint URL for fetching notes (Cloudflare Worker)
-    api_url: 
     # Avatar image URL (independent from sidebar avatar)
     avatar: /images/redefine-avatar.svg
 # HOME BANNER <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
@@ -403,12 +401,8 @@ comment:
       input_position: bottom # Place the comment box above/below the comments. e.g. top, bottom
       loading: lazy # Load the comments lazily
 
-      # Masonry Reactions Only Support for Giscus
-      # CORS Proxy for giscus API (required for masonry reactions)
-      # giscus.app blocks cross-origin API requests from non-giscus.app origins.
-      proxy: # https://giscus-cors-proxy.<your-subdomain>.workers.dev
-      # Personal Access Tokens from auther github account with read and write premission to the repo is REQUIRED
-      author_pat: 
+      # The CORS proxy giscus needs is `backend.api_url`; the author PAT that
+      # masonry reactions need is GISCUS_AUTHOR_PAT in .env. Neither lives here.
 # COMMENT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # FOOTER >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
@@ -507,14 +501,33 @@ plugins:
     normal_width: 0.6
 # PLUGINS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
+# BACKEND >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
+# Docs: https://redefine-x-docs.jason-yang.top/zh/backend
+# ONE Cloudflare Worker (workflows/backend-worker) serves every authenticated
+# concern: instant notes, GitHub-OAuth identity, the giscus CORS proxy,
+# notifications, and the encrypted-post vault. The ONLY place its URL is written.
+backend:
+  # Worker base URL. Leave empty to disable everything that depends on it.
+  api_url:
+  # Which Worker the front-end talks to: production, local
+  # `local` applies ONLY on a localhost page and ONLY to a loopback URL; a
+  # deployed site ignores it. Switches EVERY worker call at once, because a
+  # session token only verifies at the instance that signed it.
+  mode: production
+  # The Worker used when mode is `local`. Must be localhost or 127.0.0.1.
+  local_api_url: http://localhost:8787
+  # Encrypted posts (`vault:` front matter). Keys live in .vault/keys.json and D1.
+  vault_enable: false
+  # Path prefix for obfuscated vault pages and assets.
+  vault_prefix: /v
+# BACKEND <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
+
 # NOTIFICATIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/notifications
 # Requires the backend Worker in workflows/backend-worker (see its README).
 notifications:
   # Whether to enable follow + push notifications
   enable: false
-  # Backend Worker base URL (the same worker that serves notes, auth and the giscus proxy)
-  api_url:
   # VAPID public key. Public by design — it is shipped to every browser.
   # Generate a pair with `npm run vapid:keygen` in the backend-worker directory.
   vapid_public_key:
@@ -553,11 +566,5 @@ cdn:
 developer:
   # Whether to enable developer mode (only for developers who want to modify the theme source code, not for ordinary users)
   enable: false
-  # Which backend the front-end talks to: production | local
-  # `local` applies ONLY on a localhost page and ONLY to a loopback URL; a
-  # deployed site ignores it. Switches EVERY worker call at once, because a
-  # session token only verifies at the instance that signed it.
-  backend: production
-  # The Worker used when backend is `local`. Must be localhost or 127.0.0.1.
-  local_api_url: http://localhost:8787
+  # Which Worker the front-end talks to is `backend.mode` / `backend.local_api_url`.
 # DEVELOPER MODE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end

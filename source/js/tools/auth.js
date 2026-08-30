@@ -58,8 +58,8 @@
   // ─── backend selection ───────────────────────────────────
   // EXACTLY three combinations are permitted; nothing else can be expressed:
   //
-  //   A  localhost page  → local Worker        developer.backend: local
-  //   B  localhost page  → production Worker   developer.backend: production
+  //   A  localhost page  → local Worker        backend.mode: local
+  //   B  localhost page  → production Worker   backend.mode: production
   //   C  production page → production Worker   (forced, config is ignored)
   //
   // The fourth combination — a deployed page talking to a local Worker — is
@@ -138,12 +138,12 @@
     devBaseResolved = true;
     devBase = null;
 
-    var d = (window.theme && window.theme.developer) || {};
-    if (String(d.backend || "production") !== "local") return devBase;
+    var d = (window.theme && window.theme.backend) || {};
+    if (String(d.mode || "production") !== "local") return devBase;
 
     if (!isLocalhostPage()) {
       warn(
-        "developer.backend is 'local' but " +
+        "backend.mode is 'local' but " +
           location.hostname +
           " is not a private host (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x, *.local) — " +
           "ignoring it and using the production backend."
@@ -152,7 +152,7 @@
     }
     if (!d.local_api_url || !isLoopbackUrl(d.local_api_url)) {
       warn(
-        "developer.local_api_url must be a localhost/127.0.0.1 URL — " +
+        "backend.local_api_url must be a localhost/127.0.0.1 URL — " +
           "ignoring it and using the production backend."
       );
       return devBase;
@@ -169,22 +169,17 @@
   }
 
   /**
-   * Resolve the merged-Worker base URL. Both custom domains route to the same
-   * Worker, so either works for /api/oauth/token and /api/auth/login.
-   * The selected backend wins; otherwise the masonry page's giscusProxy (keeps
-   * likes on their usual domain), else the exported instant_notes.api_url.
+   * Resolve the Worker base URL. `backend.api_url` is the single place it is
+   * configured; the masonry page's embedded giscusProxy is a fallback for pages
+   * generated before that consolidation.
    */
   function getApiBase() {
     var dev = getDevBase();
     if (dev) return dev;
+    var t = window.theme && window.theme.backend && window.theme.backend.api_url;
+    if (t) return strip(t);
     var mc = getMasonryConfig();
     if (mc && mc.giscusProxy) return strip(mc.giscusProxy);
-    var t =
-      window.theme &&
-      window.theme.home_banner &&
-      window.theme.home_banner.instant_notes &&
-      window.theme.home_banner.instant_notes.api_url;
-    if (t) return strip(t);
     return null;
   }
 
@@ -192,9 +187,9 @@
    * Resolve a Worker base for any other consumer.
    *
    * EVERY module that talks to the Worker must go through this — instant notes,
-   * notifications, anything later. Reading `api_url` straight from the config
-   * is what produced the split brain this replaced: notes posting to production
-   * with a token the local Worker had signed.
+   * notifications, the vault, anything later. Reading a URL straight from the
+   * config is what produced the split brain this replaced: notes posting to
+   * production with a token the local Worker had signed.
    */
   function resolveApiBase(fallback) {
     return getDevBase() || (fallback ? strip(fallback) : getApiBase());

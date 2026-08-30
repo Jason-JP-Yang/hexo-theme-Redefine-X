@@ -178,7 +178,6 @@ notifications:
   close: Close
   back: Back
   mark_read: Mark all read
-  signed_out: Sign in with GitHub to follow this blog.
   sign_in: Sign in with GitHub
   follow: Follow this blog
   follow_nav: Follow
@@ -285,7 +284,7 @@ management:
   topic_posts: New posts
   topic_notes: Instant notes
   topic_announcements: Announcements
-  moderation_notice: Muting or banning here only affects notifications. It does not stop anyone commenting on the blog - comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation.
+  moderation_notice: Muting or banning here can only affect notifications and access to encrypted posts. It does not stop anyone commenting on the blog - comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation.
   moderation_docs: GitHub docs
   no_followers: Nobody follows the blog yet.
   no_devices: No push device registered.
@@ -300,3 +299,34 @@ management:
   confirm: Press again
   orphans: Unowned devices
   orphans_hint: Subscriptions whose owner unfollowed. Only banned ones are kept - the daily sweep removes the rest.
+  v_title: Encrypted posts
+  v_lede: Every encrypted post the site has published, and who may open it. The posts themselves are never stored here - only their keys.
+  v_empty: No encrypted post has been activated yet.
+  v_add: Activate a post
+  v_add_hint: Paste one line from the build output. Re-pasting the same line updates it.
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: Activate
+  v_added: Activated
+  v_bad: That is not an activation line.
+  v_revoke: Revoke
+  v_revoke_hint: Nobody will be able to open it again, including you.
+  v_audience: Who can read this
+  v_save: Save readers
+  v_saved: Saved
+  v_slug: Path
+  v_reader: reader
+  v_readers: readers
+  v_none: nobody yet
+  v_unreadable: Unreadable - the key does not match this build
+
+vault:
+  unlocking: Checking your access
+  badge: Encrypted
+  authorized: You have been granted access to this encrypted post
+  list_tag: Encrypted posts tagged
+  list_category: Encrypted posts in
+  list_empty: No encrypted post here is readable by this identity.
+  no_comments: Comments are closed on encrypted posts
+  no_comments_hint: A public thread under a post only some readers can open would put its title and its substance back in the open.
+  no_comments_album: Comments and likes are closed on encrypted albums
+  no_comments_album_hint: A public thread would carry the album's title and every photograph's file name, and the like counts live in that same thread - so neither is offered here.

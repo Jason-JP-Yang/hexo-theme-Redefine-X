@@ -79,11 +79,11 @@ function readConfig() {
   if (!n || !n.enable) return null;
 
   // Resolve THROUGH blogAuth, never straight from the config: on localhost it
-  // redirects to `developer.local_api_url`, and the session token we send is
-  // only valid at the Worker instance that minted it.
+  // redirects to `backend.local_api_url`, and the session token we send is only
+  // valid at the Worker instance that minted it.
   const base = window.blogAuth
-    ? window.blogAuth.resolveApiBase(n.api_url)
-    : String(n.api_url || "").replace(/\/+$/, "");
+    ? window.blogAuth.resolveApiBase()
+    : String(theme.backend?.api_url || "").replace(/\/+$/, "");
   if (!base) return null;
 
   return {

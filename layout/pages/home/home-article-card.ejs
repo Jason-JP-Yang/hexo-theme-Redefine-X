@@ -1,0 +1,92 @@
+<%
+    // One home tile. Extracted from home-content so the vault generator can
+    // render the SAME markup for an encrypted post without a second, drifting
+    // copy of it in JavaScript.
+    //
+    // A vault card is rendered once, tier-free: `tier-*`, the bento custom
+    // properties and the split classes are all applied by the client from the
+    // pre-solved geometry, because which of them a post gets depends on who is
+    // reading and that is not known at build time.
+    const bento = typeof bentoEnabled === "undefined" ? true : bentoEnabled;
+    const t = typeof tile === "undefined" ? null : tile;
+    const vault = typeof isVault !== "undefined" && isVault;
+    const body = typeof contentOverride === "undefined" ? post.content : contentOverride;
+    const chars = typeof excerptChars === "undefined" ? 520 : excerptChars;
+    const target = typeof href === "undefined" ? url_for(post.path) : href;
+    // A vault cover is a sealed hash rather than a path, and it is still a
+    // cover: `no-cover` sizes the tile as though the thumbnail were not there.
+    const asset = typeof coverAsset === "undefined" ? "" : coverAsset;
+    const hasCover = !!(cover || asset);
+    const accent = coverAccent(post);
+    const tier = t ? t.tier : "standard";
+    const style = [
+        bento && t ? bentoStyle(t) : "",
+        accent ? "--tile-accent:" + accent : "",
+    ].filter(Boolean).join(";");
+%>
+<li class="home-article-item<%= t ? " tier-" + tier : "" %><%= hasCover ? "" : " no-cover" %><%= accent ? " has-accent" : "" %><%= vault ? " is-vault" : "" %><%= bento && t ? bentoClasses(t) : "" %>"
+    <%- vault ? ' data-vault-id="' + vaultId + '"' : "" %>
+    <%- style ? ' style="' + style + '"' : "" %>>
+
+    <%# Over the cover, where an overlay has a picture to sit on. A tile with no
+        cover puts it in the flow of the head instead (below): the body starts at
+        the tile's own top edge there, so an overlay lands on the running numeral
+        and the title. %>
+    <% if (vault && hasCover) { %>
+        <%- partial('components/vault-badge') %>
+    <% } else if (!vault && post.sticky) { %>
+        <div class="home-article-sticky-badge">
+            <i class="fa-regular fa-thumbtack"></i><%- __('sticky') %>
+        </div>
+    <% } %>
+
+    <% if (hasCover) { %>
+        <div class="home-article-thumbnail">
+            <%# aria-hidden + tabindex="-1": this links to the same place as the
+                title below it, so it is decorative to a screen reader and should
+                not cost a second tab stop. %>
+            <a href="<%- target %>" tabindex="-1" aria-hidden="true">
+                <%# A vault cover carries its hash, never a path: the file it names
+                    is sealed and the client swaps in a blob: URL after decrypting. %>
+                <img src="<%- cover %>" alt="<%= post.title %>"<%- asset ? ' data-vault-asset="' + asset + '"' : "" %>
+                    <%- postNumber === 1 ? 'fetchpriority="high"' : 'loading="lazy"' %> decoding="async" />
+            </a>
+        </div>
+    <% } %>
+
+    <div class="home-article-body">
+        <span class="home-article-index" aria-hidden="true"><%= postNumber %></span>
+
+        <%# The eyebrow and the title are one row of the body's grid, not two.
+            Their own row would keep its gap when there is no eyebrow to put in
+            it — an empty track still has tracks either side of it — and the
+            excerpt is sized from what is left over, so a phantom 0.9rem is a
+            line of summary that silently disappears. %>
+        <div class="home-article-head">
+            <% if (vault && !hasCover) { %>
+                <%- partial('components/vault-badge', { extra: 'is-inline' }) %>
+            <% } %>
+
+            <% if (post.categories.length && theme.home.categories.enable === true) { %>
+                <span class="home-article-eyebrow"><%= post.categories.toArray()[0].name %></span>
+            <% } %>
+
+            <%# Never clamped. A title that does not fit is a tile that was sized
+                wrong, and the plan is what fixes that. %>
+            <h3 class="home-article-title">
+                <a href="<%- target %>"><%= post.title %></a>
+            </h3>
+        </div>
+
+        <div class="home-article-content markdown-body">
+            <% if (post.excerpt && post.excerpt == "false") { %>
+            <% } else if (post.excerpt && post.excerpt !== "false") { %>
+                <%- render(post.excerpt, "markdown") %>
+            <% } else { %>
+                <%- truncate(strip_html(body), {length: chars}) %>
+            <% } %>
+        </div>
+
+        <%- partial('pages/home/home-article', {post: post, href: target}) %>
+    </div>
+</li>

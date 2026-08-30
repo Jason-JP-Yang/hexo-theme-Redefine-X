@@ -177,7 +177,6 @@ notifications:
   close: Fermer
   back: Retour
   mark_read: Tout marquer comme lu
-  signed_out: Connectez-vous avec GitHub pour suivre ce blog.
   sign_in: Se connecter avec GitHub
   follow: Suivre ce blog
   follow_nav: Suivre
@@ -284,7 +283,7 @@ management:
   topic_posts: Nouveaux articles
   topic_notes: Notes rapides
   topic_announcements: Annonces
-  moderation_notice: Couper le son ou bloquer ici n'affecte que les notifications. Cela n'empeche personne de commenter le blog ; les commentaires sont des GitHub Discussions, donc le blocage d'un commentateur se fait dans les reglages Moderation de votre compte GitHub.
+  moderation_notice: Couper le son ou bloquer ici n'affecte que les notifications et l'acces aux articles chiffres. Cela n'empeche personne de commenter le blog ; les commentaires sont des GitHub Discussions, donc le blocage d'un commentateur se fait dans les reglages Moderation de votre compte GitHub.
   moderation_docs: Documentation GitHub
   no_followers: Personne ne suit encore le blog.
   no_devices: Aucun appareil push enregistre.
@@ -299,3 +298,34 @@ management:
   confirm: Appuyez a nouveau
   orphans: Appareils sans proprietaire
   orphans_hint: Abonnements dont le proprietaire s'est desabonne. Seuls les bloques sont conserves - le balayage quotidien supprime les autres.
+  v_title: Articles chiffres
+  v_lede: Tous les articles chiffres publies et qui peut les ouvrir. Seules leurs cles sont conservees ici, jamais leur contenu.
+  v_empty: Aucun article chiffre n'a encore ete active.
+  v_add: Activer un article
+  v_add_hint: Collez une ligne de la sortie de compilation. La recoller la met a jour.
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: Activer
+  v_added: Active
+  v_bad: Ce n'est pas une ligne d'activation.
+  v_revoke: Revoquer
+  v_revoke_hint: Plus personne ne pourra l'ouvrir, vous compris.
+  v_audience: Qui peut le lire
+  v_save: Enregistrer les lecteurs
+  v_saved: Enregistre
+  v_slug: Chemin
+  v_reader: lecteur
+  v_readers: lecteurs
+  v_unreadable: Illisible - la cle ne correspond pas a cette compilation
+  v_none: personne pour l'instant
+
+vault:
+  unlocking: Verification de votre acces
+  badge: Chiffre
+  authorized: Vous avez acces a cet article chiffre
+  list_tag: Articles chiffres etiquetes
+  list_category: Articles chiffres dans
+  list_empty: Aucun article chiffre ici n'est lisible par cette identite.
+  no_comments: Les commentaires sont fermes sur les articles chiffres
+  no_comments_hint: Un fil public sous un article que seuls certains lecteurs peuvent ouvrir exposerait de nouveau son titre et son contenu.
+  no_comments_album: Les commentaires et les mentions J'aime sont desactives sur les albums chiffres
+  no_comments_album_hint: Un fil public exposerait le titre de l'album et le nom de fichier de chaque photo, et les mentions J'aime vivent dans ce meme fil, donc ni l'un ni l'autre n'est propose ici.

@@ -177,7 +177,6 @@ notifications:
   close: 閉じる
   back: 戻る
   mark_read: すべて既読にする
-  signed_out: GitHub でサインインするとこのブログをフォローできます。
   sign_in: GitHub でサインイン
   follow: このブログをフォロー
   follow_nav: フォロー
@@ -284,7 +283,7 @@ management:
   topic_posts: 新着記事
   topic_notes: インスタントノート
   topic_announcements: お知らせ
-  moderation_notice: ここでのミュートやブロックは通知にのみ影響し、ブログへのコメントは止められません。コメントは GitHub Discussions のため、コメントを禁止するには GitHub アカウント設定の Moderation でユーザーをブロックしてください。
+  moderation_notice: ここでのミュートやブロックは通知と暗号化記事へのアクセスにのみ影響し、ブログへのコメントは止められません。コメントは GitHub Discussions のため、コメントを禁止するには GitHub アカウント設定の Moderation でユーザーをブロックしてください。
   moderation_docs: GitHub ドキュメント
   no_followers: まだフォロワーはいません。
   no_devices: プッシュデバイスは登録されていません。
@@ -299,3 +298,34 @@ management:
   confirm: もう一度押す
   orphans: 所有者のいないデバイス
   orphans_hint: 所有者がフォローを解除した購読です。ブロック済みのものだけが残り、それ以外は日次の掃除で削除されます。
+  v_title: 暗号化された記事
+  v_lede: 公開済みの暗号化記事と、それを開ける人の一覧。ここに保存されるのは鍵だけで、本文は決して保存されません。
+  v_empty: まだ有効化された暗号化記事はありません。
+  v_add: 記事を有効化
+  v_add_hint: ビルド出力の1行を貼り付けてください。同じ行を貼り直すと更新になります。
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: 有効化
+  v_added: 有効化しました
+  v_bad: これは有効化用の行ではありません。
+  v_revoke: 失効
+  v_revoke_hint: 以後は自分を含め誰も開けなくなります。
+  v_audience: 読める人
+  v_save: 読者を保存
+  v_saved: 保存しました
+  v_slug: パス
+  v_reader: 人
+  v_readers: 人
+  v_unreadable: 読み取れません — 鍵が今回のビルドと一致しません
+  v_none: まだ誰もいません
+
+vault:
+  unlocking: アクセス権を確認しています
+  badge: 暗号化
+  authorized: この暗号化記事へのアクセスが許可されています
+  list_tag: このタグの暗号化記事
+  list_category: このカテゴリの暗号化記事
+  list_empty: この識別子で読める暗号化記事はありません。
+  no_comments: 暗号化記事のコメントは閉じています
+  no_comments_hint: 一部の読者しか開けない記事に公開スレッドを置くと、題名と内容が再び公開されてしまいます。
+  no_comments_album: 暗号化アルバムではコメントといいねを受け付けません
+  no_comments_album_hint: 公開スレッドにはアルバム名と各写真のファイル名が残り、いいねの数も同じスレッドに保存されるため、どちらも有効にしていません。

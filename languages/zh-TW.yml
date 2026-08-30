@@ -179,7 +179,6 @@ notifications:
   close: 關閉
   back: 返回
   mark_read: 全部標為已讀
-  signed_out: 使用 GitHub 登入即可追蹤本部落格。
   sign_in: 使用 GitHub 登入
   follow: 追蹤本部落格
   follow_nav: 追蹤
@@ -286,7 +285,7 @@ management:
   topic_posts: 新文章
   topic_notes: 即時短箋
   topic_announcements: 公告
-  moderation_notice: 此處的靜音與封鎖只影響通知，不會限制任何人在部落格中留言 —— 留言由 GitHub Discussions 承載，如需禁止某人留言，請在 GitHub 帳號設定的 Moderation 中封鎖該使用者。
+  moderation_notice: 此處的靜音與封鎖只影響通知與加密文章的存取權限，不會限制任何人在部落格中留言 —— 留言由 GitHub Discussions 承載，如需禁止某人留言，請在 GitHub 帳號設定的 Moderation 中封鎖該使用者。
   moderation_docs: GitHub 文件
   no_followers: 目前還沒有人追蹤本部落格。
   no_devices: 未註冊任何推播裝置。
@@ -301,3 +300,34 @@ management:
   confirm: 再按一次
   orphans: 無歸屬裝置
   orphans_hint: 原擁有者已取消追蹤的訂閱。只有被封鎖的會被保留 —— 其餘的由每日清理工作移除。
+  v_title: 加密文章
+  v_lede: 站點已發佈的全部加密文章，以及誰可以開啟它們。這裡從不儲存文章本身，只儲存金鑰。
+  v_empty: 還沒有啟用任何加密文章。
+  v_add: 啟用一篇文章
+  v_add_hint: 貼上建置輸出裡的一行。重複貼上同一行等同於更新。
+  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
+  v_activate: 啟用
+  v_added: 已啟用
+  v_bad: 這不是一行啟用資訊。
+  v_revoke: 撤銷
+  v_revoke_hint: 之後沒有人能再開啟它，包括你自己。
+  v_audience: 可以閱讀的人
+  v_save: 儲存名單
+  v_saved: 已儲存
+  v_slug: 路徑
+  v_reader: 人
+  v_readers: 人
+  v_unreadable: 無法讀取 —— 金鑰與本次建置不符
+  v_none: 暫無
+
+vault:
+  unlocking: 正在檢查存取權限
+  badge: 加密
+  authorized: 你已獲授權閱讀這篇加密文章
+  list_tag: 帶此標籤的加密文章
+  list_category: 此分類下的加密文章
+  list_empty: 目前身分沒有可閱讀的加密文章。
+  no_comments: 加密文章不開放留言
+  no_comments_hint: 只有部分讀者能開啟的文章，若掛上公開討論串，標題與內容會重新暴露在外。
+  no_comments_album: 加密相簿不開放留言與按讚
+  no_comments_album_hint: 公開討論串會連同相簿標題與每張照片的檔名一併曝光，公開按讚系統也依賴同一個討論串，因此兩者都不會開啟。

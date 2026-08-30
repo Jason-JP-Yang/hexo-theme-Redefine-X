@@ -1,0 +1,15 @@
+<%#
+    "Checking your access" — the one card the theme shows while a Worker decides
+    what this identity may see. Used by the encrypted-post gate, the taxonomy
+    gate and the management console, so all three wait in the same way.
+
+    Callers pass `text`; the client repaints the same markup when it re-enters
+    the probing state (plugins/vault.js, plugins/blog-management.js).
+%>
+<div class="access-probe" role="status">
+    <div class="access-probe-lock">
+        <i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i>
+    </div>
+    <p class="access-probe-text"><%= text %></p>
+    <div class="access-probe-bar"><span></span></div>
+</div>

@@ -100,8 +100,8 @@ export default function initInstantNotes() {
   // posted to production with a token the LOCAL worker had issued, so every
   // admin write 403'd while public reads appeared to work.
   const apiUrl = window.blogAuth
-    ? window.blogAuth.resolveApiBase(theme.home_banner?.instant_notes?.api_url)
-    : theme.home_banner?.instant_notes?.api_url;
+    ? window.blogAuth.resolveApiBase()
+    : String(theme.backend?.api_url || "").replace(/\/+$/, "");
   if (!apiUrl) return;
   panel._apiUrl = apiUrl;
 

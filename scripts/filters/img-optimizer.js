@@ -866,6 +866,12 @@ hexo.extend.filter.register("after_post_render", function (data) {
 // 2. Run for full page
 hexo.extend.filter.register("after_render:html", replaceImagesInHtml);
 
+// Exposed for HTML that is never rendered as a route and so never reaches the
+// filter above — the sealed article of an encrypted post. Without it every
+// template image in that article keeps its pre-AVIF path, whose route this file
+// has already withdrawn.
+hexo.extend.helper.register("avifRewriteHtml", replaceImagesInHtml);
+
 // ----------------------------------------------------------------------------
 // Hooks
 // ----------------------------------------------------------------------------

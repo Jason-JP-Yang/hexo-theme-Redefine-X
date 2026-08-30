@@ -14,7 +14,20 @@
 	</div>
 
 	<div class="page-template-comments">
-		<% if (page.hasOwnProperty('comment') && (page.comment === true || page.comments === true) ) { %>
+		<%# An encrypted album carries neither a thread nor public like counts: both
+			live in a GitHub Discussion whose title and image filenames would sit in
+			the clear, which is the whole reason the album was sealed. The notice
+			takes their place rather than the section quietly disappearing — the
+			same card, and the same statement, an encrypted post makes. %>
+		<% if (page.vault && theme.comment.enable === true) { %>
+		<div class="vault-no-comments">
+			<i class="fa-regular fa-comment-slash" aria-hidden="true"></i>
+			<div class="vault-no-comments-body">
+				<strong><%= __('vault.no_comments_album') %></strong>
+				<span><%= __('vault.no_comments_album_hint') %></span>
+			</div>
+		</div>
+		<% } else if (page.hasOwnProperty('comment') && (page.comment === true || page.comments === true) ) { %>
 		<%- partial('components/comments/comment') %>
 		<% } %>
 	</div>

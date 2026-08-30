@@ -39,7 +39,11 @@
 		</div>
 	</div>
 
-	<% if (is_post()) { %>
+	<%# The vault gate is a `page`, not a post — is_post() is false for it — but
+		what it mounts IS an article, table of contents and all. Without the tools
+		rail the TOC toggle does not exist, and the controller that reaches for it
+		on every article throws before the table of contents is ever measured. %>
+	<% if (is_post() || (page.type === "vault" && page.vault_kind !== "masonry")) { %>
 	<div class="post-tools">
 		<%- partial('pages/post/post-tools') %>
 	</div>

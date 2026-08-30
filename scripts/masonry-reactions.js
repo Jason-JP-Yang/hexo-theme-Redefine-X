@@ -13,6 +13,7 @@
 
 const https = require("https");
 const path = require("path");
+const secrets = require("./lib/secrets");
 
 const PREFIX = "[masonry-reactions] ";
 let rlRemaining = null;
@@ -227,6 +228,18 @@ async function apiDeleteComment(pat, id, log) {
     { i: { id } },
     log,
     "delete comment"
+  );
+}
+
+async function apiDeleteDiscussion(pat, id, log) {
+  return mutate(
+    pat,
+    `mutation($i:DeleteDiscussionInput!) {
+      deleteDiscussion(input:$i) { clientMutationId }
+    }`,
+    { i: { id } },
+    log,
+    "delete discussion"
   );
 }
 
@@ -521,47 +534,99 @@ async function processPage(
   }
 }
 
-/* ────────── Hexo integration ────────── */
+/**
+ * Delete the reactions discussion of every album that now carries `vault: true`.
+ *
+ * The deletion takes the heart counts with it and cannot be undone — which is
+ * the point: they are per-photograph counts on an album that is no longer
+ * public. What this CANNOT reach is the giscus thread under the album page
+ * itself, created lazily by whoever commented first and titled with the page
+ * path; the caller is told to remove that one by hand.
+ */
+async function purgeSealed(pat, sealed, discs, log) {
+  const found = sealed.filter((pagePath) => discs[pagePath]);
+  if (!found.length) return;
 
-hexo.extend.filter.register("before_generate", async function () {
-  const g = hexo.theme.config?.comment?.config?.giscus;
+  for (const pagePath of found) {
+    if (stopped) break;
+    log.warn(`[masonry-reactions] Encrypted album — deleting public discussion: ${pagePath}`);
+    try {
+      await apiDeleteDiscussion(pat, discs[pagePath].id, log);
+      delete discs[pagePath];
+    } catch (err) {
+      log.error(`[masonry-reactions] Failed to delete ${pagePath}: ${err.message}`);
+    }
+  }
+
+  log.warn(
+    `[masonry-reactions] ${found.length} encrypted album discussion(s) removed. ` +
+      `If any of those pages was ever COMMENTED on, giscus opened a second ` +
+      `discussion titled after the page path — delete that one by hand in the repo.`
+  );
+}
+
+/* ────────── Entry point ────────── */
+
+/**
+ * Reconcile every masonry album's discussion structure with GitHub.
+ *
+ * NOT a build filter. It makes network mutations against a real repository,
+ * which has no business happening every time `hexo generate` or `hexo server`
+ * runs — it is asked for on purpose: `npm run masonry:sync`.
+ *
+ * @param {object} ctx  { theme, config, masonry, log }
+ */
+async function sync({ theme, config, masonry, log }) {
+  const g = theme?.comment?.config?.giscus;
   if (!g) return;
 
-  const { author_pat: pat, repo, repo_id: repoId, category_id: catId, proxy } = g;
+  const { repo, repo_id: repoId, category_id: catId } = g;
+  const pat = secrets.env("GISCUS_AUTHOR_PAT");
+  const proxy = String(theme?.backend?.api_url || "").replace(/\/+$/, "");
   if (!pat || !repo || !repoId || !catId || !proxy) {
-    hexo.log.info("[masonry-reactions] Skipping: incomplete giscus config");
+    log.info(
+      pat
+        ? "[masonry-reactions] Skipping: incomplete giscus/backend config"
+        : "[masonry-reactions] Skipping: GISCUS_AUTHOR_PAT is not set in .env"
+    );
     return;
   }
-  if (!hexo.theme.config?.comment?.enable) {
-    hexo.log.info("[masonry-reactions] Skipping: comments disabled");
+  if (!theme?.comment?.enable) {
+    log.info("[masonry-reactions] Skipping: comments disabled");
     return;
   }
 
   rlRemaining = null;
   stopped = false;
 
-  const masonry = hexo.locals.get("data")?.masonry;
   if (!masonry) {
-    hexo.log.info("[masonry-reactions] No masonry data");
+    log.info("[masonry-reactions] No masonry data");
     return;
   }
 
-  const siteUrl = (hexo.config.url || "").replace(/\/+$/, "");
-  const blogTitle =
-    hexo.theme.config?.info?.title || hexo.config.title || "Blog";
-  const blogAuthor =
-    hexo.theme.config?.info?.author || hexo.config.author || "";
+  const siteUrl = (config.url || "").replace(/\/+$/, "");
+  const blogTitle = theme?.info?.title || config.title || "Blog";
+  const blogAuthor = theme?.info?.author || config.author || "";
   const avif =
-    hexo.theme.config?.plugins?.minifier?.imagesOptimize?.AVIF_COMPRESS !==
-    false;
+    theme?.plugins?.minifier?.imagesOptimize?.AVIF_COMPRESS !== false;
 
   // Collect pages
   const pages = [];
+  // Encrypted albums, whose discussions have to GO rather than merely be
+  // skipped: an album that was published first still has one on GitHub holding
+  // its title, every image URL, every EXIF row and every heart — in the clear,
+  // which is exactly what sealing the album was for.
+  const sealed = [];
+
   for (const cat of masonry.filter((c) => c.links_category)) {
     for (const item of cat.list || []) {
       if (!item.images?.length) continue;
       const title = item["page-title"] || item.name;
       const pagePath = `masonry/${title}/`;
+      if (item.vault === true) {
+        sealed.push(pagePath);
+        continue;
+      }
       pages.push({
         pagePath,
         images: item.images,
@@ -578,41 +643,48 @@ hexo.extend.filter.register("before_generate", async function () {
     }
   }
 
-  if (!pages.length) {
-    hexo.log.info("[masonry-reactions] No masonry pages found");
+  if (!pages.length && !sealed.length) {
+    log.info("[masonry-reactions] No masonry pages found");
     return;
   }
 
-  hexo.log.info(`[masonry-reactions] Processing ${pages.length} pages...`);
+  log.info(`[masonry-reactions] Processing ${pages.length} pages...`);
 
   // Phase 1: fetch all existing discussions in category
   let discs;
   try {
     discs = await fetchDiscussions(pat, repo, catId);
-    hexo.log.info(
+    log.info(
       `[masonry-reactions] Found ${Object.keys(discs).length}/${pages.length} discussions`
     );
   } catch (e) {
-    hexo.log.error(`[masonry-reactions] Fetch failed: ${e.message}`);
+    log.error(`[masonry-reactions] Fetch failed: ${e.message}`);
     return;
   }
+
+  // Phase 1b: take back what an album published before it was encrypted.
+  // Skipping it is not enough — the discussion is public until it is deleted,
+  // and it carries the album's title, its photographs and its like counts.
+  await purgeSealed(pat, sealed, discs, log);
 
   // Phase 2: process each page
   let ok = 0;
   for (const p of pages) {
     if (stopped) {
-      hexo.log.error("[masonry-reactions] Stopping: rate limit.");
+      log.error("[masonry-reactions] Stopping: rate limit.");
       break;
     }
     const success = await processPage(
       pat, repo, repoId, catId,
-      p.pagePath, p.images, discs[p.pagePath] || null, hexo.log, p.ctx
+      p.pagePath, p.images, discs[p.pagePath] || null, log, p.ctx
     );
     if (success) {
       ok++;
-      hexo.log.info(`[masonry-reactions] ✓ ${p.pagePath}`);
+      log.info(`[masonry-reactions] ✓ ${p.pagePath}`);
     }
   }
 
-  hexo.log.info(`[masonry-reactions] Done. ${ok}/${pages.length} OK.`);
-});
+  log.info(`[masonry-reactions] Done. ${ok}/${pages.length} OK.`);
+}
+
+module.exports = { sync };

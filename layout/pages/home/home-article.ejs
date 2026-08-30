@@ -55,5 +55,7 @@
     <%# margin-left:auto rather than space-between on the container: when the meta
         entries wrap onto their own line this link still sits at the right edge
         instead of falling back to flex-start. %>
-    <a class="home-article-read-more" href="<%- url_for(post.path) %>"><%- __('read_more') %><span class="seo-reader-text"><%= post.title %></span><i class="fa-solid fa-angle-right"></i></a>
+    <%# `href` is passed in by an encrypted post's card: its real permalink was
+        never generated, so url_for(post.path) would be a link to a 404. %>
+    <a class="home-article-read-more" href="<%- typeof href === "undefined" ? url_for(post.path) : href %>"><%- __('read_more') %><span class="seo-reader-text"><%= post.title %></span><i class="fa-solid fa-angle-right"></i></a>
 </div>

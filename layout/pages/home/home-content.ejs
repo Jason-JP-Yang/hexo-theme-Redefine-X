@@ -75,70 +75,18 @@
             <% } else { %>
                 <%
                     const post = posts[tile.postIndex];
-                    const tier = tile.tier;
                     const cover = resolveCover(post);
-                    const postNumber = numberOffset + tile.postIndex + 1;
-                    const accent = coverAccent(post);
-                    const style = [bentoEnabled ? bentoStyle(tile) : "", accent ? "--tile-accent:" + accent : ""]
-                        .filter(Boolean)
-                        .join(";");
                 %>
-                <li class="home-article-item tier-<%= tier %><%= cover ? "" : " no-cover" %><%= accent ? " has-accent" : "" %><%= bentoEnabled ? bentoClasses(tile) : "" %>"
-                    <%- style ? ' style="' + style + '"' : "" %>>
-
-                    <% if (post.sticky) { %>
-                        <div class="home-article-sticky-badge">
-                            <i class="fa-regular fa-thumbtack"></i><%- __('sticky') %>
-                        </div>
-                    <% } %>
-
-                    <% if (cover) { %>
-                        <div class="home-article-thumbnail">
-                            <%# aria-hidden + tabindex="-1": this links to the same place as the
-                                title below it, so it is decorative to a screen reader and should
-                                not cost a second tab stop. %>
-                            <a href="<%- url_for(post.path) %>" tabindex="-1" aria-hidden="true">
-                                <img src="<%- url_for(cover) %>" alt="<%= post.title %>"
-                                    <%- tile.postIndex === 0 ? 'fetchpriority="high"' : 'loading="lazy"' %> decoding="async" />
-                            </a>
-                        </div>
-                    <% } %>
-
-                    <div class="home-article-body">
-                        <span class="home-article-index" aria-hidden="true"><%= postNumber %></span>
-
-                        <%# The eyebrow and the title are one row of the body's grid, not
-                            two. Their own row would keep its gap when there is no eyebrow
-                            to put in it — an empty track still has tracks either side of
-                            it — and the excerpt is sized from what is left over, so a
-                            phantom 0.9rem is a line of summary that silently disappears. %>
-                        <div class="home-article-head">
-                            <% if (post.categories.length && theme.home.categories.enable === true) { %>
-                                <%# The eyebrow: the post's top-level category, set above the title. %>
-                                <span class="home-article-eyebrow"><%= post.categories.toArray()[0].name %></span>
-                            <% } %>
-
-                            <%# Never clamped. A title that does not fit is a tile that was
-                                sized wrong, and the plan is what fixes that. %>
-                            <h3 class="home-article-title">
-                                <a href="<%- url_for(post.path) %>">
-                                    <%= post.title %>
-                                </a>
-                            </h3>
-                        </div>
-
-                        <div class="home-article-content markdown-body">
-                            <% if (post.excerpt && post.excerpt == "false") { %>
-                            <% } else if (post.excerpt && post.excerpt !== "false") { %>
-                                <%- render(post.excerpt, "markdown") %>
-                            <% } else { %>
-                                <%- truncate(strip_html(post.content), {length: excerptBudget(tile)}) %>
-                            <% } %>
-                        </div>
-
-                        <%- partial('pages/home/home-article', {post: post}) %>
-                    </div>
-                </li>
+                <%- partial('pages/home/home-article-card', {
+                    post: post,
+                    tile: tile,
+                    bentoEnabled: bentoEnabled,
+                    cover: cover ? url_for(cover) : "",
+                    href: url_for(post.path),
+                    postNumber: numberOffset + tile.postIndex + 1,
+                    excerptChars: excerptBudget(tile),
+                    isVault: false,
+                }) %>
             <% } %>
         <% }) %>
     </ul>

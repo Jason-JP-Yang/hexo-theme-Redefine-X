@@ -44,7 +44,7 @@ the message already carries everything it needs.
 
 ## Configuration
 
-Seven values run this Worker and nothing reads an eighth.
+Eight values run this Worker and nothing reads a ninth.
 
 | | Location | Use |
 | --- | --- | --- |
@@ -55,6 +55,7 @@ Seven values run this Worker and nothing reads an eighth.
 | `SESSION_SECRET` | secret | Signs session tokens. |
 | `VAPID_PRIVATE_KEY` | secret | The 32-byte P-256 scalar. |
 | `GITHUB_WEBHOOK_SECRET` | secret | Authenticates the deployment webhook — **and** is what identifies the deploy repo, since only the repository holding it can produce a valid signature. |
+| `VAULT_MASTER` | secret | Unwraps the per-post keys in `vault_posts`. **Must be byte-identical to `VAULT_MASTER` in the site's `.env`** — the build wraps with it, the Worker unwraps with it. Rotating it makes every already-published encrypted post permanently unreadable. |
 
 `SITE_URL` is used for the changelog fallback source, the click target of a note
 notification and of a test push, the VAPID `sub` claim, and the fallback CORS
@@ -329,6 +330,45 @@ The deliberate override of the dedupe rule. Re-queues every device belonging to
 someone already in that notification's inbox — the audience is fixed at ingest,
 so a resend cannot widen it. → `{ "ok": true, "queued": 17 }`, `404` for an
 unknown id.
+
+### Vault
+
+The Worker holds no encrypted post, no image and no metadata — only a wrapped
+key per post and, on each reader's `moderation` row, the ids that reader may
+open. Everything else is an opaque blob on the CDN, fetched and decrypted by the
+browser.
+
+#### `POST /api/vault/keys`
+Any valid session. Body is ignored.
+
+```jsonc
+{ "posts": [{ "id": "9f2c…", "slug": "k7m2x9qp4a", "key": "<base64url 32B>" }],
+  "admin": false }
+```
+
+**One row** for a reader with no grants (a primary-key probe on `moderation`
+that short-circuits), **1 + N** for a reader with them, and the whole registry
+for an admin. `Cache-Control: no-store` — the body is key material.
+
+CPU: one HMAC session verify plus one AES-GCM unwrap per post, well under a
+millisecond for any realistic N.
+
+#### `GET /api/admin/vault`
+`?offset=<n>` → `{ "posts": [{ "id", "slug", "created_at", "audience": [{id, login}] }],
+"more": bool }`, 20 per page.
+
+#### `POST /api/admin/vault`
+`{ "id", "slug", "wrapped" }` — one line of the block the build prints. Upserts,
+so re-pasting the same line is an update rather than a duplicate.
+
+#### `DELETE /api/admin/vault/:id`
+Revokes a post outright. Stale ids left behind in `moderation.vault` match no
+row on the next read; rewriting every grant row here would be a write per reader
+in the scarce direction to save nothing.
+
+#### `PUT /api/admin/vault/:id/audience`
+`{ "audience": [{ "id": 108601445 }] }` — the **complete** new list. The diff is
+computed server-side, so only the identities that actually changed are written.
 
 #### `POST /api/admin/lookup`
 `{ "ids": ["Jason-JP-Yang", 108601445] }` — names the identities typed into an
