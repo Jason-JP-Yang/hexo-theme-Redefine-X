@@ -244,6 +244,70 @@ async function publicCoverRoutes() {
   return out;
 }
 
+/**
+ * Every image the PUBLIC albums point at. An encrypted album shares its
+ * category's avatar with them, and often a thumbnail directory too; withholding
+ * one of those would blank a public card without protecting anything.
+ * `locals.data` is already the masked copy (filters/vault.js), so what it names
+ * is by definition public.
+ */
+function addPublicMasonryRoutes(into) {
+  const masonry = (hexo.locals.get("data") || {}).masonry;
+  if (!Array.isArray(masonry)) return;
+
+  const add = (value) => {
+    if (!value || typeof value !== "string") return;
+    const rel = value.replace(/^\/+/, "");
+    for (const candidate of avifCandidates(rel)) {
+      if (hexo.route.get(candidate)) {
+        into.add(candidate);
+        break;
+      }
+    }
+  };
+
+  for (const category of masonry) {
+    for (const item of (category && category.list) || []) {
+      add(item.avatar);
+      add(item.thumbnail);
+      for (const image of item.images || []) add("masonry/" + image.image);
+    }
+  }
+}
+
+/**
+ * Images named by the theme config — the default avatar, the banner, the OG
+ * card. They belong to every page on the site, so an album that happens to use
+ * one must not take it away from the rest.
+ */
+function addThemeConfigRoutes(into) {
+  const seen = new Set();
+  const walk = (node, depth) => {
+    if (depth > 6 || node == null) return;
+    if (typeof node === "string") {
+      if (!node.includes("/") || /^(https?:|data:|\/\/)/i.test(node)) return;
+      const rel = node.replace(/^\/+/, "");
+      if (seen.has(rel)) return;
+      seen.add(rel);
+      for (const candidate of avifCandidates(rel)) {
+        if (hexo.route.get(candidate)) {
+          into.add(candidate);
+          break;
+        }
+      }
+      return;
+    }
+    if (typeof node !== "object") return;
+    for (const value of Array.isArray(node) ? node : Object.values(node)) walk(value, depth + 1);
+  };
+  // `masonry` is skipped: data-handle.js copies the album list onto the theme
+  // config, and albums are covered — from the MASKED list — by
+  // addPublicMasonryRoutes. Walking the copy would call an encrypted album's own
+  // photograph site furniture and publish it.
+  const { masonry, ...rest } = hexo.theme.config || {};
+  walk(rest, 0);
+}
+
 /** Where an image may have ended up once img-optimizer had a turn at it. */
 function avifCandidates(relPath) {
   const stripped = relPath.replace(/\.[^./]+$/, "");
@@ -536,6 +600,87 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     });
   }
 
+  // ── masonry albums ────────────────────────────────────────────────────────
+  // The same three artefacts a post gets — page, card, images — rendered from
+  // the theme's own masonry templates so a decrypted album is not a lookalike of
+  // the public ones but literally the same markup.
+  const albumView = hexo.theme.getView("pages/masonry/masonry.ejs");
+  const albumCardView = hexo.theme.getView("pages/masonry/masonry-collection-card.ejs");
+  const masonryImages = hexo.extend.helper.get("masonryImages");
+  const lazyloadMasonry = hexo.extend.helper.get("lazyloadMasonryHtml");
+
+  for (const entry of state.albums()) {
+    const item = entry.item;
+    const href = `${hexo.config.root || "/"}${p}/${entry.slug}/`.replace(/\/{2,}/g, "/");
+    const images = masonryImages ? masonryImages(item) : item.images || [];
+
+    let album = await albumView.render(
+      cardLocals({
+        page: {
+          type: "masonry",
+          title: entry.title,
+          images,
+          content: "",
+          comment: false,
+          // No public discussion for an encrypted album: its title and every
+          // image filename would sit in the clear on GitHub.
+          masonryReactions: null,
+        },
+      })
+    );
+
+    // The order a routed masonry page gets: AVIF rewrite first (priority 10),
+    // then the pass that turns every <img> into an img-preloader (priority 15),
+    // which is what puts the album on the lazy pipeline.
+    if (avifRewrite) album = avifRewrite(album);
+    if (lazyloadMasonry) album = await lazyloadMasonry(album, null);
+
+    routes.set(`${p}/${entry.slug}/b.bin`, vc.seal(entry.key, await sealAssets(entry, album, routes)));
+
+    let card = await albumCardView.render(
+      cardLocals({
+        f: Object.assign({}, item, { link: href }),
+        hasThumbnail: entry.category.has_thumbnail === true,
+        isVault: true,
+      })
+    );
+    if (avifRewrite) card = avifRewrite(card);
+    card = await sealAssets(entry, card, routes);
+
+    routes.set(
+      `${p}/${entry.slug}/c.bin`,
+      vc.seal(
+        entry.key,
+        JSON.stringify({
+          card,
+          meta: {
+            kind: "album",
+            id: entry.id,
+            slug: entry.slug,
+            title: entry.title,
+            name: item.name || entry.title,
+            description: item.description || "",
+            category: entry.category.links_category,
+            thumbs: entry.category.has_thumbnail === true,
+            href,
+          },
+        })
+      )
+    );
+
+    pages.push({
+      path: `${p}/${entry.slug}/index.html`,
+      layout: "page",
+      data: {
+        type: "vault",
+        vault_slug: entry.slug,
+        vault_kind: "masonry",
+        title: "",
+        comment: false,
+      },
+    });
+  }
+
   // The taxonomy gate. One page for every tag and every category, carrying no
   // name of either: which one it is showing travels in the URL fragment, as a
   // hash, and the fragment is never sent to a server.
@@ -630,19 +775,24 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   // here: Hexo sets every generator's routes AFTER all of them have run, so a
   // removal made from inside a generator is undone before it can take effect.
   const shared = await publicCoverRoutes();
+  addPublicMasonryRoutes(shared);
+  addThemeConfigRoutes(shared);
+
   const publicHtml = hexo.locals
     .get("posts")
     .toArray()
     .map((post) => post.content || "")
     .join("");
-  for (const entry of entries) {
+
+  const sealedEntries = state.all();
+  for (const entry of sealedEntries) {
     for (const routePath of entry.assets || []) {
       if (publicHtml.includes(routePath)) shared.add(routePath);
     }
   }
 
   let withheld = 0;
-  for (const entry of entries) {
+  for (const entry of sealedEntries) {
     for (const routePath of entry.assets || []) {
       if (shared.has(routePath)) continue;
       state.withhold(routePath);
@@ -651,7 +801,8 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   }
 
   hexo.log.info(
-    `[vault] sealed ${entries.length} post(s), ${routes.size} blob(s); withholding ${withheld} image(s)`
+    `[vault] sealed ${entries.length} post(s) and ${state.albums().length} album(s), ` +
+      `${routes.size} blob(s); withholding ${withheld} image(s)`
   );
 
   return pages.concat(Array.from(routes, ([path, data]) => ({ path, data })));

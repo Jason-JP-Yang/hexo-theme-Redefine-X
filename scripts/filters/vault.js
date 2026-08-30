@@ -69,6 +69,45 @@ function withholdTaxonomy(entries) {
   }
 }
 
+/**
+ * Masonry albums carrying `vault: true` in masonry.yml.
+ *
+ * An album is withheld the same way a post is, and for the same reasons: the
+ * collection page would otherwise publish its name, description, thumbnail and
+ * avatar, and its own page would sit at `/masonry/<title>/` — a path anybody can
+ * type. Both go, and the album comes back only for a reader holding the key.
+ */
+function markedAlbums() {
+  const masonry = (hexo.locals.get("data") || {}).masonry;
+  if (!Array.isArray(masonry)) return [];
+
+  const out = [];
+  for (const category of masonry) {
+    if (!category || !category.links_category || !Array.isArray(category.list)) continue;
+    for (const item of category.list) {
+      if (item && item.vault === true) out.push({ category, item });
+    }
+  }
+  return out;
+}
+
+/** The masonry data with every encrypted album — and any category left empty by
+ *  their removal — taken out of it. */
+function maskMasonry(data) {
+  const masonry = [];
+  for (const category of data.masonry || []) {
+    if (!category || !category.links_category || !Array.isArray(category.list)) {
+      masonry.push(category);
+      continue;
+    }
+    const list = category.list.filter((item) => !item || item.vault !== true);
+    // A category whose albums are ALL encrypted does not exist publicly either:
+    // its name is as much of a disclosure as the album's.
+    if (list.length) masonry.push(Object.assign({}, category, { list }));
+  }
+  return Object.assign({}, data, { masonry });
+}
+
 hexo.extend.filter.register(
   "before_generate",
   function () {
@@ -78,12 +117,14 @@ hexo.extend.filter.register(
     // Rebuilt every pass: `hexo server` regenerates on each change, and a stale
     // stash would seal a body that is no longer the one on disk.
     state.clear();
-    if (!marked.length) return;
+
+    const albums = markedAlbums();
+    if (!marked.length && !albums.length) return;
 
     if (!vaultEnabled()) {
       store.fail(
-        `${marked.length} post(s) carry \`vault:\` front matter but backend.vault_enable is false. ` +
-          `Refusing to build them in the clear — set backend.vault_enable: true, or remove the front matter.`
+        `${marked.length + albums.length} item(s) carry \`vault:\` but backend.vault_enable is false. ` +
+          `Refusing to build them in the clear — set backend.vault_enable: true, or remove the flag.`
       );
     }
 
@@ -98,15 +139,28 @@ hexo.extend.filter.register(
             `Blog Management -> Encrypted Posts.`
         );
       }
-      state.put(id, { id, key, slug, post, plain: post.content || "" });
+      state.put(id, { kind: "post", id, key, slug, post, plain: post.content || "" });
       hidden.add(post.source);
+    }
+
+    for (const { category, item } of albums) {
+      const title = item["page-title"] || item.name;
+      const id = vc.albumId(title);
+      const { key, slug, rekeyed } = store.ensurePost(id, item.name || title);
+      if (rekeyed) {
+        hexo.log.warn(
+          `[vault] album "${item.name || title}" was flagged for regeneration: a NEW key was ` +
+            `minted and the slug (${slug}) kept. Paste the line below into Blog Management.`
+        );
+      }
+      state.put(id, { kind: "album", id, key, slug, item, category, title });
     }
 
     // Before anything is sealed: a key that reached public/ but not the keyring
     // would leave the post encrypted under a key that exists nowhere.
     store.flush();
 
-    withholdTaxonomy(state.all());
+    if (hidden.size) withholdTaxonomy(state.sorted());
 
     // Anything already materialised from the old index or the old post list is
     // now wrong in the one direction that matters.
@@ -115,11 +169,32 @@ hexo.extend.filter.register(
     // One exclusion covers the index, archive, every tag and category page, the
     // post's own permalink, the feed, the sitemap and search.json — every
     // generator takes its copy from this Query.
-    hexo.locals.set("posts", function () {
-      return posts.filter((post) => !hidden.has(post.source));
-    });
+    if (hidden.size) {
+      hexo.locals.set("posts", function () {
+        return posts.filter((post) => !hidden.has(post.source));
+      });
+    }
 
-    hexo.log.info(`[vault] ${hidden.size} encrypted post(s) withheld from the public build`);
+    // Same idea one layer up: the masonry generator builds BOTH the collection
+    // page and every album page out of this one object.
+    if (albums.length) {
+      const masked = maskMasonry(hexo.locals.get("data") || {});
+      hexo.locals.set("data", function () {
+        return masked;
+      });
+      // data-handle.js copies the album list onto the theme config at
+      // `generateBefore`, which is EARLIER than this filter. Left alone that
+      // copy still names every encrypted album — and it is a copy templates and
+      // build passes read as though it were public.
+      if (Array.isArray(hexo.theme.config.masonry)) {
+        hexo.theme.config.masonry = masked.masonry;
+      }
+    }
+
+    hexo.log.info(
+      `[vault] ${hidden.size} encrypted post(s) and ${albums.length} encrypted album(s) ` +
+        `withheld from the public build`
+    );
   },
   100
 );
@@ -178,8 +253,13 @@ hexo.extend.filter.register(
 
 // A build interrupted between the route walk and here would leave a plaintext
 // image on disk; this is the last chance to take it back.
+//
+// One thing this cannot reach: an album that USED to be public leaves its old
+// `public/masonry/<title>/` folder behind, emptied of its index.html but still
+// named after the album. Hexo never removes a directory it has emptied. Run
+// `npm run clean` once after encrypting an album that was already published.
 hexo.on("exit", function () {
-  if (!state.withheldPaths().length) return;
+  if (!state.all().length) return;
   const { removed } = withholdPlaintextImages();
   if (removed) hexo.log.info(`[vault] withheld ${removed} plaintext image(s) from public/`);
 });

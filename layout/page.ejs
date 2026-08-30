@@ -43,7 +43,7 @@
 		what it mounts IS an article, table of contents and all. Without the tools
 		rail the TOC toggle does not exist, and the controller that reaches for it
 		on every article throws before the table of contents is ever measured. %>
-	<% if (is_post() || page.type === "vault") { %>
+	<% if (is_post() || (page.type === "vault" && page.vault_kind !== "masonry")) { %>
 	<div class="post-tools">
 		<%- partial('pages/post/post-tools') %>
 	</div>

@@ -381,3 +381,40 @@ $vault-radius = 14px
     font-size 0.82rem
     line-height 1.6
     color var(--third-text-color)
+
+// ─── an encrypted album on the collection page ──────────────
+// Same statement the home tile makes: primary outline, and the lock badge in
+// the corner the sticky badge would use.
+.is-vault-album
+  position relative
+
+  &::after
+    content ''
+    position absolute
+    inset 0
+    border-radius 0.5rem
+    border 1px solid var(--primary-color)
+    opacity 0.34
+    pointer-events none
+
+  > a
+    position relative
+    display block
+
+.masonry-vault-badge
+  position absolute
+  top 8px
+  left 8px
+  z-index 3
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 4px 9px
+  border-radius 999px
+  background var(--primary-color)
+  font-size 0.68rem
+  font-weight 600
+  color var(--background-color)
+
+  i
+    font-size 0.68rem

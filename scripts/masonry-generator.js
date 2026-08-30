@@ -333,13 +333,104 @@ function buildExifCardHtml(title, description, exifFields, t) {
 
 /* ==================== Generator ==================== */
 
+/* ==================== Image processing ==================== */
+// Module scope rather than inside the generator: the vault generator seals an
+// encrypted album by rendering the SAME markup, and a second copy of the EXIF
+// pipeline is a second copy that drifts.
+
+/**
+ * Resolve local image file path for auto-exif reading
+ */
+function resolveLocalImage(imagePath) {
+  if (!imagePath) return null;
+  const cleanPath = imagePath.split('#')[0].split('?')[0];
+  if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) return null;
+
+  let decoded;
+  try { decoded = decodeURIComponent(cleanPath); } catch { decoded = cleanPath; }
+
+  const sourceDir = hexo.source_dir;
+  const candidates = [
+    path.join(sourceDir, 'masonry', decoded),
+    path.join(sourceDir, decoded),
+    path.join(sourceDir, 'build', 'masonry', decoded),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+    } catch (e) {}
+  }
+  return null;
+}
+
+/**
+ * Process a single image entry from masonry.yml
+ * Extracts manual EXIF fields, reads auto-EXIF if enabled,
+ * and generates the EXIF info card HTML for imageViewer
+ */
+function processImage(image, pageAutoExif) {
+  const t = getTranslator(hexo);
+  const processed = { ...image };
+
+  // Extract manual EXIF fields from yml
+  const exifFields = {};
+  for (const [ymlKey, exifKey] of Object.entries(YML_KEY_MAP)) {
+    if (image[ymlKey] !== undefined && image[ymlKey] !== null && String(image[ymlKey]).trim() !== '') {
+      exifFields[exifKey] = String(image[ymlKey]);
+    }
+  }
+
+  // Auto-EXIF reading from image file
+  const imageAutoExif = image['auto-exif'];
+  const autoExif = imageAutoExif !== undefined ? imageAutoExif : pageAutoExif;
+
+  if (autoExif) {
+    const localPath = resolveLocalImage(image.image);
+    if (localPath) {
+      const rawExif = readExifFromFile(localPath);
+      // Read and format auto-EXIF values; manual fields take priority
+      for (const fieldName of Object.keys(EXIF_READ_MAPPINGS)) {
+        if (!exifFields[fieldName]) {
+          const rawValue = getExifValue(rawExif, fieldName);
+          const formatted = formatAutoExifValue(fieldName, rawValue, t);
+          if (formatted) {
+            exifFields[fieldName] = formatted;
+          }
+        }
+      }
+    } else {
+      hexo.log && hexo.log.debug("[masonry-exif] Local image not found for auto-exif: " + image.image);
+    }
+  }
+
+  // Determine if this image has info to show in imageViewer
+  const hasExifFields = Object.keys(exifFields).length > 0;
+  const hasDescription = image.description && String(image.description).trim().length > 0;
+  processed.hasExifInfo = hasDescription || hasExifFields;
+
+  if (processed.hasExifInfo) {
+    processed.exifCardHtml = buildExifCardHtml(
+      image.title || '',
+      image.description || '',
+      exifFields,
+      t
+    );
+  }
+
+  return processed;
+}
+
+/** Every image of one album, EXIF cards and all. */
+hexo.extend.helper.register('masonryImages', function (item) {
+  const pageAutoExif = item['auto-exif'] || false;
+  return (item.images || []).map((img) => processImage(img, pageAutoExif));
+});
+
 hexo.extend.generator.register('masonry_pages', function(locals) {
   const masonryData = locals.data.masonry;
   if (!masonryData) return [];
 
-  const t = getTranslator(hexo);
-  const sourceDir = hexo.source_dir;
-  
   // Get comment setting from theme config
   const commentEnabled = hexo.theme.config.comment && hexo.theme.config.comment.enable ? true : false;
 
@@ -352,87 +443,6 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
 
   // Filter out the config item to get only categories
   const categories = masonryData.filter(item => item.links_category);
-
-  /**
-   * Resolve local image file path for auto-exif reading
-   */
-  function resolveLocalImage(imagePath) {
-    if (!imagePath) return null;
-    const cleanPath = imagePath.split('#')[0].split('?')[0];
-    if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) return null;
-
-    let decoded;
-    try { decoded = decodeURIComponent(cleanPath); } catch { decoded = cleanPath; }
-
-    const candidates = [
-      path.join(sourceDir, 'masonry', decoded),
-      path.join(sourceDir, decoded),
-      path.join(sourceDir, 'build', 'masonry', decoded),
-    ];
-
-    for (const candidate of candidates) {
-      try {
-        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
-      } catch (e) {}
-    }
-    return null;
-  }
-
-  /**
-   * Process a single image entry from masonry.yml
-   * Extracts manual EXIF fields, reads auto-EXIF if enabled,
-   * and generates the EXIF info card HTML for imageViewer
-   */
-  function processImage(image, pageAutoExif) {
-    const processed = { ...image };
-
-    // Extract manual EXIF fields from yml
-    const exifFields = {};
-    for (const [ymlKey, exifKey] of Object.entries(YML_KEY_MAP)) {
-      if (image[ymlKey] !== undefined && image[ymlKey] !== null && String(image[ymlKey]).trim() !== '') {
-        exifFields[exifKey] = String(image[ymlKey]);
-      }
-    }
-
-    // Auto-EXIF reading from image file
-    const imageAutoExif = image['auto-exif'];
-    const autoExif = imageAutoExif !== undefined ? imageAutoExif : pageAutoExif;
-
-    if (autoExif) {
-      const localPath = resolveLocalImage(image.image);
-      if (localPath) {
-        const rawExif = readExifFromFile(localPath);
-        // Read and format auto-EXIF values; manual fields take priority
-        for (const fieldName of Object.keys(EXIF_READ_MAPPINGS)) {
-          if (!exifFields[fieldName]) {
-            const rawValue = getExifValue(rawExif, fieldName);
-            const formatted = formatAutoExifValue(fieldName, rawValue, t);
-            if (formatted) {
-              exifFields[fieldName] = formatted;
-            }
-          }
-        }
-      } else {
-        hexo.log && hexo.log.debug("[masonry-exif] Local image not found for auto-exif: " + image.image);
-      }
-    }
-
-    // Determine if this image has info to show in imageViewer
-    const hasExifFields = Object.keys(exifFields).length > 0;
-    const hasDescription = image.description && String(image.description).trim().length > 0;
-    processed.hasExifInfo = hasDescription || hasExifFields;
-
-    if (processed.hasExifInfo) {
-      processed.exifCardHtml = buildExifCardHtml(
-        image.title || '',
-        image.description || '',
-        exifFields,
-        t
-      );
-    }
-
-    return processed;
-  }
 
   const pages = [];
 

@@ -11,7 +11,8 @@
     // home: the plaintext is in the DOM, and the only correct thing to do with
     // it is leave the page that is holding it.
 %>
-<div class="vault-gate" data-vault-slug="<%= page.vault_slug %>" data-vault-state="probing">
+<div class="vault-gate" data-vault-slug="<%= page.vault_slug %>"
+    data-vault-kind="<%= page.vault_kind || 'post' %>" data-vault-state="probing">
 
     <div class="vault-gate-probe">
         <%- partial('components/access-probe', { text: __('vault.unlocking') }) %>

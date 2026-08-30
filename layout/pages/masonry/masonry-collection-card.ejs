@@ -1,0 +1,52 @@
+<%
+    // One album on the collection page. Extracted from masonry-collection so the
+    // vault generator can render the SAME markup for an encrypted album without a
+    // second, drifting copy of it in JavaScript.
+    const thumbs = typeof hasThumbnail === "undefined" ? false : hasThumbnail;
+    const vault = typeof isVault !== "undefined" && isVault;
+%>
+<li class="group transform scale-100 transition-transform duration-100 ease-linear active:scale-95<%= vault ? " is-vault-album" : "" %>"
+    <%- vault ? ' data-vault-album="1"' : "" %>>
+    <a href="<%= f.link %>">
+        <% if (vault) { %>
+        <div class="masonry-vault-badge" title="<%- __('vault.authorized') %>">
+            <i class="fa-regular fa-lock-keyhole"></i><%- __('vault.badge') %>
+        </div>
+        <% } %>
+
+        <% if (thumbs) { %>
+        <div class="content rounded-lg redefine-box-shadow-flat">
+            <div class="thumbnail rounded-t-lg h-32 md:h-44 overflow-hidden">
+                <img class="rounded-t-lg object-cover w-full h-full" src="<%= f.thumbnail %>" />
+            </div>
+            <div class="avainfo flex flex-row items-center gap-1 sm:gap-2 overflow-hidden min-w-0">
+                <div class="avatar h-16 w-16 rounded-bl-lg bg-third-background-color">
+                    <% if (f.avatar) { %>
+                    <img class="rounded-bl-lg h-16 w-16 max-w-none" src="<%= f.avatar %>" onerror="this.style.display='none'">
+                    <% } else { %>
+                    <i class="fa-solid fa-user-group"></i>
+                    <% } %>
+                </div>
+                <div class="flex flex-col min-w-0">
+                    <div class="text-lg text-second-text-color ellipsis group-hover:!text-primary"><%= f.name %></div>
+                    <div class="text-third-text-color ellipsis"><%= f.description %></div>
+                </div>
+            </div>
+        </div>
+        <% } else { %>
+        <div class="flex flex-row items-center gap-1 sm:gap-2 overflow-hidden min-w-0 rounded-lg shadow-redefine-flat">
+            <div class="h-16 w-16 rounded-bl-lg bg-third-background-color">
+                <% if (f.avatar) { %>
+                <img class="rounded-l-lg h-16 w-16 max-w-none" src="<%= f.avatar %>" onerror="this.style.display='none'">
+                <% } else { %>
+                <i class="fa-solid fa-user-group"></i>
+                <% } %>
+            </div>
+            <div class="flex flex-col min-w-0">
+                <div class="text-lg text-second-text-color ellipsis group-hover:!text-primary"><%= f.name %></div>
+                <div class="text-third-text-color ellipsis"><%= f.description %></div>
+            </div>
+        </div>
+        <% } %>
+    </a>
+</li>

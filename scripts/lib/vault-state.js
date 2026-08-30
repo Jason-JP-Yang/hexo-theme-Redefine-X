@@ -33,9 +33,17 @@ function all() {
   return Array.from(stash.values());
 }
 
-/** Newest first, the order every listing in the theme uses. */
+/** Encrypted POSTS, newest first — the order every listing in the theme uses.
+ *  Albums are stashed in the same map and carry no date. */
 function sorted() {
-  return all().sort((a, b) => b.post.date.valueOf() - a.post.date.valueOf());
+  return all()
+    .filter((entry) => entry.kind !== "album")
+    .sort((a, b) => b.post.date.valueOf() - a.post.date.valueOf());
+}
+
+/** Encrypted masonry albums, in the order masonry.yml lists them. */
+function albums() {
+  return all().filter((entry) => entry.kind === "album");
 }
 
 function withhold(routePath) {
@@ -51,4 +59,4 @@ function clear() {
   withheld.clear();
 }
 
-module.exports = { put, get, all, sorted, withhold, withheldPaths, clear };
+module.exports = { put, get, all, sorted, albums, withhold, withheldPaths, clear };

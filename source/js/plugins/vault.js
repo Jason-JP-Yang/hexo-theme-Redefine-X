@@ -3,8 +3,10 @@ import initAutoHover, { syncHomeAutoHover } from "../layouts/autoHover.js";
 import initBentoFit, { syncBentoFit } from "../layouts/bentoFit.js";
 import initTileSpotlight from "../layouts/tileSpotlight.js";
 import initCoverParallax, { syncCoverParallax } from "../layouts/coverParallax.js";
-import initLazyLoad from "../layouts/lazyload.js";
+import initLazyLoad, { registerSrcResolver } from "../layouts/lazyload.js";
 import { initTOC } from "../layouts/toc.js";
+import { initMasonry } from "../plugins/masonry.js";
+import imageViewer from "../tools/imageViewer.js";
 import initCopyCode from "../tools/codeBlock.js";
 import initMathJaxScroll from "../plugins/mathjax-scroll.js";
 import { initNotoAnim } from "../plugins/noto-anim.js";
@@ -23,8 +25,15 @@ import {
   variantKey,
   taxHash,
   revealAssets,
+  assetURL,
   dropAssetCache,
 } from "../tools/vaultCrypto.js";
+
+// Encrypted images ride the ordinary lazyload observer: it asks for a source
+// when the image is about to be seen, and this is where the ciphertext is
+// fetched and opened. Registered at module scope so it is in place before the
+// first preloader can intersect.
+registerSrcResolver((node) => assetURL(node.getAttribute("data-vault-asset")));
 
 /**
  * Redefine-X — encrypted posts, reader side.
@@ -159,11 +168,17 @@ async function hydrateMeta(map) {
   );
 }
 
-/** Granted posts that carry metadata, newest first. */
+/** Granted POSTS that carry metadata, newest first. Albums share the keyring and
+ *  the same blob layout, but belong to no post listing. */
 function readable(map) {
   return Array.from(map.values())
-    .filter((entry) => entry.meta && entry.meta.date)
+    .filter((entry) => entry.meta && entry.meta.kind !== "album" && entry.meta.date)
     .sort((a, b) => Date.parse(b.meta.date) - Date.parse(a.meta.date));
+}
+
+/** Granted masonry albums, in the order the Worker returned them. */
+function readableAlbums(map) {
+  return Array.from(map.values()).filter((entry) => entry.meta && entry.meta.kind === "album");
 }
 
 /* ─── the post page ────────────────────────────────────────────────────────── */
@@ -205,11 +220,17 @@ async function unlockPost(gate) {
 
     const host = gate.querySelector(".vault-article-host");
     host.innerHTML = await openText(entry.key, sealed);
+    // Binds every sealed image and resolves only what the lazy pipeline cannot
+    // drive. The rest arrive as they are scrolled to, so an album of two hundred
+    // photographs opens as fast as one of two.
     await revealAssets(host, entry.raw);
-    if (isAdmin) mountAudienceEditor(host, entry);
+
+    const isAlbum = gate.dataset.vaultKind === "masonry";
+    if (isAdmin && !isAlbum) mountAudienceEditor(host, entry);
 
     setGate(gate, "open");
-    rehydrate(host);
+    if (isAlbum) rehydrateAlbum(host);
+    else rehydrate(host);
 
     host.animate(
       [
@@ -255,6 +276,29 @@ function rehydrate(root) {
   step(() => initMathJaxScroll());
   step(() => initNotoAnim());
   step(() => window.MathJax?.typesetPromise && window.MathJax.typesetPromise([root]));
+  step(() => window.dispatchEvent(new CustomEvent("redefine:content-injected", { detail: { root } })));
+  step(() => window.dispatchEvent(new CustomEvent("redefine:content-resized")));
+}
+
+/** The same, for a decrypted masonry album: columns, overflow check, EXIF cards
+ *  and the viewer, none of which the post pipeline wires. */
+function rehydrateAlbum(root) {
+  const theme = window.theme || {};
+  const step = (fn) => {
+    try {
+      fn();
+    } catch (e) {
+      /* one dead subsystem must not take the album down with it */
+    }
+  };
+
+  step(() => initMasonry());
+  step(
+    () =>
+      theme.articles?.lazyload === true &&
+      initLazyLoad({ preload: theme.articles.lazyload_preload === true })
+  );
+  step(() => imageViewer());
   step(() => window.dispatchEvent(new CustomEvent("redefine:content-injected", { detail: { root } })));
   step(() => window.dispatchEvent(new CustomEvent("redefine:content-resized")));
 }
@@ -858,6 +902,63 @@ function bumpAttr(el, attr, by) {
   el.setAttribute(attr, String(Number(el.getAttribute(attr) || 0) + by));
 }
 
+/* ─── the album collection ─────────────────────────────────────────────────── */
+
+/**
+ * Put the decrypted albums back on the collection page.
+ *
+ * The card is the one the build rendered from the theme's own
+ * masonry-collection-card partial, so a decrypted album is not a lookalike of a
+ * public one — it is the same markup, thumbnail, avatar and all. A category that
+ * exists only inside encrypted albums has no heading in the public build either,
+ * so it is created here.
+ */
+async function unlockMasonry(map) {
+  const root = document.querySelector(".friends-link-container");
+  if (!root || root.dataset.vaultApplied === "1") return;
+
+  const albums = readableAlbums(map).filter((entry) => entry.card);
+  if (!albums.length) return;
+  root.dataset.vaultApplied = "1";
+
+  await animateHeight(root, () => {
+    for (const entry of albums) {
+      const name = entry.meta.category || "";
+      let list = root.querySelector(`ul[data-masonry-category="${cssEscape(name)}"]`);
+
+      if (!list) {
+        const heading = document.createElement("div");
+        heading.className = "mt-2 mb-4";
+        heading.setAttribute("data-masonry-heading", name);
+        heading.setAttribute(INSERTED, "1");
+        heading.innerHTML = `<h2 class="text-2xl font-bold"></h2>`;
+        heading.firstElementChild.textContent = name;
+
+        list = document.createElement("ul");
+        list.className = entry.meta.thumbs
+          ? "grid mb-6 w-full gap-4 grid-cols-2"
+          : "grid mb-6 w-full gap-4 grid-cols-2 sm:grid-cols-3";
+        list.setAttribute("data-masonry-category", name);
+        list.setAttribute("data-masonry-thumbs", String(!!entry.meta.thumbs));
+        list.setAttribute(INSERTED, "1");
+
+        const tail = root.querySelector(".clear");
+        root.insertBefore(heading, tail || null);
+        root.insertBefore(list, tail || null);
+      }
+
+      entry.card.setAttribute(INSERTED, "1");
+      list.appendChild(entry.card);
+      reveal(entry.card);
+    }
+  });
+  settle();
+}
+
+function cssEscape(value) {
+  return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, "\\$&");
+}
+
 /* ─── the taxonomy gate ────────────────────────────────────────────────────── */
 
 async function unlockListingGate(gate) {
@@ -1059,4 +1160,5 @@ export default async function initVault() {
   await unlockArchiveLike(map);
   await unlockTagCloud(map);
   await unlockCategoryTree(map);
+  await unlockMasonry(map);
 }

@@ -522,51 +522,60 @@ async function processPage(
   }
 }
 
-/* ────────── Hexo integration ────────── */
+/* ────────── Entry point ────────── */
 
-hexo.extend.filter.register("before_generate", async function () {
-  const g = hexo.theme.config?.comment?.config?.giscus;
+/**
+ * Reconcile every masonry album's discussion structure with GitHub.
+ *
+ * NOT a build filter. It makes network mutations against a real repository,
+ * which has no business happening every time `hexo generate` or `hexo server`
+ * runs — it is asked for on purpose: `npm run masonry:sync`.
+ *
+ * @param {object} ctx  { theme, config, masonry, log }
+ */
+async function sync({ theme, config, masonry, log }) {
+  const g = theme?.comment?.config?.giscus;
   if (!g) return;
 
   const { repo, repo_id: repoId, category_id: catId } = g;
   const pat = secrets.env("GISCUS_AUTHOR_PAT");
-  const proxy = String(hexo.theme.config?.backend?.api_url || "").replace(/\/+$/, "");
+  const proxy = String(theme?.backend?.api_url || "").replace(/\/+$/, "");
   if (!pat || !repo || !repoId || !catId || !proxy) {
-    hexo.log.info(
+    log.info(
       pat
         ? "[masonry-reactions] Skipping: incomplete giscus/backend config"
         : "[masonry-reactions] Skipping: GISCUS_AUTHOR_PAT is not set in .env"
     );
     return;
   }
-  if (!hexo.theme.config?.comment?.enable) {
-    hexo.log.info("[masonry-reactions] Skipping: comments disabled");
+  if (!theme?.comment?.enable) {
+    log.info("[masonry-reactions] Skipping: comments disabled");
     return;
   }
 
   rlRemaining = null;
   stopped = false;
 
-  const masonry = hexo.locals.get("data")?.masonry;
   if (!masonry) {
-    hexo.log.info("[masonry-reactions] No masonry data");
+    log.info("[masonry-reactions] No masonry data");
     return;
   }
 
-  const siteUrl = (hexo.config.url || "").replace(/\/+$/, "");
-  const blogTitle =
-    hexo.theme.config?.info?.title || hexo.config.title || "Blog";
-  const blogAuthor =
-    hexo.theme.config?.info?.author || hexo.config.author || "";
+  const siteUrl = (config.url || "").replace(/\/+$/, "");
+  const blogTitle = theme?.info?.title || config.title || "Blog";
+  const blogAuthor = theme?.info?.author || config.author || "";
   const avif =
-    hexo.theme.config?.plugins?.minifier?.imagesOptimize?.AVIF_COMPRESS !==
-    false;
+    theme?.plugins?.minifier?.imagesOptimize?.AVIF_COMPRESS !== false;
 
   // Collect pages
   const pages = [];
   for (const cat of masonry.filter((c) => c.links_category)) {
     for (const item of cat.list || []) {
       if (!item.images?.length) continue;
+      // An encrypted album has no public discussion: the title and every image
+      // filename would sit in the clear on GitHub, which is the whole point of
+      // sealing the album in the first place.
+      if (item.vault === true) continue;
       const title = item["page-title"] || item.name;
       const pagePath = `masonry/${title}/`;
       pages.push({
@@ -586,21 +595,21 @@ hexo.extend.filter.register("before_generate", async function () {
   }
 
   if (!pages.length) {
-    hexo.log.info("[masonry-reactions] No masonry pages found");
+    log.info("[masonry-reactions] No masonry pages found");
     return;
   }
 
-  hexo.log.info(`[masonry-reactions] Processing ${pages.length} pages...`);
+  log.info(`[masonry-reactions] Processing ${pages.length} pages...`);
 
   // Phase 1: fetch all existing discussions in category
   let discs;
   try {
     discs = await fetchDiscussions(pat, repo, catId);
-    hexo.log.info(
+    log.info(
       `[masonry-reactions] Found ${Object.keys(discs).length}/${pages.length} discussions`
     );
   } catch (e) {
-    hexo.log.error(`[masonry-reactions] Fetch failed: ${e.message}`);
+    log.error(`[masonry-reactions] Fetch failed: ${e.message}`);
     return;
   }
 
@@ -608,18 +617,20 @@ hexo.extend.filter.register("before_generate", async function () {
   let ok = 0;
   for (const p of pages) {
     if (stopped) {
-      hexo.log.error("[masonry-reactions] Stopping: rate limit.");
+      log.error("[masonry-reactions] Stopping: rate limit.");
       break;
     }
     const success = await processPage(
       pat, repo, repoId, catId,
-      p.pagePath, p.images, discs[p.pagePath] || null, hexo.log, p.ctx
+      p.pagePath, p.images, discs[p.pagePath] || null, log, p.ctx
     );
     if (success) {
       ok++;
-      hexo.log.info(`[masonry-reactions] ✓ ${p.pagePath}`);
+      log.info(`[masonry-reactions] ✓ ${p.pagePath}`);
     }
   }
 
-  hexo.log.info(`[masonry-reactions] Done. ${ok}/${pages.length} OK.`);
-});
+  log.info(`[masonry-reactions] Done. ${ok}/${pages.length} OK.`);
+}
+
+module.exports = { sync };

@@ -126,28 +126,62 @@ function sniffType(bytes) {
   return "application/octet-stream";
 }
 
+// Which key opens which sealed image, recorded when a decrypted fragment is
+// mounted. Kept apart from the URL cache so an image can be resolved long after
+// its article was mounted — which is exactly what lazy loading needs.
+const assetKeys = new Map();
 const assetCache = new Map();
+const assetInflight = new Map();
 
-/** Swap every sealed image reference in `root` for a blob: URL. Never rejects. */
+/** Record the key for every sealed image in `root`. Fetches nothing. */
+export function bindAssets(root, rawPostKey) {
+  for (const node of root.querySelectorAll("[data-vault-asset]")) {
+    const hash = node.getAttribute("data-vault-asset");
+    if (hash) assetKeys.set(hash, rawPostKey);
+  }
+}
+
+async function openAsset(hash) {
+  const raw = assetKeys.get(hash);
+  if (!raw) return "";
+  const sealed = await fetchSealed(`${vaultPrefix()}/a/${hash}.bin`);
+  if (!sealed) return "";
+  const bytes = await openBlob(await assetKey(raw, hash), sealed);
+  const url = URL.createObjectURL(new Blob([bytes], { type: sniffType(bytes) }));
+  assetCache.set(hash, url);
+  return url;
+}
+
+/** The blob: URL for one sealed image. Fetched and decrypted once, however many
+ *  callers ask for it and however close together. Never rejects. */
+export function assetURL(hash) {
+  if (!hash) return Promise.resolve("");
+  const cached = assetCache.get(hash);
+  if (cached) return Promise.resolve(cached);
+
+  let job = assetInflight.get(hash);
+  if (!job) {
+    job = openAsset(hash).catch(() => "");
+    assetInflight.set(hash, job);
+    job.then(() => assetInflight.delete(hash));
+  }
+  return job;
+}
+
+/**
+ * Bind every sealed image in `root`, and resolve now ONLY the ones the lazyload
+ * pipeline will never drive — an article banner, a cover on a listing card.
+ * Anything carrying `data-src` is an img-preloader and is left to the observer,
+ * so mounting an article with fifty images costs one fetch rather than fifty.
+ */
 export async function revealAssets(root, rawPostKey) {
+  bindAssets(root, rawPostKey);
   await Promise.all(
-    Array.from(root.querySelectorAll("[data-vault-asset]"), async (node) => {
-      const hash = node.getAttribute("data-vault-asset");
-      if (!hash) return;
-      try {
-        let url = assetCache.get(hash);
-        if (!url) {
-          const sealed = await fetchSealed(`${vaultPrefix()}/a/${hash}.bin`);
-          if (!sealed) return;
-          const bytes = await openBlob(await assetKey(rawPostKey, hash), sealed);
-          url = URL.createObjectURL(new Blob([bytes], { type: sniffType(bytes) }));
-          assetCache.set(hash, url);
-        }
-        node.setAttribute(node.hasAttribute("data-src") ? "data-src" : "src", url);
-        node.removeAttribute("data-vault-asset");
-      } catch (e) {
-        /* leave the placeholder rather than breaking the layout */
-      }
+    Array.from(root.querySelectorAll("[data-vault-asset]:not([data-src])"), async (node) => {
+      const url = await assetURL(node.getAttribute("data-vault-asset"));
+      if (!url) return;
+      node.setAttribute("src", url);
+      node.removeAttribute("data-vault-asset");
     })
   );
 }
@@ -155,4 +189,6 @@ export async function revealAssets(root, rawPostKey) {
 export function dropAssetCache() {
   assetCache.forEach((url) => URL.revokeObjectURL(url));
   assetCache.clear();
+  assetKeys.clear();
+  assetInflight.clear();
 }

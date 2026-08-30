@@ -984,12 +984,16 @@ async function hydrateVaultMeta(rows) {
         const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/c.bin`);
         if (!sealed) return;
         const meta = (await openJSON(key, sealed)).meta || {};
+        const album = meta.kind === "album";
         row.meta = {
-          title: meta.title || "",
+          album,
+          title: (album ? meta.name : meta.title) || meta.title || "",
           date: meta.date || "",
-          category: (meta.categories || []).map((c) => c.name).join(" / "),
+          category: album
+            ? meta.category || ""
+            : (meta.categories || []).map((c) => c.name).join(" / "),
           tags: (meta.tags || []).map((t2) => t2.name),
-          excerpt: (meta.excerpt || "").slice(0, 150),
+          excerpt: ((album ? meta.description : meta.excerpt) || "").slice(0, 150),
         };
       } catch (err) {
         /* a post whose key no longer opens its record still lists by slug */
@@ -1007,7 +1011,7 @@ function vaultRowHTML(row) {
     <li class="bm-vault" data-id="${escapeHTML(row.id)}">
       <div class="bm-vault-main">
         <div class="bm-vault-title">
-          <i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i>
+          <i class="fa-solid ${m.album ? "fa-images" : "fa-lock-keyhole"}" aria-hidden="true"></i>
           <a href="${escapeHTML(vaultPrefix() + "/" + row.slug + "/")}" target="_blank" rel="noopener">
             ${escapeHTML(m.title || t("v_unreadable", "Unreadable — key does not match"))}
           </a>

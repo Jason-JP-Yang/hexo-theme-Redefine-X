@@ -75,6 +75,16 @@ function postId(sourcePath) {
     .slice(0, 16);
 }
 
+/** A masonry album has no source file, so its identity is the page it would
+ *  have been published at. Renaming that page mints a new key. */
+function albumId(pageTitle) {
+  return crypto
+    .createHash("sha256")
+    .update("masonry|" + String(pageTitle), "utf8")
+    .digest("hex")
+    .slice(0, 16);
+}
+
 /** iv || ciphertext || tag, base64url. The shape every blob in this system has. */
 function seal(key, plaintext) {
   const iv = crypto.randomBytes(IV_BYTES);
@@ -166,6 +176,7 @@ module.exports = {
   randomKey,
   randomSlug,
   postId,
+  albumId,
   seal,
   open,
   wrapKey,
