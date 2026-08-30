@@ -28,11 +28,13 @@
     <%- vault ? ' data-vault-id="' + vaultId + '"' : "" %>
     <%- style ? ' style="' + style + '"' : "" %>>
 
-    <% if (vault) { %>
-        <div class="home-article-vault-badge" title="<%- __('vault.authorized') %>">
-            <i class="fa-regular fa-lock-keyhole"></i><%- __('vault.badge') %>
-        </div>
-    <% } else if (post.sticky) { %>
+    <%# Over the cover, where an overlay has a picture to sit on. A tile with no
+        cover puts it in the flow of the head instead (below): the body starts at
+        the tile's own top edge there, so an overlay lands on the running numeral
+        and the title. %>
+    <% if (vault && hasCover) { %>
+        <%- partial('components/vault-badge') %>
+    <% } else if (!vault && post.sticky) { %>
         <div class="home-article-sticky-badge">
             <i class="fa-regular fa-thumbtack"></i><%- __('sticky') %>
         </div>
@@ -61,6 +63,10 @@
             excerpt is sized from what is left over, so a phantom 0.9rem is a
             line of summary that silently disappears. %>
         <div class="home-article-head">
+            <% if (vault && !hasCover) { %>
+                <%- partial('components/vault-badge', { extra: 'is-inline' }) %>
+            <% } %>
+
             <% if (post.categories.length && theme.home.categories.enable === true) { %>
                 <span class="home-article-eyebrow"><%= post.categories.toArray()[0].name %></span>
             <% } %>

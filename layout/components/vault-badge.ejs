@@ -1,0 +1,12 @@
+<%
+    // The one "Encrypted" marker the whole site uses — the home grid's tile and
+    // the album collection card render THIS, so the two can never drift.
+    //
+    // `extra` carries only the host card's layout classes. `is-inline` takes the
+    // badge out of absolute positioning for a card with no picture to sit on,
+    // where an overlay would land on the text instead.
+    const cls = typeof extra === "undefined" || !extra ? "" : " " + extra;
+%>
+<div class="vault-badge<%= cls %>" title="<%- __('vault.authorized') %>">
+    <i class="fa-regular fa-lock-keyhole"></i><%- __('vault.badge') %>
+</div>

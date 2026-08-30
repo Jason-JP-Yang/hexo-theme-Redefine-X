@@ -231,6 +231,18 @@ async function apiDeleteComment(pat, id, log) {
   );
 }
 
+async function apiDeleteDiscussion(pat, id, log) {
+  return mutate(
+    pat,
+    `mutation($i:DeleteDiscussionInput!) {
+      deleteDiscussion(input:$i) { clientMutationId }
+    }`,
+    { i: { id } },
+    log,
+    "delete discussion"
+  );
+}
+
 /* ────────── Content helpers ────────── */
 
 function escapeHtml(s) {
@@ -522,6 +534,37 @@ async function processPage(
   }
 }
 
+/**
+ * Delete the reactions discussion of every album that now carries `vault: true`.
+ *
+ * The deletion takes the heart counts with it and cannot be undone — which is
+ * the point: they are per-photograph counts on an album that is no longer
+ * public. What this CANNOT reach is the giscus thread under the album page
+ * itself, created lazily by whoever commented first and titled with the page
+ * path; the caller is told to remove that one by hand.
+ */
+async function purgeSealed(pat, sealed, discs, log) {
+  const found = sealed.filter((pagePath) => discs[pagePath]);
+  if (!found.length) return;
+
+  for (const pagePath of found) {
+    if (stopped) break;
+    log.warn(`[masonry-reactions] Encrypted album — deleting public discussion: ${pagePath}`);
+    try {
+      await apiDeleteDiscussion(pat, discs[pagePath].id, log);
+      delete discs[pagePath];
+    } catch (err) {
+      log.error(`[masonry-reactions] Failed to delete ${pagePath}: ${err.message}`);
+    }
+  }
+
+  log.warn(
+    `[masonry-reactions] ${found.length} encrypted album discussion(s) removed. ` +
+      `If any of those pages was ever COMMENTED on, giscus opened a second ` +
+      `discussion titled after the page path — delete that one by hand in the repo.`
+  );
+}
+
 /* ────────── Entry point ────────── */
 
 /**
@@ -569,15 +612,21 @@ async function sync({ theme, config, masonry, log }) {
 
   // Collect pages
   const pages = [];
+  // Encrypted albums, whose discussions have to GO rather than merely be
+  // skipped: an album that was published first still has one on GitHub holding
+  // its title, every image URL, every EXIF row and every heart — in the clear,
+  // which is exactly what sealing the album was for.
+  const sealed = [];
+
   for (const cat of masonry.filter((c) => c.links_category)) {
     for (const item of cat.list || []) {
       if (!item.images?.length) continue;
-      // An encrypted album has no public discussion: the title and every image
-      // filename would sit in the clear on GitHub, which is the whole point of
-      // sealing the album in the first place.
-      if (item.vault === true) continue;
       const title = item["page-title"] || item.name;
       const pagePath = `masonry/${title}/`;
+      if (item.vault === true) {
+        sealed.push(pagePath);
+        continue;
+      }
       pages.push({
         pagePath,
         images: item.images,
@@ -594,7 +643,7 @@ async function sync({ theme, config, masonry, log }) {
     }
   }
 
-  if (!pages.length) {
+  if (!pages.length && !sealed.length) {
     log.info("[masonry-reactions] No masonry pages found");
     return;
   }
@@ -612,6 +661,11 @@ async function sync({ theme, config, masonry, log }) {
     log.error(`[masonry-reactions] Fetch failed: ${e.message}`);
     return;
   }
+
+  // Phase 1b: take back what an album published before it was encrypted.
+  // Skipping it is not enough — the discussion is public until it is deleted,
+  // and it carries the album's title, its photographs and its like counts.
+  await purgeSealed(pat, sealed, discs, log);
 
   // Phase 2: process each page
   let ok = 0;

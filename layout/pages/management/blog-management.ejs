@@ -29,9 +29,11 @@
     <div class="bm-console" hidden>
         <section class="bm-section" data-part="announce"></section>
         <section class="bm-section" data-part="notifications"></section>
-        <section class="bm-section" data-part="followers"></section>
+        <%# Encrypted Posts sits ABOVE the follower list: it is a short, bounded
+            registry, and the follower list grows without limit and pages. %>
         <% if (theme.backend && theme.backend.vault_enable) { %>
         <section class="bm-section" data-part="vault"></section>
         <% } %>
+        <section class="bm-section" data-part="followers"></section>
     </div>
 </div>

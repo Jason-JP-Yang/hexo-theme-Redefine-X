@@ -283,7 +283,7 @@ management:
   topic_posts: Entradas nuevas
   topic_notes: Notas rapidas
   topic_announcements: Anuncios
-  moderation_notice: Silenciar o bloquear aqui solo afecta a las notificaciones. No impide comentar en el blog; los comentarios son GitHub Discussions, asi que para bloquear a alguien usa el apartado Moderation de tu cuenta de GitHub.
+  moderation_notice: Silenciar o bloquear aqui solo afecta a las notificaciones y al acceso a las entradas cifradas. No impide comentar en el blog; los comentarios son GitHub Discussions, asi que para bloquear a alguien usa el apartado Moderation de tu cuenta de GitHub.
   moderation_docs: Documentacion de GitHub
   no_followers: Todavia nadie sigue el blog.
   no_devices: Ningun dispositivo push registrado.
@@ -327,3 +327,5 @@ vault:
   list_empty: Ninguna entrada cifrada aqui es legible por esta identidad.
   no_comments: Los comentarios estan cerrados en las entradas cifradas
   no_comments_hint: Un hilo publico bajo una entrada que solo algunos lectores pueden abrir volveria a exponer su titulo y su contenido.
+  no_comments_album: Los comentarios y los me gusta estan cerrados en los albumes cifrados
+  no_comments_album_hint: Un hilo publico expondria el titulo del album y el nombre de archivo de cada foto, y los me gusta viven en ese mismo hilo, asi que no se ofrece ninguno de los dos.

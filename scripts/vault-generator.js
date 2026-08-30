@@ -155,7 +155,9 @@ async function sealAssets(entry, html, routes) {
 
     const hash = vc.assetHash(bytes);
     const key = vc.assetKey(entry.key, hash);
-    routes.set(`${prefix()}/a/${hash}.bin`, vc.seal(key, bytes));
+    // Named by the POST KEY as well as the bytes: two encrypted items sharing an
+    // image would otherwise claim one path and seal it under two keys.
+    routes.set(`${prefix()}/a/${vc.assetPath(entry.key, hash)}.bin`, vc.seal(key, bytes));
     // The reference carries the hash only. `src` is emptied so nothing is
     // requested before the blob has been fetched and decrypted.
     out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="" data-vault-asset="${hash}"`);
@@ -212,7 +214,10 @@ async function sealCover(entry, routes) {
   if (!bytes) return "";
 
   const hash = vc.assetHash(bytes);
-  routes.set(`${prefix()}/a/${hash}.bin`, vc.seal(vc.assetKey(entry.key, hash), bytes));
+  routes.set(
+    `${prefix()}/a/${vc.assetPath(entry.key, hash)}.bin`,
+    vc.seal(vc.assetKey(entry.key, hash), bytes)
+  );
   // The route that was actually read, not the front-matter path: withholding
   // the wrong one would leave the real derivative published.
   entry.assets = entry.assets || new Set();
@@ -604,7 +609,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   // The same three artefacts a post gets — page, card, images — rendered from
   // the theme's own masonry templates so a decrypted album is not a lookalike of
   // the public ones but literally the same markup.
-  const albumView = hexo.theme.getView("pages/masonry/masonry.ejs");
+  // page-template, NOT pages/masonry/masonry. A masonry page is a `default`
+  // layout (helpers/page-helpers), which means the router renders it through
+  // page-template and every rule the gallery has — the CSS columns, the item
+  // break-inside, the overlay captions — is written against
+  // `.page-template-container`. Sealing the inner partial alone produced an
+  // album with no layout at all once it was decrypted.
+  const albumView = hexo.theme.getView("pages/page-template.ejs");
   const albumCardView = hexo.theme.getView("pages/masonry/masonry-collection-card.ejs");
   const masonryImages = hexo.extend.helper.get("masonryImages");
   const lazyloadMasonry = hexo.extend.helper.get("lazyloadMasonryHtml");
@@ -622,8 +633,11 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
           images,
           content: "",
           comment: false,
-          // No public discussion for an encrypted album: its title and every
-          // image filename would sit in the clear on GitHub.
+          // No public discussion for an encrypted album, and no public like
+          // counts either: both live in a GitHub Discussion whose title and
+          // image filenames would sit in the clear. `vault` is what puts the
+          // notice in their place (pages/page-template.ejs).
+          vault: true,
           masonryReactions: null,
         },
       })
@@ -663,6 +677,12 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
             category: entry.category.links_category,
             thumbs: entry.category.has_thumbnail === true,
             href,
+            // Where the card goes back, sealed so the public build discloses no
+            // gap in the sequence. See markedAlbums in scripts/filters/vault.js.
+            index: entry.index,
+            pos: entry.pos,
+            catIndex: entry.catIndex,
+            catPos: entry.catPos,
           },
         })
       )

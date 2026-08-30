@@ -285,7 +285,7 @@ management:
   topic_posts: 新文章
   topic_notes: 即時短箋
   topic_announcements: 公告
-  moderation_notice: 此處的靜音與封鎖只影響通知，不會限制任何人在部落格中留言 —— 留言由 GitHub Discussions 承載，如需禁止某人留言，請在 GitHub 帳號設定的 Moderation 中封鎖該使用者。
+  moderation_notice: 此處的靜音與封鎖只影響通知與加密文章的存取權限，不會限制任何人在部落格中留言 —— 留言由 GitHub Discussions 承載，如需禁止某人留言，請在 GitHub 帳號設定的 Moderation 中封鎖該使用者。
   moderation_docs: GitHub 文件
   no_followers: 目前還沒有人追蹤本部落格。
   no_devices: 未註冊任何推播裝置。
@@ -329,3 +329,5 @@ vault:
   list_empty: 目前身分沒有可閱讀的加密文章。
   no_comments: 加密文章不開放留言
   no_comments_hint: 只有部分讀者能開啟的文章，若掛上公開討論串，標題與內容會重新暴露在外。
+  no_comments_album: 加密相簿不開放留言與按讚
+  no_comments_album_hint: 公開討論串會連同相簿標題與每張照片的檔名一併曝光，公開按讚系統也依賴同一個討論串，因此兩者都不會開啟。

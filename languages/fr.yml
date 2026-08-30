@@ -283,7 +283,7 @@ management:
   topic_posts: Nouveaux articles
   topic_notes: Notes rapides
   topic_announcements: Annonces
-  moderation_notice: Couper le son ou bloquer ici n'affecte que les notifications. Cela n'empeche personne de commenter le blog ; les commentaires sont des GitHub Discussions, donc le blocage d'un commentateur se fait dans les reglages Moderation de votre compte GitHub.
+  moderation_notice: Couper le son ou bloquer ici n'affecte que les notifications et l'acces aux articles chiffres. Cela n'empeche personne de commenter le blog ; les commentaires sont des GitHub Discussions, donc le blocage d'un commentateur se fait dans les reglages Moderation de votre compte GitHub.
   moderation_docs: Documentation GitHub
   no_followers: Personne ne suit encore le blog.
   no_devices: Aucun appareil push enregistre.
@@ -327,3 +327,5 @@ vault:
   list_empty: Aucun article chiffre ici n'est lisible par cette identite.
   no_comments: Les commentaires sont fermes sur les articles chiffres
   no_comments_hint: Un fil public sous un article que seuls certains lecteurs peuvent ouvrir exposerait de nouveau son titre et son contenu.
+  no_comments_album: Les commentaires et les mentions J'aime sont desactives sur les albums chiffres
+  no_comments_album_hint: Un fil public exposerait le titre de l'album et le nom de fichier de chaque photo, et les mentions J'aime vivent dans ce meme fil, donc ni l'un ni l'autre n'est propose ici.

@@ -284,7 +284,7 @@ management:
   topic_posts: New posts
   topic_notes: Instant notes
   topic_announcements: Announcements
-  moderation_notice: Muting or banning here only affects notifications. It does not stop anyone commenting on the blog - comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation.
+  moderation_notice: Muting or banning here can only affect notifications and access to encrypted posts. It does not stop anyone commenting on the blog - comments are GitHub Discussions, so blocking a commenter is done in your GitHub account settings under Moderation.
   moderation_docs: GitHub docs
   no_followers: Nobody follows the blog yet.
   no_devices: No push device registered.
@@ -328,3 +328,5 @@ vault:
   list_empty: No encrypted post here is readable by this identity.
   no_comments: Comments are closed on encrypted posts
   no_comments_hint: A public thread under a post only some readers can open would put its title and its substance back in the open.
+  no_comments_album: Comments and likes are closed on encrypted albums
+  no_comments_album_hint: A public thread would carry the album's title and every photograph's file name, and the like counts live in that same thread - so neither is offered here.

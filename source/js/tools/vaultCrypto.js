@@ -104,6 +104,19 @@ export function assetKey(rawPostKey, hash) {
 }
 
 /**
+ * Where one sealed image is published. The post key is mixed into the NAME as
+ * well as the key: two encrypted items that share an image (an avatar, a banner)
+ * would otherwise claim one path and seal it under two different asset keys, and
+ * whichever the build wrote last would be the only one that ever opened.
+ *
+ * Mirrors `assetPath` in scripts/lib/vault-crypto.js byte for byte.
+ */
+export async function assetPath(rawPostKey, hash) {
+  const hex = await sha256Hex("rdfx-asset-path|" + bytesToB64url(rawPostKey) + "|" + hash);
+  return hex.slice(0, 32);
+}
+
+/**
  * How a tag or a category is named in a URL fragment. A fragment never reaches
  * a server, but it does survive being copied out of the address bar, so what
  * travels is a hash: only a reader who can already decrypt the metadata can turn
@@ -144,7 +157,7 @@ export function bindAssets(root, rawPostKey) {
 async function openAsset(hash) {
   const raw = assetKeys.get(hash);
   if (!raw) return "";
-  const sealed = await fetchSealed(`${vaultPrefix()}/a/${hash}.bin`);
+  const sealed = await fetchSealed(`${vaultPrefix()}/a/${await assetPath(raw, hash)}.bin`);
   if (!sealed) return "";
   const bytes = await openBlob(await assetKey(raw, hash), sealed);
   const url = URL.createObjectURL(new Blob([bytes], { type: sniffType(bytes) }));

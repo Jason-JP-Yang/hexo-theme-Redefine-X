@@ -143,6 +143,59 @@ function report(log) {
   );
 }
 
+/**
+ * Drop every keyring entry whose item no longer carries `vault:`.
+ *
+ * The keyring is the local authority, so an entry that outlives its flag is a
+ * key for content that is no longer sealed — and the next build that re-adds the
+ * flag would silently reuse it, re-publishing under a key D1 already handed out.
+ * Removing it here is only half the job: the WRAPPED copy in D1 is what actually
+ * grants access, and nothing at build time can reach the Worker to delete it.
+ * `reportRetired` is what tells the admin to.
+ *
+ * Deliberately independent of the master key: pruning never needs one, and a
+ * site that has just removed its last `vault:` flag may have unset VAULT_MASTER
+ * already.
+ *
+ * @param {Set<string>} liveIds  ids that still carry `vault:` this build
+ */
+function prune(liveIds) {
+  const keys = state ? state.keys : secrets.readKeyring();
+  if (!keys) return [];
+
+  const retired = [];
+  for (const id of Object.keys(keys)) {
+    if (liveIds.has(id)) continue;
+    const entry = keys[id] || {};
+    retired.push({ id, slug: entry.slug || "", title: entry.title || "" });
+    delete keys[id];
+  }
+  if (!retired.length) return [];
+
+  if (state) {
+    state.dirty = true;
+    flush();
+  } else {
+    secrets.writeKeyring(keys);
+  }
+  return retired;
+}
+
+/** What `prune` removed locally and the admin still has to remove from D1. */
+function reportRetired(log, retired) {
+  if (!retired || !retired.length) return;
+  const one = retired.length === 1;
+
+  log.warn(
+    `[vault] ${retired.length} keyring entr${one ? "y" : "ies"} no longer carr${one ? "ies" : "y"} ` +
+      `\`vault:\` and ${one ? "was" : "were"} removed from .vault/keys.json.\n` +
+      `  D1 STILL HOLDS THE WRAPPED KEY for each one, which is what actually grants access.\n` +
+      `  Delete ${one ? "it" : "them"} by hand:  Blog Management → Encrypted Posts → Revoke\n\n` +
+      retired.map((r) => `    ${r.id}  ${r.slug}   # ${r.title || "(untitled)"}`).join("\n") +
+      `\n`
+  );
+}
+
 /** Marks everything registered. Run after the console has taken the block. */
 function acknowledge() {
   const s = load();
@@ -160,4 +213,14 @@ function acknowledge() {
   return n;
 }
 
-module.exports = { load, ensurePost, flush, pending, report, acknowledge, fail };
+module.exports = {
+  load,
+  ensurePost,
+  flush,
+  pending,
+  report,
+  prune,
+  reportRetired,
+  acknowledge,
+  fail,
+};

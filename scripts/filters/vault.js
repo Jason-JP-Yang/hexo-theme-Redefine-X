@@ -76,17 +76,46 @@ function withholdTaxonomy(entries) {
  * collection page would otherwise publish its name, description, thumbnail and
  * avatar, and its own page would sit at `/masonry/<title>/` — a path anybody can
  * type. Both go, and the album comes back only for a reader holding the key.
+ *
+ * ── Where it goes BACK ──────────────────────────────────────────────────────
+ *
+ * Each album also carries the two numbers a reader needs to put it back where it
+ * belongs instead of at the end of the list:
+ *
+ *   pos     how many PUBLIC albums precede it inside its category. Independent
+ *           of which encrypted albums this particular reader may open, so one
+ *           number is correct for every audience.
+ *   index   its position in the unmasked list, which orders encrypted albums
+ *           against each other when several share a `pos`.
+ *
+ * and the same pair one level up (`catPos` / `catIndex`) for a category that has
+ * no public album at all and therefore no heading in the public build. Both
+ * pairs travel INSIDE the sealed metadata, so nothing about them is published —
+ * a gap in the public sequence is exactly the disclosure this scheme avoids.
  */
 function markedAlbums() {
   const masonry = (hexo.locals.get("data") || {}).masonry;
   if (!Array.isArray(masonry)) return [];
 
   const out = [];
+  let catIndex = 0;
+  let catPos = 0;
+
   for (const category of masonry) {
     if (!category || !category.links_category || !Array.isArray(category.list)) continue;
-    for (const item of category.list) {
-      if (item && item.vault === true) out.push({ category, item });
+
+    let pos = 0;
+    for (let index = 0; index < category.list.length; index++) {
+      const item = category.list[index];
+      if (item && item.vault === true) out.push({ category, item, index, pos, catIndex, catPos });
+      else pos++;
     }
+
+    // `pos` has finished counting this category's public albums, which is also
+    // the test maskMasonry applies: a category with none of them is not on the
+    // public collection page and so occupies no slot on it.
+    if (pos) catPos++;
+    catIndex++;
   }
   return out;
 }
@@ -119,7 +148,13 @@ hexo.extend.filter.register(
     state.clear();
 
     const albums = markedAlbums();
-    if (!marked.length && !albums.length) return;
+    if (!marked.length && !albums.length) {
+      // The last `vault:` flag on the site has just been removed. The keyring
+      // still names every post that ever carried one, so it is reconciled here
+      // too — this is the one build that would otherwise never look at it.
+      if (vaultEnabled()) store.reportRetired(hexo.log, store.prune(new Set()));
+      return;
+    }
 
     if (!vaultEnabled()) {
       store.fail(
@@ -129,6 +164,7 @@ hexo.extend.filter.register(
     }
 
     const hidden = new Set();
+    const live = new Set();
     for (const post of marked) {
       const id = vc.postId(post.source);
       const { key, slug, rekeyed } = store.ensurePost(id, post.title || "");
@@ -141,9 +177,10 @@ hexo.extend.filter.register(
       }
       state.put(id, { kind: "post", id, key, slug, post, plain: post.content || "" });
       hidden.add(post.source);
+      live.add(id);
     }
 
-    for (const { category, item } of albums) {
+    for (const { category, item, index, pos, catIndex, catPos } of albums) {
       const title = item["page-title"] || item.name;
       const id = vc.albumId(title);
       const { key, slug, rekeyed } = store.ensurePost(id, item.name || title);
@@ -153,8 +190,25 @@ hexo.extend.filter.register(
             `minted and the slug (${slug}) kept. Paste the line below into Blog Management.`
         );
       }
-      state.put(id, { kind: "album", id, key, slug, item, category, title });
+      state.put(id, {
+        kind: "album",
+        id,
+        key,
+        slug,
+        item,
+        category,
+        title,
+        index,
+        pos,
+        catIndex,
+        catPos,
+      });
+      live.add(id);
     }
+
+    // A key whose post has since dropped the flag is a key for content that is
+    // no longer sealed. It goes now, before the keyring is written.
+    store.reportRetired(hexo.log, store.prune(live));
 
     // Before anything is sealed: a key that reached public/ but not the keyring
     // would leave the post encrypted under a key that exists nowhere.
@@ -230,6 +284,7 @@ function withholdPlaintextImages() {
         fs.unlinkSync(target);
         removed++;
       }
+      pruneEmptyDirs(path.dirname(target));
     } catch (e) {
       hexo.log.error(`[vault] could NOT withhold ${routePath} — it is published in the clear`);
     }
@@ -238,13 +293,70 @@ function withholdPlaintextImages() {
   return { unrouted, removed };
 }
 
+/**
+ * Take back what an album left in public/ when it was still published.
+ *
+ * Hexo removes a file whose route has gone, but only for files its own cache
+ * remembers writing — and it never removes the DIRECTORY, so
+ * `public/masonry/<title>/` survives with the album's title for a name. An empty
+ * directory is not a file anyone can fetch, but it is the album's title sitting
+ * in a deploy tree, which is the same disclosure by a slower route.
+ *
+ * The album's own images are covered by `withholdPlaintextImages`: they live
+ * under the image folder named in masonry.yml, which is routinely shared with
+ * public albums and must survive if it is.
+ */
+function withholdAlbumPages() {
+  let removed = 0;
+
+  for (const entry of state.albums()) {
+    const dir = path.join(hexo.public_dir, "masonry", entry.title);
+    try {
+      // Only the generated page, never the directory wholesale: an album whose
+      // page title happens to match an image folder would take the photographs
+      // of every album sharing it down with it.
+      const page = path.join(dir, "index.html");
+      if (fs.existsSync(page)) {
+        fs.unlinkSync(page);
+        removed++;
+      }
+      pruneEmptyDirs(dir);
+    } catch (e) {
+      hexo.log.error(
+        `[vault] could NOT remove the published page of album "${entry.title}" from public/`
+      );
+    }
+  }
+
+  return removed;
+}
+
+/** Walk up from `from`, removing directories that are now empty. Stops at
+ *  public/ itself, and at the first directory that still holds something. */
+function pruneEmptyDirs(from) {
+  const root = path.resolve(hexo.public_dir);
+  let dir = path.resolve(from);
+
+  while (dir !== root && dir.startsWith(root + path.sep)) {
+    try {
+      if (fs.readdirSync(dir).length) return;
+      fs.rmdirSync(dir);
+    } catch (e) {
+      return;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
 hexo.extend.filter.register(
   "after_generate",
   function () {
     if (!state.all().length) return;
     const { unrouted, removed } = withholdPlaintextImages();
+    const pages = withholdAlbumPages();
     hexo.log.info(
-      `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)`
+      `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)` +
+        (pages ? ` and ${pages} previously published album page(s)` : "")
     );
     store.report(hexo.log);
   },
@@ -252,14 +364,16 @@ hexo.extend.filter.register(
 );
 
 // A build interrupted between the route walk and here would leave a plaintext
-// image on disk; this is the last chance to take it back.
-//
-// One thing this cannot reach: an album that USED to be public leaves its old
-// `public/masonry/<title>/` folder behind, emptied of its index.html but still
-// named after the album. Hexo never removes a directory it has emptied. Run
-// `npm run clean` once after encrypting an album that was already published.
+// image on disk; this is the last chance to take it back. It also runs after
+// Hexo's own stale-file sweep, which is what can empty an album's directory
+// AFTER the pass above pruned it.
 hexo.on("exit", function () {
   if (!state.all().length) return;
   const { removed } = withholdPlaintextImages();
-  if (removed) hexo.log.info(`[vault] withheld ${removed} plaintext image(s) from public/`);
+  const pages = withholdAlbumPages();
+  if (removed || pages) {
+    hexo.log.info(
+      `[vault] withheld ${removed} plaintext image(s) and ${pages} album page(s) from public/`
+    );
+  }
 });

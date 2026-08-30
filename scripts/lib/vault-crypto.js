@@ -126,10 +126,30 @@ function assetKey(postKey, assetHash) {
   return hkdf(postKey, "rdfx-asset|" + assetHash);
 }
 
-/** Content-addressed, so an image shared by two posts is stored once per post
- *  key and never collides with an unrelated file. */
+/** Content-addressed: the same bytes get the same name in every post that uses
+ *  them, which is what lets one reference in the markup resolve anywhere. */
 function assetHash(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 32);
+}
+
+/**
+ * The PUBLISHED name of one sealed image — the post key mixed in.
+ *
+ * The blob used to be named by the content hash alone. Two encrypted items that
+ * share an image (every masonry album on this site shares one avatar) therefore
+ * claimed ONE path while sealing it under two different asset keys, so whichever
+ * was written last silently replaced the other and the readers of the first got
+ * a blob that would not open — a broken image with no error anywhere.
+ *
+ * A reader derives this from the post key it already holds, so nothing extra is
+ * published and nothing has to be looked up.
+ */
+function assetPath(postKey, hash) {
+  return crypto
+    .createHash("sha256")
+    .update("rdfx-asset-path|" + b64url(postKey) + "|" + hash, "utf8")
+    .digest("hex")
+    .slice(0, 32);
 }
 
 /**
@@ -184,6 +204,7 @@ module.exports = {
   hkdf,
   assetKey,
   assetHash,
+  assetPath,
   variantPath,
   variantKey,
   taxHash,

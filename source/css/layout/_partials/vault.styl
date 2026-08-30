@@ -27,9 +27,17 @@ $vault-radius = 14px
     display contents
 
 // ─── the authorized badge ───────────────────────────────────
-// Sits where the sticky badge sits: the same kind of statement about the card,
-// and never both at once.
-.home-article-vault-badge
+// ONE badge for the whole site, rendered from components/vault-badge: the home
+// tile and the album card make the same statement about the same thing, so they
+// wear the same object rather than two rules that drift apart.
+//
+// The ink is a LITERAL white, not `var(--background-color)`. That token inverts
+// with the theme, so in dark mode the label was printed in near-black on the
+// primary fill and became unreadable — the fill does not invert, so neither may
+// what sits on it.
+$vault-badge-ink = #fff
+
+.vault-badge
   position absolute
   top 10px
   left 10px
@@ -42,10 +50,33 @@ $vault-radius = 14px
   background var(--primary-color)
   font-size 0.68rem
   font-weight 600
-  color var(--background-color)
+  color $vault-badge-ink
 
   i
     font-size 0.68rem
+
+  // common/basic.styl colours `a i` and `a:hover i` DIRECTLY, and `a:hover i`
+  // (0,0,1,2) outranks `.vault-badge i`. The album badge lives INSIDE the card's
+  // link, which is what turned its lock black and then red-on-red — invisible —
+  // on hover. The class is doubled to win on specificity rather than with
+  // `!important`.
+  &.vault-badge
+    i, span
+      color $vault-badge-ink
+
+// In flow, for a card with no picture to sit on: the home tile with no cover,
+// where the body starts at the tile's top edge, and the album card with no
+// thumbnail, which is one 64px row of avatar and text. An overlay there lands on
+// content, so the badge takes a place of its own instead.
+.vault-badge.is-inline
+  position static
+  flex-shrink 0
+
+  // The tile's head is a flex COLUMN, so the cross axis is the width: left
+  // alone the badge stretches the whole text column. The album row is a flex
+  // ROW and centres it, which is what that one wants.
+  .home-article-head > &
+    align-self flex-start
 
 .home-article-item.is-vault
   position relative
@@ -383,8 +414,15 @@ $vault-radius = 14px
     color var(--third-text-color)
 
 // ─── an encrypted album on the collection page ──────────────
-// Same statement the home tile makes: primary outline, and the lock badge in
-// the corner the sticky badge would use.
+// Exactly the statement the home tile makes — the primary outline and the
+// shared `.vault-badge` above — and nothing else. The public card's `group`,
+// its press-scale and its hover recolour are all left off in the template
+// (pages/masonry/masonry-collection-card), so the card is inert under the
+// cursor: an entry granted to this reader is a fact about the card, not a
+// control to be pointed at.
+//
+// 0.5rem is `rounded-lg`, which the inner card carries and the `li` does not —
+// the two boxes are coincident, so the outline traces the visible card.
 .is-vault-album
   position relative
 
@@ -400,21 +438,3 @@ $vault-radius = 14px
   > a
     position relative
     display block
-
-.masonry-vault-badge
-  position absolute
-  top 8px
-  left 8px
-  z-index 3
-  display inline-flex
-  align-items center
-  gap 6px
-  padding 4px 9px
-  border-radius 999px
-  background var(--primary-color)
-  font-size 0.68rem
-  font-weight 600
-  color var(--background-color)
-
-  i
-    font-size 0.68rem

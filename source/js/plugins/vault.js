@@ -298,6 +298,9 @@ function rehydrateAlbum(root) {
       theme.articles?.lazyload === true &&
       initLazyLoad({ preload: theme.articles.lazyload_preload === true })
   );
+  // The scroll-triggered captions. Its observer is wired once per page view,
+  // which for a gallery mounted inside an already-open page has been and gone.
+  step(() => initAutoHover());
   step(() => imageViewer());
   step(() => window.dispatchEvent(new CustomEvent("redefine:content-injected", { detail: { root } })));
   step(() => window.dispatchEvent(new CustomEvent("redefine:content-resized")));
@@ -905,54 +908,98 @@ function bumpAttr(el, attr, by) {
 /* ─── the album collection ─────────────────────────────────────────────────── */
 
 /**
- * Put the decrypted albums back on the collection page.
+ * Put the decrypted albums back on the collection page, in their own places.
  *
  * The card is the one the build rendered from the theme's own
  * masonry-collection-card partial, so a decrypted album is not a lookalike of a
- * public one — it is the same markup, thumbnail, avatar and all. A category that
- * exists only inside encrypted albums has no heading in the public build either,
- * so it is created here.
+ * public one — it is the same markup, thumbnail, avatar and all.
+ *
+ * Where each one goes travels sealed with it, as a slot counting PUBLIC siblings
+ * only (`pos` within a category, `catPos` between categories). That number is
+ * the same for every reader, which is what lets it be decided at build time
+ * without publishing so much as a gap in the sequence; `index`/`catIndex` order
+ * the encrypted entries against each other when several claim one slot.
+ *
+ * Both levels are therefore filled BACK TO FRONT: everything already inserted
+ * sits at a slot at or after the one being claimed, so it ends up after it.
  */
 async function unlockMasonry(map) {
   const root = document.querySelector(".friends-link-container");
   if (!root || root.dataset.vaultApplied === "1") return;
 
-  const albums = readableAlbums(map).filter((entry) => entry.card);
-  if (!albums.length) return;
+  const groups = albumGroups(map);
+  if (!groups.length) return;
   root.dataset.vaultApplied = "1";
 
   await animateHeight(root, () => {
-    for (const entry of albums) {
-      const name = entry.meta.category || "";
-      let list = root.querySelector(`ul[data-masonry-category="${cssEscape(name)}"]`);
-
-      if (!list) {
-        const heading = document.createElement("div");
-        heading.className = "mt-2 mb-4";
-        heading.setAttribute("data-masonry-heading", name);
-        heading.setAttribute(INSERTED, "1");
-        heading.innerHTML = `<h2 class="text-2xl font-bold"></h2>`;
-        heading.firstElementChild.textContent = name;
-
-        list = document.createElement("ul");
-        list.className = entry.meta.thumbs
-          ? "grid mb-6 w-full gap-4 grid-cols-2"
-          : "grid mb-6 w-full gap-4 grid-cols-2 sm:grid-cols-3";
-        list.setAttribute("data-masonry-category", name);
-        list.setAttribute("data-masonry-thumbs", String(!!entry.meta.thumbs));
-        list.setAttribute(INSERTED, "1");
-
-        const tail = root.querySelector(".clear");
-        root.insertBefore(heading, tail || null);
-        root.insertBefore(list, tail || null);
+    for (let g = groups.length - 1; g >= 0; g--) {
+      const group = groups[g];
+      const list = albumList(root, group);
+      for (let i = group.items.length - 1; i >= 0; i--) {
+        const entry = group.items[i];
+        entry.card.setAttribute(INSERTED, "1");
+        list.insertBefore(entry.card, list.children[entry.meta.pos || 0] || null);
+        reveal(entry.card);
       }
-
-      entry.card.setAttribute(INSERTED, "1");
-      list.appendChild(entry.card);
-      reveal(entry.card);
     }
   });
   settle();
+}
+
+/** The readable albums by category, each group's cards in build order and the
+ *  groups themselves in the order their headings appear on the page. */
+function albumGroups(map) {
+  const byName = new Map();
+  for (const entry of readableAlbums(map)) {
+    if (!entry.card) continue;
+    const name = entry.meta.category || "";
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name).push(entry);
+  }
+
+  return Array.from(byName, ([name, items]) => {
+    items.sort((a, b) => (a.meta.index || 0) - (b.meta.index || 0));
+    return {
+      name,
+      items,
+      pos: items[0].meta.catPos || 0,
+      index: items[0].meta.catIndex || 0,
+      thumbs: !!items[0].meta.thumbs,
+    };
+  }).sort((a, b) => a.pos - b.pos || a.index - b.index);
+}
+
+/**
+ * The list a category's albums belong in. A category whose albums are ALL
+ * encrypted has no heading in the public build — publishing one would name it —
+ * so its heading and list are built here, at the slot it would have occupied.
+ */
+function albumList(root, group) {
+  const existing = root.querySelector(`ul[data-masonry-category="${cssEscape(group.name)}"]`);
+  if (existing) return existing;
+
+  const heading = document.createElement("div");
+  heading.className = "mt-2 mb-4";
+  heading.setAttribute("data-masonry-heading", group.name);
+  heading.setAttribute(INSERTED, "1");
+  heading.innerHTML = `<h2 class="text-2xl font-bold"></h2>`;
+  heading.firstElementChild.textContent = group.name;
+
+  const list = document.createElement("ul");
+  list.className = group.thumbs
+    ? "grid mb-6 w-full gap-4 grid-cols-2"
+    : "grid mb-6 w-full gap-4 grid-cols-2 sm:grid-cols-3";
+  list.setAttribute("data-masonry-category", group.name);
+  list.setAttribute("data-masonry-thumbs", String(group.thumbs));
+  list.setAttribute(INSERTED, "1");
+
+  // A heading inserted by an earlier pass carries the same attribute, which is
+  // what keeps the back-to-front walk landing on the right one.
+  const anchor =
+    root.querySelectorAll("[data-masonry-heading]")[group.pos] || root.querySelector(".clear");
+  root.insertBefore(heading, anchor || null);
+  root.insertBefore(list, anchor || null);
+  return list;
 }
 
 function cssEscape(value) {
