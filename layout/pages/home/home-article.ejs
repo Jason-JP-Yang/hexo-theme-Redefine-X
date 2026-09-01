@@ -8,7 +8,10 @@
             <i class="fa-solid fa-calendars"></i>
             <%# .home-article-date must stay text-only: utils.js relativeTimeInHome()
                 overwrites its textContent, which would eat the icon if it were inside. %>
-            <span class="meta-text home-article-date" data-date="<%= post.date %>">
+            <%# ISO/UTC, not the Date's toString(): that renders in the BUILD
+                machine's zone, so the same commit published a different wall
+                clock on a runner than it did locally. %>
+            <span class="meta-text home-article-date" data-date="<%= post.date.toISOString() %>">
                 <% if (theme.home.article_date_format == 'auto' || theme.home.article_date_format == 'relative') { %>
                     <%= date(post.date, config.date_format) %>
                 <% } else { %>

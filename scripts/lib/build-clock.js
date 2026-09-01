@@ -1,20 +1,10 @@
 "use strict";
 
 /**
- * The build's idea of "now".
- *
- * Three things in this theme read the wall clock while rendering and put the
- * answer into a published file: the home grid's recency weighting, which is an
- * input to a cost function and can therefore change the ARRANGEMENT of the page
- * as posts age; changelog.json's `generated_at`; and the footer's year. Two
- * builds of the same commit on two different days do not produce the same bytes,
- * so no pipeline can prove it reproduced what was published.
- *
- * SOURCE_DATE_EPOCH is the reproducible-builds convention for exactly this:
- * unix SECONDS, and when it is set the build reads it instead of the clock.
- * Unset — every ordinary local build — nothing changes.
- *
- * https://reproducible-builds.org/specs/source-date-epoch/
+ * The build's idea of "now". SOURCE_DATE_EPOCH (unix seconds) pins it so two
+ * builds of one commit agree; unset, this is the wall clock and nothing changes.
+ * Read by bento-helpers (recency weighting), notifications-generator
+ * (changelog.json) and the footer year — all three reach published files.
  */
 
 const raw = String(process.env.SOURCE_DATE_EPOCH || "").trim();

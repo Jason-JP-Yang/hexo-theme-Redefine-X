@@ -1,22 +1,12 @@
 "use strict";
 
 /**
- * Put the search index in a fixed order.
+ * Sort the search index.
  *
- * hexo-generator-searchdb walks `locals.posts` and `locals.pages` with a bare
- * `forEach` and no ordering at all (its lib/database.js). Hexo reads source
- * files concurrently, so that collection is in whatever order the reads
- * happened to finish in — which makes search.json a different permutation of
- * the same entries on every machine, and in principle between two runs on one
- * machine. Same length, same content, different bytes, for no reason anyone
- * chose. It was the only file in the whole artifact that could not be
- * reproduced.
- *
- * Sorting by `url` costs nothing and changes nothing the reader sees: the
- * client scores and ranks matches itself, so the order on disk was never
- * meaningful.
- *
- * Priority 5 — before anything else that rewrites routes.
+ * hexo-generator-searchdb walks `locals.posts` with a bare forEach and no
+ * ordering, and Hexo reads sources concurrently — so search.json was a
+ * different permutation of the same entries on every machine. The client ranks
+ * matches itself, so the order on disk was never meaningful.
  */
 
 /** Route payloads come back as strings, Buffers, streams or thunks. */
@@ -56,8 +46,7 @@ hexo.extend.filter.register(
     }
     if (!Array.isArray(entries) || entries.length < 2) return;
 
-    // Code-unit order, NOT localeCompare: collation depends on the runner's
-    // locale, which would put the nondeterminism straight back.
+    // Code-unit order, not localeCompare: collation depends on the locale.
     entries.sort((a, b) => {
       const x = String(a.url || "");
       const y = String(b.url || "");

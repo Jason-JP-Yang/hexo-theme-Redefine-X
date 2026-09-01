@@ -18,9 +18,8 @@ const { BuildIndex, relKey } = require("../lib/build-index");
  * Doing it here rather than in the browser is the point: no runtime canvas
  * sampling, no flash of the untinted colour, and no cost on a page view.
  *
- * The cache used to key on the absolute path plus mtime, which meant it never
- * hit on a machine other than the one that wrote it — a Linux runner recomputed
- * every accent from a Windows-authored cache. See scripts/lib/build-index.js.
+ * Keyed on content, not on an absolute path plus mtime — that key never hit on
+ * a machine other than the one that wrote it. See scripts/lib/build-index.js.
  *
  * `sharp` is a site dependency (it is what `img-optimizer` transcodes with) and
  * is required lazily, so a site without it simply gets no accents.

@@ -11,12 +11,8 @@
 	<% } else {%>
 	<div class="tagcloud-content">
 		<ul class="tag-list" data-show-value="true">
-			<%# Sorted, because `site.tags` has no order of its own: Hexo builds the
-			    tag model while processing posts CONCURRENTLY, so the collection comes
-			    out in whatever order those reads finished in — a different permutation
-			    per machine, and in principle per run. The `cloud` branch above is
-			    already safe; tagcloud() defaults to orderby: 'name'. Warehouse compares
-			    with bare < and >, so this is code-unit order and not the runner's locale. %>
+			<%# Sorted: `site.tags` has no order of its own, so it came out a different
+			    permutation per machine. tagcloud() above is already name-ordered. %>
 			<% site.tags.sort('name').forEach(function(tag){ %>
 				<li>
 					<a data-weight="<%- tag.posts.length %>" href="<%- url_for("/" + tag.path) %>">

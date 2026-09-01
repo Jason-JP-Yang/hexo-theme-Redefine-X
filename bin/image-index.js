@@ -2,23 +2,13 @@
 "use strict";
 
 /**
- * The `source/build/` manifest, from outside a build.
+ * The `source/build/` transcode manifest, from outside a build.
  *
- *   npm run images:index              rebuild the manifest from what is on disk
+ *   npm run images:index              rebuild it from what is on disk
  *   npm run images:index -- --check   exit 1 if any image has no cached product
  *
- * The first form is the migration: it walks the images this site would
- * transcode, finds the AVIF and SVG already sitting in `source/build/`, and
- * records the source hash for each — so switching the cache key from mtime to
- * content costs ZERO re-encodes and the published bytes stay the published
- * bytes.
- *
- * The second is the CI gate. A runner builds with RDFX_SKIP_AVIF set and never
- * starts an encoder, because the AVIF bytes are decided by whichever ffmpeg and
- * libaom that machine happens to carry. So an image with nothing cached would
- * silently ship in its original format; this refuses the build instead, and
- * names the files a local build has to encode first.
- *
+ * `--check` is the CI gate: a runner builds with RDFX_SKIP_AVIF and never starts
+ * an encoder, because AVIF bytes depend on the machine's ffmpeg and libaom.
  * Run from the SITE root.
  */
 
@@ -58,8 +48,7 @@ function walk(dir, out) {
   return out;
 }
 
-/** img-optimizer's own test: a regex against the leading-slash path, else a
- *  substring when the pattern will not compile. */
+/** img-optimizer's own test: regex against the leading-slash path, else substring. */
 function excluded(rel) {
   const withSlash = "/" + rel;
   for (const pattern of exclude) {
@@ -115,8 +104,7 @@ for (const abs of files) {
     continue;
   }
 
-  const already = index.hit(rel, abs, (entry) => entry.outSize === outStat.size);
-  if (already) {
+  if (index.hit(rel, abs, (entry) => entry.outSize === outStat.size)) {
     held++;
     continue;
   }
@@ -134,8 +122,7 @@ if (check) {
     console.error(
       `[images:index] ${missing.length} image(s) have no usable cached transcode:\n` +
         missing.map((p) => `    ${p}`).join("\n") +
-        `\n\n  This build would publish them unoptimised. Run a local build to encode\n` +
-        `  them, then commit source/build/.\n`
+        `\n\n  Run a local build to encode them, then commit source/build/.\n`
     );
     process.exit(1);
   }
@@ -146,8 +133,6 @@ if (check) {
 const pruned = index.prune(live);
 index.flush();
 
-// The accent cache used to key on an absolute path plus mtime and could never
-// hit off the machine that wrote it; cover-accent.js now writes .accents.json.
 const legacy = path.join(buildDir, LEGACY_ACCENTS);
 if (fs.existsSync(legacy)) {
   fs.unlinkSync(legacy);

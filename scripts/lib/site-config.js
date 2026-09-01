@@ -1,9 +1,6 @@
 "use strict";
 
-/**
- * Site and theme config, read the way Hexo resolves them, for the CLI tools in
- * bin/ — which run outside a Hexo instance and so have no `hexo.config`.
- */
+/** Site and theme config for the CLI tools in bin/, which run outside Hexo. */
 
 const fs = require("fs");
 const path = require("path");
@@ -17,15 +14,14 @@ function readYaml(file) {
   }
 }
 
-/** @param {string} [root] site root; defaults to the working directory. */
 function load(root) {
   const base = root || process.cwd();
   const site = readYaml(path.join(base, "_config.yml"));
   const name = site.theme || "";
   const themeDir = name ? path.join(base, "themes", name) : "";
 
-  // Hexo's alternate-config convention: `_config.<theme>.yml` at the site root
-  // REPLACES the theme's own file wholesale rather than merging into it.
+  // Hexo's alternate-config convention: `_config.<theme>.yml` REPLACES the
+  // theme's own file wholesale rather than merging into it.
   const override = name ? readYaml(path.join(base, `_config.${name}.yml`)) : {};
   const theme = Object.keys(override).length
     ? override

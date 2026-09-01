@@ -4,16 +4,11 @@
 /**
  * `.vault/keys.json` ⇄ `.vault/keys.enc`.
  *
- *   npm run vault:seal    keys.json -> keys.enc   (before committing)
- *   npm run vault:open    keys.enc  -> keys.json  (in CI, after checkout)
+ *   npm run vault:seal    before committing
+ *   npm run vault:open    in CI, after checkout
  *
- * The keyring holds every post key in the clear, so it cannot be committed as
- * it stands — but a build machine that cannot read it cannot build an encrypted
- * post at all, and `vault.js` fails closed rather than publishing one. Sealing
- * it under VAULT_MASTER, which the builder must already hold, puts the keyring
- * in the private repository next to the content it belongs to: one commit
- * carries both, so a key and its ciphertext can never travel separately.
- *
+ * The keyring holds every post key in the clear, so only the sealed copy is
+ * committed — one commit then carries a key and its ciphertext together.
  * Run from the SITE root.
  */
 
@@ -33,11 +28,7 @@ function fail(message) {
 
 function master() {
   const raw = secrets.env("VAULT_MASTER");
-  if (!raw) {
-    fail(
-      "VAULT_MASTER is not set. Put it in .env locally, or in the runner's secrets."
-    );
-  }
+  if (!raw) fail("VAULT_MASTER is not set (.env locally, a secret in CI).");
   const key = vc.fromB64url(raw);
   if (key.length !== vc.KEY_BYTES) {
     fail(`VAULT_MASTER must decode to ${vc.KEY_BYTES} bytes, got ${key.length}.`);
@@ -62,10 +53,7 @@ function readEnc(key) {
   try {
     return JSON.parse(vc.open(key, vc.fromB64url(sealed)).toString("utf8"));
   } catch (e) {
-    fail(
-      ".vault/keys.enc does not open under this VAULT_MASTER. Either the secret is " +
-        "wrong, or the file was sealed under a key that has since been rotated."
-    );
+    fail(".vault/keys.enc does not open under this VAULT_MASTER.");
   }
 }
 
@@ -78,7 +66,7 @@ if (mode === "seal") {
   const current = readEnc(key);
 
   // The nonce is fresh on every seal, so re-sealing unchanged content would
-  // rewrite the file and show up as a change in every commit.
+  // show up as a change in every commit.
   if (current && canonical(current) === text) {
     console.log("[vault] keys.enc is already current.");
     process.exit(0);
@@ -97,8 +85,8 @@ if (mode === "open") {
 
   const local = secrets.readKeyring();
   if (local && !force) {
-    // A key that exists only locally has never reached the sealed copy, and
-    // overwriting it would strand whatever it encrypted with no way back.
+    // A key only present locally has never been sealed; overwriting it would
+    // strand whatever it encrypted.
     const stranded = Object.keys(local).filter((id) => !(id in sealed));
     if (stranded.length) {
       fail(

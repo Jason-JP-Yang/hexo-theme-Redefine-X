@@ -6,8 +6,6 @@ const os = require("os");
 const { spawn } = require("child_process");
 const { BuildIndex, skipAvif } = require("../lib/build-index");
 
-// The cache manifest. See scripts/lib/build-index.js for why the old
-// mtime-based key had to go.
 const INDEX_FILE = ".images.json";
 
 // ----------------------------------------------------------------------------
@@ -572,8 +570,8 @@ class PathManager {
 const successfulConversions = new Set();
 const queue = new TaskQueue(2);
 
-// Rebuilt per build: the manifest, every key this build touched (so the rest can
-// be pruned), and the transcodes that were asked for while encoding was off.
+// Rebuilt per build. `indexedKeys` is what survives the prune; `skippedEncodes`
+// is what was asked for while encoding was off.
 let index = null;
 const indexedKeys = new Set();
 const skippedEncodes = [];
@@ -606,8 +604,7 @@ async function scanAndProcessAllImages() {
   index.prune(indexedKeys);
   index.flush();
 
-  // Not fatal. An image with no cached transcode keeps its original path — the
-  // rewrite below only touches what actually converted — so the page is whole,
+  // Not fatal: an uncached image keeps its original path, so the page is whole,
   // just heavier. `npm run images:index -- --check` is what refuses to build.
   if (skippedEncodes.length) {
     hexo.log.warn(
@@ -814,9 +811,8 @@ async function processFile(absPath, config) {
         return;
       }
 
-      // SVGO is pure JS, pinned by the lockfile and deterministic, so it keeps
-      // running. Only the AVIF transcode needs a native encoder whose version
-      // would decide the bytes.
+      // SVGO is pure JS and lockfile-pinned, so it keeps running; only the AVIF
+      // transcode needs a native encoder whose version would decide the bytes.
       if (isBitmap && skipAvif()) {
         skippedEncodes.push(relPath);
         return;

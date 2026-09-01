@@ -1,30 +1,15 @@
 "use strict";
 
 /**
- * The content-addressed index behind everything cached in `source/build/`.
+ * Content-addressed index for everything cached in `source/build/`.
  *
- * Both caches this replaces were keyed on mtime — `out.mtimeMs >= in.mtimeMs`
- * for the AVIF transcodes, and an ABSOLUTE path plus mtime for the cover
- * accents. Neither key survives leaving the machine that wrote it:
+ * Keys are site-relative POSIX paths; values carry the source's content hash.
+ * The caches this replaces keyed on mtime (and, for accents, an absolute path),
+ * neither of which survives a git checkout — so a runner re-derived a cache
+ * sitting right there, and a backup-restored image kept serving a stale AVIF.
  *
- *   • git stores no mtimes, so a fresh checkout gives every file the same new
- *     timestamp and the comparison becomes a coin toss — which is why a CI build
- *     re-derives a cache that is sitting right there, and why the AVIF bytes it
- *     produces are its ffmpeg's rather than the ones already published.
- *   • an absolute Windows path never matches on Linux, so the accent cache is a
- *     guaranteed total miss on a runner.
- *   • restoring an image from a backup gives it an OLD mtime, and the stale
- *     AVIF is then served forever with no warning. That one is a live bug on
- *     the authoring machine, not only in CI.
- *
- * So the key is the site-relative POSIX path and the value carries the source's
- * content hash. Both travel, which is what makes one machine's cache every
- * machine's cache.
- *
- * `mtime` and `size` are kept alongside the hash purely as a fast path: when
- * they still match, the recorded hash is taken on trust and the file is not
- * read. A checkout invalidates that on every file exactly once, which is the
- * correct amount of work, and no build after it re-reads anything unchanged.
+ * `mtime`/`size` are a fast path only: when they match, the recorded hash is
+ * trusted and the file is not read.
  */
 
 const crypto = require("crypto");
@@ -33,7 +18,6 @@ const path = require("path");
 
 const VERSION = 1;
 
-/** 64 bits of SHA-256. Collisions are not a threat model here; drift is. */
 function hashFile(absPath) {
   return crypto
     .createHash("sha256")
@@ -43,10 +27,6 @@ function hashFile(absPath) {
 }
 
 class BuildIndex {
-  /**
-   * @param {string} buildDir  usually <source>/build
-   * @param {string} name      file inside it, e.g. ".images.json"
-   */
   constructor(buildDir, name) {
     this.file = path.join(buildDir, name);
     this.entries = {};
@@ -66,10 +46,7 @@ class BuildIndex {
     return this.entries[key];
   }
 
-  /**
-   * The source's current content hash, reusing the recorded one when the file
-   * has not been touched. Returns null when the file cannot be read.
-   */
+  /** Current content hash, reusing the recorded one when the file is untouched. */
   hashOf(key, absPath) {
     let stat;
     try {
@@ -90,8 +67,7 @@ class BuildIndex {
       return null;
     }
 
-    // Re-stamp so the next build takes the fast path even though nothing about
-    // the CONTENT changed — this is the checkout case.
+    // Re-stamp so the next build takes the fast path — the checkout case.
     if (entry && entry.hash === hash) {
       entry.size = stat.size;
       entry.mtime = stat.mtimeMs;
@@ -100,11 +76,7 @@ class BuildIndex {
     return hash;
   }
 
-  /**
-   * Is `key`'s cached product still the right one for the source as it stands?
-   * `verify` is handed the entry and decides whether the PRODUCT is intact —
-   * an existing file of the recorded size, a value that is still present.
-   */
+  /** `verify` decides whether the cached PRODUCT is still intact. */
   hit(key, absPath, verify) {
     const entry = this.entries[key];
     if (!entry) return false;
@@ -125,7 +97,6 @@ class BuildIndex {
     this.dirty = true;
   }
 
-  /** Drop every key not in `live`. Returns how many went. */
   prune(live) {
     let removed = 0;
     for (const key of Object.keys(this.entries)) {
@@ -139,24 +110,20 @@ class BuildIndex {
 
   flush() {
     if (!this.dirty) return;
-    // Sorted, so the file is diffable and two machines that did the same work
-    // produce the same bytes.
+    // Sorted, so two machines doing the same work write the same bytes.
     const sorted = {};
     for (const key of Object.keys(this.entries).sort()) sorted[key] = this.entries[key];
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, JSON.stringify({ version: VERSION, entries: sorted }, null, 0), "utf8");
+      fs.writeFileSync(this.file, JSON.stringify({ version: VERSION, entries: sorted }), "utf8");
       this.dirty = false;
     } catch (e) {
-      /* the caller logs; a cache that cannot be written is slow, not wrong */
+      /* a cache that cannot be written is slow, not wrong */
     }
   }
 }
 
-/**
- * The site-relative POSIX key for an absolute path under `source/` or the
- * theme's `source/`, or null for anything outside both.
- */
+/** Site-relative POSIX key for a path under `source/` or the theme's `source/`. */
 function relKey(absPath, sourceDir, themeDir) {
   const roots = [sourceDir, themeDir ? path.join(themeDir, "source") : ""].filter(Boolean);
   for (const root of roots) {

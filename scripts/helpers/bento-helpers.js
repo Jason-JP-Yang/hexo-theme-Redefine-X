@@ -932,9 +932,8 @@ function packMd(slots) {
 function planHomeGrid(posts, options) {
   const opts = options || {};
   const list = posts && posts.toArray ? posts.toArray() : posts || [];
-  // The build clock, not the wall clock: `ageDays` feeds the cost function, so
-  // the wall clock would rearrange the page as posts age and no two builds of
-  // one commit would agree. See scripts/lib/build-clock.js.
+  // Build clock, not wall clock: `ageDays` feeds the cost function, so the page
+  // would rearrange itself as posts age and no two builds would agree.
   const now = clock.now();
   const metrics = list.map((post) => measure(post, now));
   const sequence = planSequence(metrics, !!(opts.features && list.length));
