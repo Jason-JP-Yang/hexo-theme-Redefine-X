@@ -23,6 +23,8 @@
  * override any field of an auto-generated one (matched by `id`).
  */
 
+const clock = require("./lib/build-clock");
+
 const DEFAULT_LIMIT = 30;
 
 // ─── helpers ────────────────────────────────────────────────
@@ -48,10 +50,10 @@ function truncate(text, max) {
 }
 
 function toIso(value) {
-  if (!value) return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (!value) return clock.iso();
   const date = value.toDate ? value.toDate() : new Date(value);
-  if (isNaN(date.getTime())) return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (isNaN(date.getTime())) return clock.iso();
+  return clock.iso(date);
 }
 
 /**
@@ -198,7 +200,7 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
       data: JSON.stringify(
         {
           version: 1,
-          generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+          generated_at: clock.iso(),
           entries,
         },
         null,

@@ -45,6 +45,8 @@
  * pays for with one of the others. Nothing here can produce a broken layout: the
  * hard rules are the three `_MIN` entries, and they are yes/no, not weights.
  */
+const clock = require("../lib/build-clock");
+
 const W = {
   // ── Hard rules ───────────────────────────────────────────────────────────
   // Not weights. A pairing that breaks one of these is dropped from the search:
@@ -930,7 +932,10 @@ function packMd(slots) {
 function planHomeGrid(posts, options) {
   const opts = options || {};
   const list = posts && posts.toArray ? posts.toArray() : posts || [];
-  const now = Date.now();
+  // The build clock, not the wall clock: `ageDays` feeds the cost function, so
+  // the wall clock would rearrange the page as posts age and no two builds of
+  // one commit would agree. See scripts/lib/build-clock.js.
+  const now = clock.now();
   const metrics = list.map((post) => measure(post, now));
   const sequence = planSequence(metrics, !!(opts.features && list.length));
 

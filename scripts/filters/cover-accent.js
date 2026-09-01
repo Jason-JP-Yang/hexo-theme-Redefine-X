@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { BuildIndex, relKey } = require("../lib/build-index");
 
 /**
  * Redefine-X — build-time cover accent colour.
@@ -13,15 +14,19 @@ const path = require("path");
  * of identical grey cards.
  *
  * It runs once per build, before generation, and is cached against the source
- * file's mtime — a rebuild with unchanged covers does no image work at all.
+ * file's CONTENT — a rebuild with unchanged covers does no image work at all.
  * Doing it here rather than in the browser is the point: no runtime canvas
  * sampling, no flash of the untinted colour, and no cost on a page view.
+ *
+ * The cache used to key on the absolute path plus mtime, which meant it never
+ * hit on a machine other than the one that wrote it — a Linux runner recomputed
+ * every accent from a Windows-authored cache. See scripts/lib/build-index.js.
  *
  * `sharp` is a site dependency (it is what `img-optimizer` transcodes with) and
  * is required lazily, so a site without it simply gets no accents.
  */
 
-const CACHE_FILE = ".cover-accent.json";
+const CACHE_FILE = ".accents.json";
 
 // Relative luminance the accent is pulled towards when a cover is nearly black
 // or nearly white. Outside this band a tint is either invisible against the
@@ -31,27 +36,6 @@ const LUMA_MIN = 0.18;
 const LUMA_MAX = 0.62;
 
 const accents = new Map();
-
-function cachePath() {
-  return path.join(hexo.source_dir, "build", CACHE_FILE);
-}
-
-function readCache() {
-  try {
-    return JSON.parse(fs.readFileSync(cachePath(), "utf8"));
-  } catch (e) {
-    return {};
-  }
-}
-
-function writeCache(cache) {
-  try {
-    fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
-    fs.writeFileSync(cachePath(), JSON.stringify(cache), "utf8");
-  } catch (e) {
-    hexo.log.warn(`[cover-accent] could not write the cache: ${e.message}`);
-  }
-}
 
 /**
  * The cover this post shows in the home grid.
@@ -150,8 +134,8 @@ async function buildAccents() {
   const posts = hexo.locals.get("posts");
   if (!posts || !posts.length) return;
 
-  const cache = readCache();
-  const next = {};
+  const index = new BuildIndex(path.join(hexo.source_dir, "build"), CACHE_FILE);
+  const live = new Set();
   let computed = 0;
 
   for (const post of posts.toArray()) {
@@ -161,14 +145,11 @@ async function buildAccents() {
     const file = resolveFile(cover);
     if (!file) continue;
 
-    let key;
-    try {
-      key = `${file}:${fs.statSync(file).mtimeMs}`;
-    } catch (e) {
-      continue;
-    }
+    const key = relKey(file, hexo.source_dir, hexo.theme_dir);
+    if (!key) continue;
+    live.add(key);
 
-    let accent = cache[key];
+    let accent = index.hit(key, file, (entry) => !!entry.accent) ? index.get(key).accent : "";
     if (!accent) {
       try {
         accent = await extract(file);
@@ -179,16 +160,18 @@ async function buildAccents() {
         hexo.log.debug(`[cover-accent] skipped ${cover}: ${e.message}`);
         continue;
       }
+      index.record(key, file, { accent });
     }
 
-    next[key] = accent;
     accents.set(post.path, accent);
   }
+
+  index.prune(live);
+  index.flush();
 
   if (computed) {
     hexo.log.info(`[cover-accent] extracted ${computed} cover colour${computed === 1 ? "" : "s"}`);
   }
-  writeCache(next);
 }
 
 hexo.extend.filter.register("before_generate", buildAccents);

@@ -4,6 +4,11 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { spawn } = require("child_process");
+const { BuildIndex, skipAvif } = require("../lib/build-index");
+
+// The cache manifest. See scripts/lib/build-index.js for why the old
+// mtime-based key had to go.
+const INDEX_FILE = ".images.json";
 
 // ----------------------------------------------------------------------------
 // Configuration Management
@@ -567,6 +572,12 @@ class PathManager {
 const successfulConversions = new Set();
 const queue = new TaskQueue(2);
 
+// Rebuilt per build: the manifest, every key this build touched (so the rest can
+// be pruned), and the transcodes that were asked for while encoding was off.
+let index = null;
+const indexedKeys = new Set();
+const skippedEncodes = [];
+
 async function scanAndProcessAllImages() {
   const config = ConfigManager.get();
   if (!config.ENABLE_AVIF && !config.ENABLE_SVG) {
@@ -574,8 +585,13 @@ async function scanAndProcessAllImages() {
     return;
   }
 
+  index = new BuildIndex(path.join(hexo.source_dir, "build"), INDEX_FILE);
+  indexedKeys.clear();
+  skippedEncodes.length = 0;
+
   queue.concurrency = config.MAX_CONCURRENCY;
-  hexo.log.info(`[img-optimizer] Encoder: ${config.encoder} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
+  const mode = skipAvif() ? "cache only (RDFX_SKIP_AVIF)" : config.encoder;
+  hexo.log.info(`[img-optimizer] Encoder: ${mode} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
   hexo.log.debug("[img-optimizer] Scanning images...");
 
   // Remove stale optimized files whose source images have been deleted
@@ -586,6 +602,21 @@ async function scanAndProcessAllImages() {
 
   const tasks = files.map(absPath => processFile(absPath, config));
   await Promise.all(tasks);
+
+  index.prune(indexedKeys);
+  index.flush();
+
+  // Not fatal. An image with no cached transcode keeps its original path — the
+  // rewrite below only touches what actually converted — so the page is whole,
+  // just heavier. `npm run images:index -- --check` is what refuses to build.
+  if (skippedEncodes.length) {
+    hexo.log.warn(
+      `[img-optimizer] RDFX_SKIP_AVIF is set and ${skippedEncodes.length} image(s) have no cached ` +
+        `transcode. They are published in their original format:\n` +
+        skippedEncodes.map((p) => `    ${p}`).join("\n") +
+        `\n  Run a local build to encode them, then commit source/build/.`
+    );
+  }
 
   hexo.log.info(`[img-optimizer] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
@@ -765,18 +796,31 @@ async function processFile(absPath, config) {
     routePath
   } = PathManager.buildOptimizedPath(relPath, isBitmap);
 
+  indexedKeys.add(relPath);
+
   await queue.enqueue(async () => {
     try {
-      // Cache check
-      try {
-        const inStat = await fs.promises.stat(absPath);
-        const outStat = await fs.promises.stat(outputPath);
-        if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
-          hexo.route.set(routePath, () => fs.createReadStream(outputPath));
-          successfulConversions.add(relPath);
-          return;
+      const cached = index.hit(relPath, absPath, (entry) => {
+        try {
+          return fs.statSync(outputPath).size === entry.outSize;
+        } catch (e) {
+          return false;
         }
-      } catch { }
+      });
+
+      if (cached) {
+        hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+        successfulConversions.add(relPath);
+        return;
+      }
+
+      // SVGO is pure JS, pinned by the lockfile and deterministic, so it keeps
+      // running. Only the AVIF transcode needs a native encoder whose version
+      // would decide the bytes.
+      if (isBitmap && skipAvif()) {
+        skippedEncodes.push(relPath);
+        return;
+      }
 
       const res = await ImageProcessor.process({
         absPath,
@@ -787,6 +831,7 @@ async function processFile(absPath, config) {
 
       hexo.log.info(`[img-optimizer] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
 
+      index.record(relPath, absPath, { out: routePath, outSize: res.size });
       hexo.route.set(routePath, () => fs.createReadStream(outputPath));
       successfulConversions.add(relPath);
     } catch (err) {

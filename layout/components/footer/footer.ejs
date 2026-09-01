@@ -9,7 +9,7 @@
               <span><%= date(new Date(theme.footer.start), 'YYYY') %></span>
               -
             <% } %>
-            <%= date(new Date(), 'YYYY') %>&nbsp;&nbsp;<%- theme.footer.icon || '<i class="fa-regular fa-computer-classic"></i>' %>&nbsp;&nbsp;<a href="<%= config.root %>"><%= theme.info.author || config.author %></a>
+            <%= date(buildDate(), 'YYYY') %>&nbsp;&nbsp;<%- theme.footer.icon || '<i class="fa-regular fa-computer-classic"></i>' %>&nbsp;&nbsp;<a href="<%= config.root %>"><%= theme.info.author || config.author %></a>
             <% if (theme.footer.hasOwnProperty('statistics') && theme.footer.statistics) {%>
                 <%
                     const sitePostsCount = site.posts.length;

@@ -232,6 +232,11 @@ hexo.extend.helper.register("checkDeprecation", function (condition, id, message
   return false;
 });
 
+/** The build clock as a Date, for templates. See scripts/lib/build-clock.js. */
+hexo.extend.helper.register("buildDate", function () {
+  return require("../lib/build-clock").date();
+});
+
 hexo.extend.helper.register("configOptions", function (obj, indent = '  ') {
   if (!obj || typeof obj !== 'object') return '';
   
