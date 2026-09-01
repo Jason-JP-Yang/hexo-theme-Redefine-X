@@ -403,6 +403,13 @@ function metaFor(entry, href, coverAsset, body) {
     date: entry.post.date ? entry.post.date.toISOString() : null,
     updated: entry.post.updated ? entry.post.updated.toISOString() : null,
     href,
+    // The editor's two extra facts. `source` is the repo path a save writes
+    // back to; `supersedes` is the permalink of the published post this draft
+    // stands in for, and the reader uses it to take that post's card out of
+    // every listing before putting this one in its place.
+    source: entry.post.source || "",
+    draft: entry.post.draft === true,
+    supersedes: entry.post.supersedes || "",
     cover: coverAsset || "",
     excerpt: plainExcerpt(entry.post, body),
     tags: (entry.tags || []).map((tag) => ({
@@ -571,6 +578,11 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     const meta = metaFor(entry, href, coverAsset, body);
     routes.set(`${p}/${entry.slug}/b.bin`, vc.seal(entry.key, retargetTaxonomy(article, meta)));
 
+    // The MARKDOWN, front matter and all, sealed under the same key as the body.
+    // The rendered blob is what a reader gets; this is what the editor opens,
+    // and it is the only copy of the source that exists outside the repository.
+    routes.set(`${p}/${entry.slug}/s.bin`, vc.seal(entry.key, entry.post.raw || ""));
+
     const card = await cardView.render(
       cardLocals({
         page: {},
@@ -719,7 +731,15 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
 
   if (bentoOn && bentoPlan) {
     const pages = publicPages();
-    const buckets = assignToPages(pages, entries);
+    // A draft that supersedes a published post is NOT a new tile: it takes the
+    // one that post already holds, on a grid the build already solved. Leaving
+    // it in would double the arrangement count for a subset the reader can
+    // never ask for — it derives the variant path from the keys of the posts
+    // that actually change the grid, and a superseding draft is not one.
+    const buckets = assignToPages(
+      pages,
+      entries.filter((entry) => !entry.post.supersedes)
+    );
     const withFeatures = hexo.theme.config?.home?.sidebar?.enable === true;
 
     for (let i = 0; i < pages.length; i++) {

@@ -878,6 +878,12 @@ export function initNotifications() {
   if (document.getElementById("blog-management")) {
     import("./blog-management.js").then((module) => module.initBlogManagement()).catch(() => {});
   }
+
+  // Same bargain, one page further: the editor is the largest thing the theme
+  // ships and is downloaded only on the page that is it.
+  if (document.getElementById("blog-editor")) {
+    import("./editor/index.js").then((module) => module.initEditor()).catch(() => {});
+  }
 }
 
 document.addEventListener("DOMContentLoaded", initNotifications);

@@ -94,6 +94,15 @@ const pageData = {
 		partial: "pages/management/blog-management",
 		layout: "default",
 	},
+	blogEditor: {
+		titles: [],
+		types: ["blog-editor"],
+		partial: "pages/management/editor",
+		// `raw`, not `default`: the editor owns the full width and manages its
+		// own scrolling, and a page container would put a reading measure around
+		// a three-column workspace.
+		layout: "raw",
+	},
 	vault: {
 		titles: [],
 		types: ["vault"],

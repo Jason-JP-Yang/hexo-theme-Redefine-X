@@ -49,7 +49,15 @@ import {
   BODY_MAX,
 } from "./notify.js";
 import { verifySignature, fetchChangelog, isLiveDeployment } from "./hooks.js";
-import { grantedPosts, listPosts, registerPost, deletePost, setAudience } from "./vault.js";
+import {
+  grantedPosts,
+  listPosts,
+  registerPost,
+  deletePost,
+  setAudience,
+  mintPost,
+  keyringBlob,
+} from "./vault.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
 
 const app = new Hono();
@@ -1562,6 +1570,91 @@ app.put("/api/admin/vault/:id/audience", authMiddleware, async (c) => {
 
   const written = await setAudience(c.env.DB, c.req.param("id"), ids);
   return c.json({ ok: true, written });
+});
+
+// ─── EDITOR: mint a post key, and re-seal the keyring ───────
+//
+// The one thing the online editor cannot do for itself. Wrapping a post key
+// needs VAULT_MASTER, which is the secret that must never reach a browser, so
+// the browser asks for a key by SOURCE PATH and gets back the key, the slug and
+// the whole keyring re-sealed — the exact bytes `npm run vault:seal` writes.
+// The editor puts that file in the SAME commit as the post, so a key and the
+// ciphertext it opens are never one commit apart.
+//
+// Idempotent: a path that already has a key gets that key, because a post key is
+// stable forever and a second one would orphan everything sealed under the first.
+app.post("/api/admin/vault/mint", authMiddleware, async (c) => {
+  if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
+
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+
+  const source = String(body?.source || "").trim();
+  // A path, not a name: it is hashed into the post id and must match what the
+  // build computes from `post.source`, byte for byte.
+  if (!source || source.length > 400 || source.includes("..") || !source.startsWith("source/")) {
+    return c.json({ error: "Bad source path" }, 400);
+  }
+
+  const titles = body && typeof body.titles === "object" ? body.titles : null;
+  const minted = await mintPost(c.env.DB, c.env, { source, titles });
+
+  c.header("Cache-Control", "no-store");
+  return c.json(minted);
+});
+
+// Retire a draft's key when the draft is published or deleted. The keyring comes
+// back re-sealed so the same commit that removes the file removes the key.
+app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
+  if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
+
+  const id = String(c.req.query("id") || "").trim();
+  if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: "Bad id" }, 400);
+
+  await deletePost(c.env.DB, id);
+  const keysEnc = await keyringBlob(c.env.DB, c.env, null);
+
+  c.header("Cache-Control", "no-store");
+  return c.json({ ok: true, keysEnc });
+});
+
+// ─── EDITOR: the repository ticket ──────────────────────────
+//
+// After this the Worker is OUT of the commit path: the browser talks to Gitea
+// directly, so a save carrying twenty megabytes of images costs this Worker
+// nothing at all. One request per editing session.
+//
+// The token is contained where it is SPENT, not where it is handed out — a
+// dedicated Gitea account with write on the content repository only, scope
+// `write:repository`, and branch protection with Protected File Patterns
+// covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`, `package.json` and
+// `_config.yml`. Without that last control an admin session is code execution on
+// a runner that holds VAULT_MASTER.
+app.get("/api/admin/gitea/ticket", authMiddleware, (c) => {
+  const api = String(c.env.GITEA_API_URL || "").replace(/\/+$/, "");
+  const repo = String(c.env.GITEA_REPO || "");
+  const [owner, name] = repo.split("/");
+
+  if (!api || !owner || !name || !c.env.GITEA_TOKEN) {
+    return c.json({ error: "Repository access is not configured" }, 503);
+  }
+
+  c.header("Cache-Control", "no-store");
+  return c.json({
+    api,
+    owner,
+    repo: name,
+    branch: c.env.GITEA_BRANCH || "main",
+    token: c.env.GITEA_TOKEN,
+    author: {
+      name: c.env.GITEA_AUTHOR_NAME || "blog-editor",
+      email: c.env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
+    },
+  });
 });
 
 // ─── WEBHOOK: the deploy repo finished deploying ────────────

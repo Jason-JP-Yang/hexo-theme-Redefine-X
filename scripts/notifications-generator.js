@@ -260,7 +260,7 @@ hexo.extend.generator.register("redefine_blog_management", function () {
   const theme = hexo.theme.config || {};
   if (!theme.notifications || !theme.notifications.enable) return [];
 
-  return [
+  const pages = [
     {
       path: "blog-management/index.html",
       layout: "page",
@@ -274,4 +274,24 @@ hexo.extend.generator.register("redefine_blog_management", function () {
       },
     },
   ];
+
+  // The editor is a second page rather than a fourth section of the console:
+  // it is a workspace, it owns the viewport, and it must survive a Swup
+  // navigation away and back without the console's lists reloading underneath.
+  if (theme.backend && theme.backend.vault_enable) {
+    pages.push({
+      path: "blog-management/write/index.html",
+      layout: "page",
+      data: {
+        type: "blog-editor",
+        title: "Write",
+        layout: "page",
+        content: "",
+        comment: false,
+        robots: "noindex,nofollow",
+      },
+    });
+  }
+
+  return pages;
 });

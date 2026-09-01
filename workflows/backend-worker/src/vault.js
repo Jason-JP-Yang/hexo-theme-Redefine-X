@@ -39,15 +39,31 @@ function bytesToB64url(bytes) {
 }
 
 // The master key is imported on every unlock and changes only with a deploy.
+// `encrypt` is in the usage list because the editor's mint path re-seals the
+// whole keyring — the same file `npm run vault:seal` produces locally.
 let masterCache = null;
 
 async function importMaster(secret) {
   if (masterCache && masterCache.secret === secret) return masterCache.key;
   const raw = b64urlToBytes(secret);
   if (raw.length !== 32) throw new Error("VAULT_MASTER must decode to 32 bytes");
-  const key = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"]);
+  const key = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
   masterCache = { secret, key };
   return key;
+}
+
+/** iv ‖ ciphertext ‖ tag, base64url — the shape every blob in this system has. */
+async function seal(masterKey, plaintext) {
+  const bytes = typeof plaintext === "string" ? new TextEncoder().encode(plaintext) : plaintext;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, masterKey, bytes));
+  const out = new Uint8Array(iv.length + body.length);
+  out.set(iv, 0);
+  out.set(body, iv.length);
+  return bytesToB64url(out);
 }
 
 /** iv ‖ ciphertext ‖ tag → the post key, base64url for the wire. */
@@ -150,6 +166,114 @@ export async function listPosts(db, limit, offset) {
     })),
     more,
   };
+}
+
+/* ─── minting, for the online editor ───────────────────────────────────────── */
+
+// Mirrors SLUG_ALPHABET in scripts/lib/vault-crypto.js — no I, L, O or U, since
+// a slug gets read aloud and typed by hand.
+const SLUG_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+
+/** sha256(source path), first 16 hex. The same identity the build computes. */
+async function postId(sourcePath) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(sourcePath)));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 16);
+}
+
+function randomSlug() {
+  const bytes = crypto.getRandomValues(new Uint8Array(10));
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) out += SLUG_ALPHABET[bytes[i] % SLUG_ALPHABET.length];
+  return out;
+}
+
+/**
+ * Mint and register a post key, then hand back the whole keyring re-sealed.
+ *
+ * This is the one thing the editor cannot do for itself: wrapping needs
+ * VAULT_MASTER, and VAULT_MASTER is the secret that must never reach a browser.
+ * Returning the sealed keyring in the same answer is what lets ONE commit carry
+ * both a new encrypted post and the key that opens it — a key and its
+ * ciphertext are never one commit apart, in either order.
+ *
+ * Idempotent on `source`: a path that already has a key gets that key back
+ * rather than a second one, because a post's key is stable forever and minting
+ * a new one would orphan everything already sealed under the old.
+ */
+export async function mintPost(db, env, { source, titles }) {
+  const master = await importMaster(env.VAULT_MASTER);
+  const id = await postId(source);
+
+  const existing = await db
+    .prepare("SELECT id, slug, wrapped FROM vault_posts WHERE id = ?1")
+    .bind(id)
+    .first();
+
+  if (existing) {
+    return {
+      id,
+      slug: existing.slug,
+      key: await unwrap(master, existing.wrapped),
+      keysEnc: await keyringBlob(db, env, titles),
+      fresh: false,
+    };
+  }
+
+  const taken = await db.prepare("SELECT slug FROM vault_posts").all();
+  const used = new Set((taken.results || []).map((r) => r.slug));
+  let slug = randomSlug();
+  while (used.has(slug)) slug = randomSlug();
+
+  const postKey = crypto.getRandomValues(new Uint8Array(32));
+
+  await db
+    .prepare("INSERT INTO vault_posts (id, slug, wrapped) VALUES (?1, ?2, ?3)")
+    .bind(id, slug, await seal(master, postKey))
+    .run();
+
+  return {
+    id,
+    slug,
+    key: bytesToB64url(postKey),
+    keysEnc: await keyringBlob(db, env, titles),
+    fresh: true,
+  };
+}
+
+/**
+ * `.vault/keys.enc`, byte-compatible with `npm run vault:seal`.
+ *
+ * Rebuilt from D1 every time rather than patched, so the file in the repository
+ * and the rows in the database cannot drift. `titles` is supplied by the admin
+ * browser — which reads them out of each post's own sealed record — because the
+ * database deliberately stores none: a dump of it says how many encrypted posts
+ * exist and who may read them, never what any of them is called.
+ */
+export async function keyringBlob(db, env, titles) {
+  const master = await importMaster(env.VAULT_MASTER);
+  const { results } = await db.prepare("SELECT id, slug, wrapped FROM vault_posts").all();
+
+  const map = {};
+  for (const id of (results || []).map((r) => r.id).sort()) {
+    const row = results.find((r) => r.id === id);
+    let key;
+    try {
+      key = await unwrap(master, row.wrapped);
+    } catch {
+      continue; // a row from before a rotation opens for nobody
+    }
+    map[id] = {
+      key,
+      slug: row.slug,
+      title: (titles && titles[id]) || "",
+      registered: true,
+    };
+  }
+
+  return (await seal(master, JSON.stringify(map, null, 2) + "\n")) + "\n";
 }
 
 export async function registerPost(db, { id, slug, wrapped }) {

@@ -25,7 +25,10 @@
 			<%- partial('pages/home/home-sidebar') %>
 			<% } %>
 
-			<div class="main-content<%= is_home() ? ' is-home' : '' %>">
+			<%# The editor is a workspace, not a reading column: it needs the two
+				rails beside the canvas, and the canvas still has to keep an
+				article's measure. Same exception the bento grid takes. %>
+			<div class="main-content<%= is_home() ? ' is-home' : '' %><%= page.type === 'blog-editor' ? ' is-editor' : '' %>">
 				<%- partial(getPagePartialPath(page)) %>
 			</div>
 

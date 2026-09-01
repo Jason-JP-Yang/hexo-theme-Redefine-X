@@ -181,6 +181,104 @@ function readableAlbums(map) {
   return Array.from(map.values()).filter((entry) => entry.meta && entry.meta.kind === "album");
 }
 
+/* ─── drafts that stand in for a published post ────────────────────────────── */
+
+/**
+ * A DRAFT is an ordinary encrypted post carrying `supersedes: <permalink>`, and
+ * what it supersedes is the published post at that path. Only its author can
+ * open it, so everyone else keeps seeing the published version — this is
+ * fail-safe by construction rather than by a check.
+ *
+ * The draft takes the published post's PLACE rather than sitting beside it.
+ * That is what keeps the front page honest (one article, one tile) and it is
+ * also why the build does not solve a bento variant for a superseding draft: it
+ * occupies a tile the public arrangement already accounts for.
+ */
+function supersedingMap(map) {
+  const out = new Map();
+  for (const entry of map.values()) {
+    const target = entry.meta && entry.meta.supersedes;
+    if (target) out.set(normalizePath(target), entry);
+  }
+  return out;
+}
+
+// What a draft is standing in front of, so signing out can put it back. The
+// home grid's own snapshot cannot carry this: it records the tile ELEMENTS, and
+// a swap happens inside one of them.
+let superseded = [];
+
+function undoSupersedes() {
+  for (const item of superseded.splice(0)) {
+    try {
+      item.restore();
+    } catch (e) {
+      /* the node has already left the document */
+    }
+  }
+}
+
+/** Put every readable draft into the tile of the post it replaces. */
+function swapSuperseded(drafts, list) {
+  if (!drafts.size) return;
+
+  for (const item of list.querySelectorAll(".home-article-item")) {
+    const link = item.querySelector(".home-article-title a");
+    if (!link) continue;
+
+    const entry = drafts.get(normalizePath(new URL(link.href, location.href).pathname));
+    if (!entry || !entry.card) continue;
+
+    const original = Array.from(item.childNodes);
+    superseded.push({
+      restore: () => {
+        item.replaceChildren(...original);
+        item.classList.remove("vault-draft");
+        item.removeAttribute("data-vault-id");
+      },
+    });
+
+    item.replaceChildren(...Array.from(entry.card.cloneNode(true).childNodes));
+    item.classList.add("vault-draft");
+    item.dataset.vaultId = entry.meta.id || "";
+    item.appendChild(draftRibbon());
+    reveal(item);
+  }
+}
+
+function draftRibbon() {
+  const badge = document.createElement("span");
+  badge.className = "vault-draft-ribbon";
+  badge.innerHTML = `<i class="fa-solid fa-pen-nib" aria-hidden="true"></i>`;
+  badge.appendChild(document.createTextNode(i18n("draft", "Draft")));
+  return badge;
+}
+
+/** Take the superseded post's row out of a listing before the draft's goes in. */
+function dropSuperseded(drafts, container) {
+  if (!drafts.size) return;
+
+  for (const link of Array.from(container.querySelectorAll("a[href]"))) {
+    if (link.hasAttribute(INSERTED)) continue;
+    if (!drafts.has(normalizePath(new URL(link.href, location.href).pathname))) continue;
+
+    const parent = link.parentNode;
+    const next = link.nextSibling;
+    const section = link.closest(".archive-item");
+    const count = section && section.querySelector(".archive-year-post-count");
+
+    superseded.push({
+      restore: () => {
+        parent.insertBefore(link, next);
+        bumpCount(count, 1);
+      },
+    });
+
+    link.remove();
+    bumpCount(count, -1);
+  }
+}
+
 /* ─── the post page ────────────────────────────────────────────────────────── */
 
 function setGate(gate, phase) {
@@ -378,7 +476,12 @@ function dateOf(node) {
  * they are pinned to the front regardless of date.
  */
 function postsForThisPage(map, cards, page, isLastPage) {
-  const all = Array.from(map.entries()).filter(([, entry]) => entry.meta && entry.meta.date);
+  // A superseding draft is excluded here and put into its target's tile
+  // afterwards. The build leaves it out of the variant subsets for the same
+  // reason, so both sides derive the same arrangement from the same set.
+  const all = Array.from(map.entries()).filter(
+    ([, entry]) => entry.meta && entry.meta.date && !entry.meta.supersedes
+  );
   if (!cards.length) return all;
 
   const dates = cards
@@ -423,21 +526,31 @@ async function prepareHome(map, source) {
   const total = Number(root && root.dataset.total) || 1;
 
   await hydrateMeta(map);
+  const drafts = supersedingMap(map);
   const mine = postsForThisPage(
     map,
     Array.from(source.querySelectorAll(".home-article-item")),
     page,
     page >= total
   );
-  if (!mine.length) return null;
+
+  // A page whose only readable posts are drafts still has work to do: no new
+  // tile, but the tiles that are there show the wrong version.
+  const swapOnly = drafts.size ? (list) => swapSuperseded(drafts, list) : null;
+  if (!mine.length) return swapOnly;
 
   const plan = await variantFor(page, mine);
-  if (!plan) return null;
+  if (!plan) return swapOnly;
 
   const cards = mine.filter(([, e]) => e.card).map(([id, e]) => ({ id, node: e.card }));
-  if (!cards.length) return null;
+  if (!cards.length) return swapOnly;
 
-  return (list) => applyPlan(list, plan, cards);
+  // applyPlan takes the snapshot signing out is restored from, so it goes
+  // first: a swap made before it would be recorded AS the public arrangement.
+  return (list) => {
+    applyPlan(list, plan, cards);
+    swapSuperseded(drafts, list);
+  };
 }
 
 /** Every tile in a grid, in DOM order. */
@@ -620,6 +733,10 @@ function revertHome() {
     // snapshot yet, and this has to undo the state that actually lands.
     const snap = homeSnapshot;
     homeSnapshot = null;
+    // Drafts first: they were swapped INTO tiles the snapshot records by
+    // element, so restoring the snapshot alone would leave their content in
+    // place under a public arrangement.
+    undoSupersedes();
     if (!snap || !snap.list.isConnected) return;
 
     await flipGrid(snap.list, () => {
@@ -654,14 +771,15 @@ function dayKey(date) {
 }
 
 function linkFor(meta) {
+  const draft = !!meta.supersedes || meta.draft === true;
   const a = document.createElement("a");
-  a.className = "block w-fit vault-archive-link";
+  a.className = "block w-fit vault-archive-link" + (draft ? " vault-archive-draft" : "");
   a.href = meta.href;
   a.setAttribute(INSERTED, "1");
   a.innerHTML =
     `<span class="article-title my-0.5 text-2xl">` +
-    `<i class="fa-regular fa-lock-keyhole vault-archive-lock" aria-hidden="true" title="${escapeAttr(
-      i18n("authorized", "Encrypted")
+    `<i class="fa-regular ${draft ? "fa-pen-nib" : "fa-lock-keyhole"} vault-archive-lock" aria-hidden="true" title="${escapeAttr(
+      draft ? i18n("draft", "Draft") : i18n("authorized", "Encrypted")
     )}"></i>` +
     `<span class="vault-archive-title"></span></span>`;
   a.querySelector(".vault-archive-title").textContent = meta.title;
@@ -762,8 +880,11 @@ async function unlockArchiveLike(map) {
   const mine = postsForListing(readable(map), root);
   if (!mine.length) return;
 
+  const drafts = supersedingMap(map);
+
   root.dataset.vaultApplied = "1";
   await animateHeight(root, () => {
+    dropSuperseded(drafts, container);
     for (const entry of mine) insertArchivePost(container, entry.meta);
   });
 
@@ -1082,6 +1203,10 @@ async function unlockListingGate(gate) {
 /* ─── reverting ────────────────────────────────────────────────────────────── */
 
 function revertListings() {
+  // Before the inserted nodes go: a superseded row is restored next to the
+  // draft that replaced it, and that draft is one of the nodes about to be
+  // removed.
+  undoSupersedes();
   document.querySelectorAll(`[${INSERTED}]`).forEach((node) => node.remove());
 
   document.querySelectorAll("[data-vault-base]").forEach((el) => {

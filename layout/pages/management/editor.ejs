@@ -1,0 +1,15 @@
+<%#
+    The editor at /blog-management/write/.
+
+    The server renders a shell and nothing else. What may be opened depends on
+    who is signed in, which is not known at build time, so
+    source/js/plugins/editor/ paints everything once the Worker has released a
+    ticket. The page exists for everybody — a route Swup can navigate to has to
+    — and shows the locked notice until then. Authorisation is the Worker's and
+    Gitea's; this is presentation.
+%>
+<div id="blog-editor" class="ed" data-phase="loading">
+    <div class="ed-gate">
+        <%- partial('components/access-probe', { text: __('editor.checking') }) %>
+    </div>
+</div>

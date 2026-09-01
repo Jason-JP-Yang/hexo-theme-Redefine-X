@@ -453,6 +453,54 @@ nothing drained it.
 it would bite. Empty means the problem is elsewhere — browser permission, or the
 notification simply not created yet.
 
+### Editor
+
+Two routes, and the Worker's whole involvement in the online editor. It is **not**
+in the commit path: the browser talks to Gitea directly, so a save carrying
+twenty megabytes of images never touches the 10 ms CPU budget. One editing
+session costs one `ticket` call plus one `mint` per new encrypted post.
+
+#### `GET /api/admin/gitea/ticket`
+
+Admin only. Returns the repository coordinates and the Gitea token the browser
+commits with.
+
+```jsonc
+{ "api": "https://repos.…/api/v1", "owner": "…", "repo": "…", "branch": "main",
+  "token": "<gitea token>",
+  "author": { "name": "…", "email": "…" } }
+```
+
+The token is contained where it is **spent**, not where it is handed out — a
+dedicated Gitea account with write on the content repository only, token scope
+`write:repository`, and branch protection on `main` with **Protected File
+Patterns** covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`,
+`package.json`, `package-lock.json`, `_config.yml`. Without that last control an
+admin session is code execution on a runner that holds `VAULT_MASTER`.
+
+#### `POST /api/admin/vault/mint`
+
+Admin only. `{ "source": "source/_posts/x.md", "titles": { "<id>": "…" } }`
+
+The one thing the editor cannot do for itself: wrapping a post key needs
+`VAULT_MASTER`. Returns the key, its slug, and **the whole keyring re-sealed** —
+byte-compatible with `npm run vault:seal` — so the same commit that creates the
+post also updates `.vault/keys.enc`. A key and the ciphertext it opens are never
+one commit apart.
+
+Idempotent on `source`: a path that already has a key gets that key back. A post
+key is stable forever, and a second one would orphan everything already sealed
+under the first.
+
+`titles` is supplied by the browser, which reads them from each post's own
+sealed record. The database stores none: a dump of it says how many encrypted
+posts exist and who may read them, never what any of them is called.
+
+#### `DELETE /api/admin/vault/mint?id=…`
+
+Retires a draft's key when the draft is published or deleted, and returns the
+re-sealed keyring so the same commit that removes the file removes the key.
+
 ### Retention (cron, 03:40 UTC daily)
 
 One round trip, four statements, in this order because each depends on what the

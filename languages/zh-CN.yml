@@ -332,3 +332,102 @@ vault:
   no_comments_hint: 只有部分读者能打开的文章，若挂上公开讨论串，标题与内容会重新暴露在外。
   no_comments_album: 加密相册不开放评论与点赞
   no_comments_album_hint: 公开讨论串会连同相册标题与每张照片的文件名一并暴露，公开点赞系统也依赖同一个讨论串，因此两者都不会开启。
+  draft: 草稿
+
+editor:
+  checking: 正在校验会话…
+  denied: 此页面仅面向博客管理员。
+  unreachable: 无法连接后端服务。
+  documents: 文章
+  outline: 大纲
+  filter: 筛选
+  no_docs: 暂无内容
+  no_headings: 还没有标题
+  has_draft: 有草稿
+  new_post: 新建文章
+  new_post_title: 新文章的标题
+  pick_a_doc: 在左侧选择一篇文章，或新建一篇。
+  draft: 草稿
+  encrypted: 加密
+  opening: 正在打开
+  creating: 正在创建
+  saving: 正在保存
+  saved: 已保存
+  unsaved: 有未保存的修改
+  save: 保存草稿
+  publish: 发布
+  publish_draft: 用这份草稿覆盖它所取代的文章？
+  publish_direct: 直接提交到已发布的文章？
+  discard: 这篇文章有未保存的修改，确定离开？
+  recover: 发现一份未保存的本地副本，时间为
+  recover_tail: ，要恢复吗？
+  stale: 线上副本落后于仓库 —— 构建很可能仍在进行。
+  conflict: 这个文件在仓库中已被改动
+  conflict_hint: 你的内容仍然保留在这里。请在新标签页重新打开这篇文章，看清楚落地的版本，再重新应用你的修改。
+  build_failed: 构建失败。文章已提交，线上内容未受影响。
+  view_run: 查看构建
+  s_committed: 已提交
+  s_building: 构建中
+  s_pushed: 已推送产物
+  s_deployed: 已部署
+  placeholder: 开始输入，或按 / 插入区块
+  insert: 插入区块
+  drag: 拖动以调整顺序
+  toggle_source: 显示源码
+  language: 语言
+  arguments: 参数
+  remove_block: 删除
+  replace: 替换
+  alt_text: 替代文本
+  caption: 图注
+  icon: 图标
+  title: 标题
+  choose: 选择
+  more: 更多
+  no_match: 没有匹配项
+  link_url: 链接地址
+  row: 行
+  column: 列
+  align_default: 默认
+  front_matter: Front Matter
+  raw_front: 原始 Front Matter
+  comma_separated: 用逗号分隔
+  f_title: 标题
+  f_date: 发布时间
+  f_updated: 更新时间
+  f_cover: 封面
+  f_excerpt: 摘要
+  f_categories: 分类
+  f_tags: 标签
+  f_sticky: 置顶
+  f_mathjax: MathJax
+  t_code: 代码
+  t_mermaid: 图表
+  t_math: 公式
+  t_raw: HTML
+  t_table: 表格
+  b_paragraph: 正文
+  b_heading2: 二级标题
+  b_heading3: 三级标题
+  b_list: 无序列表
+  b_olist: 有序列表
+  b_quote: 引用
+  b_code: 代码
+  b_table: 表格
+  b_image: 图片
+  b_math: 公式
+  b_mermaid: 图表
+  b_note: 提示框
+  b_notel: 大提示框
+  b_box: 高亮块
+  b_folding: 折叠块
+  b_tabs: 标签页
+  b_btn: 按钮
+  b_hr: 分隔线
+  m_strong: 加粗
+  m_em: 斜体
+  m_strike: 删除线
+  m_code: 行内代码
+  m_mark: 高亮
+  m_link: 链接
+  m_clear: 清除格式

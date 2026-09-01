@@ -330,3 +330,102 @@ vault:
   no_comments_hint: A public thread under a post only some readers can open would put its title and its substance back in the open.
   no_comments_album: Comments and likes are closed on encrypted albums
   no_comments_album_hint: A public thread would carry the album's title and every photograph's file name, and the like counts live in that same thread - so neither is offered here.
+  draft: Draft
+
+editor:
+  checking: Checking your session...
+  denied: This page is for the blog's administrator.
+  unreachable: Could not reach the backend.
+  documents: Documents
+  outline: Outline
+  filter: Filter
+  no_docs: Nothing here
+  no_headings: No headings yet
+  has_draft: has a draft
+  new_post: New post
+  new_post_title: Title for the new post
+  pick_a_doc: Choose a post on the left, or start a new one.
+  draft: Draft
+  encrypted: Encrypted
+  opening: Opening
+  creating: Creating
+  saving: Saving
+  saved: Saved
+  unsaved: Unsaved changes
+  save: Save draft
+  publish: Publish
+  publish_draft: Publish this draft over the post it replaces?
+  publish_direct: Commit this straight to the published post?
+  discard: This post has unsaved changes. Leave it?
+  recover: An unsaved local copy from
+  recover_tail: was found. Restore it?
+  stale: The published copy is behind the repository - a build is probably still running.
+  conflict: This file changed in the repository
+  conflict_hint: Your text is safe here. Open the post again in a new tab to see what landed, then re-apply your changes.
+  build_failed: The build failed. The post is committed; nothing published has changed.
+  view_run: View run
+  s_committed: Committed
+  s_building: Building
+  s_pushed: Artifact pushed
+  s_deployed: Deployed
+  placeholder: Write, or press / for a block
+  insert: Insert block
+  drag: Drag to reorder
+  toggle_source: Show source
+  language: language
+  arguments: arguments
+  remove_block: Remove
+  replace: Replace
+  alt_text: Alt text
+  caption: Caption
+  icon: Icon
+  title: Title
+  choose: Choose
+  more: More
+  no_match: Nothing matches
+  link_url: Link URL
+  row: Row
+  column: Column
+  align_default: Default
+  front_matter: Front matter
+  raw_front: Raw front matter
+  comma_separated: comma separated
+  f_title: Title
+  f_date: Date
+  f_updated: Updated
+  f_cover: Cover
+  f_excerpt: Excerpt
+  f_categories: Categories
+  f_tags: Tags
+  f_sticky: Pinned
+  f_mathjax: MathJax
+  t_code: Code
+  t_mermaid: Diagram
+  t_math: Equation
+  t_raw: HTML
+  t_table: Table
+  b_paragraph: Text
+  b_heading2: Heading 2
+  b_heading3: Heading 3
+  b_list: Bullet list
+  b_olist: Numbered list
+  b_quote: Quote
+  b_code: Code
+  b_table: Table
+  b_image: Image
+  b_math: Equation
+  b_mermaid: Diagram
+  b_note: Note
+  b_notel: Large note
+  b_box: Highlight box
+  b_folding: Folding
+  b_tabs: Tabs
+  b_btn: Button
+  b_hr: Divider
+  m_strong: Bold
+  m_em: Italic
+  m_strike: Strikethrough
+  m_code: Inline code
+  m_mark: Highlight
+  m_link: Link
+  m_clear: Clear formatting
