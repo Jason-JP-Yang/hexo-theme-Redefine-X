@@ -3,7 +3,6 @@
 const fs = require("fs");
 const path = require("path");
 const yaml = require("js-yaml");
-const secrets = require("./lib/secrets");
 
 // Optional: exif-parser for auto-exif reading from image files
 let ExifParser = null;
@@ -480,12 +479,16 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   const giscusProxy = String(
     hexo.theme.config?.backend?.api_url || ""
   ).replace(/\/+$/, "");
+  // Deliberately NOT gated on GISCUS_AUTHOR_PAT. Nothing below calls GitHub —
+  // the block emitted here is static config the browser reads, and creating the
+  // discussions behind it is `npm run masonry:sync`, a separate command. Keying
+  // the MARKUP on a build-machine secret made every album page depend on who ran
+  // the build: a runner without the PAT published a different page from the one
+  // the author published, which is exactly what a reproducible build cannot do.
+  // A page whose discussion does not exist yet is already handled — the client
+  // treats a 404 from the giscus API as "no reactions".
   const hasGiscusReactions =
-    commentEnabled &&
-    giscusConfig.repo &&
-    giscusConfig.category &&
-    giscusProxy &&
-    secrets.env("GISCUS_AUTHOR_PAT");
+    commentEnabled && giscusConfig.repo && giscusConfig.category && giscusProxy;
 
   categories.forEach(category => {
     category.list.forEach(item => {
