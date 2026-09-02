@@ -1,5 +1,8 @@
 <div class="post-page-container flex relative justify-between box-border w-full h-full">
-	<div class="article-content-container">
+	<%# The source path is what the editor needs to find this post in the
+	    repository. It is the filename, which the permalink already gives away,
+	    and it is only emitted where an editor exists at all. %>
+	<div class="article-content-container"<% if (theme.backend && theme.backend.vault_enable && is_post()) { %> data-post-source="<%= page.source || '' %>"<% } %>>
 
 		<div class="article-title relative w-full">
 			<% if (page.cover || page.banner || (page.thumbnail && page.thumbnail !== false)) { %>

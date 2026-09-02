@@ -1,13 +1,14 @@
 // ========================================================================================
 //                                        EDITOR
 // ========================================================================================
-// The writing workspace at /blog-management/write/.
+// Editing happens ON the article, not on a page of its own.
 //
-// Built from the management console's parts — same radii, same quiet buttons,
-// same red confirm — because it is the same subsystem seen from the other side.
-// The one thing it does NOT restyle is the canvas: that carries
-// `.article-content.markdown-body`, so its type scale, its headings, its notes
-// and its code blocks are the published article's, not a lookalike.
+// So there is no editor layout here, and there must never be one: the cover,
+// the title, the measure and the body are the post's, and the only thing this
+// file styles is what is ADDED to it — a bar naming the file, a card holding
+// the front matter, a floating toolbar and the per-block gutter. If a rule
+// here changes how the article itself looks, the editor has stopped showing
+// what will be published, which is the one thing it exists to do.
 //
 // Material: BASE tier throughout, except the three surfaces that genuinely float
 // over live content — the toolbar, the slash menu and the two popovers. Those
@@ -18,33 +19,41 @@
 //
 // Auto-included: style.styl requires layout/_partials/* as a glob.
 
-$ed-gap = 12px
 $ed-radius = 14px
 $ed-morph = 0.28s cubic-bezier(0.32, 0.72, 0, 1)
 $ed-fade = 0.13s ease
 $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
-$ed-rail = 232px
-$ed-inspector = 288px
 
-// The editor takes the width the bento grid takes, and for the same reason: the
-// reading measure applies to the canvas, not to the workspace around it.
-.main-content.is-editor
-  width 94%
-  max-width 1560px
+@keyframes ed-breathe
+  0%, 100%
+    opacity 0.35
+  50%
+    opacity 1
 
-.ed
-  display flex
-  flex-direction column
-  min-height 60vh
-  padding-bottom 32px
+// ─── the pencil ─────────────────────────────────────────────
+// One more tool in the article's own rail; `.blog-admin-only` already decides
+// whether it exists at all.
+.tool-edit-post
+  cursor pointer
 
-  &[data-phase="loading"] .ed-shell,
-  &[data-phase="denied"] .ed-shell,
-  &[data-phase="error"] .ed-shell
-    display none
+  &:hover i
+    color var(--primary-color)
 
-  &[data-phase="ready"] .ed-gate
-    display none
+// While editing, the way out is the bar's own ×. A second entrance to a room
+// you are already in is just a thing to press by mistake.
+html.blog-editing .tool-edit-post
+  display none !important
+
+// A post with nothing in it yet is still a page you have to be able to aim at.
+.article-content-container.is-editing .article-content
+  min-height 40vh
+
+// ─── what editing puts away ─────────────────────────────────
+// Copyright, tags, recommendations, navigation and comments are all downstream
+// of the body and none of them is yours to edit here. They leave rather than
+// grey out: an inert control is still a control.
+.ed-put-away
+  display none !important
 
 // ─── gate ───────────────────────────────────────────────────
 .ed-gate
@@ -54,232 +63,58 @@ $ed-inspector = 288px
   justify-content center
   gap 12px
   padding 72px 24px
-  border 1px solid var(--border-color)
-  border-radius $ed-radius
   color var(--third-text-color)
   text-align center
 
-// ─── shell ──────────────────────────────────────────────────
-.ed-shell
-  display grid
-  grid-template-columns $ed-rail minmax(0, 1fr) $ed-inspector
-  gap 20px
-  align-items start
-
-  @media (max-width 1280px)
-    grid-template-columns $ed-rail minmax(0, 1fr)
-
-  +redefine-tablet()
-    grid-template-columns minmax(0, 1fr)
-    gap 14px
-
-// ─── rail ───────────────────────────────────────────────────
-.ed-rail
+// ─── document bar ───────────────────────────────────────────
+// Sticky, because publish has to stay reachable from the bottom of a long post.
+.ed-docbar
   position sticky
-  top ($navbar-height + 16px)
+  top ($navbar-height + 8px)
+  z-index $z-index-3
   display flex
-  flex-direction column
+  flex-wrap wrap
+  align-items center
   gap 10px
-  max-height s("calc(100vh - %s)", $navbar-height + 40px)
+  // The article's own px-2 / sm:px-6 / md:px-8. Anything else and the bar sits
+  // a few pixels off the column it belongs to, which is the kind of thing you
+  // see without being able to say what is wrong.
+  margin 0 8px 14px
+  padding 9px 12px
+  border 1px solid var(--border-color)
+  border-radius 12px
+  background var(--second-background-color)
+  box-shadow 0 6px 20px -16px var(--shadow-color-1)
+
+  @media (min-width 640px)
+    margin 0 24px 16px
+
+  @media (min-width 768px)
+    margin 0 32px 16px
 
   +redefine-tablet()
     position static
-    max-height none
 
-.ed-rail-head
-  display flex
-  align-items center
-  justify-content space-between
-  gap 8px
-
-  h2
-    margin 0
-    font-size 0.95rem
-    font-weight 650
-    letter-spacing -0.01em
-    color var(--second-text-color)
-
-.ed-new
-  display grid
-  place-items center
-  width 28px
-  height 28px
-  border 1px solid var(--border-color)
-  border-radius 9px
-  background var(--second-background-color)
-  color var(--primary-color)
-  cursor pointer
-  transition background $ed-fade, transform $ed-morph
-
-  &:hover
-    background var(--third-background-color)
-    transform translateY(-1px)
-
-.ed-filter
-  width 100%
-  padding 7px 10px
-  border 1px solid var(--border-color)
-  border-radius 10px
-  background var(--second-background-color)
-  color var(--first-text-color)
-  font-size 0.82rem
-  outline none
-  transition border-color $ed-fade
-
-  &:focus
-    border-color var(--primary-color)
-
-.ed-doc-list
-  flex 1 1 auto
-  margin 0
-  padding 0
-  overflow-y auto
-  list-style none
-  display flex
-  flex-direction column
-  gap 4px
-
-  +redefine-tablet()
-    max-height 40vh
-
-.ed-doc
-  display flex
-  align-items center
-  gap 9px
-  padding 8px 10px
-  border 1px solid transparent
-  border-radius 10px
-  cursor pointer
-  transition background $ed-fade, border-color $ed-fade, transform $ed-morph
-
-  &:hover
-    background var(--second-background-color)
-    transform translateX(2px)
-
-  &[data-on="1"]
-    border-color var(--border-color)
-    background var(--third-background-color)
-
-  &[data-draft="1"] .ed-doc-icon
-    color var(--box-amber-text)
-
-.ed-doc-icon
-  flex-shrink 0
-  width 18px
-  font-size 0.8rem
-  color var(--third-text-color)
-  text-align center
-
-.ed-doc-text
-  min-width 0
-  display flex
-  flex-direction column
-
-  strong
-    overflow hidden
-    font-size 0.82rem
-    font-weight 550
-    line-height 1.35
-    white-space nowrap
-    text-overflow ellipsis
-    color var(--second-text-color)
-
-  small
-    font-size 0.68rem
-    color var(--fourth-text-color)
-
-.ed-doc-blank
-  padding 18px 10px
-  color var(--fourth-text-color)
-  font-size 0.78rem
-  text-align center
-
-.ed-rail-foot
-  border-top 1px solid var(--border-color)
-  padding-top 10px
-
-  h3
-    margin 0 0 6px
-    font-size 0.72rem
-    font-weight 650
-    letter-spacing 0.04em
-    text-transform uppercase
-    color var(--fourth-text-color)
-
-.ed-outline
-  margin 0
-  padding 0
-  max-height 26vh
-  overflow-y auto
-  list-style none
-  counter-reset none
-
-  li
-    padding 3px 0 3px 0
-    font-size 0.76rem
-    line-height 1.4
-    color var(--third-text-color)
-    cursor pointer
-    transition color $ed-fade, transform $ed-morph
-
-    &:hover
-      color var(--primary-color)
-      transform translateX(2px)
-
-    &[data-level="3"]
-      padding-left 12px
-
-    &[data-level="4"],
-    &[data-level="5"],
-    &[data-level="6"]
-      padding-left 24px
-
-  span
-    display block
-    overflow hidden
-    white-space nowrap
-    text-overflow ellipsis
-
-.ed-outline-blank
-  color var(--fourth-text-color)
-  cursor default !important
-
-// ─── main ───────────────────────────────────────────────────
-.ed-main
-  position relative
-  min-width 0
-  display flex
-  flex-direction column
-  gap 10px
-
-.ed-bar
-  position sticky
-  top ($navbar-height + 8px)
-  z-index 3
-  display flex
-  align-items center
-  justify-content space-between
-  gap 12px
-  padding 10px 14px
-  border 1px solid var(--border-color)
-  border-radius $ed-radius
-  background var(--second-background-color)
-
-.ed-bar-title
-  min-width 0
+.ed-docbar-id
   display flex
   align-items center
   gap 8px
+  flex 1
+  min-width 0
 
-.ed-doc-name
+  > i
+    color var(--fourth-text-color)
+    font-size 0.8rem
+
+.ed-docbar-path
   overflow hidden
-  font-size 0.95rem
-  font-weight 600
-  white-space nowrap
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.74rem
   text-overflow ellipsis
-  color var(--second-text-color)
+  white-space nowrap
 
-.ed-badge
+.ed-tag
   display inline-flex
   align-items center
   gap 5px
@@ -287,63 +122,48 @@ $ed-inspector = 288px
   padding 2px 8px
   border-radius 999px
   font-size 0.66rem
-  font-weight 600
-  letter-spacing 0.02em
+  font-weight 650
 
-  i
-    font-size 0.9em
+  &.ed-tag-vault
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
 
-.ed-badge-draft
-  background var(--box-amber-bg)
-  color var(--box-amber-text)
+  &.ed-tag-draft
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
 
-.ed-badge-vault
-  background var(--box-blue-bg)
-  color var(--box-blue-text)
-
-.ed-bar-actions
+.ed-docbar-actions
   display flex
   align-items center
   gap 8px
 
-.ed-status
-  display grid
-  place-items center
-  width 22px
-  height 22px
-  font-size 0.78rem
-  color var(--fourth-text-color)
-  transition color $ed-fade
+// The whole change indicator: one amber dot, and nothing when there is nothing
+// to say.
+.ed-dot
+  flex-shrink 0
+  width 8px
+  height 8px
+  border-radius 50%
+  background transparent
+  transition background $ed-fade
 
-  &[data-state="typing"]
-    color var(--box-amber-text)
+  &[data-state="dirty"]
+    background var(--box-amber-text)
 
-    i
-      animation ed-breathe 1.8s ease-in-out infinite
+  &[data-state="busy"]
+    background var(--box-blue-text)
+    animation ed-breathe 1.4s ease-in-out infinite
 
-  &[data-state="saved"]
-    color var(--box-green-text)
-
-  &[data-state="error"]
-    color var(--box-red-text)
-
-@keyframes ed-breathe
-  0%, 100%
-    opacity 0.35
-  50%
-    opacity 1
-
-.ed-save,
-.ed-publish
+.ed-act
   display inline-flex
   align-items center
   gap 7px
-  padding 7px 13px
+  padding 6px 12px
   border 1px solid var(--border-color)
   border-radius 10px
   background var(--background-color)
   color var(--second-text-color)
-  font-size 0.8rem
+  font-size 0.78rem
   font-weight 550
   cursor pointer
   transition background $ed-fade, border-color $ed-fade, transform $ed-morph, opacity $ed-fade
@@ -356,7 +176,7 @@ $ed-inspector = 288px
     opacity 0.4
     cursor default
 
-.ed-publish
+.ed-act-primary
   border-color transparent
   background var(--primary-color)
   color var(--background-color)
@@ -365,19 +185,279 @@ $ed-inspector = 288px
     background var(--primary-color)
     filter brightness(1.08)
 
+.ed-close
+  padding 6px 9px
+
+// ─── the title, in its own place ────────────────────────────
+.ed-title
+  outline none
+  cursor text
+
+  &:empty::before
+    content attr(data-placeholder)
+    color var(--fourth-text-color)
+    opacity 0.6
+
+.ed-cover-tools
+  position absolute
+  top 12px
+  right 12px
+  z-index 2
+  display flex
+  gap 6px
+
+  &.is-bare
+    position static
+    margin 0 8px 4px
+
+    @media (min-width 640px)
+      margin 0 24px 4px
+
+    @media (min-width 768px)
+      margin 0 32px 4px
+
+.ed-cover-act
+  display grid
+  place-items center
+  width 32px
+  height 32px
+  border 1px solid var(--border-color)
+  border-radius 9px
+  background var(--third-background-color-transparent)
+  backdrop-filter blur(10px)
+  -webkit-backdrop-filter blur(10px)
+  color var(--second-text-color)
+  font-size 0.8rem
+  cursor pointer
+  transition background $ed-fade, transform $ed-morph
+
+  &:hover
+    background var(--second-background-color)
+    transform translateY(-1px)
+
+// ─── front matter ───────────────────────────────────────────
+// ONE card. Every field is a row inside it, and nothing inside it is a card —
+// a panel of panels is how a form stops being readable.
+.ed-front
+  margin 0 8px 20px
+  padding 14px 16px
+  border 1px solid var(--border-color)
+  border-radius $ed-radius
+  background var(--second-background-color)
+
+  @media (min-width 640px)
+    margin 0 24px 22px
+
+  @media (min-width 768px)
+    margin 0 32px 22px
+
+.ed-front-group + .ed-front-group
+  margin-top 12px
+  padding-top 12px
+  border-top 1px solid var(--border-color)
+
+.ed-front-legend
+  margin 0 0 8px
+  font-size 0.66rem
+  font-weight 700
+  letter-spacing 0.06em
+  text-transform uppercase
+  color var(--fourth-text-color)
+
+.ed-front-grid
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(210px, 1fr))
+  gap 8px 14px
+  align-items start
+
+.ed-f
+  display flex
+  flex-direction column
+  gap 3px
+  min-width 0
+
+  &.is-wide
+    grid-column 1 / -1
+
+.ed-f-label
+  display flex
+  align-items center
+  gap 5px
+  font-size 0.68rem
+  font-weight 600
+  letter-spacing 0.02em
+  color var(--fourth-text-color)
+
+.ed-f-extra
+  font-size 0.5rem
+  color var(--box-amber-text)
+
+.ed-f-input
+  width 100%
+  padding 5px 9px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-size 0.78rem
+  line-height 1.5
+  outline none
+  resize vertical
+  transition border-color $ed-fade
+
+  &:focus
+    border-color var(--primary-color)
+
+textarea.ed-f-input
+  font-family inherit
+
+.ed-f-assetrow
+  display flex
+  align-items center
+  gap 6px
+
+.ed-f-thumb
+  display grid
+  place-items center
+  flex-shrink 0
+  width 30px
+  height 30px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  overflow hidden
+  color var(--fourth-text-color)
+  font-size 0.7rem
+
+  img
+    width 100%
+    height 100%
+    object-fit cover
+
+.ed-f-pick
+  display grid
+  place-items center
+  flex-shrink 0
+  width 30px
+  height 30px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  color var(--second-text-color)
+  font-size 0.74rem
+  cursor pointer
+  transition background $ed-fade
+
+  &:hover
+    background var(--third-background-color)
+
+// Chips, because a category is a thing you add and remove, not a string you
+// punctuate correctly.
+.ed-f-chips
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 4px
+  min-height 30px
+  padding 3px 5px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+
+  &:focus-within
+    border-color var(--primary-color)
+
+.ed-chipv
+  display inline-flex
+  align-items center
+  gap 4px
+  padding 2px 4px 2px 8px
+  border-radius 999px
+  background var(--third-background-color)
+  color var(--second-text-color)
+  font-size 0.72rem
+
+.ed-chipv-x
+  display grid
+  place-items center
+  width 15px
+  height 15px
+  border none
+  border-radius 50%
+  background transparent
+  color var(--fourth-text-color)
+  font-size 0.58rem
+  cursor pointer
+
+  &:hover
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+.ed-f-chipadd
+  flex 1
+  min-width 52px
+  padding 2px 4px
+  border none
+  background transparent
+  color var(--first-text-color)
+  font-size 0.74rem
+  outline none
+
+// The toggle is `.np-switch`, the notification centre's own. Only the row
+// spacing is local — the control itself must not fork.
+.ed-f-toggle
+  gap 8px
+  padding 4px 0
+
+  .np-row-label
+    font-size 0.78rem
+
+.ed-front-more
+  margin-top 12px
+  padding-top 12px
+  border-top 1px solid var(--border-color)
+
+  summary
+    display flex
+    align-items center
+    gap 6px
+    font-size 0.68rem
+    font-weight 700
+    letter-spacing 0.06em
+    text-transform uppercase
+    color var(--fourth-text-color)
+    cursor pointer
+    list-style none
+
+    &::-webkit-details-marker
+      display none
+
+    i
+      font-size 0.6rem
+      transition transform $ed-morph
+
+  &[open] summary
+    margin-bottom 8px
+
+    i
+      transform rotate(90deg)
+
 // ─── notice ─────────────────────────────────────────────────
+// A row of the bar rather than a banner over the article: nothing the editor
+// has to say is worth pushing the post down the page for.
 .ed-notice
   display flex
-  align-items flex-start
-  gap 10px
-  padding 11px 14px
-  border-radius 12px
-  font-size 0.8rem
-  line-height 1.55
+  align-items center
+  gap 8px
+  flex-basis 100%
+  padding 8px 11px
+  border-radius 10px
+  font-size 0.76rem
+  line-height 1.5
 
-  p
-    margin 4px 0 0
-    opacity 0.85
+  &[data-kind="info"]
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
 
   &[data-kind="warn"]
     background var(--box-amber-bg)
@@ -393,11 +473,12 @@ $ed-inspector = 288px
   flex-wrap wrap
   align-items center
   gap 8px
-  padding 9px 12px
+  flex-basis 100%
+  padding 7px 10px
   border 1px solid var(--border-color)
-  border-radius 12px
-  background var(--second-background-color)
-  font-size 0.74rem
+  border-radius 10px
+  background var(--background-color)
+  font-size 0.72rem
 
 .ed-stage
   position relative
@@ -438,15 +519,20 @@ $ed-inspector = 288px
   font-size 0.72rem
 
 // ─── toolbar ────────────────────────────────────────────────
-// One of the three surfaces that genuinely floats over live content, so one of
-// the three that earns a compositor layer.
+// Genuinely floating over live content, so one of the three surfaces that earns
+// a compositor layer. Fixed rather than sticky: it belongs to the session, not
+// to a scroll container, and the article no longer has one to stick inside.
 .ed-toolbar
-  position sticky
-  top ($navbar-height + 68px)
-  z-index 4
-  display flex
-  justify-content center
+  position fixed
+  top ($navbar-height + 14px)
+  left 50%
+  z-index $z-index-4
+  transform translateX(-50%)
   pointer-events none
+
+  +redefine-tablet()
+    top auto
+    bottom 16px
 
 .ed-toolbar-inner
   display flex
@@ -467,6 +553,9 @@ $ed-inspector = 288px
   align-items center
   gap 2px
 
+  &[hidden]
+    display none
+
 .ed-tool
   display grid
   place-items center
@@ -475,14 +564,14 @@ $ed-inspector = 288px
   border none
   border-radius 8px
   background transparent
-  color var(--third-text-color)
+  color var(--second-text-color)
   font-size 0.82rem
   cursor pointer
   transition background $ed-fade, color $ed-fade, transform 0.18s ease
 
   &:hover
     background var(--second-background-color)
-    color var(--second-text-color)
+    color var(--first-text-color)
     transform translateY(-1px)
 
   &[data-on="1"]
@@ -495,43 +584,19 @@ $ed-inspector = 288px
   margin 0 4px
   background var(--border-color)
 
-// ─── canvas ─────────────────────────────────────────────────
-.ed-canvas-scroll
-  position relative
-  min-height 46vh
-
-.ed-canvas
-  padding 4px 0 40px
-
-  &:empty
-    display none
-
-.ed-empty
-  display flex
-  flex-direction column
-  align-items center
-  justify-content center
-  gap 12px
-  padding 90px 24px
-  border 1px dashed var(--border-color)
-  border-radius $ed-radius
-  color var(--fourth-text-color)
-  text-align center
-
-  i
-    font-size 26px
-    opacity 0.55
-
-  p
-    margin 0
-    font-size 0.85rem
-
 // ─── block shell ────────────────────────────────────────────
+// No padding, no margin, no background: the wrapper must be dimensionally
+// invisible, or every line in the editor breaks somewhere the published post
+// does not.
 .ed-block
   position relative
-  padding-left 4px
-  border-radius 8px
   transition background $ed-fade
+
+// The article zeroes the top margin of its first child. With blocks that child
+// is a wrapper, so the rule has to reach one level further in — otherwise the
+// body starts a line lower here than it will once published.
+.article-content > .ed-block:first-child .ed-body > *
+  margin-top 0 !important
 
   &:hover > .ed-gutter,
   &[data-on="1"] > .ed-gutter
@@ -557,44 +622,48 @@ $ed-inspector = 288px
   &[data-drop="after"]::after
     bottom -3px
 
-// The gutter sits OUTSIDE the measure so it never narrows the writing column.
+// The gutter rides in the article's own left padding, never in the measure:
+// pushing the text across would mean the line breaks you are editing are not
+// the line breaks you will publish.
 .ed-gutter
   position absolute
-  top 2px
-  left -58px
+  top 1px
+  left -30px
   display flex
-  gap 2px
+  flex-direction column
+  gap 3px
   opacity 0
   transform translateX(4px)
   transition opacity $ed-fade, transform $ed-morph
 
-  @media (max-width 1100px)
-    left -34px
-    flex-direction column
-
   +redefine-tablet()
     position static
     flex-direction row
-    margin-bottom 4px
+    margin-bottom 5px
     opacity 1
     transform none
 
+// A control you cannot find is a control you do not have. These carry a real
+// surface and second-tier ink rather than the faintest colour in the palette
+// on no background at all.
 .ed-gutter-btn
   display grid
   place-items center
-  width 24px
-  height 24px
-  border none
-  border-radius 7px
-  background transparent
-  color var(--fourth-text-color)
-  font-size 0.72rem
+  width 26px
+  height 26px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--second-background-color)
+  color var(--second-text-color)
+  font-size 0.74rem
   cursor pointer
-  transition background $ed-fade, color $ed-fade
+  transition background $ed-fade, color $ed-fade, border-color $ed-fade, transform 0.18s ease
 
   &:hover
-    background var(--second-background-color)
-    color var(--second-text-color)
+    border-color var(--primary-color)
+    background var(--primary-color)
+    color var(--background-color)
+    transform translateY(-1px)
 
 .ed-handle
   cursor grab
@@ -1091,110 +1160,6 @@ $ed-inspector = 288px
     &[data-on="1"]
       border-color var(--primary-color)
 
-// ─── inspector ──────────────────────────────────────────────
-.ed-inspector
-  position sticky
-  top ($navbar-height + 16px)
-  display flex
-  flex-direction column
-  gap 12px
-  max-height s("calc(100vh - %s)", $navbar-height + 40px)
-  padding 14px
-  border 1px solid var(--border-color)
-  border-radius $ed-radius
-  background var(--second-background-color)
-  overflow-y auto
-
-  @media (max-width 1280px)
-    position static
-    grid-column 1 / -1
-    max-height none
-
-.ed-inspector-title
-  margin 0
-  font-size 0.95rem
-  font-weight 650
-  color var(--second-text-color)
-
-.ed-fields
-  display flex
-  flex-direction column
-  gap 10px
-
-.ed-field
-  display flex
-  flex-direction column
-  gap 4px
-
-  > span
-    font-size 0.7rem
-    font-weight 600
-    letter-spacing 0.03em
-    text-transform uppercase
-    color var(--fourth-text-color)
-
-  input[type="text"],
-  input:not([type]),
-  textarea
-    width 100%
-    padding 6px 9px
-    border 1px solid var(--border-color)
-    border-radius 9px
-    background var(--background-color)
-    color var(--first-text-color)
-    font-size 0.8rem
-    outline none
-    resize vertical
-    transition border-color $ed-fade
-
-    &:focus
-      border-color var(--primary-color)
-
-.ed-field-toggle
-  flex-direction row
-  align-items center
-  justify-content space-between
-
-.ed-field-row
-  display flex
-  gap 6px
-
-  button
-    display grid
-    place-items center
-    flex-shrink 0
-    width 30px
-    border 1px solid var(--border-color)
-    border-radius 9px
-    background var(--background-color)
-    color var(--second-text-color)
-    cursor pointer
-    transition background $ed-fade
-
-    &:hover
-      background var(--third-background-color)
-
-.ed-front-raw
-  summary
-    font-size 0.72rem
-    color var(--fourth-text-color)
-    cursor pointer
-
-  textarea
-    width 100%
-    min-height 160px
-    margin-top 8px
-    padding 8px 10px
-    border 1px solid var(--border-color)
-    border-radius 9px
-    background var(--background-color)
-    color var(--first-text-color)
-    font-family $ed-mono
-    font-size 0.74rem
-    line-height 1.55
-    outline none
-    resize vertical
-
 // ─── the console's link into here ───────────────────────────
 .bm-write
   display inline-flex
@@ -1240,7 +1205,7 @@ $ed-inspector = 288px
 
 @media (prefers-reduced-motion: reduce)
   .ed-block,
-  .ed-doc,
+  .ed-act,
   .ed-tool,
   .ed-gutter,
   .ed-stage,

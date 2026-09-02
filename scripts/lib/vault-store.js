@@ -12,10 +12,13 @@
  * alternative — carrying on and rendering the post — publishes it in the clear.
  */
 
+const fs = require("fs");
+const path = require("path");
 const secrets = require("./secrets");
 const vc = require("./vault-crypto");
 
 const MASTER_ENV = "VAULT_MASTER";
+const ENC_FILE = path.join(secrets.ROOT, ".vault", "keys.enc");
 
 let state = null;
 
@@ -196,6 +199,47 @@ function reportRetired(log, retired) {
   );
 }
 
+/** Sorted, so two machines sealing the same keyring produce the same bytes. */
+function canonical(map) {
+  const out = {};
+  for (const id of Object.keys(map).sort()) out[id] = map[id];
+  return JSON.stringify(out, null, 2) + "\n";
+}
+
+/**
+ * `.vault/keys.json` → `.vault/keys.enc`.
+ *
+ * Called at the end of every build. Only the sealed copy is committed, so the
+ * commit that carries a post's ciphertext has to carry the key for it in the
+ * same commit — which it cannot do if sealing is a separate command someone has
+ * to remember.
+ *
+ * The nonce is fresh on every seal, so an unchanged keyring is left alone: a
+ * rewrite would show up as a change in git on every build.
+ */
+function seal() {
+  const keys = secrets.readKeyring();
+  if (!keys) return null;
+
+  const master = load().master;
+  const text = canonical(keys);
+
+  let current = null;
+  try {
+    const sealed = fs.readFileSync(ENC_FILE, "utf8").trim();
+    current = JSON.parse(vc.open(master, vc.fromB64url(sealed)).toString("utf8"));
+  } catch (e) {
+    /* absent, or written under a different master — either way, write it */
+  }
+
+  const count = Object.keys(keys).length;
+  if (current && canonical(current) === text) return { changed: false, count };
+
+  fs.mkdirSync(path.dirname(ENC_FILE), { recursive: true });
+  fs.writeFileSync(ENC_FILE, vc.b64url(vc.seal(master, text)) + "\n", "utf8");
+  return { changed: true, count };
+}
+
 /** Marks everything registered. Run after the console has taken the block. */
 function acknowledge() {
   const s = load();
@@ -221,6 +265,7 @@ module.exports = {
   report,
   prune,
   reportRetired,
+  seal,
   acknowledge,
   fail,
 };

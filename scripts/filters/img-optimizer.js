@@ -617,7 +617,31 @@ async function scanAndProcessAllImages() {
 
   hexo.log.info(`[img-optimizer] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
+  publishManifest();
   cleanupRoutes();
+}
+
+/**
+ * `build/manifest.json` — which source images this build actually transcoded.
+ *
+ * The editor cannot guess. An image with a product is published ONLY at that
+ * product's path (the original route is withdrawn below), and an image without
+ * one is published ONLY at its original path — so pointing at the wrong one is
+ * a broken picture either way. This map is the answer, and it is written by the
+ * same pass that decides it.
+ */
+function publishManifest() {
+  if (!hexo.theme.config.backend?.vault_enable) return;
+
+  const map = {};
+  for (const relPath of successfulConversions) {
+    const ext = path.extname(relPath);
+    const { routePath } = PathManager.buildOptimizedPath(relPath, PathManager.isSupportedBitmap(ext));
+    map[relPath] = routePath;
+  }
+
+  const body = JSON.stringify(map, Object.keys(map).sort());
+  hexo.route.set("build/manifest.json", () => body);
 }
 
 async function gatherFiles() {

@@ -336,22 +336,20 @@ editor:
   checking: Checking your session...
   denied: This page is for the blog's administrator.
   unreachable: Could not reach the backend.
-  documents: Documents
-  outline: Outline
-  filter: Filter
-  no_docs: Nothing here
-  no_headings: No headings yet
-  has_draft: has a draft
+  no_document: This post is not in the repository you can write to.
+  edit_post: Edit this post
   new_post: New post
-  new_post_title: Title for the new post
-  pick_a_doc: Choose a post on the left, or start a new one.
+  close: Stop editing
+  untitled: Untitled
   draft: Draft
   encrypted: Encrypted
   opening: Opening
-  creating: Creating
   saving: Saving
   saved: Saved
+  saved_clean: Everything is committed
   unsaved: Unsaved changes
+  unsaved_file: not saved yet
+  need_title: Give the post a title before saving it.
   save: Save draft
   publish: Publish
   publish_draft: Publish this draft over the post it replaces?
@@ -359,15 +357,17 @@ editor:
   discard: This post has unsaved changes. Leave it?
   recover: An unsaved local copy from
   recover_tail: was found. Restore it?
+  editing_draft: You are editing the draft that supersedes this post.
   stale: The published copy is behind the repository - a build is probably still running.
-  conflict: This file changed in the repository
-  conflict_hint: Your text is safe here. Open the post again in a new tab to see what landed, then re-apply your changes.
+  conflict_hint: This file changed in the repository. Your text is safe here - open the post in a new tab to see what landed, then re-apply.
   build_failed: The build failed. The post is committed; nothing published has changed.
   view_run: View run
   s_committed: Committed
   s_building: Building
   s_pushed: Artifact pushed
   s_deployed: Deployed
+  cover_pick: Change cover
+  cover_drop: Remove cover
   placeholder: Write, or press / for a block
   insert: Insert block
   drag: Drag to reorder
@@ -380,25 +380,47 @@ editor:
   caption: Caption
   icon: Icon
   title: Title
-  choose: Choose
   more: More
   no_match: Nothing matches
   link_url: Link URL
   row: Row
   column: Column
   align_default: Default
-  front_matter: Front matter
-  raw_front: Raw front matter
-  comma_separated: comma separated
+  g_look: Appearance
+  g_tax: Taxonomy
+  g_flags: Behaviour
+  g_vault: Vault
+  g_more: Metadata & SEO
+  extra_key: not a theme key
   f_title: Title
   f_date: Date
   f_updated: Updated
   f_cover: Cover
+  f_thumbnail: Thumbnail
+  f_banner: Banner
   f_excerpt: Excerpt
+  f_description: Description
   f_categories: Categories
   f_tags: Tags
-  f_sticky: Pinned
+  f_sticky: Pin weight
   f_mathjax: MathJax
+  f_comment: Comments
+  f_copyright: Copyright notice
+  f_notify: Notify followers
+  f_published: Published
+  f_hidden: Hide from listings
+  f_vault: Encrypted
+  f_draft: Draft
+  f_supersedes: Supersedes
+  f_author: Author
+  f_avatar: Avatar
+  f_license: License
+  f_expires: Expires
+  f_keywords: Keywords
+  f_robots: Robots
+  f_canonical_path: Canonical path
+  f_og_image: OG image
+  f_og_description: OG description
   t_code: Code
   t_mermaid: Diagram
   t_math: Equation

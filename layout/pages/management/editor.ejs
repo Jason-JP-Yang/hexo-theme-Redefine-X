@@ -1,15 +1,47 @@
 <%#
-    The editor at /blog-management/write/.
+    A new post, at /blog-management/write/.
 
-    The server renders a shell and nothing else. What may be opened depends on
-    who is signed in, which is not known at build time, so
-    source/js/plugins/editor/ paints everything once the Worker has released a
-    ticket. The page exists for everybody — a route Swup can navigate to has to
-    — and shows the locked notice until then. Authorisation is the Worker's and
-    Gitea's; this is presentation.
+    This is the ARTICLE layout with nothing in it — the same containers, the
+    same classes, the same measure. There is no editor page style, because a
+    post being written and a post being read are the same page in two states,
+    and anything the editor added here would be something a published post does
+    not have.
+
+    The shell renders for everybody. It is empty until the Worker releases a
+    ticket, and what may be written is Gitea's decision, not this template's.
 %>
-<div id="blog-editor" class="ed" data-phase="loading">
-    <div class="ed-gate">
-        <%- partial('components/access-probe', { text: __('editor.checking') }) %>
-    </div>
+<div class="post-page-container flex relative justify-between box-border w-full h-full">
+	<div class="article-content-container" data-post-new="1">
+
+		<div class="ed-gate">
+			<%- partial('components/access-probe', { text: __('editor.checking') }) %>
+		</div>
+
+		<%# Empty, and rebuilt by the editor from the front matter the moment it
+		    opens — a cover added while writing has to produce the cover
+		    template, not a patched version of this one. %>
+		<div class="article-title relative w-full"></div>
+
+		<% if (theme.info.author || config.author) { %>
+		<div class="article-header flex flex-row gap-2 items-center px-2 sm:px-6 md:px-8">
+			<div class="avatar w-[46px] h-[46px] flex-shrink-0 rounded-medium border border-border-color p-[1px]">
+				<%- image_tag(theme.defaults.avatar) %>
+			</div>
+			<div class="info flex flex-col justify-between">
+				<div class="author flex items-center">
+					<span class="name text-default-text-color text-lg font-semibold"><%= theme.info.author || config.author %></span>
+				</div>
+				<div class="meta-info">
+					<div class="article-meta-info">
+						<span class="article-date article-meta-item">
+							<i class="fa-regular fa-pen-fancy"></i>&nbsp;<span><%= date(new Date(), config.date_format) %></span>
+						</span>
+					</div>
+				</div>
+			</div>
+		</div>
+		<% } %>
+
+		<div class="article-content markdown-body px-2 sm:px-6 md:px-8 pb-8"></div>
+	</div>
 </div>

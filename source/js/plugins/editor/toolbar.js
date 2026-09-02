@@ -77,30 +77,49 @@ export function createToolbar(ctx) {
     `<span class="ed-tool-sep"></span>
      <button type="button" class="ed-tool" data-mark="clear" title="${escapeHTML(ctx.t("m_clear", "Clear formatting"))}"><i class="fa-solid fa-eraser" aria-hidden="true"></i></button>`;
 
-  /** Morph between the two faces: width animates, contents cross-fade. */
+  /**
+   * Morph between the two faces: width animates, contents cross-fade.
+   *
+   * Nothing here is allowed to leave a filled animation behind. A `forwards`
+   * fill on the outgoing face persists `opacity: 0` on an element this function
+   * will show again later, and the fade-in that follows does not outrank it —
+   * the pill comes back empty and stays empty. Every animation is cancelled
+   * before the next one starts, and `mode` is claimed synchronously so two
+   * selection changes in one frame cannot interleave halfway through.
+   */
+  let morph = 0;
+
   async function setMode(mode) {
     if (el.dataset.mode === mode) return;
+    el.dataset.mode = mode;
+
+    const token = ++morph;
     const inner = el.querySelector(".ed-toolbar-inner");
     const from = inner.offsetWidth;
 
     const show = mode === "marks" ? marks : blocks;
     const hide = mode === "marks" ? blocks : marks;
 
-    if (reduced()) {
-      hide.hidden = true;
-      show.hidden = false;
-      el.dataset.mode = mode;
-      return;
-    }
+    for (const face of [blocks, marks]) face.getAnimations().forEach((a) => a.cancel());
+    inner.getAnimations().forEach((a) => a.cancel());
 
-    await hide.animate([{ opacity: 1 }, { opacity: 0 }], { duration: FADE_MS, fill: "forwards" }).finished.catch(() => {});
-    hide.hidden = true;
-    show.hidden = false;
-    el.dataset.mode = mode;
+    const swap = () => {
+      hide.hidden = true;
+      hide.style.opacity = "";
+      show.hidden = false;
+      show.style.opacity = "";
+    };
+
+    if (reduced()) return void swap();
+
+    await hide.animate([{ opacity: 1 }, { opacity: 0 }], { duration: FADE_MS }).finished.catch(() => {});
+    if (token !== morph) return;
+
+    swap();
     const to = inner.offsetWidth;
 
     inner.animate([{ width: from + "px" }, { width: to + "px" }], { duration: MORPH_MS, easing: EASE });
-    show.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_MS, delay: FADE_MS });
+    show.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_MS });
   }
 
   el.addEventListener("mousedown", (e) => e.preventDefault());
@@ -140,14 +159,18 @@ export function createToolbar(ctx) {
   return { el, sync, setMode, applyMark: (key) => applyMark(key, ctx) };
 }
 
+/** A selection anchors on a TEXT node far more often than on an element, so the
+ *  walk has to start at its parent or it never takes a single step. */
 function isInside(sel, tag) {
   let node = sel.anchorNode;
+  if (node && node.nodeType === 3) node = node.parentNode;
+
   const name = tag.toUpperCase();
-  while (node && node.classList && !node.classList.contains("ed-rich")) {
+  while (node && node.nodeType === 1) {
     if (node.tagName === name) return true;
+    if (node.classList.contains("ed-rich")) return false;
     node = node.parentNode;
   }
-  if (node && node.nodeType === 3) return false;
   return false;
 }
 

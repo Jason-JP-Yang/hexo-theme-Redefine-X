@@ -335,42 +335,42 @@ vault:
   draft: 草稿
 
 editor:
-  checking: 正在校验会话…
-  denied: 此页面仅面向博客管理员。
+  checking: 正在确认你的身份…
+  denied: 该页面仅供博客管理员使用。
   unreachable: 无法连接后端服务。
-  documents: 文章
-  outline: 大纲
-  filter: 筛选
-  no_docs: 暂无内容
-  no_headings: 还没有标题
-  has_draft: 有草稿
+  no_document: 这篇文章不在你可以写入的仓库里。
+  edit_post: 编辑这篇文章
   new_post: 新建文章
-  new_post_title: 新文章的标题
-  pick_a_doc: 在左侧选择一篇文章，或新建一篇。
+  close: 结束编辑
+  untitled: 未命名
   draft: 草稿
-  encrypted: 加密
+  encrypted: 已加密
   opening: 正在打开
-  creating: 正在创建
   saving: 正在保存
   saved: 已保存
-  unsaved: 有未保存的修改
+  saved_clean: 全部改动已提交
+  unsaved: 有未保存的改动
+  unsaved_file: 尚未保存
+  need_title: 保存之前请先填写标题。
   save: 保存草稿
   publish: 发布
   publish_draft: 用这份草稿覆盖它所取代的文章？
   publish_direct: 直接提交到已发布的文章？
-  discard: 这篇文章有未保存的修改，确定离开？
+  discard: 这篇文章有未保存的改动，确定离开？
   recover: 发现一份未保存的本地副本，时间为
-  recover_tail: ，要恢复吗？
-  stale: 线上副本落后于仓库 —— 构建很可能仍在进行。
-  conflict: 这个文件在仓库中已被改动
-  conflict_hint: 你的内容仍然保留在这里。请在新标签页重新打开这篇文章，看清楚落地的版本，再重新应用你的修改。
-  build_failed: 构建失败。文章已提交，线上内容未受影响。
+  recover_tail: ，要恢复它吗？
+  editing_draft: 你正在编辑取代这篇文章的草稿。
+  stale: 已发布的版本落后于仓库 — 构建可能还在进行中。
+  conflict_hint: 仓库中的这个文件已经改变。你的文字仍在这里 — 请在新标签页打开这篇文章查看已落地的内容，然后重新应用改动。
+  build_failed: 构建失败。文章已提交，已发布的内容没有变化。
   view_run: 查看构建
   s_committed: 已提交
   s_building: 构建中
-  s_pushed: 已推送产物
+  s_pushed: 产物已推送
   s_deployed: 已部署
-  placeholder: 开始输入，或按 / 插入区块
+  cover_pick: 更换头图
+  cover_drop: 移除头图
+  placeholder: 开始书写，或按 / 插入区块
   insert: 插入区块
   drag: 拖动以调整顺序
   toggle_source: 显示源码
@@ -382,25 +382,47 @@ editor:
   caption: 图注
   icon: 图标
   title: 标题
-  choose: 选择
   more: 更多
   no_match: 没有匹配项
   link_url: 链接地址
   row: 行
   column: 列
   align_default: 默认
-  front_matter: Front Matter
-  raw_front: 原始 Front Matter
-  comma_separated: 用逗号分隔
+  g_look: 外观
+  g_tax: 分类与标签
+  g_flags: 行为
+  g_vault: 加密
+  g_more: 元数据与 SEO
+  extra_key: 不是主题识别的字段
   f_title: 标题
   f_date: 发布时间
   f_updated: 更新时间
-  f_cover: 封面
+  f_cover: 头图
+  f_thumbnail: 缩略图
+  f_banner: 横幅
   f_excerpt: 摘要
+  f_description: 描述
   f_categories: 分类
   f_tags: 标签
-  f_sticky: 置顶
+  f_sticky: 置顶权重
   f_mathjax: MathJax
+  f_comment: 评论
+  f_copyright: 版权声明
+  f_notify: 通知关注者
+  f_published: 已发布
+  f_hidden: 从列表中隐藏
+  f_vault: 加密
+  f_draft: 草稿
+  f_supersedes: 取代
+  f_author: 作者
+  f_avatar: 头像
+  f_license: 许可协议
+  f_expires: 过期时间
+  f_keywords: 关键词
+  f_robots: Robots
+  f_canonical_path: 规范链接
+  f_og_image: OG 图片
+  f_og_description: OG 描述
   t_code: 代码
   t_mermaid: 图表
   t_math: 公式
@@ -417,9 +439,9 @@ editor:
   b_image: 图片
   b_math: 公式
   b_mermaid: 图表
-  b_note: 提示框
-  b_notel: 大提示框
-  b_box: 高亮块
+  b_note: 提示
+  b_notel: 大号提示
+  b_box: 高亮框
   b_folding: 折叠块
   b_tabs: 标签页
   b_btn: 按钮

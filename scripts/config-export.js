@@ -65,12 +65,10 @@ hexo.extend.helper.register("export_config", function () {
   if (languageContent && languageContent["management"]) {
     theme_config.management_i18n = languageContent["management"];
   }
-  // The editor paints every one of its own strings, so they travel the same way
-  // — but only on the editor's own page. It is by far the largest string table
-  // in the theme, and every other page would carry it for nothing.
-  if (languageContent && languageContent["editor"] && this.page?.type === "blog-editor") {
-    theme_config.editor_i18n = languageContent["editor"];
-  }
+  // The editor's own strings do NOT travel here. It opens on any article now,
+  // and its table is the largest in the theme — it is fetched from
+  // /blog-management/editor-i18n.json the first time an admin opens it.
+  //
   // The encrypted-post gate, its admin audience field and every listing an
   // authorized reader is shown are painted after the Worker answers, so their
   // strings travel the same way.

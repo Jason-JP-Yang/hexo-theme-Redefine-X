@@ -497,7 +497,9 @@ function mountImage(view) {
     }
     const picked = await ctx.pickImage();
     if (!picked) return;
-    block.src = picked.path;
+    // The SITE path, not the repository path: what lands in the markdown has to
+    // be what a browser can ask for.
+    block.src = picked.site;
     view.touch();
     paint();
   });

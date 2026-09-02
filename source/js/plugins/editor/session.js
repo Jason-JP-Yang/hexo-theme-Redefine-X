@@ -167,6 +167,35 @@ export function permalinkOf(entry) {
   return `/${parts[1]}/${parts[2]}/${parts[3]}/${stem}/`;
 }
 
+/**
+ * The document the page in front of you is showing.
+ *
+ * `source` comes from the rendered post; `slug` from an encrypted one, whose
+ * page carries nothing else. A published post that already HAS a draft resolves
+ * to the draft — editing the published copy instead would fork a second one,
+ * and the reader is already being shown the draft's text.
+ */
+export async function entryForPage({ source, slug }) {
+  const entries = await listDocuments();
+
+  if (slug) return entries.find((e) => e.slug === slug) || null;
+  if (!source) return null;
+
+  const path = source.startsWith("source/") ? source : "source/" + String(source).replace(/^\/+/, "");
+  const row = entries.find((e) => e.path === path);
+  if (!row) return null;
+  if (!row.shadowed) return row;
+
+  const link = permalinkOf(row);
+  return entries.find((e) => e.draft && e.supersedes === link) || row;
+}
+
+/** The post key for an id, after a mint has put it in D1. */
+export async function grantFor(id) {
+  const rows = await loadGrants(true);
+  return rows.find((row) => row.id === id) || null;
+}
+
 /* ─── open ─────────────────────────────────────────────────────────────────── */
 
 export async function openDocument(entry) {
@@ -269,7 +298,13 @@ export async function save(doc, mode, pending) {
   }
 
   if (mode === "publish") {
-    const target = entry.draft ? findPublishTarget(doc, entry) : doc.path;
+    // A post that has never been saved publishes straight to its own file: it
+    // has no draft to fold back and no key to revoke.
+    const target = doc.isNew
+      ? pathForTitle(frontOf(doc).title)
+      : entry.draft
+        ? findPublishTarget(doc, entry)
+        : doc.path;
     const clean = withFront(source, { vault: null, draft: null, supersedes: null });
 
     const current = await gitea.read(target);
@@ -300,7 +335,16 @@ export async function save(doc, mode, pending) {
   let sha = doc.sha;
   let body = source;
 
-  if (!entry.draft && !entry.encrypted) {
+  if (doc.isNew) {
+    path = pathForTitle(frontOf(doc).title);
+    sha = "";
+    if (await gitea.read(path)) {
+      throw new Error(`${path} already exists — give this post a different title`);
+    }
+    minted = await mintVaultKey(path, titleOf(doc));
+    keysEnc = minted.keysEnc;
+    body = withFront(source, { vault: "true", draft: "true" });
+  } else if (!entry.draft && !entry.encrypted) {
     // First edit of a published post: fork it.
     path = draftPathFor(doc.path);
     sha = "";
@@ -333,16 +377,19 @@ export async function save(doc, mode, pending) {
   return { ...result, path, minted, published: false };
 }
 
-/** A brand-new post, encrypted from its first commit. */
-export async function create(title, front) {
-  const stem = String(title).trim().replace(/[\\/:*?"<>|]/g, "-").slice(0, 80) || "untitled";
-  const path = `${POSTS_DIR}/${stem}.md`;
-  const minted = await mintVaultKey(path, title);
-
-  const now = front && front.date ? front.date : localStamp();
+/**
+ * A brand-new post, in memory only.
+ *
+ * Nothing is committed and no key is minted until the first save. Creating a
+ * file the moment someone opens the editor would put an empty post in the
+ * repository — and start a build for it — for every visit that changed its
+ * mind.
+ */
+export function newDocument() {
+  const now = localStamp();
   const source =
     `---\n` +
-    `title: ${title}\n` +
+    `title: \n` +
     `cover: \n` +
     `thumbnail: \n` +
     `excerpt: \n` +
@@ -351,18 +398,27 @@ export async function create(title, front) {
     `updated: ${now}\n` +
     `vault: true\n` +
     `draft: true\n` +
-    `supersedes: \n` +
     `mathjax: false\n` +
     `categories:\n` +
     `tags:\n` +
     `---\n\n`;
 
-  const files = [
-    { operation: "create", path, content: gitea.toBase64(source) },
-    await keyringFile(minted.keysEnc),
-  ];
-  const result = await gitea.commit(files, `New draft: ${title}`);
-  return { ...result, path, source, minted };
+  return {
+    ...markdownToDoc(source),
+    path: "",
+    sha: "",
+    isNew: true,
+    entry: { kind: "new", draft: true, encrypted: true },
+    stale: false,
+  };
+}
+
+/** Where a new post's file goes, derived from its title at save time. */
+function pathForTitle(title) {
+  const stem =
+    String(title || "").trim().replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").slice(0, 80) ||
+    "untitled-" + Date.now().toString(36);
+  return `${POSTS_DIR}/${stem}.md`;
 }
 
 export async function remove(entry) {

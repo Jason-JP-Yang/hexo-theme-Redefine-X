@@ -359,6 +359,13 @@ hexo.extend.filter.register(
         (pages ? ` and ${pages} previously published album page(s)` : "")
     );
     store.report(hexo.log);
+
+    // Sealing is part of building, not a command to remember: a commit must
+    // never carry a post's ciphertext without the key that opens it.
+    const sealed = store.seal();
+    if (sealed && sealed.changed) {
+      hexo.log.info(`[vault] sealed ${sealed.count} key(s) into .vault/keys.enc`);
+    }
   },
   20
 );
