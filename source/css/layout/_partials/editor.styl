@@ -17,11 +17,24 @@
 // Motion: 130ms fade / 280ms morph / cubic-bezier(0.32, 0.72, 0, 1), the
 // console's own constants. Anything longer belongs in JS, where it can measure.
 //
+// Ink: --third-text-color is the dimmest thing allowed to carry a word here.
+// --fourth-text-color is `darken(--default, 70%)`, which in dark mode lands at
+// roughly 1.6:1 against the surfaces in this file — a field label written in it
+// is not faint, it is gone. It stays available for borders and rules only.
+//
 // Auto-included: style.styl requires layout/_partials/* as a glob.
 
 $ed-radius = 14px
 $ed-morph = 0.28s cubic-bezier(0.32, 0.72, 0, 1)
 $ed-fade = 0.13s ease
+// Ink for anything sitting ON --primary-color, which is a dark cardinal red.
+// --background-color inverts with the theme, so pairing the two puts near-black
+// on red the moment the site is dark. White, the way the notification centre,
+// the console and the error book already do it.
+$ed-on-primary = #fff
+// Where the document bar pins, and the anchor the floating toolbar is placed
+// under. One value, so the two cannot drift back onto the same band.
+$ed-docbar-top = ($navbar-height + 12px)
 $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
 
 @keyframes ed-breathe
@@ -29,6 +42,14 @@ $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo
     opacity 0.35
   50%
     opacity 1
+
+@keyframes ed-drop-in
+  from
+    opacity 0
+    transform scaleX(0.82)
+  to
+    opacity 1
+    transform none
 
 // ─── the pencil ─────────────────────────────────────────────
 // One more tool in the article's own rail; `.blog-admin-only` already decides
@@ -68,18 +89,25 @@ html.blog-editing .tool-edit-post
 
 // ─── document bar ───────────────────────────────────────────
 // Sticky, because publish has to stay reachable from the bottom of a long post.
+//
+// It pins ABOVE the floating toolbar, in both senses: a higher stacking order,
+// and the toolbar offset below it by `--ed-docbar-h` (set from JS, since the
+// bar's height changes as it wraps and as notices and the progress row appear).
+// The two used to be given the same band under the navbar and the toolbar won,
+// so the file you were editing and the way to save it were both behind it.
 .ed-docbar
   position sticky
-  top ($navbar-height + 8px)
-  z-index $z-index-3
+  top $ed-docbar-top
+  // Above the toolbar ($z-index-4); the transient popovers stay above both.
+  z-index $z-index-5
   display flex
   flex-wrap wrap
   align-items center
-  gap 10px
-  // The article's own px-2 / sm:px-6 / md:px-8. Anything else and the bar sits
-  // a few pixels off the column it belongs to, which is the kind of thing you
-  // see without being able to say what is wrong.
-  margin 0 8px 14px
+  gap 8px 10px
+  // Top margin clears the author banner directly above. Sides are the article's
+  // own px-2 / sm:px-6 / md:px-8, or the bar sits a few pixels off the column it
+  // belongs to — the kind of thing you see without being able to say what it is.
+  margin 22px 8px 14px
   padding 9px 12px
   border 1px solid var(--border-color)
   border-radius 12px
@@ -87,28 +115,39 @@ html.blog-editing .tool-edit-post
   box-shadow 0 6px 20px -16px var(--shadow-color-1)
 
   @media (min-width 640px)
-    margin 0 24px 16px
+    margin 24px 24px 16px
 
   @media (min-width 768px)
-    margin 0 32px 16px
+    margin 26px 32px 16px
 
   +redefine-tablet()
     position static
 
+// Both halves wrap, and either may take a whole row of its own. A file path is
+// the one thing here that can be any length, so it is what gives way first —
+// but it gives way by wrapping to its own line, never by being squeezed to the
+// two or three characters that used to be left of it.
 .ed-docbar-id
   display flex
+  flex-wrap wrap
   align-items center
-  gap 8px
-  flex 1
+  gap 6px 8px
+  flex 1 1 210px
   min-width 0
 
   > i
-    color var(--fourth-text-color)
+    flex-shrink 0
+    color var(--third-text-color)
     font-size 0.8rem
 
 .ed-docbar-path
+  // A floor, not a preference: without one the path is the only item here that
+  // shrinks, so the tags kept their full width and the filename was ground down
+  // to a character and a half. Below this the tags wrap to a line of their own.
+  flex 1 1 12rem
+  min-width 8rem
   overflow hidden
-  color var(--third-text-color)
+  color var(--second-text-color)
   font-family $ed-mono
   font-size 0.74rem
   text-overflow ellipsis
@@ -134,8 +173,11 @@ html.blog-editing .tool-edit-post
 
 .ed-docbar-actions
   display flex
+  flex-wrap wrap
+  justify-content flex-end
   align-items center
   gap 8px
+  margin-left auto
 
 // The whole change indicator: one amber dot, and nothing when there is nothing
 // to say.
@@ -179,7 +221,10 @@ html.blog-editing .tool-edit-post
 .ed-act-primary
   border-color transparent
   background var(--primary-color)
-  color var(--background-color)
+  color $ed-on-primary
+
+  i
+    color $ed-on-primary
 
   &:hover:not(:disabled)
     background var(--primary-color)
@@ -195,7 +240,7 @@ html.blog-editing .tool-edit-post
 
   &:empty::before
     content attr(data-placeholder)
-    color var(--fourth-text-color)
+    color var(--third-text-color)
     opacity 0.6
 
 .ed-cover-tools
@@ -262,7 +307,7 @@ html.blog-editing .tool-edit-post
   font-weight 700
   letter-spacing 0.06em
   text-transform uppercase
-  color var(--fourth-text-color)
+  color var(--third-text-color)
 
 .ed-front-grid
   display grid
@@ -286,7 +331,7 @@ html.blog-editing .tool-edit-post
   font-size 0.68rem
   font-weight 600
   letter-spacing 0.02em
-  color var(--fourth-text-color)
+  color var(--third-text-color)
 
 .ed-f-extra
   font-size 0.5rem
@@ -326,7 +371,7 @@ textarea.ed-f-input
   border-radius 8px
   background var(--background-color)
   overflow hidden
-  color var(--fourth-text-color)
+  color var(--third-text-color)
   font-size 0.7rem
 
   img
@@ -385,7 +430,7 @@ textarea.ed-f-input
   border none
   border-radius 50%
   background transparent
-  color var(--fourth-text-color)
+  color var(--third-text-color)
   font-size 0.58rem
   cursor pointer
 
@@ -425,7 +470,7 @@ textarea.ed-f-input
     font-weight 700
     letter-spacing 0.06em
     text-transform uppercase
-    color var(--fourth-text-color)
+    color var(--third-text-color)
     cursor pointer
     list-style none
 
@@ -487,7 +532,7 @@ textarea.ed-f-input
   gap 6px
   padding 4px 10px
   border-radius 999px
-  color var(--fourth-text-color)
+  color var(--third-text-color)
   transition color $ed-morph, background $ed-morph
 
   & + .ed-stage::before
@@ -524,11 +569,14 @@ textarea.ed-f-input
 // to a scroll container, and the article no longer has one to stick inside.
 .ed-toolbar
   position fixed
-  top ($navbar-height + 14px)
+  // Below the document bar's pinned band. `--ed-docbar-h` is that bar's measured
+  // height, republished by a ResizeObserver, so this clears it however it wraps.
+  top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top + 12px))
   left 50%
   z-index $z-index-4
   transform translateX(-50%)
   pointer-events none
+  transition top $ed-morph
 
   +redefine-tablet()
     top auto
@@ -576,7 +624,7 @@ textarea.ed-f-input
 
   &[data-on="1"]
     background var(--primary-color)
-    color var(--background-color)
+    color $ed-on-primary
 
 .ed-tool-sep
   width 1px
@@ -590,19 +638,15 @@ textarea.ed-f-input
 // does not.
 .ed-block
   position relative
-  transition background $ed-fade
-
-// The article zeroes the top margin of its first child. With blocks that child
-// is a wrapper, so the rule has to reach one level further in — otherwise the
-// body starts a line lower here than it will once published.
-.article-content > .ed-block:first-child .ed-body > *
-  margin-top 0 !important
+  transition background $ed-fade, opacity $ed-fade
 
   &:hover > .ed-gutter,
   &[data-on="1"] > .ed-gutter
     opacity 1
     transform none
 
+  // The block being carried. It stays legible — you are aiming it at a gap, and
+  // a ghost you cannot read is a gap you cannot aim at.
   &.is-dragging
     opacity 0.45
 
@@ -612,23 +656,42 @@ textarea.ed-f-input
     position absolute
     left 0
     right 0
-    height 2px
-    border-radius 2px
+    height 3px
+    border-radius 3px
     background var(--primary-color)
+    box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+    animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
 
   &[data-drop="before"]::before
-    top -3px
+    top -4px
 
   &[data-drop="after"]::after
-    bottom -3px
+    bottom -4px
+
+// The article zeroes the top margin of its first child. With blocks that child
+// is a wrapper, so the rule has to reach one level further in — otherwise the
+// body starts a line lower here than it will once published.
+.article-content > .ed-block:first-child .ed-body > *
+  margin-top 0 !important
+
+// The carried block keeps its own handle lit — hover is not a thing you can do
+// with a button already held down. Every OTHER gutter stays hidden: they are not
+// targets, and a column of buttons lighting up as you pass is noise over the one
+// line you are actually aiming at.
+.ed-block.is-dragging > .ed-gutter
+  opacity 1
+  transform none
 
 // The gutter rides in the article's own left padding, never in the measure:
 // pushing the text across would mean the line breaks you are editing are not
 // the line breaks you will publish.
+// Anchored off the block's own left edge rather than a hardcoded offset, so the
+// column stays in the padding whatever the buttons measure.
 .ed-gutter
   position absolute
   top 1px
-  left -30px
+  right 100%
+  margin-right 3px
   display flex
   flex-direction column
   gap 3px
@@ -639,13 +702,14 @@ textarea.ed-f-input
   +redefine-tablet()
     position static
     flex-direction row
-    margin-bottom 5px
+    margin 0 0 5px
     opacity 1
     transform none
 
-// A control you cannot find is a control you do not have. These carry a real
-// surface and second-tier ink rather than the faintest colour in the palette
-// on no background at all.
+// A control you cannot find is a control you do not have. These sit on the
+// article's own surface with the site's flat elevation ring under them, rather
+// than on --second-background-color, which is two per cent off the card they
+// were drawn on and read as nothing at all.
 .ed-gutter-btn
   display grid
   place-items center
@@ -653,7 +717,8 @@ textarea.ed-f-input
   height 26px
   border 1px solid var(--border-color)
   border-radius 8px
-  background var(--second-background-color)
+  background var(--background-color)
+  box-shadow var(--redefine-box-shadow-flat)
   color var(--second-text-color)
   font-size 0.74rem
   cursor pointer
@@ -662,13 +727,19 @@ textarea.ed-f-input
   &:hover
     border-color var(--primary-color)
     background var(--primary-color)
-    color var(--background-color)
+    color $ed-on-primary
     transform translateY(-1px)
 
 .ed-handle
   cursor grab
 
-  &:active
+  // Held down, the handle stays lit for the whole drag — the pointer has left
+  // the button by then, so :hover is gone exactly when the feedback matters.
+  &:active,
+  .ed-block.is-dragging &
+    border-color var(--primary-color)
+    background var(--primary-color)
+    color $ed-on-primary
     cursor grabbing
 
 // ─── rich text ──────────────────────────────────────────────
@@ -683,7 +754,7 @@ textarea.ed-f-input
   &:empty::before,
   &[data-placeholder]:empty::before
     content attr(data-placeholder)
-    color var(--fourth-text-color)
+    color var(--third-text-color)
     pointer-events none
 
   mark
@@ -734,7 +805,7 @@ textarea.ed-f-input
   font-weight 600
   letter-spacing 0.03em
   text-transform uppercase
-  color var(--fourth-text-color)
+  color var(--third-text-color)
 
 .ed-lang,
 .ed-component-args,
@@ -765,7 +836,7 @@ textarea.ed-f-input
   border none
   border-radius 7px
   background transparent
-  color var(--fourth-text-color)
+  color var(--third-text-color)
   font-size 0.74rem
   cursor pointer
   transition background $ed-fade, color $ed-fade
@@ -885,7 +956,7 @@ textarea.ed-f-input
   place-items center
   min-height 140px
   background var(--second-background-color)
-  color var(--fourth-text-color)
+  color var(--third-text-color)
   font-size 22px
 
 .ed-caption
@@ -897,7 +968,7 @@ textarea.ed-f-input
 
   &:empty::before
     content attr(data-placeholder)
-    color var(--fourth-text-color)
+    color var(--third-text-color)
 
 // ─── table ──────────────────────────────────────────────────
 .ed-table-block
@@ -1057,7 +1128,7 @@ textarea.ed-f-input
   font-weight 600
   text-transform uppercase
   letter-spacing 0.03em
-  color var(--fourth-text-color)
+  color var(--third-text-color)
 
 .ed-raw-render
   font-size 0.9em
@@ -1085,7 +1156,7 @@ textarea.ed-f-input
 .ed-more-menu,
 .ed-icon-picker
   position absolute
-  z-index $z-index-5
+  z-index ($z-index-5 + 1)
   padding 6px
   border 1px solid var(--border-color)
   border-radius 12px
@@ -1117,7 +1188,7 @@ textarea.ed-f-input
 
   i
     width 15px
-    color var(--fourth-text-color)
+    color var(--third-text-color)
     font-size 0.78rem
     text-align center
 
@@ -1133,7 +1204,7 @@ textarea.ed-f-input
 
 .ed-slash-empty
   padding 14px 10px
-  color var(--fourth-text-color)
+  color var(--third-text-color)
   font-size 0.78rem
   text-align center
 
@@ -1170,7 +1241,7 @@ textarea.ed-f-input
   border 1px solid transparent
   border-radius 10px
   background var(--primary-color)
-  color var(--background-color)
+  color $ed-on-primary
   font-size 0.8rem
   font-weight 550
   transition transform $ed-morph, filter $ed-fade

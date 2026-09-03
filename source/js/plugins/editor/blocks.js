@@ -95,6 +95,13 @@ function wireDrag(view) {
   handle.addEventListener("dragstart", (e) => {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", view.block.id);
+    // The ghost is the whole block, not the 26px button the pointer happened to
+    // be on. Taken before `is-dragging` lands, so the ghost is the opaque block
+    // and the one left behind is the faded one.
+    const box = view.el.getBoundingClientRect();
+    if (e.dataTransfer.setDragImage) {
+      e.dataTransfer.setDragImage(view.el, e.clientX - box.left, e.clientY - box.top);
+    }
     view.el.classList.add("is-dragging");
     view.ctx.onDragStart(view.block.id);
   });
@@ -462,7 +469,7 @@ function mountImage(view) {
   const missing = wrap.querySelector(".ed-image-missing");
 
   const paint = () => {
-    img.src = ctx.resolveAsset(block.src);
+    ctx.bindImage(img, block.src);
     img.alt = block.alt || "";
     caption.textContent = block.title || "";
   };

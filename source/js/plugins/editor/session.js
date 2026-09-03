@@ -38,6 +38,23 @@ import {
 
 const POSTS_DIR = "source/_posts";
 
+/**
+ * A repository path, from either spelling of the same file.
+ *
+ * Hexo's `post.source` is relative to `source/` — that is what the rendered
+ * page carries and what the sealed metadata records — while Gitea lists and
+ * writes full repository paths. Mixing the two is not a cosmetic mismatch: an
+ * encrypted post whose `_posts/x.md` never matched a listed `source/_posts/x.md`
+ * fell out of the document list entirely, so opening it reported that the post
+ * was not in the repository, and a save that did find it would have created a
+ * second file at the wrong path.
+ */
+function repoPath(p) {
+  const rel = String(p || "").replace(/^\/+/, "");
+  if (!rel) return "";
+  return rel.startsWith("source/") ? rel : "source/" + rel;
+}
+
 let grants = null;
 
 /* ─── grants ───────────────────────────────────────────────────────────────── */
@@ -58,12 +75,15 @@ async function loadGrants(force) {
   if (!res.ok) return (grants = []);
 
   const body = await res.json().catch(() => ({}));
-  grants = (body.posts || []).map((row) => ({ ...row, key: null, raw: row.key }));
+  // `raw` is BYTES, the same shape plugins/vault.js keeps. The sealed-asset
+  // helpers take raw key material, and one of the two spellings silently
+  // derives the wrong path rather than failing.
+  grants = (body.posts || []).map((row) => ({ ...row, key: null, raw: b64urlToBytes(row.key) }));
   return grants;
 }
 
 async function keyOf(grant) {
-  if (!grant.key) grant.key = await importAesKey(b64urlToBytes(grant.raw));
+  if (!grant.key) grant.key = await importAesKey(grant.raw);
   return grant.key;
 }
 
@@ -103,13 +123,16 @@ export async function listDocuments() {
       id: grant.id,
       slug: grant.slug,
       grant,
-      path: meta.source || "",
+      path: repoPath(meta.source),
       title: meta.title || "",
       date: meta.date || "",
       draft: meta.draft === true,
       supersedes: meta.supersedes || "",
       excerpt: meta.excerpt || "",
       cover: meta.cover || "",
+      // Published route -> content hash for this post's sealed images. The only
+      // way to find them: their plaintext routes are withheld from the build.
+      assets: meta.assets || {},
     };
     if (entry.draft) drafts.push(entry);
     if (entry.path) vaultBySource.set(entry.path, entry);
@@ -134,6 +157,7 @@ export async function listDocuments() {
       title: vault ? vault.title : titleFromName(file.name),
       date: vault ? vault.date : "",
       encrypted: !!vault,
+      assets: vault ? vault.assets : null,
       draft: false,
       shadowed: false,
     });
@@ -179,9 +203,10 @@ export async function entryForPage({ source, slug }) {
   const entries = await listDocuments();
 
   if (slug) return entries.find((e) => e.slug === slug) || null;
-  if (!source) return null;
 
-  const path = source.startsWith("source/") ? source : "source/" + String(source).replace(/^\/+/, "");
+  const path = repoPath(source);
+  if (!path) return null;
+
   const row = entries.find((e) => e.path === path);
   if (!row) return null;
   if (!row.shadowed) return row;
@@ -389,10 +414,12 @@ export function newDocument() {
   const now = localStamp();
   const source =
     `---\n` +
-    `title: \n` +
+    `title: ""\n` +
     `cover: \n` +
     `thumbnail: \n` +
-    `excerpt: \n` +
+    // Quoted, not bare: `title` and `excerpt` are String fields in Hexo's Post
+    // schema, and a null one aborts the build before anything renders.
+    `excerpt: ""\n` +
     `sticky: \n` +
     `date: ${now}\n` +
     `updated: ${now}\n` +

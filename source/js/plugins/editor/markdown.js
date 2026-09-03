@@ -114,6 +114,22 @@ function quoteIfNeeded(value) {
 }
 
 /**
+ * Keys Hexo's Post schema declares as String, where a bare `key:` is fatal.
+ *
+ * warehouse runs `validate` on insert but not `cast`, so an explicitly null
+ * value never reaches the schema default: `excerpt:` with nothing after it
+ * parses as null and the whole build dies with "`null` is not a string!" before
+ * a single page renders. Every other key here is untyped and may be left bare,
+ * which is why this is a list and not a blanket rule.
+ */
+const STRING_KEYS = new Set(["title", "excerpt", "layout", "content", "more", "raw", "id"]);
+
+/** Empty, spelled so Hexo can read it: `""` for the typed keys, bare for the rest. */
+function emptyFor(key) {
+  return STRING_KEYS.has(key) ? '""' : "";
+}
+
+/**
  * Write one key back into the front-matter TEXT, leaving every other line —
  * comments, key order, blank lines — exactly as it was. A key that is not there
  * is appended; a key set to `null` is removed.
@@ -144,9 +160,10 @@ export function setFrontMatterKey(front, key, value) {
     return lines.join("\n");
   }
 
+  const written = isList ? "" : quoteIfNeeded(value);
   const replacement = isList
     ? [key + ":"].concat(value.filter(Boolean).map((item) => "  - " + quoteIfNeeded(item)))
-    : [key + ": " + quoteIfNeeded(value)];
+    : [key + ": " + (written || emptyFor(key))];
 
   if (start < 0) lines.push.apply(lines, replacement);
   else lines.splice(start, end - start, ...replacement);

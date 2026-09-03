@@ -184,7 +184,7 @@ function renderRow(field, front, t) {
 
 /**
  * @param {object} doc  the open document; `doc.front` is edited in place
- * @param {object} ctx  { t, onChange, pickImage, resolveAsset }
+ * @param {object} ctx  { t, onChange, pickImage, bindImage }
  */
 export function createFrontCard(doc, ctx) {
   const el = document.createElement("section");
@@ -240,9 +240,12 @@ export function createFrontCard(doc, ctx) {
     const key = node.dataset.thumb;
     const input = el.querySelector(`input[data-key="${key}"]`);
     const src = input ? input.value.trim() : "";
-    node.innerHTML = src
-      ? `<img src="${escapeHTML(ctx.resolveAsset(src))}" alt="">`
-      : `<i class="fa-regular fa-image" aria-hidden="true"></i>`;
+    if (!src) {
+      node.innerHTML = `<i class="fa-regular fa-image" aria-hidden="true"></i>`;
+      return;
+    }
+    node.innerHTML = `<img alt="">`;
+    ctx.bindImage(node.querySelector("img"), src);
   }
 
   /** The single place a value reaches the file. */

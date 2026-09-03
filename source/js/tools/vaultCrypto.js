@@ -146,11 +146,15 @@ const assetKeys = new Map();
 const assetCache = new Map();
 const assetInflight = new Map();
 
+/** Which key opens one sealed image. `rawPostKey` is BYTES, never base64. */
+export function registerAssetKey(hash, rawPostKey) {
+  if (hash) assetKeys.set(hash, rawPostKey);
+}
+
 /** Record the key for every sealed image in `root`. Fetches nothing. */
 export function bindAssets(root, rawPostKey) {
   for (const node of root.querySelectorAll("[data-vault-asset]")) {
-    const hash = node.getAttribute("data-vault-asset");
-    if (hash) assetKeys.set(hash, rawPostKey);
+    registerAssetKey(node.getAttribute("data-vault-asset"), rawPostKey);
   }
 }
 

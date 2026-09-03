@@ -276,6 +276,60 @@ export async function keyringBlob(db, env, titles) {
   return (await seal(master, JSON.stringify(map, null, 2) + "\n")) + "\n";
 }
 
+/**
+ * Does this body come from a build that holds VAULT_MASTER?
+ *
+ * A build mints keys and has to register them, but it cannot hold an admin
+ * session: `hexo generate` on a laptop and a CI runner both lack a browser to
+ * sign in with. What both DO hold is VAULT_MASTER — they need it to seal
+ * `.vault/keys.enc` — so the proof is knowledge of that secret rather than a
+ * new credential to distribute and rotate.
+ *
+ * The master is never used directly as a MAC key: an HKDF subkey keeps the
+ * signing and the wrapping of post keys in separate cryptographic domains.
+ * Mirrors `pushMac` in scripts/lib/vault-store.js.
+ */
+export async function verifyBuildSignature(rawBody, header, secret) {
+  if (!header || !secret || !header.startsWith("sha256=")) return false;
+
+  let mac;
+  try {
+    const base = await crypto.subtle.importKey("raw", b64urlToBytes(secret), "HKDF", false, [
+      "deriveBits",
+    ]);
+    const bits = await crypto.subtle.deriveBits(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: new Uint8Array(0),
+        info: new TextEncoder().encode("rdfx-vault-push"),
+      },
+      base,
+      256
+    );
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(bits),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody)));
+  } catch {
+    return false;
+  }
+
+  let expected = "";
+  for (let i = 0; i < mac.length; i++) expected += mac[i].toString(16).padStart(2, "0");
+
+  // Constant time: a fast-exit comparison leaks the correct prefix.
+  const received = header.slice(7);
+  if (received.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ received.charCodeAt(i);
+  return diff === 0;
+}
+
 export async function registerPost(db, { id, slug, wrapped }) {
   await db
     .prepare(

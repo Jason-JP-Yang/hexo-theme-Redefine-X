@@ -617,9 +617,21 @@ async function scanAndProcessAllImages() {
 
   hexo.log.info(`[img-optimizer] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
-  publishManifest();
   cleanupRoutes();
 }
+
+/** `relPath -> routePath` for everything this build transcoded. */
+function transcodeMap() {
+  const map = {};
+  for (const relPath of successfulConversions) {
+    const ext = path.extname(relPath);
+    const { routePath } = PathManager.buildOptimizedPath(relPath, PathManager.isSupportedBitmap(ext));
+    map[relPath] = routePath;
+  }
+  return map;
+}
+
+hexo.extend.helper.register("avifTranscodeMap", transcodeMap);
 
 /**
  * `build/manifest.json` — which source images this build actually transcoded.
@@ -627,21 +639,24 @@ async function scanAndProcessAllImages() {
  * The editor cannot guess. An image with a product is published ONLY at that
  * product's path (the original route is withdrawn below), and an image without
  * one is published ONLY at its original path — so pointing at the wrong one is
- * a broken picture either way. This map is the answer, and it is written by the
- * same pass that decides it.
+ * a broken picture either way. This map is the answer.
+ *
+ * Written at `after_generate`, NOT beside the decision that produces it.
+ * `_routerRefresh` snapshots the route list, runs the generators, and then
+ * removes every route in the snapshot that no generator re-emitted — so a route
+ * set during `before_generate` is deleted before anything reaches disk. That is
+ * the same mechanism the AVIF routes work around with their own copy-to-public
+ * pass below; the manifest had no such fallback and was simply never published,
+ * which left the editor with an empty map and every picture pointing at a path
+ * whose route this file had withdrawn.
  */
 function publishManifest() {
   if (!hexo.theme.config.backend?.vault_enable) return;
 
-  const map = {};
-  for (const relPath of successfulConversions) {
-    const ext = path.extname(relPath);
-    const { routePath } = PathManager.buildOptimizedPath(relPath, PathManager.isSupportedBitmap(ext));
-    map[relPath] = routePath;
-  }
-
+  const map = transcodeMap();
   const body = JSON.stringify(map, Object.keys(map).sort());
   hexo.route.set("build/manifest.json", () => body);
+  hexo.log.info(`[img-optimizer] build/manifest.json lists ${Object.keys(map).length} transcode(s).`);
 }
 
 async function gatherFiles() {
@@ -944,6 +959,10 @@ hexo.extend.helper.register("avifRewriteHtml", replaceImagesInHtml);
 hexo.extend.filter.register("before_generate", scanAndProcessAllImages);
 
 hexo.extend.filter.register("after_generate", function () {
+  // Late enough to survive _routerRefresh, early enough that the generate
+  // console still writes it: that console reads route.list() after this hook.
+  publishManifest();
+
   // Safety Cleanup & Public Sync
   const toDelete = [];
   for (const relPath of successfulConversions) {

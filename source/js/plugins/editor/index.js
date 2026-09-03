@@ -36,7 +36,7 @@ import {
 } from "./markdown.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
-import { loadManifest, resolveAsset, siteRoot } from "./assets.js";
+import { bindImage, loadManifest, resolveAsset, setVaultAssets, siteRoot } from "./assets.js";
 import * as session from "./session.js";
 import * as gitea from "./gitea.js";
 import { contentChanged, crossFade, enter, exit, flip, pop } from "./motion.js";
@@ -71,6 +71,7 @@ const state = {
   dirty: false,
   saving: false,
   dragId: null,
+  dropAt: "",
   stashTimer: null,
   scrollRAF: 0,
   pointerY: 0,
@@ -114,6 +115,28 @@ function pageIdentity(host) {
 }
 
 /* ─── chrome ───────────────────────────────────────────────────────────────── */
+
+/**
+ * Publish the document bar's height so the floating toolbar can sit under it.
+ *
+ * Measured rather than assumed: the bar wraps at narrow widths and grows a row
+ * whenever a notice or the publish progress appears, and a toolbar parked at a
+ * guessed offset lands on top of it the moment either happens.
+ */
+function watchDocbarHeight(bar) {
+  const publish = () => {
+    document.documentElement.style.setProperty("--ed-docbar-h", `${Math.round(bar.offsetHeight)}px`);
+  };
+  publish();
+  const ro = new ResizeObserver(publish);
+  ro.observe(bar);
+  return ro;
+}
+
+function releaseDocbarHeight() {
+  if (ui && ui.barSize) ui.barSize.disconnect();
+  document.documentElement.style.removeProperty("--ed-docbar-h");
+}
 
 function buildDocbar() {
   const bar = document.createElement("div");
@@ -163,7 +186,7 @@ function titleMarkup(front) {
   if (cover) {
     return `
       <div class="article-cover-frame sm:rounded-t-large">
-        <img src="${escapeHTML(resolveAsset(cover, state.pending))}" alt="" class="article-cover-image dark:brightness-75">
+        <img alt="" class="article-cover-image dark:brightness-75">
         <span class="ed-cover-tools">${pick}${drop}</span>
       </div>
       <div class="w-full flex items-center absolute bottom-0 ${place}">
@@ -183,6 +206,14 @@ function titleMarkup(front) {
 function paintTitle() {
   const front = parseFrontMatter(state.doc.front);
   state.titleHost.innerHTML = titleMarkup(front);
+
+  // Bound rather than written into the markup: a sealed cover has no URL until
+  // its bytes have been fetched and decrypted.
+  bindImage(
+    state.titleHost.querySelector(".article-cover-image"),
+    front.cover || front.banner || front.thumbnail || "",
+    state.pending
+  );
 
   const heading = state.titleHost.querySelector(".ed-title");
   heading.addEventListener("input", () => {
@@ -236,6 +267,7 @@ async function activate(host) {
     close: ui.bar.querySelector(".ed-close"),
     progress: ui.bar.querySelector(".ed-progress"),
     notice: ui.bar.querySelector(".ed-notice"),
+    barSize: watchDocbarHeight(ui.bar),
   });
 
   ui.file = document.createElement("input");
@@ -316,11 +348,15 @@ async function activate(host) {
     return;
   }
 
+  // Every sealed image this post owns, and the key for them. A public post
+  // clears whatever the previous document registered.
+  setVaultAssets(state.entry && state.entry.grant, state.entry && state.entry.assets);
+
   ui.front = createFrontCard(state.doc, {
     t,
     onChange: onFrontChange,
     pickImage,
-    resolveAsset: (src) => resolveAsset(src, state.pending),
+    bindImage: (img, src) => bindImage(img, src, state.pending),
   });
   host.insertBefore(ui.front.el, state.canvas);
 
@@ -371,6 +407,7 @@ async function deactivate() {
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
   unwire();
+  releaseDocbarHeight();
 
   const bar = ui.bar;
   const front = ui.front && ui.front.el;
@@ -453,7 +490,7 @@ function onFrontChange(key) {
   const cover = front.cover || front.banner || front.thumbnail || "";
   const img = state.titleHost.querySelector(".article-cover-image");
   if (!cover !== !img) return void paintTitle();
-  if (img) img.src = resolveAsset(cover, state.pending);
+  bindImage(img, cover, state.pending);
 }
 
 function writeFront(key, value) {
@@ -489,15 +526,21 @@ function blockCtx() {
     onPasteMarkdown: (id, text) => pasteMarkdown(id, text),
     onDragStart: (id) => {
       state.dragId = id;
+      state.dropAt = "";
       state.canvas.classList.add("is-dragging");
+      document.addEventListener("dragover", onDocDragOver);
+      document.addEventListener("drop", onDocDrop);
     },
     onDragEnd: () => {
       state.dragId = null;
       stopEdgeScroll();
+      document.removeEventListener("dragover", onDocDragOver);
+      document.removeEventListener("drop", onDocDrop);
       state.canvas.classList.remove("is-dragging");
-      state.canvas.querySelectorAll(".ed-block").forEach((el) => (el.dataset.drop = ""));
+      paintDrop(null);
     },
     resolveAsset: (src) => resolveAsset(src, state.pending),
+    bindImage: (img, src) => bindImage(img, src, state.pending),
     pickImage,
   };
 }
@@ -650,49 +693,100 @@ function stopEdgeScroll() {
   state.scrollRAF = 0;
 }
 
-function onCanvasDragOver(e) {
-  if (state.dragId) {
-    e.preventDefault();
-    startEdgeScroll(e.clientY);
-    const over = e.target.closest(".ed-block");
-    state.canvas.querySelectorAll(".ed-block").forEach((el) => (el.dataset.drop = ""));
-    if (over && over.dataset.id !== state.dragId) {
-      const rect = over.getBoundingClientRect();
-      over.dataset.drop = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+/**
+ * Which slot the pointer is over, decided by geometry rather than by hit
+ * testing what is under it.
+ *
+ * `e.target.closest(".ed-block")` only answers while the pointer is inside a
+ * block's own box, so the gutter, the article's padding, the gap between two
+ * paragraphs and everything past the last one all came back as "nowhere" — no
+ * indicator, and the cursor went to no-drop. Every Y inside the page maps to a
+ * slot here, including above the first block and below the last.
+ */
+function dropTargetAt(y) {
+  const rows = state.views.filter((v) => v.block.id !== state.dragId);
+  if (!rows.length) return null;
+
+  for (const view of rows) {
+    const rect = view.el.getBoundingClientRect();
+    if (y < rect.bottom) {
+      return { id: view.block.id, where: y < rect.top + rect.height / 2 ? "before" : "after" };
     }
-    return;
   }
+  return { id: rows[rows.length - 1].block.id, where: "after" };
+}
+
+/**
+ * Paint the insertion line, and ONLY when it moves.
+ *
+ * Clearing every block's `data-drop` on each `dragover` and re-setting it tore
+ * the pseudo-element down and built it again several times a second, which
+ * restarted its entrance animation each time — the flicker was the indicator
+ * being recreated, not redrawn.
+ */
+function paintDrop(target) {
+  const key = target ? target.id + ":" + target.where : "";
+  if (key === state.dropAt) return;
+  state.dropAt = key;
+
+  for (const view of state.views) {
+    const want = target && view.block.id === target.id ? target.where : "";
+    if (view.el.dataset.drop !== want) view.el.dataset.drop = want;
+  }
+}
+
+// On the document, not the canvas: a pointer that wanders over the document bar
+// or into a margin is still holding a block, and taking the drop away there is
+// what produced a forbidden cursor over half the page. Bound only for the
+// length of a drag.
+function onDocDragOver(e) {
+  if (!state.dragId) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  startEdgeScroll(e.clientY);
+  paintDrop(dropTargetAt(e.clientY));
+}
+
+async function onDocDrop(e) {
+  const dragId = state.dragId;
+  if (!dragId) return;
+  e.preventDefault();
+  stopEdgeScroll();
+
+  const target = dropTargetAt(e.clientY);
+  paintDrop(null);
+  if (!target) return;
+
+  const from = indexOf(dragId);
+  const to = indexOf(target.id);
+  const after = target.where === "after";
+  const anchor = state.views[to].el;
+  if (from < 0 || to < 0) return;
+
+  await flip(Array.from(state.canvas.querySelectorAll(".ed-block")), () => {
+    const [view] = state.views.splice(from, 1);
+    const [block] = state.doc.blocks.splice(from, 1);
+    const at = to + (after ? 1 : 0) - (from < to ? 1 : 0);
+    state.views.splice(at, 0, view);
+    state.doc.blocks.splice(at, 0, block);
+    if (after) anchor.after(view.el);
+    else anchor.before(view.el);
+  });
+
+  // Order is the one thing a moved block cannot carry in `src`: its trailing
+  // separator belonged to the position it left.
+  state.doc.blocks.forEach((b) => (b.after = b.after || "\n\n"));
+  markDirty();
+}
+
+function onCanvasDragOver(e) {
+  if (state.dragId) return;
   if (e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
 }
 
+// Files only. A block being carried is handled on the document, above.
 async function onCanvasDrop(e) {
-  if (state.dragId) {
-    e.preventDefault();
-    stopEdgeScroll();
-    const over = e.target.closest(".ed-block");
-    state.canvas.querySelectorAll(".ed-block").forEach((el) => (el.dataset.drop = ""));
-    if (!over || over.dataset.id === state.dragId) return;
-
-    const from = indexOf(state.dragId);
-    const to = indexOf(over.dataset.id);
-    const after = over.dataset.drop === "after";
-
-    await flip(Array.from(state.canvas.querySelectorAll(".ed-block")), () => {
-      const [view] = state.views.splice(from, 1);
-      const [block] = state.doc.blocks.splice(from, 1);
-      const target = to + (after ? 1 : 0) - (from < to ? 1 : 0);
-      state.views.splice(target, 0, view);
-      state.doc.blocks.splice(target, 0, block);
-      if (after) over.after(view.el);
-      else over.before(view.el);
-    });
-
-    // Order is the one thing a moved block cannot carry in `src`: its trailing
-    // separator belonged to where it used to be.
-    state.doc.blocks.forEach((b) => (b.after = b.after || "\n\n"));
-    markDirty();
-    return;
-  }
+  if (state.dragId) return;
 
   const files = e.dataTransfer && e.dataTransfer.files;
   if (!files || !files.length) return;
@@ -927,7 +1021,10 @@ function unwire() {
   state.canvas.removeEventListener("drop", onCanvasDrop);
   document.removeEventListener("selectionchange", onSelectionChange);
   document.removeEventListener("keydown", onKey, true);
+  document.removeEventListener("dragover", onDocDragOver);
+  document.removeEventListener("drop", onDocDrop);
   window.removeEventListener("beforeunload", onLeave);
+  state.dragId = null;
   stopEdgeScroll();
 }
 
@@ -1031,6 +1128,7 @@ export function teardownEditor() {
   if (!state.on) return;
 
   unwire();
+  releaseDocbarHeight();
   document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-more-menu, .ed-icon-picker").forEach((el) => el.remove());
   document.documentElement.classList.remove("blog-editing");
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);

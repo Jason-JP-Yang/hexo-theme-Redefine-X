@@ -57,6 +57,7 @@ import {
   setAudience,
   mintPost,
   keyringBlob,
+  verifyBuildSignature,
 } from "./vault.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
 
@@ -1549,6 +1550,47 @@ app.post("/api/admin/vault", authMiddleware, async (c) => {
 
   await registerPost(c.env.DB, { id, slug, wrapped });
   return c.json({ ok: true, id, slug });
+});
+
+/**
+ * Activation from a BUILD, with no session — the same registration the route
+ * above does by hand, done automatically.
+ *
+ * A build that mints a key must be able to register it, or the ciphertext ships
+ * and nobody, the author included, can open it until a block of JSON is pasted
+ * into a panel. Neither `hexo generate` on a laptop nor a CI runner can hold an
+ * admin session, so this is authorized by an HMAC keyed off VAULT_MASTER, which
+ * both already hold and without which they could not seal the keyring anyway.
+ * No session, no new secret, and no route a browser can reach.
+ */
+app.post("/api/admin/vault/push", async (c) => {
+  if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
+
+  const raw = await c.req.text();
+  const ok = await verifyBuildSignature(raw, c.req.header("X-Vault-Signature"), c.env.VAULT_MASTER);
+  if (!ok) return c.json({ error: "Bad signature" }, 401);
+
+  let posts;
+  try {
+    posts = JSON.parse(raw).posts;
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+  if (!Array.isArray(posts) || posts.length > 200) return c.json({ error: "Bad request" }, 400);
+
+  const written = [];
+  for (const row of posts) {
+    const id = String(row?.id || "").trim();
+    const slug = String(row?.slug || "").trim();
+    const wrapped = String(row?.wrapped || "").trim();
+    if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: `Bad id: ${id}` }, 400);
+    if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: `Bad slug for ${id}` }, 400);
+    if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: `Bad key for ${id}` }, 400);
+    await registerPost(c.env.DB, { id, slug, wrapped });
+    written.push(id);
+  }
+
+  return c.json({ ok: true, registered: written });
 });
 
 app.delete("/api/admin/vault/:id", authMiddleware, async (c) => {

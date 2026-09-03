@@ -20,12 +20,15 @@ $post-tool-button-width = 42px
       i
         color var(--default-text-color)
 
+      // White, not --background-color: the latter inverts with the theme, so in
+      // dark mode the hover put near-black ink on the cardinal red and the icon
+      // you were pointing at was the one you could no longer see.
       &:hover
         background var(--primary-color)
-        color var(--background-color)
+        color #fff
 
         i
-          color var(--background-color)
+          color #fff
 
       &:last-child
         margin-bottom 0

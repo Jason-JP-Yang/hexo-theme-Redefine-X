@@ -268,6 +268,38 @@ hexo.extend.filter.register(
  * Removing the route here is what stops the file being written at all: Hexo
  * walks the route list to disk only after this hook has run.
  */
+/**
+ * Take the withheld images back out of `build/manifest.json`.
+ *
+ * The manifest names every source image the build transcoded, which for an
+ * image only an encrypted post uses would publish its FILE NAME beside the
+ * ciphertext — the same leak `data-original-src` is stripped to prevent, and a
+ * file name is often the most descriptive thing about a picture. The editor
+ * does not need them there: an encrypted post's images are addressed through
+ * the `assets` map in its own sealed metadata, which is keyed by both the
+ * published route and the source path exactly so this file can stay public.
+ */
+function pruneManifest() {
+  // Rebuilt from img-optimizer's own map rather than read back off the route:
+  // `route.get` hands out a stream, not the string that was put in.
+  const transcodes = hexo.extend.helper.get("avifTranscodeMap");
+  if (!transcodes) return;
+
+  const hidden = new Set(state.withheldPaths());
+  const map = transcodes();
+  const kept = {};
+  let dropped = 0;
+  for (const key of Object.keys(map).sort()) {
+    if (hidden.has(map[key])) dropped++;
+    else kept[key] = map[key];
+  }
+  if (!dropped) return;
+
+  const out = JSON.stringify(kept);
+  hexo.route.set("build/manifest.json", () => out);
+  hexo.log.info(`[vault] removed ${dropped} withheld image(s) from build/manifest.json`);
+}
+
 function withholdPlaintextImages() {
   let unrouted = 0;
   let removed = 0;
@@ -290,6 +322,7 @@ function withholdPlaintextImages() {
     }
   }
 
+  pruneManifest();
   return { unrouted, removed };
 }
 
@@ -350,7 +383,7 @@ function pruneEmptyDirs(from) {
 
 hexo.extend.filter.register(
   "after_generate",
-  function () {
+  async function () {
     if (!state.all().length) return;
     const { unrouted, removed } = withholdPlaintextImages();
     const pages = withholdAlbumPages();
@@ -358,10 +391,23 @@ hexo.extend.filter.register(
       `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)` +
         (pages ? ` and ${pages} previously published album page(s)` : "")
     );
+
+    // Activation, then sealing — both part of building rather than commands to
+    // remember. A commit must never carry a post's ciphertext without the key
+    // that opens it, and a key nobody has registered opens nothing.
+    //
+    // The push runs first because it MARKS the entries it registered, and the
+    // seal has to capture that state; the fallback print runs only for whatever
+    // is still unregistered afterwards.
+    const api = String(hexo.theme.config.backend?.api_url || "");
+    try {
+      const sent = await store.push(api);
+      if (sent) hexo.log.info(`[vault] registered ${sent.pushed} key(s) with the backend`);
+    } catch (err) {
+      hexo.log.warn(`[vault] could not reach ${api} to register new keys — ${err.message}`);
+    }
     store.report(hexo.log);
 
-    // Sealing is part of building, not a command to remember: a commit must
-    // never carry a post's ciphertext without the key that opens it.
     const sealed = store.seal();
     if (sealed && sealed.changed) {
       hexo.log.info(`[vault] sealed ${sealed.count} key(s) into .vault/keys.enc`);

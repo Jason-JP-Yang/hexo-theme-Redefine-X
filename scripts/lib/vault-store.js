@@ -5,8 +5,8 @@
  *
  * A key is minted ONCE, the first time a post carries `vault:` front matter,
  * and never changes again: rebuilding must not invalidate what is already in
- * D1. The wrapped copy that the Worker needs is printed for the admin console
- * to take; nothing here talks to the network.
+ * D1. The wrapped copy the Worker needs is PUSHED at the end of every build
+ * (`push`), and only if that cannot be done is it printed for a human to paste.
  *
  * FAIL CLOSED. Every path that cannot produce a key throws, because the
  * alternative — carrying on and rendering the post — publishes it in the clear.
@@ -14,6 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const secrets = require("./secrets");
 const vc = require("./vault-crypto");
 
@@ -126,8 +127,58 @@ function pending() {
 }
 
 /**
- * What the admin pastes into Management → Encrypted Posts. One JSON line per
- * post so a copy that clips a newline is rejected rather than half-applied.
+ * Register every unactivated key with the Worker, and mark them done.
+ *
+ * The whole point of doing it here: a commit that carries a post's ciphertext
+ * must never be a commit whose key nobody has. Both build paths reach this —
+ * `hexo generate` on the machine and the Gitea Action — because both hold
+ * VAULT_MASTER, which is what signs the request. There is no session and no
+ * second secret; see `verifyBuildSignature` in the Worker.
+ *
+ * BEST EFFORT, always. A build with no network, or one run before the Worker
+ * was deployed, falls back to `report()` and prints the paste block instead.
+ * Refusing to build over an unreachable backend would make the offline case —
+ * the one that motivated the loopback CI — impossible.
+ *
+ * @returns {Promise<{pushed:number}|null>} null when nothing was pushed
+ */
+async function push(apiBase) {
+  const rows = pending();
+  if (!rows.length) return null;
+
+  const base = String(apiBase || "").replace(/\/+$/, "");
+  if (!base) return null;
+
+  const body = JSON.stringify({
+    posts: rows.map((r) => ({ id: r.id, slug: r.slug, wrapped: r.wrapped })),
+  });
+
+  const res = await fetch(`${base}/api/admin/vault/push`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Vault-Signature": pushMac(body) },
+    body,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${detail.slice(0, 200)}`);
+  }
+
+  // Only now. `acknowledge` is what stops the next build re-sending them, and
+  // marking them before the write landed would lose a key silently.
+  acknowledge();
+  return { pushed: rows.length };
+}
+
+/** HMAC over the request body, under an HKDF subkey of the master. */
+function pushMac(body) {
+  const key = vc.hkdf(load().master, "rdfx-vault-push");
+  return "sha256=" + crypto.createHmac("sha256", key).update(body, "utf8").digest("hex");
+}
+
+/**
+ * What the admin pastes into Management → Encrypted Posts, when and only when
+ * the push above could not be made. One JSON line per post so a copy that clips
+ * a newline is rejected rather than half-applied.
  */
 function report(log) {
   const rows = pending();
@@ -262,6 +313,7 @@ module.exports = {
   ensurePost,
   flush,
   pending,
+  push,
   report,
   prune,
   reportRetired,

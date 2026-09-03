@@ -120,6 +120,39 @@ function readRoute(routePath) {
 
 const ASSET_ATTR = /\b(src|data-src)\s*=\s*("|')([^"']+)\2/gi;
 
+let routeToSource = null;
+
+/** `build/images/x.avif` → `images/x.png`, from img-optimizer's own record. */
+function sourceOfRoute(routePath) {
+  if (!routeToSource) {
+    routeToSource = new Map();
+    const transcodes = hexo.extend.helper.get("avifTranscodeMap");
+    const map = transcodes ? transcodes() : {};
+    for (const [rel, route] of Object.entries(map)) routeToSource.set(route, rel);
+  }
+  return routeToSource.get(routePath) || routePath;
+}
+
+/**
+ * Record one sealed image, every way it can be named.
+ *
+ * The Set drives withholding — which plaintext routes must stop being published.
+ * The map goes into the post's sealed metadata and is the only way the editor
+ * can ever find these bytes: it opens the MARKDOWN, so all it has is a source
+ * path, while a sealed image is named by the hash of what it contains.
+ *
+ * Keyed by BOTH the published route and that source path, so the editor never
+ * has to consult `build/manifest.json` for an encrypted post — which is what
+ * lets the withheld images be pruned out of that public file entirely.
+ */
+function noteAsset(entry, routePath, hash) {
+  entry.assets = entry.assets || new Set();
+  entry.assets.add(routePath);
+  entry.assetMap = entry.assetMap || {};
+  entry.assetMap[routePath] = hash;
+  entry.assetMap[sourceOfRoute(routePath)] = hash;
+}
+
 /**
  * Seal every local image the body points at and rewrite the reference to the
  * sealed blob. `data-original-src` is stripped on the way through: img-optimizer
@@ -161,8 +194,7 @@ async function sealAssets(entry, html, routes) {
     // The reference carries the hash only. `src` is emptied so nothing is
     // requested before the blob has been fetched and decrypted.
     out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="" data-vault-asset="${hash}"`);
-    entry.assets = entry.assets || new Set();
-    entry.assets.add(job.routePath);
+    noteAsset(entry, job.routePath, hash);
   }
 
   return out;
@@ -220,8 +252,7 @@ async function sealCover(entry, routes) {
   );
   // The route that was actually read, not the front-matter path: withholding
   // the wrong one would leave the real derivative published.
-  entry.assets = entry.assets || new Set();
-  entry.assets.add(matched);
+  noteAsset(entry, matched, hash);
   return hash;
 }
 
@@ -403,11 +434,16 @@ function metaFor(entry, href, coverAsset, body) {
     date: entry.post.date ? entry.post.date.toISOString() : null,
     updated: entry.post.updated ? entry.post.updated.toISOString() : null,
     href,
-    // The editor's two extra facts. `source` is the repo path a save writes
-    // back to; `supersedes` is the permalink of the published post this draft
-    // stands in for, and the reader uses it to take that post's card out of
-    // every listing before putting this one in its place.
+    // The editor's two extra facts. `source` is Hexo's own source-relative path
+    // (`_posts/x.md`), NOT a repository path — the editor normalises it, and
+    // must, because blobs sealed before it did are still out there. `supersedes`
+    // is the permalink of the published post this draft stands in for, and the
+    // reader uses it to take that post's card out of every listing before
+    // putting this one in its place.
     source: entry.post.source || "",
+    // Published route -> content hash, for every image this post sealed. The
+    // editor walks source path -> route (build/manifest.json) -> hash (here).
+    assets: entry.assetMap || {},
     draft: entry.post.draft === true,
     supersedes: entry.post.supersedes || "",
     cover: coverAsset || "",
