@@ -311,7 +311,27 @@ function withFront(source, updates) {
  * original, deletes the draft and revokes its key — one commit, so there is no
  * window in which both exist or neither does.
  */
-export async function save(doc, mode, pending) {
+const TRUTHY = /^(true|yes|on|1)$/i;
+
+/**
+ * Should the PUBLISHED post be encrypted?
+ *
+ * `vault` means two different things depending on who wrote it. On a draft it
+ * is machinery — every draft is encrypted, and the fork writes the flag itself
+ * — so publishing has to drop it or the first edit of any post would encrypt it
+ * forever. In a post's own front matter it is the author's decision, and
+ * dropping it there is why the Encrypted switch did nothing.
+ *
+ * `choice` is that switch, and it is set only when it was actually operated, so
+ * it wins over both readings without needing to guess between them.
+ */
+function publishEncrypted(doc, entry, choice) {
+  if (choice !== undefined && choice !== null) return TRUTHY.test(String(choice));
+  if (entry.draft) return false;
+  return TRUTHY.test(String(parseFrontMatter(doc.front).vault || ""));
+}
+
+export async function save(doc, mode, pending, choice) {
   const files = [];
   const entry = doc.entry || {};
   // Stamped here rather than offered as a field: `updated` means "when this was
@@ -334,7 +354,12 @@ export async function save(doc, mode, pending) {
       : entry.draft
         ? findPublishTarget(doc, entry)
         : doc.path;
-    const clean = withFront(source, { vault: null, draft: null, supersedes: null });
+    const encrypted = publishEncrypted(doc, entry, choice);
+    const clean = withFront(source, {
+      vault: encrypted ? "true" : null,
+      draft: null,
+      supersedes: null,
+    });
 
     const current = await gitea.read(target);
     files.push({
@@ -347,6 +372,8 @@ export async function save(doc, mode, pending) {
     if (entry.draft && doc.path && doc.path !== target) {
       const draftFile = await gitea.read(doc.path);
       if (draftFile) files.push({ operation: "delete", path: doc.path, sha: draftFile.sha });
+      // The draft's key goes; the published post gets its own from the build,
+      // which is what puts it on the console's Encrypted Posts list.
       const revoked = await revokeVaultKey(entry.id);
       keysEnc = revoked.keysEnc;
     }
@@ -356,7 +383,7 @@ export async function save(doc, mode, pending) {
     }
 
     const result = await gitea.commit(files, `Publish: ${titleOf(doc)}`);
-    return { ...result, path: target, published: true };
+    return { ...result, path: target, published: true, encrypted };
   }
 
   // ── draft ──────────────────────────────────────────────────────────────

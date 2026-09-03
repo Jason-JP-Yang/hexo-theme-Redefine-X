@@ -72,6 +72,7 @@ const state = {
   saving: false,
   dragId: null,
   dropAt: "",
+  vaultChoice: undefined,
   stashTimer: null,
   scrollRAF: 0,
   pointerY: 0,
@@ -431,7 +432,7 @@ async function deactivate() {
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: "", titleSnapshot: "",
-    put: [], doc: null, views: [], entry: null, pending: [], dirty: false, focused: null,
+    put: [], doc: null, views: [], entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
   });
   ui = null;
   contentChanged();
@@ -469,8 +470,12 @@ function notice(kind, text) {
 
 const COVER_KEYS = ["cover", "banner", "thumbnail"];
 
-function onFrontChange(key) {
+function onFrontChange(key, value) {
   markDirty();
+
+  // Remembered because publishing has to tell the author's decision apart from
+  // the `vault: true` the draft machinery writes on every fork.
+  if (key === "vault") state.vaultChoice = value;
 
   if (key === "title") {
     const heading = state.titleHost.querySelector(".ed-title");
@@ -794,7 +799,7 @@ async function onCanvasDrop(e) {
   for (const file of files) {
     if (!file.type.startsWith("image/")) continue;
     const asset = await stageImage(file);
-    insertBlock(makeBlock("image", { src: asset.site, alt: "" }), null, false);
+    insertBlock(makeBlock("image", { url: asset.site, alt: "" }), null, false);
   }
 }
 
@@ -860,7 +865,7 @@ async function doSave(mode) {
   notice(null, "");
 
   try {
-    const result = await session.save(state.doc, mode, state.pending);
+    const result = await session.save(state.doc, mode, state.pending, state.vaultChoice);
 
     for (const asset of state.pending) URL.revokeObjectURL(asset.url);
     state.pending = [];
@@ -878,7 +883,19 @@ async function doSave(mode) {
     state.doc.path = result.path;
 
     if (result.published) {
-      state.entry = { ...state.entry, kind: "public", path: result.path, encrypted: false, draft: false, grant: null };
+      // A post published WITH `vault:` has no key yet — the build mints it and
+      // registers it, and only then is there anything to decrypt.
+      state.entry = {
+        ...state.entry,
+        kind: result.encrypted ? "vault" : "public",
+        path: result.path,
+        encrypted: false,
+        draft: false,
+        grant: null,
+      };
+      if (result.encrypted) {
+        notice("info", t("will_encrypt", "Published. The next build seals it and registers its key."));
+      }
     } else if (result.minted) {
       state.entry = {
         ...state.entry,
@@ -1036,7 +1053,7 @@ async function onCanvasPaste(e) {
     if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
     e.preventDefault();
     const asset = await stageImage(item.getAsFile());
-    insertBlock(makeBlock("image", { src: asset.site, alt: "" }), state.focused ? state.focused.block.id : null, false);
+    insertBlock(makeBlock("image", { url: asset.site, alt: "" }), state.focused ? state.focused.block.id : null, false);
     return;
   }
 }

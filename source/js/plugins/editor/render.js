@@ -72,7 +72,7 @@ export function renderBlock(b) {
       return `<div class="mathjax-block ed-math-block" data-tex="${escapeHTML(b.tex)}"></div>`;
 
     case "image":
-      return `<figure class="ed-figure"><img src="${escapeHTML(b.src)}" alt="${escapeHTML(b.alt)}"${b.title ? ` title="${escapeHTML(b.title)}"` : ""}>${b.title ? `<figcaption>${escapeHTML(b.title)}</figcaption>` : ""}</figure>`;
+      return `<figure class="ed-figure"><img src="${escapeHTML(b.url)}" alt="${escapeHTML(b.alt)}"${b.title ? ` title="${escapeHTML(b.title)}"` : ""}>${b.title ? `<figcaption>${escapeHTML(b.title)}</figcaption>` : ""}</figure>`;
 
     case "list":
       return renderList(b);

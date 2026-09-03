@@ -371,7 +371,12 @@ export function parseBlocks(body) {
     // ── a lone image is a figure, not a paragraph ─────────────────────────
     if (IMAGE_ONLY.test(line.trim())) {
       const m = line.trim().match(IMAGE_ONLY);
-      push(block("image", { alt: m[1], src: m[2], title: m[3] || "" }), i, i + 1);
+      // `url`, not `src`: every block carries `src` as the exact source text it
+      // was parsed from, and `push` below writes it. An image that stored its
+      // address there had it overwritten with its own markdown line, so the
+      // canvas asked the server for `/![](/images/x.jpeg)` and a save re-emitted
+      // that inside a second set of brackets.
+      push(block("image", { alt: m[1], url: m[2], title: m[3] || "" }), i, i + 1);
       i += 1;
       continue;
     }
@@ -487,7 +492,7 @@ export function emitBlock(b) {
     case "math":
       return "$$\n" + b.tex + "\n$$";
     case "image":
-      return "![" + b.alt + "](" + b.src + (b.title ? ' "' + b.title + '"' : "") + ")";
+      return "![" + b.alt + "](" + b.url + (b.title ? ' "' + b.title + '"' : "") + ")";
     case "list":
       return b.items
         .map((item, index) =>

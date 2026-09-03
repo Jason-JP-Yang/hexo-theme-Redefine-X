@@ -469,7 +469,7 @@ function mountImage(view) {
   const missing = wrap.querySelector(".ed-image-missing");
 
   const paint = () => {
-    ctx.bindImage(img, block.src);
+    ctx.bindImage(img, block.url);
     img.alt = block.alt || "";
     caption.textContent = block.title || "";
   };
@@ -506,7 +506,7 @@ function mountImage(view) {
     if (!picked) return;
     // The SITE path, not the repository path: what lands in the markdown has to
     // be what a browser can ask for.
-    block.src = picked.site;
+    block.url = picked.site;
     view.touch();
     paint();
   });
