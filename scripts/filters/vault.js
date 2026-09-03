@@ -280,24 +280,16 @@ hexo.extend.filter.register(
  * published route and the source path exactly so this file can stay public.
  */
 function pruneManifest() {
-  // Rebuilt from img-optimizer's own map rather than read back off the route:
-  // `route.get` hands out a stream, not the string that was put in.
-  const transcodes = hexo.extend.helper.get("avifTranscodeMap");
-  if (!transcodes) return;
+  // Rebuilt through img-optimizer's own builder rather than read back off the
+  // route: `route.get` hands out a stream, not the string that was put in.
+  const build = hexo.extend.helper.get("avifManifestBody");
+  if (!build) return;
 
   const hidden = new Set(state.withheldPaths());
-  const map = transcodes();
-  const kept = {};
-  let dropped = 0;
-  for (const key of Object.keys(map).sort()) {
-    if (hidden.has(map[key])) dropped++;
-    else kept[key] = map[key];
-  }
-  if (!dropped) return;
+  if (!hidden.size) return;
 
-  const out = JSON.stringify(kept);
-  hexo.route.set("build/manifest.json", () => out);
-  hexo.log.info(`[vault] removed ${dropped} withheld image(s) from build/manifest.json`);
+  hexo.route.set("build/manifest.json", () => build(hidden));
+  hexo.log.info(`[vault] kept ${hidden.size} withheld image(s) out of build/manifest.json`);
 }
 
 function withholdPlaintextImages() {
@@ -399,6 +391,9 @@ hexo.extend.filter.register(
     // The push runs first because it MARKS the entries it registered, and the
     // seal has to capture that state; the fallback print runs only for whatever
     // is still unregistered afterwards.
+    const opened = store.load().opened;
+    if (opened) hexo.log.info(`[vault] opened ${opened} key(s) from .vault/keys.enc`);
+
     const api = String(hexo.theme.config.backend?.api_url || "");
     try {
       const sent = await store.push(api);

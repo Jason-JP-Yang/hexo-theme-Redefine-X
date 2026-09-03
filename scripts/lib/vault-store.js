@@ -46,14 +46,53 @@ function loadMaster() {
   return key;
 }
 
+/**
+ * Take into `keys.json` every key `keys.enc` holds that it does not.
+ *
+ * `keys.json` is gitignored and `keys.enc` is committed, so a fresh clone — a
+ * CI runner, or your own machine after pulling what CI pushed — starts with no
+ * local keyring at all. Without this the build treats every encrypted post as
+ * new, mints a SECOND key for it, registers that with the backend, and the
+ * ciphertext already published stops opening. Opening is therefore part of
+ * loading rather than a command someone has to remember.
+ *
+ * Local entries win a conflict and are never overwritten: a key minted here and
+ * not yet sealed is the only copy of itself.
+ */
+function absorbSealed(master, keys) {
+  let sealed;
+  try {
+    sealed = fs.readFileSync(ENC_FILE, "utf8").trim();
+  } catch (e) {
+    return 0;
+  }
+  if (!sealed) return 0;
+
+  let opened;
+  try {
+    opened = JSON.parse(vc.open(master, vc.fromB64url(sealed)).toString("utf8"));
+  } catch (e) {
+    fail(".vault/keys.enc does not open under this VAULT_MASTER.");
+  }
+
+  let taken = 0;
+  for (const [id, entry] of Object.entries(opened)) {
+    if (keys[id]) continue;
+    keys[id] = entry;
+    taken++;
+  }
+  return taken;
+}
+
 function load() {
   if (state) return state;
-  state = {
-    master: loadMaster(),
-    keys: secrets.readKeyring() || {},
-    dirty: false,
-    minted: [],
-  };
+
+  const master = loadMaster();
+  const keys = secrets.readKeyring() || {};
+  const taken = absorbSealed(master, keys);
+  if (taken) secrets.writeKeyring(keys);
+
+  state = { master, keys, dirty: false, minted: [], opened: taken };
   return state;
 }
 
@@ -193,7 +232,7 @@ function report(log) {
       `not yet activated. Until each is registered in D1, nobody — not even you — can read it.\n\n` +
       `  Blog Management → Encrypted Posts → Add, paste ONE line per post:\n\n` +
       rows.map((r, i) => `    ${lines[i]}   # ${r.title || r.id}`).join("\n") +
-      `\n\n  Then run:  npm run vault:ack\n`
+      `\n\n  Then run:  node themes/redefine-x/bin/vault-ack.js\n`
   );
 }
 

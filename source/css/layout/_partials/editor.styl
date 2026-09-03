@@ -876,27 +876,31 @@ textarea.ed-f-input
   border-bottom 1px dotted var(--fourth-text-color)
 
 // ─── image ──────────────────────────────────────────────────
-.ed-figure-block
-  margin 1.4rem 0
-
-.ed-image-frame
+// The figure IS the article's own `figure.image-caption`, carrying the article's
+// own `.img-preloader` and caption. Nothing here may restyle either: the only
+// addition is a control overlay and an editable caption, so what is on screen is
+// the picture as published, at the size it will be published at.
+.ed-figure
   position relative
-  border-radius 12px
-  overflow hidden
-
-  img
-    display block
-    width 100%
-    height auto
 
   &:hover .ed-image-tools
     opacity 1
     transform none
 
+  figcaption
+    outline none
+    cursor text
+
+    &:empty::before
+      content attr(data-placeholder)
+      color var(--third-text-color)
+      opacity 0.7
+
 .ed-image-tools
   position absolute
   top 10px
   right 10px
+  z-index 2
   display flex
   gap 4px
   padding 4px
@@ -926,25 +930,6 @@ textarea.ed-f-input
 
     &[data-act="remove"]:hover
       color var(--box-red-text)
-
-.ed-image-missing
-  display grid
-  place-items center
-  min-height 140px
-  background var(--second-background-color)
-  color var(--third-text-color)
-  font-size 22px
-
-.ed-caption
-  margin-top 6px
-  outline none
-  font-size 0.78rem
-  text-align center
-  color var(--third-text-color)
-
-  &:empty::before
-    content attr(data-placeholder)
-    color var(--third-text-color)
 
 // ─── table ──────────────────────────────────────────────────
 .ed-table-block

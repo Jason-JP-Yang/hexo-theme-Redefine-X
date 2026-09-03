@@ -36,7 +36,16 @@ import {
 } from "./markdown.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
-import { bindImage, loadManifest, resolveAsset, setVaultAssets, siteRoot } from "./assets.js";
+import {
+  bindImage,
+  buildPreloader,
+  loadManifest,
+  resolveAsset,
+  setVaultAssets,
+  siteRoot,
+} from "./assets.js";
+import initLazyLoad, { registerSrcResolver } from "../../layouts/lazyload.js";
+import { assetURL } from "../../tools/vaultCrypto.js";
 import * as session from "./session.js";
 import * as gitea from "./gitea.js";
 import { contentChanged, crossFade, enter, exit, flip, pop } from "./motion.js";
@@ -351,7 +360,14 @@ async function activate(host) {
 
   // Every sealed image this post owns, and the key for them. A public post
   // clears whatever the previous document registered.
-  setVaultAssets(state.entry && state.entry.grant, state.entry && state.entry.assets);
+  setVaultAssets(
+    state.entry && state.entry.grant,
+    state.entry && state.entry.assets,
+    state.entry && state.entry.sizes
+  );
+
+  // The same one plugins/vault.js installs, for the pages it is not loaded on.
+  registerSrcResolver((node) => assetURL(node.getAttribute("data-vault-asset")));
 
   ui.front = createFrontCard(state.doc, {
     t,
@@ -546,8 +562,52 @@ function blockCtx() {
     },
     resolveAsset: (src) => resolveAsset(src, state.pending),
     bindImage: (img, src) => bindImage(img, src, state.pending),
+    buildPreloader: (src, alt) => buildPreloader(src, alt, state.pending),
+    observeImages,
+    figureIndex,
     pickImage,
   };
+}
+
+/**
+ * Hand the article's images to the site's own lazyload observer.
+ *
+ * The editor mounts the same `.img-preloader` nodes the build emits, so there
+ * is nothing to do here but let the observer find them: it takes
+ * `.img-preloader:not([data-observed])`, which is exactly the ones just added.
+ */
+function observeImages() {
+  const articles = (window.theme && window.theme.articles) || {};
+  if (articles.lazyload !== true) return void forceLoad();
+  initLazyLoad({ preload: articles.lazyload_preload === true });
+}
+
+/** With lazyload off the page loads images immediately, and so does the editor. */
+function forceLoad() {
+  for (const node of state.canvas.querySelectorAll(".img-preloader:not([data-observed])")) {
+    node.dataset.observed = "true";
+    const src = node.dataset.src;
+    if (!src) continue;
+    const img = new Image();
+    img.alt = node.dataset.alt || "";
+    img.src = src;
+    node.replaceWith(img);
+  }
+}
+
+/** Which figure this is, counted the way the build counts them. */
+function figureIndex(id) {
+  let n = 0;
+  for (const block of state.doc.blocks) {
+    if (block.type === "image") n += 1;
+    if (block.id === id) return n;
+  }
+  return n;
+}
+
+/** Figure numbers are positional, so every image restates its own after a move. */
+function renumberFigures() {
+  for (const view of state.views) if (view.renumber) view.renumber();
 }
 
 function mountBlock(block) {
@@ -575,6 +635,7 @@ function insertBlock(block, afterId, focus) {
     if (focus && view.focus) view.focus("start");
     contentChanged();
   });
+  renumberFigures();
   markDirty();
   return view;
 }
@@ -593,6 +654,7 @@ async function deleteBlock(id, move) {
   const next = state.views[move === "next" ? index : Math.max(0, index - 1)];
   if (next && next.focus) next.focus("end");
 
+  renumberFigures();
   markDirty();
   contentChanged();
 }
@@ -781,6 +843,7 @@ async function onDocDrop(e) {
   // Order is the one thing a moved block cannot carry in `src`: its trailing
   // separator belonged to the position it left.
   state.doc.blocks.forEach((b) => (b.after = b.after || "\n\n"));
+  renumberFigures();
   markDirty();
 }
 
@@ -823,13 +886,19 @@ async function stageImage(file) {
   const existing = state.pending.find((a) => a.path === path);
   if (existing) return existing;
 
-  const asset = {
-    path,
-    site: "/" + path.replace(/^source\//, ""),
-    bytes,
-    url: URL.createObjectURL(file),
-    name: file.name,
-  };
+  const url = URL.createObjectURL(file);
+  const asset = { path, site: "/" + path.replace(/^source\//, ""), bytes, url, name: file.name };
+
+  // Measured now, because the build has never seen this file and the preloader
+  // has to reserve the right box for it like it does for every other image.
+  const size = await new Promise((done) => {
+    const probe = new Image();
+    probe.onload = () => done({ width: probe.naturalWidth, height: probe.naturalHeight });
+    probe.onerror = () => done(null);
+    probe.src = url;
+  });
+  if (size && size.width) Object.assign(asset, size);
+
   state.pending.push(asset);
   markDirty();
   return asset;

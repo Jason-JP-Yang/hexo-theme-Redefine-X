@@ -146,11 +146,24 @@ function sourceOfRoute(routePath) {
  * lets the withheld images be pruned out of that public file entirely.
  */
 function noteAsset(entry, routePath, hash) {
+  const source = sourceOfRoute(routePath);
+
   entry.assets = entry.assets || new Set();
   entry.assets.add(routePath);
   entry.assetMap = entry.assetMap || {};
   entry.assetMap[routePath] = hash;
-  entry.assetMap[sourceOfRoute(routePath)] = hash;
+  entry.assetMap[source] = hash;
+
+  // The size too, from the pass that measured it. A withheld image is kept out
+  // of the public manifest on purpose, so this is the only place the editor can
+  // learn the box to reserve for it.
+  const lookup = hexo.extend.helper.get("lazyloadSizes");
+  const sizes = lookup ? lookup() : null;
+  const dims = sizes && (sizes.get(routePath) || sizes.get(source));
+  if (!dims) return;
+  entry.assetSizes = entry.assetSizes || {};
+  entry.assetSizes[routePath] = [dims.width, dims.height];
+  entry.assetSizes[source] = [dims.width, dims.height];
 }
 
 /**
@@ -441,9 +454,12 @@ function metaFor(entry, href, coverAsset, body) {
     // reader uses it to take that post's card out of every listing before
     // putting this one in its place.
     source: entry.post.source || "",
-    // Published route -> content hash, for every image this post sealed. The
-    // editor walks source path -> route (build/manifest.json) -> hash (here).
+    // Published route -> content hash, and the same keys -> [w, h], for every
+    // image this post sealed. The editor walks source path -> route
+    // (build/manifest.json) -> hash, and takes the size from here because a
+    // withheld image is deliberately absent from that public file.
     assets: entry.assetMap || {},
+    sizes: entry.assetSizes || {},
     draft: entry.post.draft === true,
     supersedes: entry.post.supersedes || "",
     cover: coverAsset || "",

@@ -631,7 +631,30 @@ function transcodeMap() {
   return map;
 }
 
+/**
+ * The manifest body: `source path -> [published route, width, height]`.
+ *
+ * Sizes come from the lazyload filter, which is the only pass that measures
+ * them; an image no page referenced has none and gets zeros. `hidden` is the
+ * set of routes the vault withheld — passed in rather than consulted here,
+ * because this file must not know that encrypted posts exist.
+ */
+function manifestBody(hidden) {
+  const sizes = (hexo.extend.helper.get("lazyloadSizes") || (() => new Map()))();
+  const map = transcodeMap();
+  const out = {};
+
+  for (const rel of Object.keys(map).sort()) {
+    const route = map[rel];
+    if (hidden && hidden.has(route)) continue;
+    const dims = sizes.get(route) || sizes.get(rel) || null;
+    out[rel] = [route, dims ? dims.width : 0, dims ? dims.height : 0];
+  }
+  return JSON.stringify(out);
+}
+
 hexo.extend.helper.register("avifTranscodeMap", transcodeMap);
+hexo.extend.helper.register("avifManifestBody", manifestBody);
 
 /**
  * `build/manifest.json` — which source images this build actually transcoded.
@@ -653,10 +676,9 @@ hexo.extend.helper.register("avifTranscodeMap", transcodeMap);
 function publishManifest() {
   if (!hexo.theme.config.backend?.vault_enable) return;
 
-  const map = transcodeMap();
-  const body = JSON.stringify(map, Object.keys(map).sort());
+  const body = manifestBody(null);
   hexo.route.set("build/manifest.json", () => body);
-  hexo.log.info(`[img-optimizer] build/manifest.json lists ${Object.keys(map).length} transcode(s).`);
+  hexo.log.info(`[img-optimizer] build/manifest.json lists ${successfulConversions.size} transcode(s).`);
 }
 
 async function gatherFiles() {

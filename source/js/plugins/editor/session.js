@@ -133,6 +133,7 @@ export async function listDocuments() {
       // Published route -> content hash for this post's sealed images. The only
       // way to find them: their plaintext routes are withheld from the build.
       assets: meta.assets || {},
+      sizes: meta.sizes || {},
     };
     if (entry.draft) drafts.push(entry);
     if (entry.path) vaultBySource.set(entry.path, entry);
@@ -158,6 +159,7 @@ export async function listDocuments() {
       date: vault ? vault.date : "",
       encrypted: !!vault,
       assets: vault ? vault.assets : null,
+      sizes: vault ? vault.sizes : null,
       draft: false,
       shadowed: false,
     });

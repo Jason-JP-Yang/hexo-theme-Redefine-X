@@ -30,6 +30,7 @@ import { assetURL, registerAssetKey } from "../../tools/vaultCrypto.js";
 
 let manifest = null;
 let sealed = null;
+let sealedSizes = null;
 
 export function siteRoot() {
   return String((window.config && window.config.root) || "/").replace(/\/+$/, "");
@@ -51,8 +52,9 @@ export async function loadManifest() {
  * Which sealed images this document owns, and the key that opens them.
  * Called with no map for a public post, which clears the previous document's.
  */
-export function setVaultAssets(grant, assets) {
+export function setVaultAssets(grant, assets, sizes) {
   sealed = grant && assets && Object.keys(assets).length ? assets : null;
+  sealedSizes = sealed ? sizes || null : null;
   if (!sealed) return;
   for (const hash of Object.values(sealed)) registerAssetKey(hash, grant.raw);
 }
@@ -65,15 +67,37 @@ export function manifestKey(src) {
     .split(/[?#]/)[0];
 }
 
+/** `[route, width, height]`, or null when the build never touched this image. */
+function record(src) {
+  const row = manifest && manifest[manifestKey(src)];
+  return Array.isArray(row) ? row : null;
+}
+
 /** The path this image is published at, compressed or not. */
 function routeFor(src) {
+  const row = record(src);
+  return row ? row[0] : manifestKey(src);
+}
+
+/**
+ * The intrinsic size the BUILD measured, so the editor can reserve the same box
+ * the published page reserves. Zeros mean unknown — a staged image, or one no
+ * page referenced — and the caller leaves the aspect ratio to the browser.
+ */
+export function imageSize(src) {
+  const row = record(src);
+  if (row && row[1] && row[2]) return { width: row[1], height: row[2] };
+
+  // A withheld image is not in the public manifest at all; its size travels in
+  // the post's own sealed metadata instead.
   const key = manifestKey(src);
-  return (manifest && manifest[key]) || key;
+  const wh = sealedSizes && (sealedSizes[routeFor(src)] || sealedSizes[key]);
+  return wh && wh[0] ? { width: wh[0], height: wh[1] } : null;
 }
 
 /** True once the build has an AVIF (or optimised SVG) for this source image. */
 export function isTranscoded(src) {
-  return !!(manifest && manifest[manifestKey(src)]);
+  return !!record(src);
 }
 
 function staged(src, list) {
@@ -96,6 +120,58 @@ export function resolveAsset(src, list) {
 }
 
 /**
+ * The hash of the sealed copy of this image, if this document has one.
+ *
+ * Two spellings, because a withheld image is deliberately absent from the
+ * public manifest: the published route when it is listed there, and the source
+ * path when it is not. The sealed map carries both keys.
+ */
+function sealedHash(src, list) {
+  if (!sealed || staged(src, list) || /^(blob:|data:|https?:|\/\/)/i.test(src)) return null;
+  return sealed[routeFor(src)] || sealed[manifestKey(src)] || null;
+}
+
+// What the build reserves for an image it could not measure.
+const FALLBACK = { width: 1000, height: 500 };
+
+/**
+ * The image, as the published page builds it.
+ *
+ * Not an `<img>`: every image in an article is a `.img-preloader` that the
+ * lazyload observer turns into one when it is about to be seen. Emitting the
+ * same node is what makes the editor load, size, skeleton and open images the
+ * way the page does — anything else is a second image pipeline that will drift.
+ *
+ * Mirrors `buildPreloaderDiv` in scripts/filters/lazyload-handle.js.
+ */
+export function buildPreloader(src, alt, list) {
+  const el = document.createElement("div");
+  el.className = "img-preloader";
+  el.dataset.alt = alt || "";
+
+  // A sealed image has no URL until its bytes are decrypted, so it carries the
+  // hash instead and the registered resolver opens it — the same path an
+  // encrypted post's images take for a reader.
+  const hash = sealedHash(String(src || ""), list);
+  if (hash) el.dataset.vaultAsset = hash;
+  else el.dataset.src = resolveAsset(src, list);
+
+  const staging = staged(String(src || ""), list);
+  const dims = (staging && staging.width ? staging : imageSize(src)) || FALLBACK;
+  el.dataset.width = dims.width;
+  el.dataset.height = dims.height;
+  el.style.aspectRatio = (dims.width / dims.height).toFixed(6);
+  el.style.maxWidth = "100%";
+
+  el.innerHTML =
+    `<svg viewBox="0 0 ${dims.width} ${dims.height}" class="img-preloader-shim"` +
+    ` style="width:100%;height:auto;display:block;opacity:0;pointer-events:none"></svg>` +
+    `<div class="img-preloader-skeleton"></div>`;
+
+  return el;
+}
+
+/**
  * Point an `<img>` at this source, decrypting first where that is the only way
  * to see it.
  *
@@ -114,13 +190,7 @@ export function bindImage(img, src, list) {
     return;
   }
 
-  // Two spellings, because a withheld image is deliberately absent from the
-  // public manifest: the published route when it is listed there, and the
-  // source path when it is not. The sealed map carries both keys.
-  const hash =
-    sealed && !staged(value, list) && !/^(blob:|data:|https?:|\/\/)/i.test(value)
-      ? sealed[routeFor(value)] || sealed[manifestKey(value)]
-      : null;
+  const hash = sealedHash(value, list);
 
   if (!hash) {
     img.src = resolveAsset(value, list);

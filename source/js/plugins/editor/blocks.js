@@ -448,60 +448,72 @@ function mountSource(view) {
 
 /* ─── image ────────────────────────────────────────────────────────────────── */
 
+/**
+ * An image, built the way the published page builds one.
+ *
+ * The page emits a `.img-preloader` that the lazyload observer turns into an
+ * `<img>` when it is about to be seen, optionally wrapped in
+ * `<figure class="image-caption">` with the ALT text as the caption — see
+ * scripts/filters/img-handle.js and scripts/filters/lazyload-handle.js. The
+ * editor emits exactly that and lets the same observer, the same skeleton and
+ * the same image viewer take it from there. What is added is a small overlay of
+ * controls and an editable caption; nothing about the image itself is local.
+ *
+ * The caption edits `alt`, not the markdown title, because alt is what the page
+ * prints under the picture. The title never appears anywhere.
+ */
 function mountImage(view) {
   const { block, ctx } = view;
-  const wrap = document.createElement("figure");
-  wrap.className = "ed-figure-block";
-  wrap.innerHTML = `
-    <div class="ed-image-frame">
-      <img alt="">
-      <div class="ed-image-tools" contenteditable="false">
-        <button type="button" data-act="replace" title="${escapeHTML(ctx.t("replace", "Replace"))}"><i class="fa-solid fa-arrows-rotate"></i></button>
-        <button type="button" data-act="alt" title="${escapeHTML(ctx.t("alt_text", "Alt text"))}"><i class="fa-solid fa-a"></i></button>
-        <button type="button" data-act="remove" title="${escapeHTML(ctx.t("remove_block", "Remove"))}"><i class="fa-solid fa-trash"></i></button>
-      </div>
-      <div class="ed-image-missing" hidden><i class="fa-solid fa-image-slash"></i></div>
-    </div>
-    <figcaption class="ed-caption" contenteditable="true" data-placeholder="${escapeHTML(ctx.t("caption", "Caption"))}"></figcaption>`;
+  const style = (window.theme && window.theme.articles && window.theme.articles.style) || {};
+  const numbered = style.image_figure_number === true;
+  const captioned = style.image_caption !== false;
 
-  const img = wrap.querySelector("img");
-  const caption = wrap.querySelector(".ed-caption");
-  const missing = wrap.querySelector(".ed-image-missing");
+  const wrap = document.createElement("figure");
+  wrap.className = "image-caption ed-figure";
+  wrap.innerHTML = `
+    <div class="ed-image-tools" contenteditable="false">
+      <button type="button" data-act="replace" title="${escapeHTML(ctx.t("replace", "Replace"))}"><i class="fa-solid fa-arrows-rotate"></i></button>
+      <button type="button" data-act="remove" title="${escapeHTML(ctx.t("remove_block", "Remove"))}"><i class="fa-solid fa-trash"></i></button>
+    </div>
+    <figcaption contenteditable="true" spellcheck="false"
+      data-placeholder="${escapeHTML(ctx.t("caption", "Describe this image"))}"></figcaption>`;
+
+  const caption = wrap.querySelector("figcaption");
+  const tools = wrap.querySelector(".ed-image-tools");
+
+  const paintCaption = () => {
+    if (!captioned) return void (caption.hidden = true);
+    const n = numbered ? ctx.figureIndex(block.id) : 0;
+    caption.innerHTML = numbered
+      ? (block.alt ? `<strong>Figure ${n}.</strong> ` : "") + escapeHTML(block.alt || `Figure ${n}`)
+      : escapeHTML(block.alt || "");
+  };
 
   const paint = () => {
-    ctx.bindImage(img, block.url);
-    img.alt = block.alt || "";
-    caption.textContent = block.title || "";
+    const old = wrap.querySelector(".img-preloader, img");
+    const node = ctx.buildPreloader(block.url, block.alt);
+    if (old) old.replaceWith(node);
+    else wrap.insertBefore(node, tools);
+    paintCaption();
+    ctx.observeImages();
   };
   paint();
 
-  img.addEventListener("error", () => {
-    missing.hidden = false;
-    img.style.visibility = "hidden";
-  });
-  img.addEventListener("load", () => {
-    missing.hidden = true;
-    img.style.visibility = "";
-  });
-
+  // Typing in the caption IS typing the alt text; the numbering prefix is the
+  // page's, not the author's, so it is stripped back off on the way out.
   caption.addEventListener("input", () => {
-    block.title = caption.textContent.trim();
+    const text = caption.textContent.replace(/^\s*Figure\s+\d+\.?\s*/i, "").trim();
+    block.alt = text;
     view.touch();
   });
+  caption.addEventListener("blur", paintCaption);
 
-  wrap.querySelector(".ed-image-tools").addEventListener("click", async (e) => {
+  tools.addEventListener("click", async (e) => {
     const act = e.target.closest("[data-act]");
     if (!act) return;
     e.preventDefault();
 
     if (act.dataset.act === "remove") return void ctx.onDelete(block.id, "prev");
-    if (act.dataset.act === "alt") {
-      const value = window.prompt(ctx.t("alt_text", "Alt text"), block.alt || "");
-      if (value === null) return;
-      block.alt = value;
-      view.touch();
-      return void paint();
-    }
     const picked = await ctx.pickImage();
     if (!picked) return;
     // The SITE path, not the repository path: what lands in the markdown has to
@@ -513,6 +525,7 @@ function mountImage(view) {
 
   view.body.appendChild(wrap);
   view.read = () => {};
+  view.renumber = paintCaption;
   view.focus = () => caret.focusEnd(caption);
   view.isEmpty = () => false;
 }
