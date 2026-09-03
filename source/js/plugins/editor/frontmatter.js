@@ -3,11 +3,11 @@
  *
  * ── Every key, or the ones you cannot see are the ones you lose ─────────────
  *
- * `FIELDS` is the complete set of front-matter keys this theme reads, checked
- * against the layouts and the generators rather than against the scaffold. A
- * key that exists in the file but is not modelled here is still shown — as a
- * plain text row under "Other" — so nothing a post carries is ever invisible,
- * and nothing is ever silently dropped.
+ * `FIELDS` is what you can usefully SET here. A key the file carries that is
+ * not modelled shows as a plain row under "Other", so nothing a post holds is
+ * invisible; a key in `HIDDEN` is written by a build or by a button and is not
+ * yours to type. Either way nothing is dropped — writing edits the front-matter
+ * text in place, so a key this card never renders survives a save untouched.
  *
  * Writing goes through `setFrontMatterKey`, which edits the front matter TEXT
  * in place: unmodelled keys, comments, key order and blank lines survive a save
@@ -32,14 +32,16 @@ import { escapeHTML, parseFrontMatter, setFrontMatterKey } from "./markdown.js";
 
 export const FIELDS = [
   { key: "title", type: "text", group: "head", label: "Title", wide: true },
-  { key: "date", type: "datetime", group: "head", label: "Date" },
-  { key: "updated", type: "datetime", group: "head", label: "Updated" },
+  // Read only. `date` is the post's identity — it is half the permalink, so
+  // changing it here moves the published URL without moving anything that links
+  // to it — and `updated` is stamped by every save.
+  { key: "date", type: "datetime", group: "head", label: "Date", fixed: true },
+  { key: "updated", type: "datetime", group: "head", label: "Updated", fixed: true },
 
   { key: "cover", type: "asset", group: "look", label: "Cover" },
   { key: "thumbnail", type: "asset", group: "look", label: "Thumbnail" },
   { key: "banner", type: "asset", group: "look", label: "Banner" },
   { key: "excerpt", type: "area", group: "look", label: "Excerpt", wide: true },
-  { key: "description", type: "text", group: "look", label: "Description", wide: true },
 
   { key: "categories", type: "list", group: "tax", label: "Categories" },
   { key: "tags", type: "list", group: "tax", label: "Tags" },
@@ -53,27 +55,17 @@ export const FIELDS = [
   { key: "hidden", type: "toggle", group: "flags", label: "Hide from listings", on: false },
 
   { key: "vault", type: "toggle", group: "vault", label: "Encrypted", on: false },
-  { key: "draft", type: "toggle", group: "vault", label: "Draft", on: false },
-  { key: "supersedes", type: "text", group: "vault", label: "Supersedes", wide: true },
-
-  { key: "author", type: "text", group: "more", label: "Author" },
-  { key: "avatar", type: "asset", group: "more", label: "Avatar" },
-  { key: "license", type: "text", group: "more", label: "License" },
-  { key: "expires", type: "datetime", group: "more", label: "Expires" },
-  { key: "keywords", type: "list", group: "more", label: "Keywords" },
-  { key: "robots", type: "text", group: "more", label: "Robots" },
-  { key: "canonical_path", type: "text", group: "more", label: "Canonical path" },
-  { key: "og_image", type: "asset", group: "more", label: "OG image" },
-  { key: "og_description", type: "text", group: "more", label: "OG description", wide: true },
 ];
 
 const BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 
-// Hexo writes these itself, or the vault generator does. Showing them would
-// invite editing a value the next build overwrites.
-const DERIVED = new Set([
+// Never shown. Hexo or the vault generator writes these, or a button does:
+// `draft` and `supersedes` are what Save draft and Publish mean, and offering
+// them as fields is offering two ways to say one thing.
+const HIDDEN = new Set([
   "layout", "type", "template", "partial", "vault_kind", "vault_slug",
   "masonry_items", "masonryReactions", "permalink", "_content",
+  "draft", "supersedes",
 ]);
 
 const GROUPS = [
@@ -120,7 +112,7 @@ function rowText(field, value, label, type) {
   return `<label class="ed-f ${field.wide ? "is-wide" : ""}" data-key="${field.key}">
     <span class="ed-f-label">${label}</span>
     <input class="ed-f-input" type="${type || "text"}" data-key="${field.key}" data-kind="${field.type}"
-      value="${escapeHTML(value)}" spellcheck="false">
+      value="${escapeHTML(value)}" spellcheck="false"${field.fixed ? " readonly disabled" : ""}>
   </label>`;
 }
 
@@ -196,7 +188,7 @@ export function createFrontCard(doc, ctx) {
   const present = new Set(Object.keys(parseFrontMatter(doc.front)));
 
   function extras(front) {
-    return Object.keys(front).filter((key) => !BY_KEY.has(key) && !DERIVED.has(key));
+    return Object.keys(front).filter((key) => !BY_KEY.has(key) && !HIDDEN.has(key));
   }
 
   function paint() {
@@ -213,25 +205,27 @@ export function createFrontCard(doc, ctx) {
       </div>`;
     }).join("");
 
-    const more =
-      FIELDS.filter((f) => f.group === "more").map((f) => renderRow(f, front, t)).join("") +
-      rest
-        .map(
-          (key) =>
-            `<label class="ed-f is-wide" data-key="${key}">
-              <span class="ed-f-label">${escapeHTML(key)}<i class="fa-solid fa-asterisk ed-f-extra" title="${escapeHTML(t("extra_key", "not a theme key"))}"></i></span>
-              <input class="ed-f-input" data-key="${escapeHTML(key)}" data-kind="text"
-                value="${escapeHTML(Array.isArray(front[key]) ? front[key].join(", ") : front[key] || "")}" spellcheck="false">
-            </label>`
-        )
-        .join("");
+    // Whatever the file carries that this card does not model — shown so that
+    // nothing a post holds is invisible, and absent entirely when there is none.
+    const other = rest
+      .map(
+        (key) =>
+          `<label class="ed-f is-wide" data-key="${key}">
+            <span class="ed-f-label">${escapeHTML(key)}<i class="fa-solid fa-asterisk ed-f-extra" title="${escapeHTML(t("extra_key", "not a theme key"))}"></i></span>
+            <input class="ed-f-input" data-key="${escapeHTML(key)}" data-kind="text"
+              value="${escapeHTML(Array.isArray(front[key]) ? front[key].join(", ") : front[key] || "")}" spellcheck="false">
+          </label>`
+      )
+      .join("");
 
-    el.innerHTML = `
-      ${body}
-      <details class="ed-front-more">
-        <summary><i class="fa-solid fa-chevron-right" aria-hidden="true"></i>${escapeHTML(t("g_more", "Metadata & SEO"))}</summary>
-        <div class="ed-front-grid">${more}</div>
-      </details>`;
+    el.innerHTML =
+      body +
+      (other
+        ? `<div class="ed-front-group">
+             <h3 class="ed-front-legend">${escapeHTML(t("g_other", "Other"))}</h3>
+             <div class="ed-front-grid">${other}</div>
+           </div>`
+        : "");
 
     for (const node of el.querySelectorAll("[data-thumb]")) paintThumb(node);
   }

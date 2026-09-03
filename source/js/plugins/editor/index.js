@@ -895,6 +895,7 @@ async function doSave(mode) {
 
     const fresh = await gitea.read(result.path);
     state.doc.sha = fresh ? fresh.sha : "";
+    ui.front.paint(); // `updated` was stamped by the save
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);
     startProgress(result);

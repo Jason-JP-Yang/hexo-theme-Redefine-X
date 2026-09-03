@@ -181,6 +181,7 @@ const UL_ITEM = /^(\s*)([-*+])\s+(.*)$/;
 const OL_ITEM = /^(\s*)(\d+)([.)])\s+(.*)$/;
 const IMAGE_ONLY = /^!\[([^\]]*)\]\(\s*(\S+?)(?:\s+["']([^"']*)["'])?\s*\)$/;
 const TABLE_DIVIDER = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
+const INDENTED_CODE = /^(?: {4}|\t)\s*\S/;
 const MATH_OPEN = /^\s*\$\$\s*$/;
 const TAG_OPEN = /^\s*\{%\s*([A-Za-z][\w-]*)([^%]*?)%\}\s*$/;
 const TAG_INLINE = /^\s*\{%\s*([A-Za-z][\w-]*)([^%]*?)%\}\s*$/;
@@ -379,6 +380,20 @@ export function parseBlocks(body) {
     if (/^\s*<[a-zA-Z!/]/.test(line)) {
       let j = i;
       while (j < lines.length && lines[j].trim()) j++;
+      push(block("raw", { text: lines.slice(i, j).join("\n") }), i, j);
+      i = j;
+      continue;
+    }
+
+    // ── an indented code block ────────────────────────────────────────────
+    // Last, so a list's own indented continuation lines are already gone. Kept
+    // as `raw` because that mounts a textarea: read as a paragraph the leading
+    // spaces are whitespace the browser collapses, and the first edit to the
+    // block deletes the indentation that made it code.
+    if (INDENTED_CODE.test(line)) {
+      let j = i;
+      while (j < lines.length && (INDENTED_CODE.test(lines[j]) || !lines[j].trim())) j++;
+      while (j > i && !lines[j - 1].trim()) j--;
       push(block("raw", { text: lines.slice(i, j).join("\n") }), i, j);
       i = j;
       continue;

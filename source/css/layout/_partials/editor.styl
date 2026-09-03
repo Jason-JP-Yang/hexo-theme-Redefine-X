@@ -353,6 +353,12 @@ html.blog-editing .tool-edit-post
   &:focus
     border-color var(--primary-color)
 
+  // Shown, not offered: a date the build owns.
+  &:disabled
+    background var(--second-background-color)
+    color var(--third-text-color)
+    cursor default
+
 textarea.ed-f-input
   font-family inherit
 
@@ -456,36 +462,6 @@ textarea.ed-f-input
 
   .np-row-label
     font-size 0.78rem
-
-.ed-front-more
-  margin-top 12px
-  padding-top 12px
-  border-top 1px solid var(--border-color)
-
-  summary
-    display flex
-    align-items center
-    gap 6px
-    font-size 0.68rem
-    font-weight 700
-    letter-spacing 0.06em
-    text-transform uppercase
-    color var(--third-text-color)
-    cursor pointer
-    list-style none
-
-    &::-webkit-details-marker
-      display none
-
-    i
-      font-size 0.6rem
-      transition transform $ed-morph
-
-  &[open] summary
-    margin-bottom 8px
-
-    i
-      transform rotate(90deg)
 
 // ─── notice ─────────────────────────────────────────────────
 // A row of the bar rather than a banner over the article: nothing the editor

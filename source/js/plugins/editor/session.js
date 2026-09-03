@@ -314,6 +314,10 @@ function withFront(source, updates) {
 export async function save(doc, mode, pending) {
   const files = [];
   const entry = doc.entry || {};
+  // Stamped here rather than offered as a field: `updated` means "when this was
+  // last saved", and the only moment that is known is this one.
+  doc.front = setFrontMatterKey(doc.front, "updated", localStamp());
+  doc.frontDirty = true;
   const source = docToMarkdown(doc);
   let minted = null;
   let keysEnc = null;
