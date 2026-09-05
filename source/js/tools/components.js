@@ -296,6 +296,134 @@
     return `<a class="button ${cls}" ${hrefAttr} title='${text}'>${text}</a>`;
   }
 
+  /* ─── image with EXIF ──────────────────────────────────────────────────── */
+
+  /**
+   * `{% exifimage [title] [auto-exif:bool] %}` — the browser half.
+   *
+   * scripts/modules/image-exif.js is the build's, and it can do one thing this
+   * cannot: open the file and read the camera data out of it. So the editor
+   * renders what the author has WRITTEN — the same figure, the same card, the
+   * same section and item classes — and leaves the automatic fields to the
+   * build. What is on the canvas is the layout that will be published; what
+   * fills it may still grow.
+   */
+  const EXIF_ORDER = [
+    ["camera", "fa-camera", ["Make", "Model", "DateTimeOriginal"]],
+    ["lens", "fa-circle-dot", ["LensModel", "FocalLength", "FocusMode"]],
+    ["exposure", "fa-sun", ["ExposureTime", "Aperture", "ISOSpeedRatings", "ExposureProgram", "ExposureBias", "MeteringMode"]],
+    ["other", "fa-circle-info", ["Flash", "WhiteBalance", "GPSLatitude", "GPSLongitude", "GPSAltitude"]],
+  ];
+
+  const EXIF_LABELS = {
+    Make: "Make", Model: "Model", DateTimeOriginal: "Date Taken",
+    LensModel: "Lens", FocalLength: "Focal Length", FocusMode: "Focus Mode",
+    ExposureTime: "Shutter", Aperture: "Aperture", ISOSpeedRatings: "ISO",
+    ExposureProgram: "Exposure Program", ExposureBias: "Exposure Compensation",
+    MeteringMode: "Metering Mode", Flash: "Flash", WhiteBalance: "White Balance",
+    GPSLatitude: "Latitude", GPSLongitude: "Longitude", GPSAltitude: "Altitude",
+  };
+
+  const SECTION_LABELS = { camera: "Camera", lens: "Lens", exposure: "Exposure", other: "Other" };
+  const NEWLINES = /\r?\n/;
+
+  /** The image line and the exif-info comment the tag's body is made of. */
+  function parseExifBody(content) {
+    const text = String(content == null ? "" : content);
+    const image = text.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+    const info = {};
+
+    const comment = text.match(/<!--\s*exif-info([\s\S]*?)-->/);
+    if (comment) {
+      for (const line of comment[1].split(NEWLINES)) {
+        const pair = line.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
+        if (pair && EXIF_LABELS[pair[1]]) info[pair[1]] = pair[2].trim();
+      }
+    }
+    return { description: image ? image[1] : "", path: image ? image[2] : "", info };
+  }
+
+  /** The inverse: fields back into the tag's body. */
+  function buildExifBody(fields) {
+    const lines = [`![${fields.description || ""}](${fields.path || ""})`];
+    const written = Object.keys(EXIF_LABELS).filter((key) => (fields.info || {})[key]);
+    if (written.length) {
+      lines.push("<!-- exif-info");
+      for (const key of written) lines.push(`${key}: ${fields.info[key]}`);
+      lines.push("-->");
+    }
+    return lines.join("\n");
+  }
+
+  function exifArgs(args) {
+    const joined = (args || []).join(" ");
+    const auto = joined.match(/auto-exif\s*:\s*(true|false)/i);
+    return {
+      title: joined.replace(/auto-exif\s*:\s*(true|false)/i, "").trim(),
+      autoExif: auto ? auto[1].toLowerCase() === "true" : true,
+    };
+  }
+
+  function exifImage(args, content, render, options) {
+    const { title, autoExif } = exifArgs(args);
+    const { description, path, info } = parseExifBody(content);
+    const opts = options || {};
+    const src = opts.resolve ? opts.resolve(path) : path;
+
+    const hasInfo = Object.keys(info).length > 0;
+    const alt = escapeText(description);
+
+    // Simple mode: a caption, no card. What image-exif.js emits when there is
+    // nothing to put in the card.
+    if (!hasInfo) {
+      const caption =
+        (title ? `<strong class="image-exif-title">${escapeText(title)}</strong>` : "") +
+        (title && description ? "<br>" : "") +
+        (description ? escapeText(description) : "");
+      return `
+<figure class="image-caption image-exif-simple-container">
+  <img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" data-no-img-handle="true" />
+  <figcaption>${caption}</figcaption>
+</figure>`;
+    }
+
+    let sections = "";
+    for (const [key, icon, fields] of EXIF_ORDER) {
+      const items = fields.filter((f) => info[f]);
+      if (!items.length) continue;
+      sections +=
+        `<div class="image-exif-section image-exif-${key}">` +
+        `<div class="image-exif-section-title"><i class="fa-solid ${icon}"></i> ${SECTION_LABELS[key]}</div>` +
+        `<div class="image-exif-items">` +
+        items
+          .map(
+            (f) =>
+              `<div class="image-exif-item"><span class="image-exif-label">${EXIF_LABELS[f]}</span>` +
+              `<span class="image-exif-value">${escapeText(info[f])}</span></div>`
+          )
+          .join("") +
+        `</div></div>`;
+    }
+
+    const header =
+      `<div class="image-exif-header"><div class="image-exif-header-content">` +
+      (title ? `<div class="image-exif-title">${escapeText(title)}</div>` : "") +
+      (description ? `<div class="image-exif-description">${escapeText(description)}</div>` : "") +
+      `</div><button class="image-exif-toggle-btn" aria-label="Toggle EXIF data">` +
+      `<i class="fa-solid fa-chevron-down"></i></button></div>`;
+
+    const layout = opts.float ? "image-exif-float" : "image-exif-block";
+    const card = `<div class="image-exif-info-card">${header}<div class="image-exif-data">${sections}</div></div>`;
+
+    return `
+<figure class="image-exif-container ${layout}" data-no-img-handle="true" data-auto-exif="${autoExif}">
+  <div class="image-exif-image-wrapper">
+    <img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" />
+  </div>
+  ${card}
+</figure>`;
+  }
+
   /* ─── the editor's view of all this ────────────────────────────────────── */
 
   /**
@@ -349,6 +477,15 @@
         { key: "active", type: "number" },
       ],
     },
+    exifImage: {
+      tags: ["exifimage"],
+      ends: true,
+      body: "image",
+      fields: [
+        { key: "title", type: "text" },
+        { key: "autoExif", type: "toggle" },
+      ],
+    },
     btn: {
       tags: ["btn", "button"],
       ends: false,
@@ -378,6 +515,11 @@
     folding,
     tabs,
     btn,
+    exifImage,
+    exifArgs,
+    parseExifBody,
+    buildExifBody,
+    EXIF_LABELS,
     splitArgs,
     splitIcon,
     boxColor,

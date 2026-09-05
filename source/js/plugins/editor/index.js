@@ -28,6 +28,7 @@ import { createView, makeBlock } from "./blocks.js";
 import { INSERTS, askFor, createSlashMenu, createToolbar } from "./toolbar.js";
 import { conversions, entryFor, fieldsFor, linesOf } from "./convert.js";
 import {
+  blocksToBody,
   docToMarkdown,
   emitBlock,
   escapeHTML,
@@ -38,6 +39,7 @@ import {
   setFrontMatterKey,
 } from "./markdown.js";
 import { insertInline } from "./inline.js";
+import { createStage, forgetTree, openPicker, openSheet, siteAddress } from "./picker.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
 import {
@@ -82,6 +84,8 @@ const state = {
   put: [],
   doc: null,
   views: [],
+  root: null,
+  boxes: new Set(),
   focused: null,
   entry: null,
   pending: [],
@@ -90,6 +94,7 @@ const state = {
   dragId: null,
   dropAt: "",
   vaultChoice: undefined,
+  stage: null,
   stashTimer: null,
   scrollRAF: 0,
   pointerY: 0,
@@ -263,7 +268,8 @@ function paintTitle() {
   heading.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
-    if (state.views[0] && state.views[0].focus) state.views[0].focus("start");
+    const first = state.root && state.root.views[0];
+    if (first && first.focus) first.focus("start");
   });
 }
 
@@ -288,6 +294,7 @@ async function activate(host) {
 
   state.host = host;
   state.canvas = canvas;
+  state.stage = createStage();
   state.titleHost = titleHost;
   // The NODES, not their markup. Restoring from a string reparses the article:
   // every picture in it is requested a second time, and any preloader that was
@@ -298,6 +305,11 @@ async function activate(host) {
   state.titleSnapshot = Array.from(titleHost.childNodes);
 
   host.classList.add("is-editing");
+  // The site's mathjax plugin re-typesets the whole document whenever
+  // MathJax.typesetPromise exists — and the editor is what makes it exist. This
+  // class is the one MathJax was told to ignore, so the canvas is typeset by
+  // the editor alone rather than by both of them.
+  canvas.classList.add("ed-no-typeset");
   document.documentElement.classList.add("blog-editing");
 
   ui = { bar: buildDocbar() };
@@ -436,12 +448,13 @@ async function activate(host) {
 
   await crossFade(state.canvas, () => {
     state.canvas.innerHTML = "";
-    state.views = [];
-    for (const block of state.doc.blocks) mountBlock(block);
-    if (!state.views.length) {
+    state.boxes.clear();
+    state.root = createBox(state.doc.blocks, state.canvas, { depth: 0 });
+    for (const block of state.doc.blocks) mountBlock(block, state.root);
+    if (!state.root.views.length) {
       const block = makeBlock("paragraph");
       state.doc.blocks.push(block);
-      mountBlock(block);
+      mountBlock(block, state.root);
     }
   });
 
@@ -486,12 +499,14 @@ async function deactivate() {
   observeImages();
 
   for (const node of state.put) node.classList.remove("ed-put-away");
+  state.canvas.classList.remove("ed-no-typeset");
   state.host.classList.remove("is-editing");
   document.documentElement.classList.remove("blog-editing");
 
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
+  forgetTree();
   Object.assign(state, {
-    on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [],
+    on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
     put: [], doc: null, views: [], entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
   });
   ui = null;
@@ -566,18 +581,37 @@ function writeFront(key, value) {
 
 /* ─── blocks ───────────────────────────────────────────────────────────────── */
 
-function blockCtx() {
+function blockCtx(box) {
+  const home = box || state.root;
   return {
     t,
-    onChange: markDirty,
+    box: home,
+    onChange: () => {
+      writeBox(home);
+      markDirty();
+    },
     onFocus: (view) => {
       const moved = state.focused !== view;
       state.focused = view;
-      for (const other of state.views) other.el.dataset.on = other === view ? "1" : "0";
+      for (const other of allViews()) other.el.dataset.on = other === view ? "1" : "0";
       // The Block tab is about THIS block, so it is repainted the moment the
       // caret lands in another one.
       if (moved && ui && ui.toolbar) ui.toolbar.sync();
     },
+    /** A nesting component asks for a box of its own; one level, never two. */
+    nest: (el, markdown, opts) => {
+      if (home.depth >= 1) return null;
+      const child = createBox([], el, {
+        depth: home.depth + 1,
+        write: opts.write,
+        onEmpty: opts.onEmpty,
+      });
+      fillBox(child, markdown);
+      return child;
+    },
+    unnest: dropBox,
+    fillBox,
+    writeBox,
     onOptionsChanged: () => {
       if (ui && ui.toolbar) ui.toolbar.refresh();
     },
@@ -586,15 +620,16 @@ function blockCtx() {
     ask: (kind, current) => askFor(ui.toolbar.el, { t }, kind, current),
     onInsertAfter: (id) => insertBlock(makeBlock("paragraph"), id, true),
     onSplit: (id, tailText) => {
-      const index = indexOf(id);
-      insertBlock(makeBlock("paragraph", { text: tailText }), id, true);
-      state.views[index + 1].focus("start");
+      const view = insertBlock(makeBlock("paragraph", { text: tailText }), id, false);
+      if (view && view.focus) view.focus("start");
     },
     onDelete: (id, move) => deleteBlock(id, move),
     onMergeBack: (id) => mergeBack(id),
     onConvert: (id, type, fields) => convertBlock(id, type, fields),
     onFocusSibling: (id, delta) => {
-      const view = state.views[indexOf(id) + delta];
+      const at = locate(id);
+      if (!at) return;
+      const view = at.box.views[at.index + delta];
       if (view && view.focus) view.focus(delta > 0 ? "start" : "end");
     },
     onSlash: (view) => ui.slash.open(view),
@@ -620,7 +655,75 @@ function blockCtx() {
     observeImages,
     figureIndex,
     pickImage,
+    imageProps,
+    openViewer,
   };
+}
+
+/**
+ * Everything the theme's `{% exifimage %}` can be told, in one sheet.
+ *
+ * The fields ARE the tag's: scripts/modules/image-exif.js reads exactly these
+ * names out of the `<!-- exif-info -->` comment, and the ones left empty are
+ * the ones the build fills in from the file itself when auto-exif is on.
+ */
+async function imageProps(block) {
+  const api = window.RedefineComponents;
+  const labels = (api && api.EXIF_LABELS) || {};
+  const info = block.exif || {};
+
+  const group = (label, keys) => ({
+    label,
+    fields: keys.filter((k) => labels[k]).map((k) => ({ key: k, label: labels[k] })),
+  });
+
+  const answer = await openSheet(
+    { t },
+    t("properties", "Picture properties"),
+    [
+      {
+        label: t("g_caption", "Caption"),
+        fields: [
+          { key: "exifTitle", label: t("f_title", "Title"), wide: true },
+          { key: "alt", label: t("alt_text", "Description"), wide: true },
+          { key: "title", label: t("hover_title", "Hover text"), wide: true },
+          { key: "autoExif", label: t("auto_exif", "Read EXIF at build time"), kind: "toggle" },
+        ],
+      },
+      group(t("g_camera", "Camera"), ["Make", "Model", "DateTimeOriginal"]),
+      group(t("g_lens", "Lens"), ["LensModel", "FocalLength", "FocusMode"]),
+      group(t("g_exposure", "Exposure"), [
+        "ExposureTime", "Aperture", "ISOSpeedRatings",
+        "ExposureProgram", "ExposureBias", "MeteringMode",
+      ]),
+      group(t("g_other", "Other"), [
+        "Flash", "WhiteBalance", "GPSLatitude", "GPSLongitude", "GPSAltitude",
+      ]),
+    ],
+    Object.assign(
+      { exifTitle: block.exifTitle || "", alt: block.alt || "", title: block.title || "", autoExif: block.autoExif !== false },
+      info
+    )
+  );
+  if (!answer) return null;
+
+  const exif = {};
+  for (const key of Object.keys(labels)) if (answer[key]) exif[key] = answer[key];
+  return {
+    alt: answer.alt,
+    title: answer.title,
+    exifTitle: answer.exifTitle,
+    autoExif: answer.autoExif !== false,
+    exif,
+  };
+}
+
+/** The lightbox, on request. A click on the canvas selects instead. */
+function openViewer(img) {
+  if (!img) return;
+  img.removeAttribute("data-no-viewer");
+  img.click();
+  setTimeout(() => img.setAttribute("data-no-viewer", ""), 0);
 }
 
 /**
@@ -645,77 +748,170 @@ function observeImages() {
   });
 }
 
-/** Which figure this is, counted the way the build counts them. */
+/**
+ * Which figure this is, counted the way the build counts them — in the order
+ * they appear on the page, which for a picture inside a note means counting
+ * through the note rather than around it.
+ */
 function figureIndex(id) {
   let n = 0;
-  for (const block of state.doc.blocks) {
-    if (block.type === "image") n += 1;
-    if (block.id === id) return n;
+  for (const el of state.canvas.querySelectorAll('.ed-block[data-type="image"]')) {
+    n += 1;
+    if (el.dataset.id === id) return n;
   }
   return n;
 }
 
 /** Figure numbers are positional, so every image restates its own after a move. */
-function renumberFigures() {
-  for (const view of state.views) if (view.renumber) view.renumber();
+/* ─── boxes ────────────────────────────────────────────────────────────────── */
+
+/**
+ * A list of blocks with a home.
+ *
+ * The document is one box; the body of a large note, a folding or a tab pane is
+ * another. Everything below works on a BOX rather than on the document, which
+ * is what lets a note hold real blocks — with their own gutters, their own
+ * conversions and their own drag handles — instead of a slab of rich text that
+ * looked like the article but behaved like nothing else in it.
+ *
+ * One level only. A box inside a box would mean a note inside a note, which the
+ * markdown can express but nobody can read, so a nested box refuses to take a
+ * block that would open a third.
+ */
+function createBox(blocks, el, opts) {
+  const box = Object.assign({ blocks, views: [], el, depth: 0, write: null, onEmpty: null }, opts || {});
+  state.boxes.add(box);
+  return box;
 }
 
-function mountBlock(block) {
-  const view = createView(block, blockCtx());
-  state.canvas.appendChild(view.el);
-  state.views.push(view);
+function dropBox(box) {
+  state.boxes.delete(box);
+}
+
+/** Every view on the canvas, in the order they are painted. */
+function allViews() {
+  const out = [];
+  for (const box of state.boxes) out.push(...box.views);
+  return out;
+}
+
+/** Which box holds this block, and where in it. */
+function locate(id) {
+  for (const box of state.boxes) {
+    const index = box.views.findIndex((v) => v.block.id === id);
+    if (index >= 0) return { box, index, view: box.views[index] };
+  }
+  return null;
+}
+
+/**
+ * A nested box writes itself back into the component that owns it.
+ *
+ * Guarded, because writing calls the component's `touch`, which asks its OWN
+ * box to write — a short loop that would otherwise run until the stack ended.
+ */
+function writeBox(box) {
+  if (!box || !box.write || box.writing) return;
+  box.writing = true;
+  try {
+    for (const view of box.views) view.read();
+    box.write(blocksToBody(box.blocks, "").replace(/\s+$/, ""));
+  } finally {
+    box.writing = false;
+  }
+}
+
+function renumberFigures() {
+  for (const view of allViews()) if (view.renumber) view.renumber();
+}
+
+function mountBlock(block, box) {
+  const home = box || state.root;
+  const view = createView(block, blockCtx(home));
+  view.box = home;
+  home.el.appendChild(view.el);
+  home.views.push(view);
   return view;
 }
 
-function indexOf(id) {
-  return state.views.findIndex((v) => v.block.id === id);
+/**
+ * Fill a box with the blocks its markdown parses to.
+ *
+ * Called by a nesting component when it mounts, and again whenever the body it
+ * holds is replaced from outside — switching tab panes, for instance.
+ */
+function fillBox(box, markdown) {
+  for (const view of box.views) view.el.remove();
+  box.views.length = 0;
+  box.blocks.length = 0;
+
+  const parsed = parseBlocks(String(markdown == null ? "" : markdown));
+  if (!parsed.length) parsed.push(makeBlock("paragraph"));
+  for (const block of parsed) {
+    box.blocks.push(block);
+    mountBlock(block, box);
+  }
+  renumberFigures();
 }
 
-function insertBlock(block, afterId, focus) {
-  const index = afterId == null ? state.doc.blocks.length - 1 : indexOf(afterId);
-  state.doc.blocks.splice(index + 1, 0, block);
+function insertBlock(block, afterId, focus, box) {
+  const at = afterId == null ? null : locate(afterId);
+  const home = box || (at ? at.box : state.root);
+  const index = at ? at.index : home.blocks.length - 1;
 
-  const view = createView(block, blockCtx());
-  const anchor = state.views[index];
+  home.blocks.splice(index + 1, 0, block);
+  const view = createView(block, blockCtx(home));
+  view.box = home;
+
+  const anchor = home.views[index];
   if (anchor) anchor.el.after(view.el);
-  else state.canvas.appendChild(view.el);
-  state.views.splice(index + 1, 0, view);
+  else home.el.appendChild(view.el);
+  home.views.splice(index + 1, 0, view);
 
   enter(view.el).then(() => {
     if (focus && view.focus) view.focus("start");
     contentChanged();
   });
   renumberFigures();
+  writeBox(home);
   markDirty();
   return view;
 }
 
 async function deleteBlock(id, move) {
-  const index = indexOf(id);
-  if (index < 0) return;
-  if (state.views.length === 1) return void convertBlock(id, "paragraph", { text: "" });
+  const at = locate(id);
+  if (!at) return;
+  const { box, index, view } = at;
 
-  const view = state.views[index];
+  // The last block in the document becomes an empty paragraph — there has to be
+  // somewhere to type. The last block in a NESTED box takes the box with it,
+  // because a note with nothing in it is not a note.
+  if (box.views.length === 1) {
+    if (!box.onEmpty) return void convertBlock(id, "paragraph", { text: "" });
+    return void box.onEmpty();
+  }
+
   await exit(view.el);
   view.el.remove();
-  state.views.splice(index, 1);
-  state.doc.blocks.splice(index, 1);
+  box.views.splice(index, 1);
+  box.blocks.splice(index, 1);
 
-  const next = state.views[move === "next" ? index : Math.max(0, index - 1)];
+  const next = box.views[move === "next" ? index : Math.max(0, index - 1)];
   if (next && next.focus) next.focus("end");
 
   renumberFigures();
+  writeBox(box);
   markDirty();
   contentChanged();
 }
 
 /** Backspace at the head of a block folds it into the one above. */
 function mergeBack(id) {
-  const index = indexOf(id);
-  if (index <= 0) return;
+  const at = locate(id);
+  if (!at || at.index <= 0) return;
 
-  const prev = state.views[index - 1];
-  const here = state.views[index];
+  const prev = at.box.views[at.index - 1];
+  const here = at.view;
   if (!prev.editable || prev.block.type === "list") return;
 
   prev.read();
@@ -727,24 +923,28 @@ function mergeBack(id) {
   if (prev.block.type === "heading") fields.level = prev.block.level;
   convertBlock(prev.block.id, prev.block.type, fields);
   deleteBlock(id, "prev");
-  const rebuilt = state.views[index - 1];
+  const rebuilt = at.box.views[at.index - 1];
   if (rebuilt && rebuilt.focus) rebuilt.focus(caretAt === 0 ? "start" : "end");
 }
 
 function convertBlock(id, type, fields) {
-  const index = indexOf(id);
-  if (index < 0) return;
+  const at = locate(id);
+  if (!at) return;
+  const { box, index } = at;
 
-  const old = state.doc.blocks[index];
+  const old = box.blocks[index];
   const block = makeBlock(type, fields);
   block.after = old.after;
-  state.doc.blocks[index] = block;
+  box.blocks[index] = block;
 
-  const view = createView(block, blockCtx());
-  state.views[index].el.replaceWith(view.el);
-  state.views[index] = view;
+  const view = createView(block, blockCtx(box));
+  view.box = box;
+  box.views[index].el.replaceWith(view.el);
+  box.views[index] = view;
+  state.focused = view;
 
   if (view.focus) view.focus("end");
+  writeBox(box);
   markDirty();
   contentChanged();
 }
@@ -760,8 +960,8 @@ function pasteMarkdown(id, text) {
     anchor = block.id;
   }
 
-  const here = state.views[indexOf(id)];
-  if (here && here.isEmpty && here.isEmpty()) deleteBlock(id, "next");
+  const here = locate(id);
+  if (here && here.view.isEmpty && here.view.isEmpty()) deleteBlock(id, "next");
 }
 
 /* ─── the four ways of editing ─────────────────────────────────────────────── */
@@ -831,6 +1031,12 @@ function insertItem(key, host) {
   const spec = BLOCK_SEEDS[key];
   if (!spec) return;
 
+  // One level of nesting. A note inside a note is expressible and unreadable.
+  const box = (target && target.box) || state.root;
+  if (spec.nests && box.depth >= 1) {
+    return void notice("warn", t("no_deeper", "A note, folding or tab group cannot go inside another one."));
+  }
+
   if (target && target.isEmpty && target.isEmpty()) {
     return void convertBlock(target.block.id, spec.type, spec.fields);
   }
@@ -847,10 +1053,10 @@ const BLOCK_SEEDS = {
   mermaid: { type: "mermaid", fields: { code: "graph TD\n  A --> B" } },
   hr: { type: "hr" },
   note: { type: "component", fields: { name: "note", args: "info", body: "" } },
-  notel: { type: "component", fields: { name: "notel", args: "info fa-circle-info Title", body: "" } },
+  notel: { type: "component", nests: true, fields: { name: "notel", args: "info fa-circle-info Title", body: "" } },
   box: { type: "component", fields: { name: "box", args: "blue", body: "" } },
-  folding: { type: "component", fields: { name: "folding", args: "blue::Details", body: "" } },
-  tabs: { type: "component", fields: { name: "tabs", args: "GROUP", body: "<!-- tab One -->\n\n<!-- endtab -->" } },
+  folding: { type: "component", nests: true, fields: { name: "folding", args: "blue::Details", body: "" } },
+  tabs: { type: "component", nests: true, fields: { name: "tabs", args: "GROUP", body: "<!-- tab One -->\n\n<!-- endtab -->" } },
   btn: { type: "component", fields: { name: "btn", args: "Label::https://", body: null } },
 };
 
@@ -909,11 +1115,12 @@ function toggleSource(on) {
  * thing that must not happen is a block left holding text the parser never saw.
  */
 function applyRaw(id, text) {
-  const index = indexOf(id);
-  if (index < 0) return;
+  const at = locate(id);
+  if (!at) return;
+  const { box, index } = at;
 
   const blocks = parseBlocks(text).map((b) => Object.assign(b, { dirty: true }));
-  const old = state.doc.blocks[index];
+  const old = box.blocks[index];
 
   if (!blocks.length) return void deleteBlock(id, "prev");
   if (blocks.length === 1 && blocks[0].type === old.type && emitBlock(blocks[0]) === emitBlock(old)) {
@@ -921,12 +1128,17 @@ function applyRaw(id, text) {
   }
 
   blocks[blocks.length - 1].after = old.after;
-  state.doc.blocks.splice(index, 1, ...blocks);
+  box.blocks.splice(index, 1, ...blocks);
 
-  const views = blocks.map((block) => createView(block, blockCtx()));
-  state.views[index].el.replaceWith(...views.map((v) => v.el));
-  state.views.splice(index, 1, ...views);
+  const views = blocks.map((block) => {
+    const view = createView(block, blockCtx(box));
+    view.box = box;
+    return view;
+  });
+  box.views[index].el.replaceWith(...views.map((v) => v.el));
+  box.views.splice(index, 1, ...views);
 
+  writeBox(box);
   markDirty();
   renumberFigures();
   contentChanged();
@@ -935,12 +1147,13 @@ function applyRaw(id, text) {
 
 /** Rebuild one block's view in place — its own fields decided to change shape. */
 function remountBlock(id) {
-  const index = indexOf(id);
-  if (index < 0) return;
-  const block = state.doc.blocks[index];
-  const view = createView(block, blockCtx());
-  state.views[index].el.replaceWith(view.el);
-  state.views[index] = view;
+  const at = locate(id);
+  if (!at) return;
+  const { box, index } = at;
+  const view = createView(box.blocks[index], blockCtx(box));
+  view.box = box;
+  box.views[index].el.replaceWith(view.el);
+  box.views[index] = view;
   state.focused = view;
   if (view.focus) view.focus("end");
   renumberFigures();
@@ -951,21 +1164,24 @@ function remountBlock(id) {
 function moveFocused(delta) {
   const view = state.focused;
   if (!view) return;
-  const from = indexOf(view.block.id);
+  const at = locate(view.block.id);
+  if (!at) return;
+  const { box, index: from } = at;
   const to = from + delta;
-  if (from < 0 || to < 0 || to >= state.doc.blocks.length) return;
+  if (to < 0 || to >= box.blocks.length) return;
 
-  const nodes = state.views.map((v) => v.el);
+  const nodes = box.views.map((v) => v.el);
   flip(nodes, () => {
-    const [block] = state.doc.blocks.splice(from, 1);
-    state.doc.blocks.splice(to, 0, block);
-    const [moved] = state.views.splice(from, 1);
-    state.views.splice(to, 0, moved);
-    const anchor = state.views[to + (delta > 0 ? -1 : 1)];
+    const [block] = box.blocks.splice(from, 1);
+    box.blocks.splice(to, 0, block);
+    const [moved] = box.views.splice(from, 1);
+    box.views.splice(to, 0, moved);
+    const anchor = box.views[to + (delta > 0 ? -1 : 1)];
     if (delta > 0) anchor.el.after(moved.el);
     else anchor.el.before(moved.el);
   });
 
+  writeBox(box);
   markDirty();
   renumberFigures();
 }
@@ -1028,16 +1244,32 @@ function stopEdgeScroll() {
  * slot here, including above the first block and below the last.
  */
 function dropTargetAt(y) {
-  const rows = state.views.filter((v) => v.block.id !== state.dragId);
+  const held = state.dragId ? locate(state.dragId) : null;
+  const carried = held ? held.view.el : null;
+  // Document order, from the DOM, so a block nested inside a note is a target
+  // in the place it is drawn rather than wherever its box happens to sit in a
+  // list. Its own subtree is not: a block cannot be dropped inside itself.
+  const rows = Array.from(state.canvas.querySelectorAll(".ed-block")).filter(
+    (el) => !carried || (el !== carried && !carried.contains(el))
+  );
   if (!rows.length) return null;
 
-  for (const view of rows) {
-    const rect = view.el.getBoundingClientRect();
+  // A nested box takes no block that would open a third level.
+  const nesting = held && held.view.nests;
+
+  for (const el of rows) {
+    const at = locate(el.dataset.id);
+    if (!at) continue;
+    if (nesting && at.box.depth >= 1) continue;
+    const rect = el.getBoundingClientRect();
     if (y < rect.bottom) {
-      return { id: view.block.id, where: y < rect.top + rect.height / 2 ? "before" : "after" };
+      return { id: el.dataset.id, where: y < rect.top + rect.height / 2 ? "before" : "after" };
     }
   }
-  return { id: rows[rows.length - 1].block.id, where: "after" };
+  const last = rows[rows.length - 1];
+  const at = locate(last.dataset.id);
+  if (nesting && at && at.box.depth >= 1) return null;
+  return { id: last.dataset.id, where: "after" };
 }
 
 /**
@@ -1053,7 +1285,7 @@ function paintDrop(target) {
   if (key === state.dropAt) return;
   state.dropAt = key;
 
-  for (const view of state.views) {
+  for (const view of allViews()) {
     const want = target && view.block.id === target.id ? target.where : "";
     if (view.el.dataset.drop !== want) view.el.dataset.drop = want;
   }
@@ -1081,25 +1313,46 @@ async function onDocDrop(e) {
   paintDrop(null);
   if (!target) return;
 
-  const from = indexOf(dragId);
-  const to = indexOf(target.id);
+  const held = locate(dragId);
+  const dest = locate(target.id);
+  if (!held || !dest || held.view === dest.view) return;
+
   const after = target.where === "after";
-  const anchor = state.views[to].el;
-  if (from < 0 || to < 0) return;
+  const anchor = dest.view.el;
+  const leaving = held.box;
+  const arriving = dest.box;
+
+  // A note left with nothing in it is not a note. Noted before the move, acted
+  // on after, so the block being carried is safely somewhere else first.
+  const emptying = leaving !== arriving && leaving.views.length === 1 && leaving.onEmpty;
 
   await flip(Array.from(state.canvas.querySelectorAll(".ed-block")), () => {
-    const [view] = state.views.splice(from, 1);
-    const [block] = state.doc.blocks.splice(from, 1);
-    const at = to + (after ? 1 : 0) - (from < to ? 1 : 0);
-    state.views.splice(at, 0, view);
-    state.doc.blocks.splice(at, 0, block);
-    if (after) anchor.after(view.el);
-    else anchor.before(view.el);
+    leaving.views.splice(held.index, 1);
+    const [block] = leaving.blocks.splice(held.index, 1);
+
+    const to = arriving.views.indexOf(dest.view);
+    const at = to + (after ? 1 : 0);
+    arriving.views.splice(at, 0, held.view);
+    arriving.blocks.splice(at, 0, block);
+
+    if (after) anchor.after(held.view.el);
+    else anchor.before(held.view.el);
   });
+
+  // The view's ctx is bound to the box it was built in, so a block that changed
+  // homes is rebuilt into the one it landed in.
+  if (leaving !== arriving) {
+    held.view.box = arriving;
+    remountBlock(dragId);
+  }
 
   // Order is the one thing a moved block cannot carry in `src`: its trailing
   // separator belonged to the position it left.
-  state.doc.blocks.forEach((b) => (b.after = b.after || "\n\n"));
+  for (const box of state.boxes) box.blocks.forEach((b) => (b.after = b.after || "\n\n"));
+  writeBox(leaving);
+  if (arriving !== leaving) writeBox(arriving);
+  if (emptying) leaving.onEmpty();
+
   renumberFigures();
   markDirty();
 }
@@ -1125,21 +1378,66 @@ async function onCanvasDrop(e) {
 
 /* ─── assets ───────────────────────────────────────────────────────────────── */
 
-function pickImage() {
-  return new Promise((resolve) => {
-    ui.file.value = "";
-    ui.file.onchange = async () => {
-      const file = ui.file.files && ui.file.files[0];
-      resolve(file ? await stageImage(file) : null);
-    };
-    ui.file.click();
-  });
+/**
+ * Point this document at where its pictures are about to be.
+ *
+ * Only this one. Finding every other post that used the old name would mean
+ * pulling the whole site into the browser, so that job is left to the build,
+ * which already has every post open — see scripts/events/image-moves.js.
+ */
+function applyStagedMoves() {
+  if (!state.stage || !state.stage.dirty) return;
+
+  const swap = (text) => {
+    let out = String(text == null ? "" : text);
+    for (const move of state.stage.moves) {
+      const from = siteAddress(move.from);
+      const to = siteAddress(move.to);
+      out = out.split(from).join(to);
+    }
+    return out;
+  };
+
+  for (const view of allViews()) view.read();
+  for (const block of state.doc.blocks) {
+    const before = emitBlock(block);
+    const after = swap(before);
+    if (after === before) continue;
+    const parsed = parseBlocks(after)[0];
+    if (parsed) Object.assign(block, parsed, { id: block.id, after: block.after, dirty: true });
+  }
+
+  const front = swap(state.doc.front);
+  if (front !== state.doc.front) {
+    state.doc.front = front;
+    state.doc.frontDirty = true;
+  }
+}
+
+/**
+ * Name a picture — the one control, wherever the asking happens.
+ *
+ * A block's address, a replacement, the cover, the thumbnail and the banner all
+ * come through here, so there is one place that knows what the repository holds
+ * and one place that knows how to add to it.
+ */
+async function pickImage(current) {
+  const picked = await openPicker(
+    { t, stage: state.stage, pending: state.pending, upload: stageImage, observeImages },
+    { current }
+  );
+  if (!picked) return null;
+  const staged = state.pending.find((a) => state.stage.resolve(a.path) === picked.path);
+  return staged || { path: picked.path, site: picked.site };
 }
 
 /** Read a file off disk, hold it as a blob, and queue it for the next commit. */
-async function stageImage(file) {
+async function stageImage(file, dir) {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const path = await gitea.assetPath(file.name, bytes);
+  let path = await gitea.assetPath(file.name, bytes);
+  // The picker can say where it should land; without one it goes where every
+  // pasted picture has always gone.
+  if (dir && dir !== "source/images/posts") path = dir.replace(/\/+$/, "") + "/" + path.split("/").pop();
   const existing = state.pending.find((a) => a.path === path);
   if (existing) return existing;
 
@@ -1175,7 +1473,13 @@ function markDirty() {
 }
 
 function readAll() {
-  for (const view of state.views) if (view.read) view.read();
+  // Innermost first: a nested box has to be read and written back into its
+  // component before the component itself is read.
+  const boxes = Array.from(state.boxes).sort((a, b) => b.depth - a.depth);
+  for (const box of boxes) {
+    for (const view of box.views) if (view.read) view.read();
+    writeBox(box);
+  }
 }
 
 async function doSave(mode) {
@@ -1191,10 +1495,18 @@ async function doSave(mode) {
   notice(null, "");
 
   try {
-    const result = await session.save(state.doc, mode, state.pending, state.vaultChoice);
+    // A rename is only real once it is committed, and it is committed with the
+    // post that now points at it. The addresses in THIS document are rewritten
+    // here; every other post is rewritten by the build, from the note save
+    // leaves behind.
+    applyStagedMoves();
+
+    const result = await session.save(state.doc, mode, state.pending, state.vaultChoice, state.stage);
 
     for (const asset of state.pending) URL.revokeObjectURL(asset.url);
     state.pending = [];
+    state.stage.clear();
+    forgetTree();
     state.dirty = false;
 
     // Edited blocks STAY dirty. Their `src` is the text they were parsed from
@@ -1392,7 +1704,7 @@ function onFocusIn(e) {
   if (state.canvas.contains(e.target) || ui.toolbar.el.contains(e.target)) return;
   if (e.target.closest && e.target.closest(".ed-ask, .ed-slash")) return;
 
-  for (const view of state.views) view.el.dataset.on = "0";
+  for (const view of allViews()) view.el.dataset.on = "0";
   state.focused = null;
   ui.toolbar.reset();
 }

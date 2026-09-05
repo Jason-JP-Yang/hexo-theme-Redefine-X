@@ -282,12 +282,11 @@ export function parseBlocks(body) {
         else if (close.test(lines[j]) && --depth === 0) break;
         j++;
       }
+      const inner = lines.slice(i + 1, j).join("\n");
       push(
-        block("component", {
-          name: name.toLowerCase(),
-          args: open[2].trim(),
-          body: lines.slice(i + 1, j).join("\n"),
-        }),
+        name.toLowerCase() === "exifimage"
+          ? imageFromExif(open[2].trim(), inner)
+          : block("component", { name: name.toLowerCase(), args: open[2].trim(), body: inner }),
         i,
         Math.min(j + 1, lines.length)
       );
@@ -492,7 +491,7 @@ export function emitBlock(b) {
     case "math":
       return "$$\n" + b.tex + "\n$$";
     case "image":
-      return "![" + b.alt + "](" + b.url + (b.title ? ' "' + b.title + '"' : "") + ")";
+      return emitImage(b);
     case "list":
       return b.items
         .map((item, index) =>
@@ -509,6 +508,48 @@ export function emitBlock(b) {
     default:
       return b.text || "";
   }
+}
+
+/**
+ * One picture, in whichever of its two spellings it needs: `![alt](path)` says
+ * all a plain image has, and a caption title or a line of camera data needs the
+ * theme's `{% exifimage %}`, which is the only form that carries them. The block
+ * keeps one identity and one set of tools; the spelling follows the fields.
+ */
+function emitImage(b) {
+  const info = b.exif || {};
+  const written = Object.keys(info).filter((k) => info[k]);
+  const line = "![" + (b.alt || "") + "](" + b.url + (b.title ? ' "' + b.title + '"' : "") + ")";
+  if (!b.exifTitle && !written.length) return line;
+
+  const args = [b.exifTitle || "", b.autoExif === false ? "auto-exif:false" : ""].filter(Boolean).join(" ");
+  const body = written.length
+    ? [line, "<!-- exif-info"].concat(written.map((k) => k + ": " + info[k]), ["-->"]).join("\n")
+    : line;
+  return "{% exifimage" + (args ? " " + args : "") + " %}\n" + body + "\n{% endexifimage %}";
+}
+
+function imageFromExif(args, body) {
+  const auto = args.match(/auto-exif\s*:\s*(true|false)/i);
+  const image = body.match(/!\[([^\]]*)\]\(\s*(\S+?)(?:\s+["']([^"']*)["'])?\s*\)/);
+  const comment = body.match(/<!--\s*exif-info([\s\S]*?)-->/);
+  const info = {};
+
+  if (comment) {
+    for (const row of comment[1].split(/\r?\n/)) {
+      const pair = row.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
+      if (pair && pair[2].trim()) info[pair[1]] = pair[2].trim();
+    }
+  }
+
+  return block("image", {
+    url: image ? image[2] : "",
+    alt: image ? image[1] : "",
+    title: image && image[3] ? image[3] : "",
+    exifTitle: args.replace(/auto-exif\s*:\s*(true|false)/i, "").trim(),
+    autoExif: auto ? auto[1].toLowerCase() === "true" : true,
+    exif: info,
+  });
 }
 
 function emitTable(b) {
@@ -635,7 +676,8 @@ const INLINE_RULES = [
     name: "math",
     re: /(?<!\$)\$(?!\$)([^$\n]+)\$(?!\$)/,
     html: (m) =>
-      `<span class="mathjax-inline ed-math" data-md="math" data-tex="${escapeHTML(m[1])}">` +
+      `<span class="mathjax-inline ed-math" data-md="math" data-mathjax="inline"` +
+      ` data-tex="${escapeHTML(m[1])}" contenteditable="false">` +
       `<span class="ed-math-src">${escapeHTML(m[1])}</span></span>`,
   },
   { name: "image", re: /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/, html: (m) => `<img data-md="image" src="${escapeHTML(m[2])}" alt="${escapeHTML(m[1])}"${m[3] ? ` title="${escapeHTML(m[3])}"` : ""}>` },

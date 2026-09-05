@@ -210,6 +210,7 @@ function mountRich(view) {
   // either side of a mark before anything has been applied to it.
   anchorMarks(host);
   typesetMath(host);
+  wireInlineMath(host, view);
 
   view.body.appendChild(host);
   view.editable = host;
@@ -298,6 +299,67 @@ function mountRich(view) {
       return view.ctx.onRemount(block.id);
     }
   };
+}
+
+/**
+ * An equation in the middle of a sentence, opened to be read.
+ *
+ * Rendered it is an SVG, and an SVG is not something you can put a caret in —
+ * so the chip is inert until it is clicked, and then it shows the LaTeX it was
+ * made from as ordinary text. Leaving it typesets it again. Display math is a
+ * block of its own with its own field; this is the inline half, and the two are
+ * told apart by which delimiter wrote them.
+ */
+function wireInlineMath(host, view) {
+  const close = (chip) => {
+    const src = chip.querySelector(".ed-math-src");
+    if (!src) return;
+    const tex = src.textContent.trim();
+    chip.setAttribute("data-tex", tex);
+    chip.removeAttribute("data-editing");
+    chip.contentEditable = "false";
+    src.contentEditable = "false";
+    chip.innerHTML = `<span class="ed-math-src">${escapeHTML(tex)}</span>`;
+    typesetMath(chip);
+    view.touch();
+    view.read();
+  };
+
+  host.addEventListener("click", (e) => {
+    const chip = e.target.closest(".ed-math");
+    if (!chip || !host.contains(chip)) return;
+    e.preventDefault();
+
+    for (const other of host.querySelectorAll('.ed-math[data-editing="1"]')) {
+      if (other !== chip) close(other);
+    }
+    if (chip.dataset.editing === "1") return;
+
+    chip.dataset.editing = "1";
+    chip.innerHTML = `<span class="ed-math-src">${escapeHTML(chip.getAttribute("data-tex") || "")}</span>`;
+    const src = chip.querySelector(".ed-math-src");
+    src.contentEditable = "true";
+    caret.focusEnd(src);
+  });
+
+  host.addEventListener(
+    "blur",
+    (e) => {
+      const chip = e.target.closest && e.target.closest('.ed-math[data-editing="1"]');
+      if (chip) close(chip);
+    },
+    true
+  );
+
+  host.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" && e.key !== "Enter") return;
+    const chip = e.target.closest && e.target.closest('.ed-math[data-editing="1"]');
+    if (!chip) return;
+    e.preventDefault();
+    e.stopPropagation();
+    close(chip);
+    caret.focusEnd(host);
+  });
 }
 
 /**
@@ -499,13 +561,9 @@ function mountSource(view) {
   };
 
   const paint = async () => {
-    if (block.type === "mermaid") await renderMermaid(preview, block.code || "");
-    else if (block.type === "math") {
-      preview.innerHTML = `<div class="mathjax-block ed-math-block" data-tex="${escapeHTML(block.tex || "")}"></div>`;
-      await typesetMath(preview);
-    } else {
-      preview.innerHTML = renderBlock(block);
-    }
+    if (block.type === "mermaid") return void (await renderMermaid(preview, block.code || ""));
+    preview.innerHTML = renderBlock(block);
+    if (block.type === "math") await typesetMath(preview);
   };
 
   const show = async (mode) => {
@@ -644,9 +702,35 @@ function mountImage(view) {
       : escapeHTML(block.alt || "");
   };
 
+  const hasExif = () => !!block.exifTitle || Object.keys(block.exif || {}).some((k) => block.exif[k]);
+
   const paint = () => {
+    const api = window.RedefineComponents;
+
+    // With a caption title or camera data this is an `{% exifimage %}`, and the
+    // card it prints is part of the picture. Rendered through the shared
+    // emitter, so the canvas shows the figure the build will.
+    if (hasExif() && api && api.exifImage) {
+      wrap.className = "ed-figure ed-figure-exif";
+      wrap.innerHTML = api.exifImage(
+        [block.exifTitle || "", block.autoExif === false ? "auto-exif:false" : ""].filter(Boolean),
+        api.buildExifBody({ description: block.alt, path: block.url, info: block.exif || {} }),
+        null,
+        { resolve: (p) => ctx.resolveAsset(p) }
+      );
+      const img = wrap.querySelector("img");
+      if (img) img.setAttribute("data-no-viewer", "");
+      return;
+    }
+
+    wrap.className = "image-caption ed-figure";
+    if (!wrap.contains(caption)) wrap.appendChild(caption);
     const old = wrap.querySelector(".img-preloader, img");
     const node = ctx.buildPreloader(block.url, block.alt);
+    // In the editor a click on a picture SELECTS it; the viewer is a button in
+    // the toolbar, because opening a lightbox over the thing you are editing is
+    // not what a click there means.
+    node.setAttribute("data-no-viewer", "");
     if (old) old.replaceWith(node);
     else wrap.insertBefore(node, caption);
     paintCaption();
@@ -673,26 +757,30 @@ function mountImage(view) {
   view.editable = caption;
 
   view.options = () => [
-    { kind: "btn", act: "replace", icon: "fa-arrows-rotate", label: "Replace picture", tt: "replace", wide: true },
-    { kind: "btn", act: "address", icon: "fa-link", label: "Address", tt: "address", wide: true },
+    { kind: "btn", act: "folder", icon: "fa-folder-open", label: "Open folder", tt: "open_folder", wide: true },
+    { kind: "btn", act: "props", icon: "fa-sliders", label: "Properties", tt: "properties", wide: true, on: hasExif() },
+    { kind: "btn", act: "view", icon: "fa-expand", label: "Open viewer", tt: "open_viewer" },
   ];
 
   view.act = async (act) => {
-    if (act === "replace") {
-      const picked = await ctx.pickImage();
+    if (act === "folder") {
+      // The picker names it. Replacing and addressing were the same act asked
+      // two ways, and one of them was a repository path typed from memory.
+      const picked = await ctx.pickImage(block.url);
       if (!picked) return;
-      // The SITE path, not the repository path: what lands in the markdown has
-      // to be what a browser can ask for.
       block.url = picked.site;
-    } else if (act === "address") {
-      const url = await ctx.ask("url", block.url || "");
-      if (url == null) return;
-      block.url = url.trim();
+    } else if (act === "props") {
+      const next = await ctx.imageProps(block);
+      if (!next) return;
+      Object.assign(block, next);
+    } else if (act === "view") {
+      return void ctx.openViewer(wrap.querySelector("img"));
     } else {
       return;
     }
     view.touch();
     paint();
+    ctx.onOptionsChanged();
   };
 }
 
@@ -947,18 +1035,53 @@ function mountComponent(view) {
     }
   };
 
+  // A large note and a folding hold BLOCKS, not a slab of rich text — the same
+  // blocks the article holds, with their own gutters and handles, so a picture
+  // or a table inside one is edited the way it is edited anywhere else. A small
+  // note and a box hold a line or two, and a canvas inside them would be more
+  // machinery than the thing it edits.
+  const nests = kind === "noteLarge" || kind === "folding";
+  let nested = null;
+
   const paint = () => {
+    if (nested) {
+      ctx.unnest(nested);
+      nested = null;
+    }
     host.innerHTML = renderBlock(block);
     wireTitle();
     if (kind === "btn") return;
+
     const inner = host.querySelector(".markdown-body, .notel-content, .post-box, .content");
-    if (!inner || parsed.bodyKind === "text") return mountComponentBody(view, host, parsed);
-    mountComponentBody(view, inner, parsed);
+    if (nests && inner) {
+      inner.classList.add("ed-nest");
+      inner.innerHTML = "";
+      nested = ctx.nest(inner, block.body || "", {
+        write: (text) => {
+          block.body = text;
+          view.touch();
+        },
+        onEmpty: () => ctx.onDelete(block.id, "prev"),
+      });
+      if (nested) return;
+      // No box came back, which means this note is already inside one. It falls
+      // back to the flat body rather than opening a second level.
+      inner.classList.remove("ed-nest");
+      host.innerHTML = renderBlock(block);
+      wireTitle();
+    }
+
+    const body = host.querySelector(".markdown-body, .notel-content, .post-box, .content");
+    if (!body || parsed.bodyKind === "text") return mountComponentBody(view, host, parsed);
+    mountComponentBody(view, body, parsed);
   };
 
   paint();
+  view.nests = nests;
 
-  view.read = () => {};
+  view.read = () => {
+    if (nested && ctx.writeBox) ctx.writeBox(nested);
+  };
   view.focus = () => {
     const editable = wrap.querySelector("[contenteditable=true]");
     if (editable) caret.focusEnd(editable);
@@ -1080,7 +1203,7 @@ function mountTabs(view, wrap) {
   wrap.innerHTML = `
     <div class="ed-tabs">
       <div class="ed-tabs-nav" contenteditable="false"></div>
-      <div class="ed-tabs-pane markdown-body ed-rich" contenteditable="true" spellcheck="true"></div>
+      <div class="ed-tabs-pane markdown-body"></div>
     </div>`;
 
   const nav = wrap.querySelector(".ed-tabs-nav");
@@ -1098,8 +1221,11 @@ function mountTabs(view, wrap) {
     view.touch();
   };
 
+  // The pane's own box writes itself back as its blocks change, so reading is
+  // only a matter of asking it to.
   const readPane = () => {
-    if (panes[open]) panes[open].body = richToMarkdown(pane);
+    if (nested && ctx.writeBox) ctx.writeBox(nested);
+    else if (panes[open]) panes[open].body = richToMarkdown(pane);
   };
 
   const paintNav = () => {
@@ -1125,8 +1251,38 @@ function mountTabs(view, wrap) {
     });
   };
 
+  // Each pane is a canvas of its own. Emptying one deletes that pane — its
+  // caption goes with it, because a tab with no name and nothing in it is not
+  // something you meant to keep — and the last pane takes the group with it.
+  let nested = null;
+
+  const dropPane = () => {
+    if (panes.length <= 1) return void ctx.onDelete(block.id, "prev");
+    panes.splice(open, 1);
+    open = Math.max(0, open - 1);
+    writeBody();
+    paintNav();
+    morphHeight(wrap, paintPane);
+  };
+
   const paintPane = () => {
-    pane.innerHTML = renderMarkdown(panes[open] ? panes[open].body : "");
+    if (nested) {
+      ctx.unnest(nested);
+      nested = null;
+    }
+    pane.innerHTML = "";
+    pane.classList.add("ed-nest");
+    nested = ctx.nest(pane, panes[open] ? panes[open].body : "", {
+      write: (text) => {
+        if (panes[open]) panes[open].body = text;
+        writeBody();
+      },
+      onEmpty: dropPane,
+    });
+    if (!nested) {
+      pane.classList.remove("ed-nest");
+      pane.innerHTML = renderMarkdown(panes[open] ? panes[open].body : "");
+    }
     ctx.observeImages();
   };
 
@@ -1154,19 +1310,15 @@ function mountTabs(view, wrap) {
     }
   });
 
-  pane.addEventListener("input", () => {
-    readPane();
-    writeBody();
-  });
-  pane.addEventListener("paste", (e) => onPaste(view, e));
-  pane.addEventListener("focus", () => ctx.onFocus(view));
-
   paintNav();
   paintPane();
 
+  view.nests = true;
   view.read = readPane;
-  view.editable = pane;
-  view.focus = () => caret.focusEnd(pane);
+  view.focus = () => {
+    const first = pane.querySelector("[contenteditable=true]");
+    if (first) caret.focusEnd(first);
+  };
   view.isEmpty = () => false;
 
   view.options = () => [
@@ -1373,7 +1525,7 @@ export function makeBlock(type, fields) {
     code: { lang: "", code: "", fence: "```" },
     mermaid: { code: "graph TD\n  A --> B" },
     math: { tex: "" },
-    image: { alt: "", url: "", title: "" },
+    image: { alt: "", url: "", title: "", exifTitle: "", autoExif: true, exif: {} },
     hr: {},
     raw: { text: "" },
     table: {

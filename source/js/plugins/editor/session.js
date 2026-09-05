@@ -333,7 +333,64 @@ function publishEncrypted(doc, entry, choice) {
   return TRUTHY.test(String(parseFrontMatter(doc.front).vault || ""));
 }
 
-export async function save(doc, mode, pending, choice) {
+/**
+ * The picker's renames and moves, as git operations, plus the note that tells
+ * the build to catch up the rest of the site.
+ *
+ * The editor rewrote the addresses in the post it had open, because that one is
+ * in front of it. Every OTHER post that used the old name is rewritten on the
+ * next generate from `source/_data/image-moves.json` — see
+ * scripts/events/image-moves.js — which then deletes the note, so the sweep
+ * happens once and never again.
+ */
+async function movedFiles(stage) {
+  if (!stage || !stage.dirty) return [];
+  const files = [];
+  const notes = [];
+
+  for (const move of stage.moves) {
+    let sha = "";
+    try {
+      const dir = move.from.replace(/\/[^/]+$/, "");
+      const row = (await gitea.list(dir)).find((f) => f.path === move.from);
+      sha = row ? row.sha : "";
+    } catch (err) {
+      sha = "";
+    }
+    // No sha means the repository has never seen it — a picture added in this
+    // same session and renamed before it was ever committed. It rides in on the
+    // pending upload under its final name, so there is nothing to move.
+    if (!sha) continue;
+    files.push({ operation: "update", path: move.to, from: move.from, sha });
+    notes.push({ from: move.from, to: move.to });
+  }
+
+  if (notes.length) {
+    const JOURNAL = "source/_data/image-moves.json";
+    let held = [];
+    let sha = "";
+    try {
+      const current = await gitea.read(JOURNAL);
+      if (current) {
+        sha = current.sha;
+        held = JSON.parse(current.text) || [];
+      }
+    } catch (err) {
+      held = [];
+    }
+    const body = JSON.stringify(held.concat(notes), null, 2) + "\n";
+    files.push({
+      operation: sha ? "update" : "create",
+      path: JOURNAL,
+      content: gitea.toBase64(body),
+      ...(sha ? { sha } : {}),
+    });
+  }
+
+  return files;
+}
+
+export async function save(doc, mode, pending, choice, stage) {
   const files = [];
   const entry = doc.entry || {};
   // Stamped here rather than offered as a field: `updated` means "when this was
@@ -347,6 +404,7 @@ export async function save(doc, mode, pending, choice) {
   for (const asset of pending || []) {
     files.push({ operation: "create", path: asset.path, content: gitea.toBase64(asset.bytes) });
   }
+  files.push(...(await movedFiles(stage)));
 
   if (mode === "publish") {
     // A post that has never been saved publishes straight to its own file: it

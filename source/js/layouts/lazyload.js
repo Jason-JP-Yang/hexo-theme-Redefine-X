@@ -189,7 +189,12 @@ export function transformPreloaderToImage(preloader, img) {
   // Mark
   img.classList.add("img-preloader-loaded");
   img.dataset.originalSrc = preloader.dataset.src;
-  
+
+  // The editor marks its pictures so a click selects them instead of opening
+  // the lightbox. The mark has to survive the swap or it stops meaning anything
+  // the moment the image actually loads.
+  if (preloader.hasAttribute("data-no-viewer")) img.setAttribute("data-no-viewer", "");
+
   return img;
 }
 

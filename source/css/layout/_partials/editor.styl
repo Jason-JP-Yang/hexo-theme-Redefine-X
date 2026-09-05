@@ -891,6 +891,271 @@ textarea.ed-f-input
   &[data-mode="source"] .ed-preview
     display none
 
+// ─── a canvas inside a component ────────────────────────────
+// A large note, a folding and a tab pane hold real blocks, so what is inside
+// one has to look like what is outside one — same measure, same spacing, its
+// own gutter. The gutter goes INSIDE here rather than out in the article's
+// padding, because there is no padding to ride in this far in.
+.ed-nest
+  min-height 2.2em
+
+  > .ed-block > .ed-gutter
+    position static
+    flex-direction row
+    margin 0 0 4px
+    opacity 0
+    transform none
+
+  > .ed-block:hover > .ed-gutter,
+  > .ed-block[data-on="1"] > .ed-gutter
+    opacity 1
+
+  > .ed-block:first-child .ed-body > *
+    margin-top 0
+
+  > .ed-block:last-child .ed-body > *
+    margin-bottom 0
+
+// ─── an equation in a sentence ──────────────────────────────
+// Rendered it is an SVG and holds no caret, so it is inert until it is clicked
+// and then it shows the LaTeX it came from.
+.ed-math
+  border-radius 4px
+  cursor pointer
+  transition background $ed-fade
+
+  &:hover
+    background var(--second-background-color)
+
+  &[data-editing="1"]
+    background var(--second-background-color)
+    cursor text
+
+    .ed-math-src
+      font-family $ed-mono
+      font-size 0.86em
+      outline none
+
+.ed-math[data-editing="1"] .ed-math-src
+  padding 0 3px
+
+.ed-math-error
+  color var(--box-red-text)
+
+// ─── the picture browser & the property sheet ───────────────
+.ed-picker-mask
+  position fixed
+  inset 0
+  z-index ($z-index-5 + 3)
+  display grid
+  place-items center
+  padding 20px
+  background var(--shadow-color-1)
+  backdrop-filter blur(4px)
+  -webkit-backdrop-filter blur(4px)
+
+.ed-picker,
+.ed-sheet
+  display flex
+  flex-direction column
+  width min(880px, 100%)
+  max-height min(680px, 100%)
+  border 1px solid var(--border-color)
+  border-radius $ed-radius
+  background var(--background-color)
+  box-shadow 0 24px 60px -24px var(--shadow-color-1)
+  overflow hidden
+
+.ed-picker-bar
+  display flex
+  align-items center
+  gap 10px
+  padding 10px 12px
+  border-bottom 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-picker-name
+  display inline-flex
+  align-items center
+  gap 8px
+  font-size 0.82rem
+  font-weight 650
+
+.ed-picker-acts
+  display flex
+  gap 4px
+  margin-left auto
+
+  button
+    display grid
+    place-items center
+    width 28px
+    height 28px
+    border none
+    border-radius 8px
+    background transparent
+    color var(--second-text-color)
+    font-size 0.78rem
+    cursor pointer
+    transition background $ed-fade
+
+    &:hover
+      background var(--third-background-color)
+
+.ed-picker-body
+  display grid
+  grid-template-columns minmax(0, 1fr) minmax(0, 1.15fr)
+  min-height 0
+  flex 1 1 auto
+
+  +redefine-tablet()
+    grid-template-columns minmax(0, 1fr)
+    grid-template-rows minmax(0, 1fr) minmax(0, 1fr)
+
+.ed-picker-side
+  display flex
+  flex-direction column
+  min-height 0
+  border-right 1px solid var(--border-color)
+
+  +redefine-tablet()
+    border-right none
+    border-bottom 1px solid var(--border-color)
+
+.ed-picker-find
+  display flex
+  align-items center
+  gap 8px
+  padding 8px 12px
+  border-bottom 1px solid var(--border-color)
+  color var(--third-text-color)
+  font-size 0.74rem
+
+  input
+    flex 1 1 auto
+    min-width 0
+    border none
+    background transparent
+    color var(--first-text-color)
+    font-size 0.78rem
+    outline none
+
+.ed-picker-tree
+  flex 1 1 auto
+  min-height 0
+  padding 6px 0
+  overflow-y auto
+
+.ed-picker-row
+  display flex
+  align-items center
+  gap 8px
+  padding 5px 12px 5px 8px
+  color var(--second-text-color)
+  font-size 0.78rem
+  cursor pointer
+  user-select none
+  transition background $ed-fade
+
+  i
+    flex-shrink 0
+    width 14px
+    color var(--third-text-color)
+    font-size 0.76rem
+
+  span
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+  &:hover
+    background var(--second-background-color)
+
+  &[data-on="1"]
+    background var(--primary-color)
+    color $ed-on-primary
+
+    i
+      color $ed-on-primary
+
+  &[data-drop="1"]
+    box-shadow inset 0 0 0 2px var(--primary-color)
+
+.ed-picker-flag
+  margin-left auto
+  padding 1px 6px
+  border-radius 999px
+  background var(--box-amber-bg)
+  color var(--box-amber-text)
+  font-size 0.6rem
+  font-style normal
+
+.ed-picker-empty
+  padding 22px 14px
+  color var(--third-text-color)
+  font-size 0.76rem
+  text-align center
+
+.ed-picker-view
+  display flex
+  flex-direction column
+  gap 10px
+  min-height 0
+  padding 14px
+  overflow-y auto
+
+.ed-picker-shot
+  display grid
+  place-items center
+  flex 1 1 auto
+  min-height 0
+
+  .img-preloader,
+  img
+    max-width 100%
+    max-height 46vh
+    border-radius 10px
+
+.ed-picker-meta
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.7rem
+  word-break break-all
+
+.ed-picker-foot
+  display flex
+  align-items center
+  gap 12px
+  padding 10px 12px
+  border-top 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-picker-path
+  flex 1 1 auto
+  min-width 0
+  overflow hidden
+  color var(--second-text-color)
+  font-family $ed-mono
+  font-size 0.72rem
+  text-overflow ellipsis
+  white-space nowrap
+
+.ed-picker-hint
+  flex 1 1 auto
+  color var(--third-text-color)
+  font-size 0.72rem
+
+.ed-sheet-body
+  flex 1 1 auto
+  min-height 0
+  padding 14px
+  overflow-y auto
+
+.ed-sheet-group + .ed-sheet-group
+  margin-top 16px
+  padding-top 14px
+  border-top 1px solid var(--border-color)
+
 .ed-chip
   display inline-flex
   align-items center
