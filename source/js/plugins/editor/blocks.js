@@ -26,6 +26,7 @@ import { emitBlock, escapeHTML, htmlToInline, inlineToHTML, nextId } from "./mar
 import { renderBlock, renderMarkdown, renderMermaid, typesetMath } from "./render.js";
 import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
+import { anchorMarks } from "./inline.js";
 import { crossFade, morphHeight, setDragImage } from "./motion.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
@@ -86,6 +87,14 @@ export function createView(block, ctx) {
   el.querySelector(".ed-add").addEventListener("click", (e) => {
     e.preventDefault();
     ctx.onInsertAfter(block.id);
+  });
+
+  // A press anywhere in the block is a press ON the block. Without this an
+  // image or a button — neither of which holds a caret — never became the
+  // focused one, and the toolbar had nothing to say about it.
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".ed-gutter")) return;
+    ctx.onFocus(view);
   });
 
   // Every block answers the toolbar, whether or not it has anything to say.
@@ -197,6 +206,10 @@ function mountRich(view) {
   host.spellcheck = true;
   host.dataset.placeholder = view.ctx.t("placeholder", "Write, or press / for a block");
   host.innerHTML = richHTML(block);
+  // Boundary anchors from the first frame: the caret has to be able to stand
+  // either side of a mark before anything has been applied to it.
+  anchorMarks(host);
+  typesetMath(host);
 
   view.body.appendChild(host);
   view.editable = host;
@@ -229,17 +242,22 @@ function mountRich(view) {
   // Heading levels 5 and 6 are not offered as conversions — four is already
   // more depth than a post uses — but a file that carries one has to be able to
   // say so, so the depth control covers all six.
-  view.options = () => {
+  view.options = (open) => {
     if (block.type === "heading") {
-      return [1, 2, 3, 4, 5, 6].map((level) => ({
-        kind: "btn",
-        act: "level",
-        arg: level,
-        icon: "fa-heading",
-        label: "H" + level,
-        wide: true,
-        on: (block.level || 2) === level,
-      }));
+      // One control that opens the depths, the way the highlighter opens the
+      // palette. Six H icons in a row said nothing about which was which.
+      return [
+        {
+          kind: "btn",
+          act: "sub",
+          arg: "level",
+          icon: "fa-heading",
+          label: "Heading " + (block.level || 2),
+          tt: "b_heading" + (block.level || 2),
+          wide: true,
+          on: open === "level",
+        },
+      ];
     }
     if (block.type === "list") {
       return [
@@ -249,6 +267,23 @@ function mountRich(view) {
     }
     return [];
   };
+
+  view.subOptions = (key) =>
+    key !== "level" || block.type !== "heading"
+      ? []
+      : [
+          { kind: "label", label: "Depth", tt: "depth" },
+          ...[1, 2, 3, 4, 5, 6].map((level) => ({
+            kind: "btn",
+            act: "level",
+            arg: level,
+            icon: "fa-heading",
+            label: "Heading " + level,
+            tt: "b_heading" + level,
+            wide: true,
+            on: (block.level || 2) === level,
+          })),
+        ];
 
   view.act = (act, arg) => {
     if (act === "level") {

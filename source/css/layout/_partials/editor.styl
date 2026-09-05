@@ -552,6 +552,10 @@ textarea.ed-f-input
   position fixed
   // Below the document bar's pinned band. `--ed-docbar-h` is that bar's measured
   // height, republished by a ResizeObserver, so this clears it however it wraps.
+  // `--ed-docbar-h` is 0 unless the document bar is PINNED. Unpinned it
+  // is still down in the article clearing nothing, and reserving its height
+  // left a band of empty page under the navbar. The switch is animated by the
+  // transition below, so the toolbar slides rather than jumps.
   top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top + 12px))
   left 50%
   z-index $z-index-4
@@ -833,15 +837,42 @@ textarea.ed-f-input
   background var(--box-amber-bg)
   color var(--box-amber-text)
 
-for $hl in 'amber' 'yellow' 'lime' 'green' 'teal' 'cyan' 'blue' 'indigo' 'purple' 'pink' 'red' 'gray'
-  .markdown-body mark.hl-{$hl},
-  .ed-rich mark.hl-{$hl}
-    background unquote('var(--box-' + $hl + '-bg)')
-    color unquote('var(--box-' + $hl + '-text)')
+// A highlight is a box, so the swatch IS a box: it wears the very classes the
+// published span wears and needs no palette of its own.
+.ed-swatch-dot.post-box
+  padding 0
 
-  .ed-swatch-dot.hl-{$hl}
-    background unquote('var(--box-' + $hl + '-bg)')
-    box-shadow inset 0 0 0 1px unquote('var(--box-' + $hl + '-text)')
+// Something with no words in it still has to be clickable, or the only way to
+// put words in it is gone. An empty caption, an empty button, an empty quote
+// and an empty cell all used to collapse to nothing at all.
+.ed-inplace:empty
+  display inline-block
+  min-width 3.5em
+  min-height 1.2em
+  border-bottom 1px dashed var(--border-color)
+
+.ed-rich blockquote p:empty,
+.ed-rich > p:empty
+  min-height 1.4em
+
+.ed-block[data-type="quote"] .ed-rich
+  min-height 1.8em
+
+.ed-component[data-kind="btn"] a.button
+  display inline-flex
+  align-items center
+  justify-content center
+  min-width 5em
+  min-height 2.6em
+
+.ed-table-block th:empty,
+.ed-table-block td:empty
+  min-width 4em
+
+  &::before
+    content ""
+    display inline-block
+    min-height 1.2em
 // ─── source blocks ──────────────────────────────────────────
 .ed-source-block
   position relative

@@ -246,14 +246,28 @@ export async function renderMermaid(host, code) {
     host.textContent = code;
     return;
   }
+  const id = "ed-mmd-" + Math.random().toString(36).slice(2, 9);
   try {
-    window.mermaid.initialize({ startOnLoad: false, theme: document.documentElement.classList.contains("dark") ? "dark" : "default" });
-    const id = "ed-mmd-" + Math.random().toString(36).slice(2, 9);
+    window.mermaid.initialize({
+      startOnLoad: false,
+      // Mermaid's own error report is a full-width SVG it appends to the BODY
+      // and never takes away, so a diagram in mid-sentence printed "Syntax
+      // error in text" across the foot of the article. The message belongs in
+      // the block being edited and nowhere else.
+      suppressErrorRendering: true,
+      theme: document.documentElement.classList.contains("dark") ? "dark" : "default",
+    });
     const { svg } = await window.mermaid.render(id, code);
     host.innerHTML = svg;
     host.classList.remove("ed-mermaid-error");
   } catch (err) {
     host.textContent = String((err && err.message) || err);
     host.classList.add("ed-mermaid-error");
+  } finally {
+    // Older mermaid ignores suppressErrorRendering and leaves the sandbox
+    // behind regardless, so whatever it parked outside the block is removed.
+    for (const stray of document.querySelectorAll("#" + id + ", #d" + id)) {
+      if (!host.contains(stray)) stray.remove();
+    }
   }
 }

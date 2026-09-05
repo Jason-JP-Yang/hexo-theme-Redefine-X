@@ -25,15 +25,20 @@ function boundaryRange(el, toStart) {
   return bound;
 }
 
+/** What the author actually typed: the editor's own caret anchors do not count. */
+function typed(range) {
+  return range.toString().replace(/​/g, "");
+}
+
 /** True when nothing but whitespace lies between the caret and the start. */
 export function atStart(el) {
   const range = boundaryRange(el, true);
-  return range ? range.toString().length === 0 : false;
+  return range ? typed(range).length === 0 : false;
 }
 
 export function atEnd(el) {
   const range = boundaryRange(el, false);
-  return range ? range.toString().length === 0 : false;
+  return range ? typed(range).length === 0 : false;
 }
 
 export function isCollapsed() {
@@ -44,7 +49,7 @@ export function isCollapsed() {
 /** Characters between the start of `el` and the caret — what `/` menus need. */
 export function offsetIn(el) {
   const range = boundaryRange(el, true);
-  return range ? range.toString().length : 0;
+  return range ? typed(range).length : 0;
 }
 
 export function focusStart(el) {

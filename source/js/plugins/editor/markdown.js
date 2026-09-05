@@ -574,11 +574,70 @@ export function escapeHTML(value) {
   );
 }
 
-// Ordered by precedence. `code` and `math` come first because their contents
-// are literal — an asterisk inside a code span is an asterisk.
+/** tools/components.js, when the page has loaded it. The one emitter. */
+function components() {
+  return (typeof window !== "undefined" && window.RedefineComponents) || null;
+}
+
+/**
+ * A highlight is `{% box colour %}…{% endbox %}`, and equally
+ * `{$ box colour $}…{$ endbox $}` — scripts/filters/box-syntax.js rewrites the
+ * second into the first before Hexo sees it. The shorthand exists so a box can
+ * sit against a `$` math delimiter without the two fighting, which is also why
+ * this rule has to run BEFORE the math one: `{$ box green $}` is otherwise read
+ * as an equation called " box green ".
+ *
+ * Whichever spelling the author used is remembered on the node and re-emitted,
+ * so opening a post does not rewrite the other one.
+ */
+const BOX_RE = /\{([%$])\s*box(?:\s+([^%$}]*?))?\s*\1\}([\s\S]*?)\{\1\s*endbox\s*\1\}/;
+
+function boxHTML(m) {
+  const api = components();
+  const colour = api ? api.boxColor(m[2]) : String(m[2] || "default").trim() || "default";
+  const inner = inlineToHTML(m[3]);
+  const data = ` data-md="box" data-box-syntax="${m[1]}"`;
+
+  if (!api) return `<span class="post-box post-box-${escapeHTML(colour)}"${data}>${inner}</span>`;
+
+  // Through the shared emitter, so the box on the canvas is the box the build
+  // makes. The placeholder survives its escaping untouched.
+  const MARK = " box ";
+  return api
+    .box([colour], MARK)
+    .replace(MARK, inner)
+    .replace(/^<(span|div)\s/, `<$1${data} `);
+}
+
+/** `{% btn class::text::url::icon %}` — one node, edited through the toolbar. */
+const BTN_RE = /\{%\s*(?:btn|button)\s+([^%]*?)\s*%\}/;
+
+function btnHTML(m) {
+  const api = components();
+  const data = ` data-md="btn" data-md-src="${escapeHTML(m[0])}"`;
+  if (!api) return `<span class="button"${data}>${escapeHTML(m[1])}</span>`;
+  return api
+    .btn(m[1].trim().split(/\s+/))
+    .replace(/^\s*<a\s/, `<a${data} `);
+}
+
+// Ordered by precedence. `box` and `btn` are first because their delimiters
+// contain characters later rules claim; `code` and `math` come next because
+// their contents are literal — an asterisk inside a code span is an asterisk.
 const INLINE_RULES = [
+  { name: "box", re: BOX_RE, html: boxHTML },
+  { name: "btn", re: BTN_RE, html: btnHTML },
   { name: "code", re: /`([^`\n]+)`/, html: (m) => `<code data-md="code">${escapeHTML(m[1])}</code>` },
-  { name: "math", re: /\$([^$\n]+)\$/, html: (m) => `<span class="ed-math-inline" data-md="math" data-tex="${escapeHTML(m[1])}">${escapeHTML(m[1])}</span>` },
+  // Not `$$`: that is display math, and it is a block of its own. Without the
+  // guards this rule ate the inner half of one and left a stray delimiter at
+  // each end.
+  {
+    name: "math",
+    re: /(?<!\$)\$(?!\$)([^$\n]+)\$(?!\$)/,
+    html: (m) =>
+      `<span class="mathjax-inline ed-math" data-md="math" data-tex="${escapeHTML(m[1])}">` +
+      `<span class="ed-math-src">${escapeHTML(m[1])}</span></span>`,
+  },
   { name: "image", re: /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/, html: (m) => `<img data-md="image" src="${escapeHTML(m[2])}" alt="${escapeHTML(m[1])}"${m[3] ? ` title="${escapeHTML(m[3])}"` : ""}>` },
   { name: "link", re: /\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/, html: (m) => `<a data-md="link" href="${escapeHTML(m[2])}"${m[3] ? ` title="${escapeHTML(m[3])}"` : ""}>${inlineToHTML(m[1])}</a>` },
   { name: "strong", re: /\*\*([^*]+)\*\*/, html: (m) => `<strong data-md="strong">${inlineToHTML(m[1])}</strong>` },
@@ -637,13 +696,22 @@ export function inlineToHTML(text) {
 
 const MD_ESCAPE = /([\\`*_[\]~])/g;
 
+/** The colour a box node is wearing, when the attribute has been lost. */
+export function boxColourOf(el) {
+  const found = String(el.className || "").match(/post-box-([a-z]+)/);
+  return found ? found[1] : "default";
+}
+
 /** The contenteditable's DOM → inline markdown. The inverse of the above. */
 export function htmlToInline(node) {
   let out = "";
 
   for (const child of Array.from(node.childNodes)) {
     if (child.nodeType === 3) {
-      out += child.nodeValue.replace(MD_ESCAPE, "\\$1");
+      // Zero-width spaces are the editor's own: they are the caret's landing
+      // place either side of a mark (see anchorMarks in inline.js) and are
+      // never part of what the author wrote.
+      out += child.nodeValue.replace(/​/g, "").replace(MD_ESCAPE, "\\$1");
       continue;
     }
     if (child.nodeType !== 1) continue;
@@ -662,6 +730,13 @@ export function htmlToInline(node) {
 
     if (tag === "br") {
       out += "\n";
+    } else if (kind === "box") {
+      // Back in the spelling it arrived in. `%` is the tag, `$` the shorthand;
+      // anything new the editor makes is written as the shorthand, which is the
+      // form that survives sitting next to a `$` delimiter.
+      const d = child.getAttribute("data-box-syntax") === "%" ? "%" : "$";
+      const colour = child.getAttribute("data-box-color") || boxColourOf(child);
+      out += `{${d} box ${colour} ${d}}${htmlToInline(child)}{${d} endbox ${d}}`;
     } else if (tag === "code" || kind === "code") {
       out += "`" + child.textContent + "`";
     } else if (kind === "math") {

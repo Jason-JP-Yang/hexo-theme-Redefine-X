@@ -53,6 +53,7 @@ import initLazyLoad, {
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
 import { assetURL } from "../../tools/vaultCrypto.js";
+import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as gitea from "./gitea.js";
 import { contentChanged, crossFade, enter, exit, flip, pop } from "./motion.js";
@@ -141,13 +142,32 @@ function pageIdentity(host) {
  * guessed offset lands on top of it the moment either happens.
  */
 function watchDocbarHeight(bar) {
+  let pinned = false;
+  let height = 0;
+
   const publish = () => {
-    document.documentElement.style.setProperty("--ed-docbar-h", `${Math.round(bar.offsetHeight)}px`);
+    // Only while the bar is actually PINNED. Unpinned it is still down in the
+    // article, clearing nothing, and reserving its height left a band of empty
+    // page under the navbar with the toolbar stranded below it.
+    document.documentElement.style.setProperty("--ed-docbar-h", `${pinned ? height : 0}px`);
   };
-  publish();
-  const ro = new ResizeObserver(publish);
+
+  const measure = () => {
+    height = Math.round(bar.offsetHeight);
+    // Sticky means its top stops at the pin line and goes no further, so being
+    // at the line IS being pinned. One pixel of slack for fractional layout.
+    const stick = parseFloat(getComputedStyle(bar).top) || 0;
+    const now = getComputedStyle(bar).position === "sticky" && bar.getBoundingClientRect().top <= stick + 1;
+    if (now === pinned && document.documentElement.style.getPropertyValue("--ed-docbar-h")) return;
+    pinned = now;
+    publish();
+  };
+
+  measure();
+  const ro = new ResizeObserver(measure);
   ro.observe(bar);
-  return ro;
+  const off = onScroll(measure, null, "editor docbar pin");
+  return { disconnect: () => { ro.disconnect(); off(); } };
 }
 
 function releaseDocbarHeight() {
@@ -796,28 +816,18 @@ function convertTo(key) {
   convertBlock(view.block.id, entry.type, fieldsFor(entry, lines));
 }
 
-/** Insert at the caret: inline where the caret is inline, a block where not. */
+/**
+ * Insert: always a new block, after the one the caret is in.
+ *
+ * There is no inline half any more. Everything that goes INSIDE a line — a
+ * link, a highlight, a code span, an equation — needs words to act on, so it
+ * belongs to the selection and lives in Format.
+ */
 function insertItem(key, host) {
   const item = INSERTS.find((entry) => entry.key === key);
   if (!item) return;
 
   const target = host || state.focused;
-  const root = richRoot();
-
-  if (item.where === "mark" && root) {
-    if (key === "link") {
-      return void askFor(ui.toolbar.el, { t }, "url", "https://").then((url) => {
-        if (url == null) return;
-        ui.toolbar.applyMark("link", { href: url });
-      });
-    }
-    return void ui.toolbar.applyMark("code", {});
-  }
-
-  if (item.where === "inline" && root && target) {
-    return void insertInlineNode(key);
-  }
-
   const spec = BLOCK_SEEDS[key];
   if (!spec) return;
 
@@ -829,6 +839,7 @@ function insertItem(key, host) {
 
 /** What each insertable BLOCK starts life as. */
 const BLOCK_SEEDS = {
+  paragraph: { type: "paragraph", fields: { text: "" } },
   image: { type: "image", fields: { url: "", alt: "" } },
   table: { type: "table" },
   code: { type: "code", fields: { lang: "", code: "" } },
@@ -1345,6 +1356,7 @@ function wire() {
   state.canvas.addEventListener("drop", onCanvasDrop);
   document.addEventListener("selectionchange", onSelectionChange);
   document.addEventListener("keydown", onKey, true);
+  document.addEventListener("focusin", onFocusIn);
   window.addEventListener("beforeunload", onLeave);
 }
 
@@ -1354,6 +1366,7 @@ function unwire() {
   state.canvas.removeEventListener("drop", onCanvasDrop);
   document.removeEventListener("selectionchange", onSelectionChange);
   document.removeEventListener("keydown", onKey, true);
+  document.removeEventListener("focusin", onFocusIn);
   document.removeEventListener("dragover", onDocDragOver);
   document.removeEventListener("drop", onDocDrop);
   window.removeEventListener("beforeunload", onLeave);
@@ -1371,6 +1384,17 @@ async function onCanvasPaste(e) {
     insertBlock(makeBlock("image", { url: asset.site, alt: "" }), state.focused ? state.focused.block.id : null, false);
     return;
   }
+}
+
+/** The caret left the article: no block is being edited, so nothing is shown. */
+function onFocusIn(e) {
+  if (!state.on || !ui || !ui.toolbar) return;
+  if (state.canvas.contains(e.target) || ui.toolbar.el.contains(e.target)) return;
+  if (e.target.closest && e.target.closest(".ed-ask, .ed-slash")) return;
+
+  for (const view of state.views) view.el.dataset.on = "0";
+  state.focused = null;
+  ui.toolbar.reset();
 }
 
 function onSelectionChange() {
@@ -1398,7 +1422,7 @@ function onKey(e) {
 
   if (e.key === "k") {
     e.preventDefault();
-    return void insertItem("link", null);
+    return void ui.toolbar.link();
   }
 
   const marks = { b: "strong", i: "em", u: "u", e: "code" };

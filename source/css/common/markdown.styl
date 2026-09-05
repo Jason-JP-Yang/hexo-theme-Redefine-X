@@ -228,8 +228,12 @@
 
   
 
+  // `.ed-body` is the editor's block wrapper. A table inside one is
+  // still a table in this article, and without it named here the editor's
+  // tables had no borders, no header band and no zebra at all.
   & > table,
-  .tab-pane > table
+  .tab-pane > table,
+  .ed-body > table
     border-spacing 0
     border-collapse collapse
     width 100%

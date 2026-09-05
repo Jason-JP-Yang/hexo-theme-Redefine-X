@@ -650,7 +650,21 @@ function manifestBody(hidden) {
     const dims = sizes.get(route) || sizes.get(rel) || null;
     out[rel] = [route, dims ? dims.width : 0, dims ? dims.height : 0];
   }
-  return JSON.stringify(out);
+
+  // An image this build did NOT transcode keeps its ORIGINAL route, and the
+  // editor still has to know its size or it reserves a guessed box and the
+  // picture lands at the wrong shape. On a CI runner, which never starts an
+  // encoder, this is most of them — so the manifest describes every image the
+  // build measured, not only the ones it compressed.
+  for (const [route, dims] of sizes) {
+    if (route.startsWith("build/") || out[route]) continue;
+    if (hidden && hidden.has(route)) continue;
+    out[route] = [route, dims.width, dims.height];
+  }
+
+  const sorted = {};
+  for (const key of Object.keys(out).sort()) sorted[key] = out[key];
+  return JSON.stringify(sorted);
 }
 
 hexo.extend.helper.register("avifTranscodeMap", transcodeMap);

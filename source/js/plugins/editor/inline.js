@@ -30,23 +30,36 @@
 
 import { selection } from "./caret.js";
 
-/** Highlight colours, drawn from the box palette so the site keeps one set. */
+/**
+ * A highlight is the theme's own box, not an invented `<mark>`.
+ *
+ * The site already has fifteen box colours, a filter that accepts the
+ * `{$ box $}` shorthand as well as the `{% box %}` tag, and CSS for both — so
+ * highlighting with anything else would mean a second kind of highlight that
+ * only the editor understands. One tool, therefore, wearing the highlighter
+ * icon and opening the palette the posts already use.
+ */
 export const HIGHLIGHTS = [
-  "amber", "yellow", "lime", "green", "teal", "cyan",
-  "blue", "indigo", "purple", "pink", "red", "gray",
+  "default", "blue", "cyan", "teal", "green", "lime", "yellow", "amber",
+  "orange", "red", "pink", "purple", "indigo", "gray", "slate",
 ];
 
 export const MARKS = [
   { key: "strong", tag: "strong", alias: ["B"], icon: "fa-bold", label: "Bold", shortcut: "b" },
   { key: "em", tag: "em", alias: ["I"], icon: "fa-italic", label: "Italic", shortcut: "i" },
   { key: "strike", tag: "del", alias: ["S"], icon: "fa-strikethrough", label: "Strikethrough" },
-  { key: "mark", tag: "mark", icon: "fa-highlighter", label: "Highlight", colours: true },
+  {
+    key: "box",
+    tag: "span",
+    icon: "fa-highlighter",
+    label: "Highlight",
+    colours: true,
+    test: (el) => el.getAttribute && el.getAttribute("data-md") === "box",
+  },
   { key: "code", tag: "code", icon: "fa-code", label: "Inline code", literal: true },
   { key: "link", tag: "a", icon: "fa-link", label: "Link", asks: "url" },
-  { key: "kbd", tag: "kbd", icon: "fa-keyboard", label: "Key" },
   { key: "sup", tag: "sup", icon: "fa-superscript", label: "Superscript" },
   { key: "sub", tag: "sub", icon: "fa-subscript", label: "Subscript" },
-  { key: "u", tag: "u", icon: "fa-underline", label: "Underline" },
 ];
 
 const BY_KEY = new Map(MARKS.map((m) => [m.key, m]));
@@ -73,8 +86,16 @@ function literalAround(node, root) {
 }
 
 function matches(el, spec) {
+  if (spec.test) return spec.test(el);
   if (el.tagName === spec.tag.toUpperCase()) return true;
   return !!(spec.alias && spec.alias.includes(el.tagName));
+}
+
+/** A box is a span, and most spans are not boxes, so the tag alone cannot say. */
+function isMarkNode(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.getAttribute && el.getAttribute("data-md") === "box") return true;
+  return MARK_TAGS.has(el.tagName);
 }
 
 function closestMark(node, spec, root) {
@@ -130,10 +151,14 @@ function unwrap(el) {
 }
 
 function dress(el, spec, opts) {
-  if (spec.key === "mark") {
-    const colour = opts && opts.colour;
-    if (colour) el.className = "hl-" + colour;
-    else el.removeAttribute("class");
+  if (spec.key === "box") {
+    const colour = (opts && opts.colour) || "default";
+    el.className = "post-box post-box-" + colour;
+    el.setAttribute("data-md", "box");
+    el.setAttribute("data-box-color", colour);
+    // Anything new is written in the shorthand, which is the spelling that
+    // survives sitting against a math delimiter.
+    if (!el.getAttribute("data-box-syntax")) el.setAttribute("data-box-syntax", "$");
     return;
   }
   if (spec.key === "link") el.setAttribute("href", (opts && opts.href) || "#");
@@ -223,7 +248,7 @@ function touched(range, root) {
 /* ─── tidying ──────────────────────────────────────────────────────────────── */
 
 function signature(el) {
-  if (!el || el.nodeType !== 1 || !MARK_TAGS.has(el.tagName)) return null;
+  if (!isMarkNode(el)) return null;
   const href = el.getAttribute("href") || "";
   return el.tagName + "|" + (el.className || "") + "|" + href;
 }
@@ -248,7 +273,7 @@ function insideSame(el, root) {
  */
 function tidy(root) {
   for (const el of Array.from(root.querySelectorAll("*"))) {
-    if (!el.parentNode || !MARK_TAGS.has(el.tagName)) continue;
+    if (!el.parentNode || !isMarkNode(el)) continue;
 
     if (!el.firstChild || (!el.textContent && !el.querySelector("img, br"))) {
       el.remove();
@@ -264,6 +289,9 @@ function tidy(root) {
       el.remove();
     }
   }
+
+  dropStrayAnchors(root);
+  anchorMarks(root);
 }
 
 /* ─── what the toolbar reads ───────────────────────────────────────────────── */
@@ -292,7 +320,7 @@ export function markState(root) {
     else if (on) partial.add(spec.key);
   }
 
-  const anchorMark = closestMark(live[0], BY_KEY.get("mark"), root);
+  const anchorBox = closestMark(live[0], BY_KEY.get("box"), root);
   const anchorLink = closestMark(live[0], BY_KEY.get("link"), root);
 
   return {
@@ -300,7 +328,7 @@ export function markState(root) {
     active,
     partial,
     literal: literalAround(live[0], root),
-    colour: anchorMark ? (anchorMark.className || "").replace(/^hl-/, "") : "",
+    colour: anchorBox ? anchorBox.getAttribute("data-box-color") || "default" : "",
     href: anchorLink ? anchorLink.getAttribute("href") || "" : "",
   };
 }
@@ -327,13 +355,15 @@ export function applyMark(root, key, opts = {}) {
   if (!nodes.length) return false;
 
   const all = nodes.every((n) => closestMark(n, spec, root));
-  const wants = spec.key === "mark" ? "colour" : spec.key === "link" ? "href" : "";
+  const wants = spec.key === "box" ? "colour" : spec.key === "link" ? "href" : "";
   const given = wants && opts[wants] !== undefined && opts[wants] !== "";
 
   if (all && given) {
     const now = nodes.map((n) => {
       const el = closestMark(n, spec, root);
-      return spec.key === "mark" ? (el.className || "").replace(/^hl-/, "") : el.getAttribute("href") || "";
+      return spec.key === "box"
+        ? el.getAttribute("data-box-color") || "default"
+        : el.getAttribute("href") || "";
     });
     // Asking for what it already is means "take it off"; asking for something
     // else means "make it that" — never nest a second one inside the first.
@@ -367,7 +397,7 @@ function stripAround(node, root) {
   let cur = top;
   while (cur && cur !== node) {
     const next = cur.firstChild;
-    if (MARK_TAGS.has(cur.tagName)) unwrap(cur);
+    if (isMarkNode(cur)) unwrap(cur);
     cur = next;
   }
 }
@@ -404,6 +434,81 @@ function select(sel, nodes) {
 
   sel.removeAllRanges();
   sel.addRange(out);
+}
+
+/* ─── the caret at a boundary ──────────────────────────────────────────────── */
+
+const ZWSP = "​";
+
+function isZwsp(node) {
+  return node && node.nodeType === 3 && node.nodeValue === ZWSP;
+}
+
+/**
+ * Give every mark boundary somewhere to stand.
+ *
+ * `Hello *World*, Jason` has ONE visual point between `World` and the comma and
+ * TWO meanings for it: keep typing inside the italics, or after them. The
+ * browser offers whichever it feels like, so the author types `!` and gets
+ * `*World!*` when they wanted `*World*!` — with no way to say which.
+ *
+ * So each boundary is given a text node of its own to hold the caret. A
+ * zero-width space is a real position the arrow keys step through, which makes
+ * the two meanings two places; between two touching marks there are three,
+ * which is exactly the number of things the author could mean there. They are
+ * the editor's, never the author's, and every read path strips them.
+ */
+export function anchorMarks(root) {
+  if (!root) return;
+  const marks = Array.from(root.querySelectorAll("*")).filter(isMarkNode);
+
+  for (const el of marks) {
+    if (!el.parentNode) continue;
+    const before = el.previousSibling;
+    const after = el.nextSibling;
+
+    if ((!before || isMarkNode(before)) && !isZwsp(before)) {
+      el.parentNode.insertBefore(document.createTextNode(ZWSP), el);
+    }
+    if ((!after || isMarkNode(after)) && !isZwsp(after)) {
+      el.parentNode.insertBefore(document.createTextNode(ZWSP), el.nextSibling);
+    }
+  }
+}
+
+/** Drop the anchors that no longer sit beside a mark. */
+export function dropStrayAnchors(root) {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const dead = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!isZwsp(node)) continue;
+    if (!isMarkNode(node.previousSibling) && !isMarkNode(node.nextSibling)) dead.push(node);
+  }
+  for (const n of dead) n.remove();
+}
+
+/* ─── holding a selection across a prompt ──────────────────────────────────── */
+
+/**
+ * A prompt takes the focus, and taking the focus destroys the selection — so by
+ * the time an address has been typed there is nothing left to apply it to.
+ * That is the whole reason the link tool did nothing at all. The range is taken
+ * before the prompt opens and put back before the mark is applied.
+ */
+export function saveRange() {
+  const sel = selection();
+  if (!sel || !sel.rangeCount) return null;
+  return sel.getRangeAt(0).cloneRange();
+}
+
+export function restoreRange(range) {
+  if (!range || !range.startContainer || !range.startContainer.isConnected) return false;
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
 }
 
 /**

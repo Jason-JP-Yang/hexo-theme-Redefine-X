@@ -29,27 +29,44 @@
 
 import { escapeHTML } from "./markdown.js";
 import { caretRect, selection } from "./caret.js";
-import { HIGHLIGHTS, MARKS, applyMark, clearMarks, markState } from "./inline.js";
+import {
+  HIGHLIGHTS,
+  MARKS,
+  applyMark,
+  clearMarks,
+  markState,
+  restoreRange,
+  saveRange,
+} from "./inline.js";
 import { conversions } from "./convert.js";
 import { MORPH_MS, EASE, pop, reduced } from "./motion.js";
 
-/** What can be put IN. Everything a block can BECOME lives in convert.js. */
+/**
+ * What can be put IN, and every one of them arrives as a NEW BLOCK.
+ *
+ * Nothing inline lives here. A link, a highlight, an equation or a code span
+ * are things a SELECTION becomes — they need words to act on, and offering them
+ * where there is no selection is offering something that cannot happen. They
+ * are in Format, which is where the selection is.
+ *
+ * The first group is the four shapes a block can also be CONVERTED to, kept
+ * together because reaching for them here means "and a new one after this",
+ * not "and make this one that".
+ */
 export const INSERTS = [
-  { key: "image", icon: "fa-image", label: "Image", where: "inline" },
-  { key: "link", icon: "fa-link", label: "Link", where: "mark" },
-  { key: "imath", icon: "fa-superscript", label: "Inline equation", where: "inline" },
-  { key: "icode", icon: "fa-terminal", label: "Inline code", where: "mark" },
-  { key: "table", icon: "fa-table", label: "Table", where: "block" },
-  { key: "code", icon: "fa-code", label: "Code block", where: "block" },
-  { key: "math", icon: "fa-square-root-variable", label: "Equation", where: "block" },
-  { key: "mermaid", icon: "fa-diagram-project", label: "Diagram", where: "block" },
-  { key: "note", icon: "fa-circle-info", label: "Note", where: "block" },
-  { key: "notel", icon: "fa-rectangle-list", label: "Large note", where: "block" },
-  { key: "folding", icon: "fa-chevron-right", label: "Folding", where: "block" },
-  { key: "tabs", icon: "fa-folder-tree", label: "Tabs", where: "block" },
-  { key: "box", icon: "fa-highlighter", label: "Coloured box", where: "block" },
-  { key: "btn", icon: "fa-square-arrow-up-right", label: "Button", where: "block" },
-  { key: "hr", icon: "fa-minus", label: "Divider", where: "block" },
+  { key: "paragraph", icon: "fa-paragraph", label: "Plain text" },
+  { key: "code", icon: "fa-code", label: "Code block" },
+  { key: "math", icon: "fa-square-root-variable", label: "Equation" },
+  { key: "mermaid", icon: "fa-diagram-project", label: "Diagram" },
+  { key: "-" },
+  { key: "image", icon: "fa-image", label: "Image" },
+  { key: "table", icon: "fa-table", label: "Table" },
+  { key: "note", icon: "fa-circle-info", label: "Note" },
+  { key: "notel", icon: "fa-rectangle-list", label: "Large note" },
+  { key: "folding", icon: "fa-chevron-right", label: "Folding" },
+  { key: "tabs", icon: "fa-folder-tree", label: "Tabs" },
+  { key: "btn", icon: "fa-square-arrow-up-right", label: "Button" },
+  { key: "hr", icon: "fa-minus", label: "Divider" },
 ];
 
 /** The slash menu offers both halves, because at an empty line both apply. */
@@ -61,7 +78,7 @@ export const CATALOGUE = [
     kind: "convert",
     keywords: entry.label.toLowerCase() + " " + entry.key,
   })),
-  ...INSERTS.map((entry) => ({
+  ...INSERTS.filter((entry) => entry.key !== "-").map((entry) => ({
     key: entry.key,
     icon: entry.icon,
     label: entry.label,
@@ -70,12 +87,20 @@ export const CATALOGUE = [
   })),
 ];
 
-const TABS = [
-  { key: "format", icon: "fa-i-cursor", label: "Format" },
-  { key: "block", icon: "fa-cube", label: "Block" },
-  { key: "insert", icon: "fa-plus", label: "Insert" },
-  { key: "source", icon: "fa-code", label: "Source" },
-];
+/**
+ * Two slots, not four.
+ *
+ * FORMAT does not sit beside BLOCK — it REPLACES it, because they are the same
+ * question asked of different things: what is selected, or, when nothing is,
+ * what this block is. A tab you can never usefully press is worse than no tab,
+ * and Format with no selection was exactly that.
+ *
+ * SOURCE is not a tab either. Showing a block's markdown is a way of LOOKING at
+ * the block, so it is a switch inside Block.
+ */
+const TAB_FORMAT = { key: "format", icon: "fa-highlighter", label: "Format" };
+const TAB_BLOCK = { key: "block", icon: "fa-cube", label: "Block" };
+const TAB_INSERT = { key: "insert", icon: "fa-plus", label: "Insert" };
 
 /* ─── rendering the control vocabulary ─────────────────────────────────────── */
 
@@ -116,14 +141,7 @@ export function createToolbar(ctx) {
   el.dataset.tab = "block";
   el.innerHTML = `
     <div class="ed-toolbar-card">
-      <div class="ed-toolbar-tabs" role="tablist">
-        ${TABS.map(
-          (tab) =>
-            `<button type="button" class="ed-tab" data-tab="${tab.key}" role="tab">
-               <i class="fa-solid ${tab.icon}" aria-hidden="true"></i><span>${escapeHTML(t("tab_" + tab.key, tab.label))}</span>
-             </button>`
-        ).join("")}
-      </div>
+      <div class="ed-toolbar-tabs" role="tablist"></div>
       <div class="ed-toolbar-row" data-row="main"></div>
       <div class="ed-toolbar-row ed-toolbar-sub" data-row="sub" hidden></div>
     </div>`;
@@ -147,28 +165,20 @@ export function createToolbar(ctx) {
     const locked = s.literal === "code" || s.literal === "literal";
     const dead = s.collapsed;
 
+    // The highlighter opens the palette rather than toggling a colour of its
+    // own: a button that highlights and a button that picks the colour are the
+    // same button, and having both meant one of them was always the wrong one.
     const items = MARKS.filter((mark) => mark.key !== "link").map((mark) => ({
       kind: "btn",
-      act: "mark",
-      arg: mark.key,
+      act: mark.colours ? "sub" : "mark",
+      arg: mark.colours ? "highlight" : mark.key,
       icon: mark.icon,
       label: mark.label,
       tt: "m_" + mark.key,
-      on: s.active.has(mark.key),
+      on: mark.colours ? subKey === "highlight" || s.active.has(mark.key) : s.active.has(mark.key),
       mixed: s.partial.has(mark.key),
       disabled: dead || (locked && mark.key !== "code"),
     }));
-
-    items.splice(4, 0, {
-      kind: "btn",
-      act: "sub",
-      arg: "highlight",
-      icon: "fa-palette",
-      label: "Highlight colour",
-      tt: "m_colour",
-      on: subKey === "highlight",
-      disabled: dead || locked,
-    });
 
     items.push(
       { kind: "sep" },
@@ -198,6 +208,11 @@ export function createToolbar(ctx) {
 
   function blockItems() {
     const view = ctx.view();
+    // Read first: legality is decided from the block's CONTENT, and a block
+    // that has been typed into since the last read still says it holds one
+    // line — which is how a three-line paragraph stayed convertible to a
+    // heading.
+    if (view && view.read) view.read();
     const block = view && view.block;
     const rows = conversions(block).map((entry) => ({
       kind: "btn",
@@ -219,43 +234,39 @@ export function createToolbar(ctx) {
     ];
 
     if (!view) return common;
+
+    // Looking at the markdown is a way of looking at THIS block, so it is a
+    // switch here rather than a tab of its own.
+    const raw = !!(view.sourceOn && view.sourceOn());
+    const source = {
+      kind: "btn",
+      act: "source",
+      arg: raw ? "off" : "on",
+      icon: raw ? "fa-eye" : "fa-file-code",
+      label: raw ? "Back to the rendered block" : "Show this block's markdown",
+      tt: raw ? "src_off" : "src_on",
+      on: raw,
+    };
+    if (raw) return [source, { kind: "sep" }, ...common];
+
     const head = [...rows, ...(own.length ? [{ kind: "sep" }, ...own] : [])];
-    return head.length ? [...head, { kind: "sep" }, ...common] : common;
+    return [...head, { kind: "sep" }, source, ...common];
   }
 
   function insertItems() {
-    const view = ctx.view();
-    const inline = !!(view && view.editable && view.editable.isContentEditable);
-    return INSERTS.map((entry) => ({
-      kind: "btn",
-      act: "insert",
-      arg: entry.key,
-      icon: entry.icon,
-      label: entry.label,
-      tt: "b_" + entry.key,
-      wide: true,
-      // An inline insert needs somewhere inline to go.
-      disabled: entry.where !== "block" && !inline,
-    }));
-  }
-
-  function sourceItems() {
-    const view = ctx.view();
-    const on = !!(view && view.sourceOn && view.sourceOn());
-    return [
-      {
-        kind: "btn",
-        act: "source",
-        arg: on ? "off" : "on",
-        icon: on ? "fa-eye" : "fa-code",
-        label: on ? "Back to the rendered block" : "Edit this block's markdown",
-        tt: on ? "src_off" : "src_on",
-        wide: true,
-        on,
-        disabled: !view,
-      },
-      { kind: "label", label: "Every marker the block is written with." , tt: "src_hint" },
-    ];
+    return INSERTS.map((entry) =>
+      entry.key === "-"
+        ? { kind: "sep" }
+        : {
+            kind: "btn",
+            act: "insert",
+            arg: entry.key,
+            icon: entry.icon,
+            label: entry.label,
+            tt: "b_" + entry.key,
+            wide: true,
+          }
+    );
   }
 
   /* ─── the second row ─────────────────────────────────────────────────── */
@@ -269,12 +280,12 @@ export function createToolbar(ctx) {
           kind: "swatch",
           act: "highlight",
           arg: colour,
-          cls: "hl-" + colour,
+          cls: "post-box post-box-" + colour,
           label: colour,
-          on: now === colour || (!now && colour === "amber"),
+          on: now === colour,
         })),
         { kind: "sep" },
-        { kind: "btn", act: "mark", arg: "mark", icon: "fa-ban", label: "No highlight", tt: "m_nohl" },
+        { kind: "btn", act: "mark", arg: "box", icon: "fa-ban", label: "No highlight", tt: "m_nohl" },
       ];
     }
 
@@ -293,15 +304,31 @@ export function createToolbar(ctx) {
   function itemsFor(tab) {
     if (tab === "format") return formatItems();
     if (tab === "insert") return insertItems();
-    if (tab === "source") return sourceItems();
     return blockItems();
   }
 
   let morph = 0;
 
+  /** Slot one is Format while there is a selection and Block when there is not. */
+  function paintTabs(tab) {
+    const strip = [tab === "format" ? TAB_FORMAT : TAB_BLOCK, TAB_INSERT];
+    const html = strip
+      .map(
+        (item) =>
+          `<button type="button" class="ed-tab" data-tab="${item.key}" role="tab" data-on="${item.key === tab ? "1" : "0"}">
+             <i class="fa-solid ${item.icon}" aria-hidden="true"></i><span>${escapeHTML(t("tab_" + item.key, item.label))}</span>
+           </button>`
+      )
+      .join("");
+    if (tabs.__sig !== html) {
+      tabs.__sig = html;
+      tabs.innerHTML = html;
+    }
+  }
+
   async function render(animate) {
     const tab = el.dataset.tab;
-    for (const button of tabs.children) button.dataset.on = button.dataset.tab === tab ? "1" : "0";
+    paintTabs(tab);
 
     const before = animate ? card.offsetHeight : 0;
     const moved = paint(main, itemsFor(tab), t);
@@ -334,13 +361,29 @@ export function createToolbar(ctx) {
     const root = ctx.richRoot();
     state = root ? markState(root) : null;
 
+    // Nothing focused means nothing to act on, so the toolbar goes back to how
+    // it opened rather than sitting on the last block's settings.
+    if (!ctx.view()) {
+      chosen = "block";
+      subKey = "";
+    }
+
     const selecting = !!(state && !state.collapsed);
-    const want = selecting ? "format" : chosen;
+    const want = chosen === "insert" ? "insert" : selecting ? "format" : "block";
     if (el.dataset.tab !== want) {
       el.dataset.tab = want;
-      if (want !== "format") subKey = "";
+      if (want !== "format" && subKey === "highlight") subKey = "";
     }
     if (!selecting && subKey === "highlight") subKey = "";
+    render(true);
+  }
+
+  /** Back to the opening state — called when the canvas loses the caret. */
+  function reset() {
+    chosen = "block";
+    subKey = "";
+    state = null;
+    el.dataset.tab = "block";
     render(true);
   }
 
@@ -350,7 +393,7 @@ export function createToolbar(ctx) {
     const tab = e.target.closest("[data-tab]");
     if (!tab) return;
     e.preventDefault();
-    if (tab.dataset.tab !== "format") chosen = tab.dataset.tab;
+    chosen = tab.dataset.tab === "insert" ? "insert" : "block";
     el.dataset.tab = tab.dataset.tab;
     subKey = "";
     render(true);
@@ -371,11 +414,13 @@ export function createToolbar(ctx) {
       if (!root) return;
       const spec = MARKS.find((m) => m.key === arg);
       if (spec && spec.asks === "url") {
+        // The prompt takes the focus, and the focus is what holds the
+        // selection. Without this the address was typed and applied to nothing.
+        const held = saveRange();
         const url = await ctx.ask("url", (state && state.href) || "https://");
         if (url == null) return;
+        if (!restoreRange(held)) return;
         applyMark(root, "link", { href: url });
-      } else if (arg === "mark") {
-        applyMark(root, "mark", {});
       } else {
         applyMark(root, arg, {});
       }
@@ -385,7 +430,7 @@ export function createToolbar(ctx) {
 
     if (act === "highlight") {
       if (!root) return;
-      applyMark(root, "mark", { colour: arg });
+      applyMark(root, "box", { colour: arg });
       ctx.onMarked();
       return void sync();
     }
@@ -405,7 +450,14 @@ export function createToolbar(ctx) {
     }
 
     if (act === "convert") return void ctx.onConvert(arg);
-    if (act === "insert") return void ctx.onInsert(arg);
+    if (act === "insert") {
+      // One insert, then back to the block it landed in — staying on Insert
+      // means the next thing pressed adds a second one by accident.
+      ctx.onInsert(arg);
+      chosen = "block";
+      el.dataset.tab = "block";
+      return void render(true);
+    }
     if (act === "source") return void ctx.onSource(arg === "on");
 
     // Everything else belongs to the focused block, which owns its own options.
@@ -418,9 +470,22 @@ export function createToolbar(ctx) {
   return {
     el,
     sync,
+    reset,
     /** Re-read the focused block's own options without touching the tab. */
     refresh: () => render(true),
     openSub,
+    /** Ctrl-K, through the same held-range path the button uses. */
+    link: async () => {
+      const root = ctx.richRoot();
+      if (!root) return;
+      const held = saveRange();
+      const url = await ctx.ask("url", (state && state.href) || "https://");
+      if (url == null) return;
+      if (!restoreRange(held)) return;
+      applyMark(root, "link", { href: url });
+      ctx.onMarked();
+      sync();
+    },
     applyMark: (key, opts) => {
       const root = ctx.richRoot();
       if (!root) return;

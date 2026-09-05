@@ -5,11 +5,13 @@
  * The `source/build/` transcode manifest, from outside a build.
  *
  *   npm run images:index              rebuild it from what is on disk
- *   npm run images:index -- --check   exit 1 if any image has no cached product
+ *   npm run images:index -- --check   list what has no cached product
  *
- * `--check` is the CI gate: a runner builds with RDFX_SKIP_AVIF and never starts
- * an encoder, because AVIF bytes depend on the machine's ffmpeg and libaom.
- * Run from the SITE root.
+ * `--check` is what CI runs, and it is a REPORT rather than a gate: a runner
+ * builds with RDFX_SKIP_AVIF and never starts an encoder, because AVIF bytes
+ * depend on the machine's ffmpeg and libaom — and an image with no cached
+ * transcode is published in its original format, which the page and the editor
+ * both already resolve. Heavier, never broken. Run from the SITE root.
  */
 
 const fs = require("fs");
@@ -119,12 +121,13 @@ for (const abs of files) {
 
 if (check) {
   if (missing.length) {
-    console.error(
-      `[images:index] ${missing.length} image(s) have no usable cached transcode:\n` +
+    console.log(
+      `[images:index] ${missing.length} of ${live.size} image(s) have no cached transcode ` +
+        `and will be published in their original format:\n` +
         missing.map((p) => `    ${p}`).join("\n") +
-        `\n\n  Run a local build to encode them, then commit source/build/.\n`
+        `\n\n  Encode them in a local build and commit source/build/ if the weight matters.\n`
     );
-    process.exit(1);
+    process.exit(0);
   }
   console.log(`[images:index] ${live.size} image(s), all cached.`);
   process.exit(0);
