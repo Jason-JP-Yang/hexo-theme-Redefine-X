@@ -44,11 +44,14 @@ import {
   setVaultAssets,
   siteRoot,
 } from "./assets.js";
-import initLazyLoad, { registerSrcResolver } from "../../layouts/lazyload.js";
+import initLazyLoad, {
+  forceLoadAllPreloaders,
+  registerSrcResolver,
+} from "../../layouts/lazyload.js";
 import { assetURL } from "../../tools/vaultCrypto.js";
 import * as session from "./session.js";
 import * as gitea from "./gitea.js";
-import { contentChanged, crossFade, enter, exit, flip, pop } from "./motion.js";
+import { contentChanged, crossFade, enter, exit, flip, moveGhost, pop, stopGhost } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -69,8 +72,8 @@ const state = {
   host: null,
   canvas: null,
   titleHost: null,
-  snapshot: "",
-  titleSnapshot: "",
+  snapshot: [],
+  titleSnapshot: [],
   put: [],
   doc: null,
   views: [],
@@ -227,7 +230,10 @@ function paintTitle() {
 
   const heading = state.titleHost.querySelector(".ed-title");
   heading.addEventListener("input", () => {
-    writeFront("title", heading.textContent.trim());
+    const title = heading.textContent.trim();
+    writeFront("title", title);
+    // The heading and the front matter's Title are one field shown twice.
+    if (ui.front) ui.front.set("title", title);
     ui.path.textContent = pathLabel();
   });
   heading.addEventListener("keydown", (e) => {
@@ -259,8 +265,13 @@ async function activate(host) {
   state.host = host;
   state.canvas = canvas;
   state.titleHost = titleHost;
-  state.snapshot = canvas.innerHTML;
-  state.titleSnapshot = titleHost.innerHTML;
+  // The NODES, not their markup. Restoring from a string reparses the article:
+  // every picture in it is requested a second time, and any preloader that was
+  // still loading when the editor opened comes back as a fresh element the
+  // observer has already been told about. Detached nodes keep their identity,
+  // their decoded images and their place in the observer.
+  state.snapshot = Array.from(canvas.childNodes);
+  state.titleSnapshot = Array.from(titleHost.childNodes);
 
   host.classList.add("is-editing");
   document.documentElement.classList.add("blog-editing");
@@ -437,9 +448,13 @@ async function deactivate() {
   document.querySelectorAll(".ed-more-menu, .ed-icon-picker").forEach((el) => el.remove());
 
   await crossFade(state.canvas, () => {
-    state.canvas.innerHTML = state.snapshot;
-    state.titleHost.innerHTML = state.titleSnapshot;
+    state.canvas.replaceChildren(...state.snapshot);
+    state.titleHost.replaceChildren(...state.titleSnapshot);
   });
+
+  // Anything that was mid-swap when the article was taken apart was released by
+  // the loader; this is where it gets picked up again.
+  observeImages();
 
   for (const node of state.put) node.classList.remove("ed-put-away");
   state.host.classList.remove("is-editing");
@@ -447,7 +462,7 @@ async function deactivate() {
 
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   Object.assign(state, {
-    on: false, host: null, canvas: null, titleHost: null, snapshot: "", titleSnapshot: "",
+    on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [],
     put: [], doc: null, views: [], entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
   });
   ui = null;
@@ -554,6 +569,7 @@ function blockCtx() {
     },
     onDragEnd: () => {
       state.dragId = null;
+      stopGhost();
       stopEdgeScroll();
       document.removeEventListener("dragover", onDocDragOver);
       document.removeEventListener("drop", onDocDrop);
@@ -572,27 +588,23 @@ function blockCtx() {
 /**
  * Hand the article's images to the site's own lazyload observer.
  *
- * The editor mounts the same `.img-preloader` nodes the build emits, so there
- * is nothing to do here but let the observer find them: it takes
- * `.img-preloader:not([data-observed])`, which is exactly the ones just added.
+ * Deferred to the next frame, and coalesced. A block paints itself BEFORE it is
+ * appended to the canvas, so a pass run inline could not see the image it was
+ * called for — every image was picked up by the next block's pass and the last
+ * one in the post by nobody, which is why it sat on its skeleton forever. One
+ * pass after the mounting burst sees all of them, and asks the observer once
+ * instead of once per image.
  */
-function observeImages() {
-  const articles = (window.theme && window.theme.articles) || {};
-  if (articles.lazyload !== true) return void forceLoad();
-  initLazyLoad({ preload: articles.lazyload_preload === true });
-}
+let observePass = 0;
 
-/** With lazyload off the page loads images immediately, and so does the editor. */
-function forceLoad() {
-  for (const node of state.canvas.querySelectorAll(".img-preloader:not([data-observed])")) {
-    node.dataset.observed = "true";
-    const src = node.dataset.src;
-    if (!src) continue;
-    const img = new Image();
-    img.alt = node.dataset.alt || "";
-    img.src = src;
-    node.replaceWith(img);
-  }
+function observeImages() {
+  if (observePass) return;
+  observePass = requestAnimationFrame(() => {
+    observePass = 0;
+    const articles = (window.theme && window.theme.articles) || {};
+    if (articles.lazyload !== true) return void forceLoadAllPreloaders();
+    initLazyLoad({ preload: articles.lazyload_preload === true });
+  });
 }
 
 /** Which figure this is, counted the way the build counts them. */
@@ -810,6 +822,7 @@ function onDocDragOver(e) {
   if (!state.dragId) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  moveGhost(e.clientX, e.clientY);
   startEdgeScroll(e.clientY);
   paintDrop(dropTargetAt(e.clientY));
 }

@@ -334,6 +334,12 @@ export function createFrontCard(doc, ctx) {
     }
   });
 
+  /** One field, written from outside — the heading and Title are one value. */
+  function set(key, value) {
+    const input = el.querySelector(`input[data-key="${key}"]`);
+    if (input && input !== document.activeElement) input.value = value == null ? "" : value;
+  }
+
   paint();
-  return { el, paint };
+  return { el, paint, set };
 }

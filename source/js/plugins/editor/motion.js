@@ -143,6 +143,62 @@ export function pop(el) {
   );
 }
 
+/* ─── drag ghost ───────────────────────────────────────────────────────────── */
+
+/**
+ * The picture that travels with the pointer while a block is being carried.
+ *
+ * `setDragImage(el, dx, dy)` lets the BROWSER decide which rectangle `el`
+ * occupies, and it decides differently from us twice over. The gutter is
+ * absolutely positioned outside the block, so the snapshot starts a column's
+ * width left of the border box the offsets were measured against and the ghost
+ * rides to the right of the cursor. And under a scaled viewport — device
+ * emulation, pinch zoom — the bitmap is captured in device pixels and drawn
+ * unscaled, so it arrives magnified with the drift scaled up to match.
+ *
+ * Neither is reachable from script, so the native image is suppressed and the
+ * ghost is an ordinary fixed clone we place ourselves: the block at the size it
+ * has on the page, under the point it was picked up by.
+ */
+const BLANK = new Image();
+BLANK.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+let ghost = null;
+let ghostX = 0;
+let ghostY = 0;
+
+export function startGhost(el, e) {
+  stopGhost();
+  if (e.dataTransfer && e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(BLANK, 0, 0);
+
+  const box = el.getBoundingClientRect();
+  ghostX = e.clientX - box.left;
+  ghostY = e.clientY - box.top;
+
+  ghost = el.cloneNode(true);
+  ghost.classList.add("ed-ghost");
+  ghost.classList.remove("is-dragging");
+  ghost.removeAttribute("data-drop");
+  ghost.style.width = box.width + "px";
+  for (const node of ghost.querySelectorAll("[contenteditable]")) node.contentEditable = "false";
+  // A cloned skeleton is still a preloader to the observer, and it would fetch
+  // the picture again to fill a ghost that is about to be thrown away.
+  for (const node of ghost.querySelectorAll(".img-preloader")) node.dataset.ghost = "1";
+
+  document.body.appendChild(ghost);
+  moveGhost(e.clientX, e.clientY);
+}
+
+export function moveGhost(x, y) {
+  if (!ghost || (!x && !y)) return;
+  ghost.style.transform = `translate3d(${Math.round(x - ghostX)}px, ${Math.round(y - ghostY)}px, 0)`;
+}
+
+export function stopGhost() {
+  if (ghost) ghost.remove();
+  ghost = null;
+}
+
 /** Tell the theme's scroll scheduler the page just changed height. */
 export function contentChanged() {
   try {

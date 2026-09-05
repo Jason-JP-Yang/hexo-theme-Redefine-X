@@ -644,6 +644,21 @@ textarea.ed-f-input
   &[data-drop="after"]::after
     bottom -4px
 
+// The block travelling with the pointer. Drawn here rather than handed to
+// `setDragImage`, which measures a rectangle of its own choosing and rescales
+// it under an emulated viewport — see startGhost() in editor/motion.js.
+.ed-ghost
+  position fixed
+  top 0
+  left 0
+  z-index ($z-index-5 + 2)
+  border-radius 10px
+  background var(--background-color)
+  box-shadow 0 20px 44px -20px var(--shadow-color-1)
+  opacity 0.9
+  pointer-events none
+  user-select none
+
 // The article zeroes the top margin of its first child. With blocks that child
 // is a wrapper, so the rule has to reach one level further in — otherwise the
 // body starts a line lower here than it will once published.
@@ -992,9 +1007,23 @@ textarea.ed-f-input
   &:hover
     border-color var(--border-color)
 
-  &:hover .ed-component-bar
-    opacity 1
-    transform none
+  // Pointer devices only: a tap latches `:hover` on a touch screen and the bar
+  // would never dim again. Without hover to reveal it, it simply stays legible.
+  @media (hover: hover)
+    &:hover .ed-component-bar
+      opacity 1
+      transform none
+
+  @media (hover: none)
+    .ed-component-bar
+      opacity 1
+      transform none
+
+  // Writing in the card puts the chrome back down — the pointer sits over the
+  // card for the whole time you are typing in it, so hover alone kept it lit.
+  &[data-typing="1"] .ed-component-bar
+    opacity 0.35
+    transform translateY(-2px)
 
   &[data-mode="preview"] .ed-source
     display none

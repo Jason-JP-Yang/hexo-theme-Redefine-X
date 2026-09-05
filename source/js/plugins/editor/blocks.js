@@ -26,7 +26,7 @@ import { escapeHTML, htmlToInline, inlineToHTML, nextId } from "./markdown.js";
 import { renderBlock, renderMermaid, typesetMath } from "./render.js";
 import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
-import { crossFade, morphHeight, pop } from "./motion.js";
+import { crossFade, morphHeight, pop, startGhost, stopGhost } from "./motion.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
 const SOURCE_TYPES = new Set(["code", "mermaid", "math", "raw"]);
@@ -98,14 +98,12 @@ function wireDrag(view) {
     // The ghost is the whole block, not the 26px button the pointer happened to
     // be on. Taken before `is-dragging` lands, so the ghost is the opaque block
     // and the one left behind is the faded one.
-    const box = view.el.getBoundingClientRect();
-    if (e.dataTransfer.setDragImage) {
-      e.dataTransfer.setDragImage(view.el, e.clientX - box.left, e.clientY - box.top);
-    }
+    startGhost(view.el, e);
     view.el.classList.add("is-dragging");
     view.ctx.onDragStart(view.block.id);
   });
   handle.addEventListener("dragend", () => {
+    stopGhost();
     view.el.classList.remove("is-dragging");
     view.ctx.onDragEnd();
   });
@@ -671,6 +669,7 @@ function mountComponent(view) {
   wrap.className = "ed-component";
   wrap.dataset.kind = kind || "unknown";
   view.body.appendChild(wrap);
+  wireBarFade(wrap);
 
   // A tag with no browser emitter is edited as its source. Nothing is lost:
   // the block still round-trips byte for byte.
@@ -758,6 +757,23 @@ function mountComponent(view) {
     if (editable) caret.focusEnd(editable);
   };
   view.isEmpty = () => false;
+}
+
+/**
+ * The chip bar steps back while the body is being typed into, and returns on
+ * the next pointer move. Hover alone left it lit for the whole of an editing
+ * session — the pointer is over the card the entire time you are writing in it,
+ * and on a touch screen the tap that opened the card latches `:hover` for good.
+ */
+function wireBarFade(wrap) {
+  const wake = () => {
+    if (wrap.dataset.typing) delete wrap.dataset.typing;
+  };
+  wrap.addEventListener("input", (e) => {
+    if (!e.target.closest(".ed-component-bar")) wrap.dataset.typing = "1";
+  });
+  wrap.addEventListener("pointermove", wake);
+  wrap.addEventListener("pointerdown", wake);
 }
 
 function mountComponentBody(view, host, parsed) {
@@ -904,10 +920,15 @@ function openIconPicker(anchor, current, onPick) {
       `<button type="button" data-icon="${escapeHTML(icon)}" data-on="${icon === current ? "1" : "0"}">${icon ? `<i class="fa-solid ${escapeHTML(icon)}"></i>` : '<i class="fa-solid fa-ban"></i>'}</button>`
   ).join("");
 
-  const rect = anchor.getBoundingClientRect();
-  menu.style.top = rect.bottom + 6 + "px";
-  menu.style.left = rect.left + "px";
+  // Absolutely positioned, so DOCUMENT coordinates — a viewport rect used raw
+  // put the picker a whole scroll offset above the button it belongs to.
   document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  const height = menu.offsetHeight;
+  const above = window.innerHeight - rect.bottom < height + 16;
+  menu.style.top = (above ? rect.top - height - 6 : rect.bottom + 6) + window.scrollY + "px";
+  menu.style.left =
+    Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 12)) + window.scrollX + "px";
   pop(menu);
 
   menu.addEventListener("click", (e) => {
@@ -949,7 +970,7 @@ export function makeBlock(type, fields) {
     code: { lang: "", code: "", fence: "```" },
     mermaid: { code: "graph TD\n  A --> B" },
     math: { tex: "" },
-    image: { alt: "", src: "", title: "" },
+    image: { alt: "", url: "", title: "" },
     hr: {},
     raw: { text: "" },
     table: {
