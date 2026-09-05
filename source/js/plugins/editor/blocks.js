@@ -22,11 +22,11 @@
  *             it is just which of the two layers is showing.
  */
 
-import { escapeHTML, htmlToInline, inlineToHTML, nextId } from "./markdown.js";
-import { renderBlock, renderMermaid, typesetMath } from "./render.js";
+import { emitBlock, escapeHTML, htmlToInline, inlineToHTML, nextId } from "./markdown.js";
+import { renderBlock, renderMarkdown, renderMermaid, typesetMath } from "./render.js";
 import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
-import { crossFade, morphHeight, pop, startGhost, stopGhost } from "./motion.js";
+import { crossFade, morphHeight, setDragImage } from "./motion.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
 const SOURCE_TYPES = new Set(["code", "mermaid", "math", "raw"]);
@@ -63,10 +63,12 @@ export function createView(block, ctx) {
         <i class="fa-solid fa-grip-vertical" aria-hidden="true"></i>
       </button>
     </div>
-    <div class="ed-body"></div>`;
+    <div class="ed-body"></div>
+    <textarea class="ed-raw" spellcheck="false" hidden></textarea>`;
 
   const body = el.querySelector(".ed-body");
   const view = { el, body, block, ctx, touched: false };
+  wireRaw(view, el.querySelector(".ed-raw"));
 
   view.touch = () => {
     view.touched = true;
@@ -86,8 +88,65 @@ export function createView(block, ctx) {
     ctx.onInsertAfter(block.id);
   });
 
+  // Every block answers the toolbar, whether or not it has anything to say.
+  if (!view.options) view.options = () => [];
+  if (!view.subOptions) view.subOptions = () => [];
+  if (!view.act) view.act = () => {};
+
   wireDrag(view);
   return view;
+}
+
+/**
+ * The block's own markdown, every marker included.
+ *
+ * One implementation for all twelve types, because there is only one question
+ * being asked — what does this block SAY in the file — and `emitBlock` already
+ * answers it for each of them. What comes back may be several blocks (a pasted
+ * section) or none (an emptied field); both are ordinary, not errors.
+ */
+function wireRaw(view, raw) {
+  const grow = () => {
+    raw.style.height = "auto";
+    raw.style.height = raw.scrollHeight + "px";
+  };
+
+  view.sourceOn = () => !raw.hidden;
+
+  view.showRaw = async () => {
+    if (!raw.hidden) return;
+    view.read();
+    const block = view.block;
+    raw.value = block.dirty ? emitBlock(block) : block.src || emitBlock(block);
+    await crossFade(view.el, () => {
+      view.body.hidden = true;
+      raw.hidden = false;
+      grow();
+    });
+    raw.focus();
+  };
+
+  view.hideRaw = () => {
+    if (raw.hidden) return;
+    const text = raw.value;
+    raw.hidden = true;
+    view.body.hidden = false;
+    view.ctx.onRawEdited(view.block.id, text);
+  };
+
+  raw.addEventListener("input", grow);
+  raw.addEventListener("focus", () => view.ctx.onFocus(view));
+  raw.addEventListener("blur", () => view.hideRaw());
+  raw.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      view.hideRaw();
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      document.execCommand("insertText", false, "  ");
+    }
+  });
 }
 
 function wireDrag(view) {
@@ -98,12 +157,11 @@ function wireDrag(view) {
     // The ghost is the whole block, not the 26px button the pointer happened to
     // be on. Taken before `is-dragging` lands, so the ghost is the opaque block
     // and the one left behind is the faded one.
-    startGhost(view.el, e);
+    setDragImage(e, view.el);
     view.el.classList.add("is-dragging");
     view.ctx.onDragStart(view.block.id);
   });
   handle.addEventListener("dragend", () => {
-    stopGhost();
     view.el.classList.remove("is-dragging");
     view.ctx.onDragEnd();
   });
@@ -167,6 +225,44 @@ function mountRich(view) {
 
   view.focus = (where) => (where === "start" ? caret.focusStart(host) : caret.focusEnd(host));
   view.isEmpty = () => !host.textContent.trim();
+
+  // Heading levels 5 and 6 are not offered as conversions — four is already
+  // more depth than a post uses — but a file that carries one has to be able to
+  // say so, so the depth control covers all six.
+  view.options = () => {
+    if (block.type === "heading") {
+      return [1, 2, 3, 4, 5, 6].map((level) => ({
+        kind: "btn",
+        act: "level",
+        arg: level,
+        icon: "fa-heading",
+        label: "H" + level,
+        wide: true,
+        on: (block.level || 2) === level,
+      }));
+    }
+    if (block.type === "list") {
+      return [
+        { kind: "btn", act: "ordered", arg: "0", icon: "fa-list-ul", label: "Bullets", tt: "b_list", on: !block.ordered },
+        { kind: "btn", act: "ordered", arg: "1", icon: "fa-list-ol", label: "Numbers", tt: "b_olist", on: !!block.ordered },
+      ];
+    }
+    return [];
+  };
+
+  view.act = (act, arg) => {
+    if (act === "level") {
+      block.level = Number(arg) || 2;
+      view.touch();
+      return view.ctx.onRemount(block.id);
+    }
+    if (act === "ordered") {
+      block.ordered = arg === "1";
+      block.marker = block.ordered ? "." : "-";
+      view.touch();
+      return view.ctx.onRemount(block.id);
+    }
+  };
 }
 
 /**
@@ -338,26 +434,25 @@ function onPaste(view, e) {
 
 const SOURCE_FIELD = { code: "code", mermaid: "code", math: "tex", raw: "text" };
 
+/** Offered as buttons; anything else is typed once and remembered in the file. */
+const LANGS = [
+  "", "js", "ts", "jsx", "tsx", "html", "css", "styl", "json", "yaml", "toml",
+  "bash", "python", "c", "cpp", "java", "go", "rust", "php", "sql", "diff", "md",
+];
+
 function mountSource(view) {
   const { block, ctx } = view;
   const field = SOURCE_FIELD[block.type];
 
   const wrap = document.createElement("div");
   wrap.className = "ed-source-block";
+  wrap.dataset.kind = block.type;
   wrap.innerHTML = `
-    <div class="ed-source-bar" contenteditable="false">
-      <span class="ed-chip"><i class="fa-solid ${BLOCK_ICONS[block.type]}" aria-hidden="true"></i>${escapeHTML(ctx.t("t_" + block.type, block.type))}</span>
-      ${block.type === "code" ? `<input class="ed-lang" spellcheck="false" placeholder="${escapeHTML(ctx.t("language", "language"))}" value="${escapeHTML(block.lang || "")}">` : ""}
-      <button type="button" class="ed-source-toggle" title="${escapeHTML(ctx.t("toggle_source", "Show source"))}">
-        <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
-      </button>
-    </div>
     <div class="ed-preview"></div>
     <textarea class="ed-source" spellcheck="false"></textarea>`;
 
   const preview = wrap.querySelector(".ed-preview");
   const source = wrap.querySelector(".ed-source");
-  const lang = wrap.querySelector(".ed-lang");
 
   source.value = block[field] || "";
   view.body.appendChild(wrap);
@@ -416,17 +511,49 @@ function mountSource(view) {
     }
   });
 
-  if (lang) {
-    lang.addEventListener("input", () => {
-      block.lang = lang.value.trim();
+  if (block.type === "code") {
+    view.options = (open) => [
+      {
+        kind: "btn",
+        act: "sub",
+        arg: "lang",
+        icon: "fa-file-code",
+        label: block.lang || ctx.t("plain", "Plain text"),
+        wide: true,
+        on: open === "lang",
+      },
+    ];
+    view.subOptions = (key) =>
+      key !== "lang"
+        ? []
+        : [
+            { kind: "label", label: "Language", tt: "language" },
+            ...LANGS.map((name) => ({
+              kind: "btn",
+              act: "lang",
+              arg: name,
+              icon: name ? "fa-code" : "fa-align-left",
+              label: name || ctx.t("plain", "Plain text"),
+              wide: true,
+              on: (block.lang || "") === name,
+            })),
+            { kind: "btn", act: "lang-other", icon: "fa-ellipsis", label: "Other", tt: "other", wide: true },
+          ];
+    view.act = async (act, arg) => {
+      if (act === "lang") {
+        block.lang = arg;
+      } else if (act === "lang-other") {
+        const name = await ctx.ask("lang", block.lang || "");
+        if (name == null) return;
+        block.lang = name.trim();
+      } else {
+        return;
+      }
       view.touch();
-    });
+      if (wrap.dataset.mode !== "source") paint();
+      ctx.onOptionsChanged();
+    };
   }
-
-  wrap.querySelector(".ed-source-toggle").addEventListener("click", () => {
-    if (wrap.dataset.mode === "source") view.showPreview();
-    else view.showSource().then(() => source.focus());
-  });
 
   preview.addEventListener("click", () => {
     view.showSource().then(() => source.focus());
@@ -469,15 +596,10 @@ function mountImage(view) {
   const wrap = document.createElement("figure");
   wrap.className = "image-caption ed-figure";
   wrap.innerHTML = `
-    <div class="ed-image-tools" contenteditable="false">
-      <button type="button" data-act="replace" title="${escapeHTML(ctx.t("replace", "Replace"))}"><i class="fa-solid fa-arrows-rotate"></i></button>
-      <button type="button" data-act="remove" title="${escapeHTML(ctx.t("remove_block", "Remove"))}"><i class="fa-solid fa-trash"></i></button>
-    </div>
     <figcaption contenteditable="true" spellcheck="false"
       data-placeholder="${escapeHTML(ctx.t("caption", "Describe this image"))}"></figcaption>`;
 
   const caption = wrap.querySelector("figcaption");
-  const tools = wrap.querySelector(".ed-image-tools");
 
   const paintCaption = () => {
     if (!captioned) return void (caption.hidden = true);
@@ -491,7 +613,7 @@ function mountImage(view) {
     const old = wrap.querySelector(".img-preloader, img");
     const node = ctx.buildPreloader(block.url, block.alt);
     if (old) old.replaceWith(node);
-    else wrap.insertBefore(node, tools);
+    else wrap.insertBefore(node, caption);
     paintCaption();
     ctx.observeImages();
   };
@@ -506,26 +628,37 @@ function mountImage(view) {
   });
   caption.addEventListener("blur", paintCaption);
 
-  tools.addEventListener("click", async (e) => {
-    const act = e.target.closest("[data-act]");
-    if (!act) return;
-    e.preventDefault();
-
-    if (act.dataset.act === "remove") return void ctx.onDelete(block.id, "prev");
-    const picked = await ctx.pickImage();
-    if (!picked) return;
-    // The SITE path, not the repository path: what lands in the markdown has to
-    // be what a browser can ask for.
-    block.url = picked.site;
-    view.touch();
-    paint();
-  });
+  caption.addEventListener("focus", () => ctx.onFocus(view));
 
   view.body.appendChild(wrap);
   view.read = () => {};
   view.renumber = paintCaption;
   view.focus = () => caret.focusEnd(caption);
   view.isEmpty = () => false;
+  view.editable = caption;
+
+  view.options = () => [
+    { kind: "btn", act: "replace", icon: "fa-arrows-rotate", label: "Replace picture", tt: "replace", wide: true },
+    { kind: "btn", act: "address", icon: "fa-link", label: "Address", tt: "address", wide: true },
+  ];
+
+  view.act = async (act) => {
+    if (act === "replace") {
+      const picked = await ctx.pickImage();
+      if (!picked) return;
+      // The SITE path, not the repository path: what lands in the markdown has
+      // to be what a browser can ask for.
+      block.url = picked.site;
+    } else if (act === "address") {
+      const url = await ctx.ask("url", block.url || "");
+      if (url == null) return;
+      block.url = url.trim();
+    } else {
+      return;
+    }
+    view.touch();
+    paint();
+  };
 }
 
 /* ─── table ────────────────────────────────────────────────────────────────── */
@@ -550,21 +683,7 @@ function mountTable(view) {
       )
       .join("");
 
-    wrap.innerHTML = `
-      <div class="ed-table-bar" contenteditable="false">
-        <span class="ed-chip"><i class="fa-solid fa-table" aria-hidden="true"></i>${escapeHTML(ctx.t("t_table", "Table"))}</span>
-        <span class="ed-table-align" role="group">
-          <button type="button" data-align="" title="${escapeHTML(ctx.t("align_default", "Default"))}"><i class="fa-solid fa-align-justify"></i></button>
-          <button type="button" data-align="left"><i class="fa-solid fa-align-left"></i></button>
-          <button type="button" data-align="center"><i class="fa-solid fa-align-center"></i></button>
-          <button type="button" data-align="right"><i class="fa-solid fa-align-right"></i></button>
-        </span>
-        <button type="button" data-act="add-row"><i class="fa-solid fa-plus"></i>${escapeHTML(ctx.t("row", "Row"))}</button>
-        <button type="button" data-act="add-col"><i class="fa-solid fa-plus"></i>${escapeHTML(ctx.t("column", "Column"))}</button>
-        <button type="button" data-act="del-row"><i class="fa-solid fa-minus"></i>${escapeHTML(ctx.t("row", "Row"))}</button>
-        <button type="button" data-act="del-col"><i class="fa-solid fa-minus"></i>${escapeHTML(ctx.t("column", "Column"))}</button>
-      </div>
-      <div class="table-container"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    wrap.innerHTML = `<div class="table-container"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   };
 
   const readCells = () => {
@@ -586,14 +705,20 @@ function mountTable(view) {
   };
 
   let activeCol = 0;
+  let activeRow = -1;
 
   wrap.addEventListener("input", (e) => {
     if (e.target.matches("th, td")) view.touch();
   });
 
   wrap.addEventListener("focusin", (e) => {
-    if (e.target.matches("th, td")) activeCol = Number(e.target.dataset.col) || 0;
+    if (e.target.matches("th, td")) {
+      activeCol = Number(e.target.dataset.col) || 0;
+      activeRow = e.target.dataset.row == null ? -1 : Number(e.target.dataset.row);
+      view.editable = e.target;
+    }
     ctx.onFocus(view);
+    ctx.onOptionsChanged();
   });
 
   wrap.addEventListener("keydown", (e) => {
@@ -606,59 +731,132 @@ function mountTable(view) {
     caret.focusEnd(next);
   });
 
-  wrap.addEventListener("click", (e) => {
-    const align = e.target.closest("[data-align]");
-    if (align) {
-      e.preventDefault();
-      return void rebuild(() => {
-        block.align[activeCol] = align.dataset.align;
-      });
-    }
-
-    const act = e.target.closest("[data-act]");
-    if (!act) return;
-    e.preventDefault();
-
-    if (act.dataset.act === "add-row") {
-      return void rebuild(() => block.rows.push(block.header.map(() => "")));
-    }
-    if (act.dataset.act === "del-row") {
-      return void rebuild(() => {
-        if (block.rows.length > 1) block.rows.pop();
-      });
-    }
-    if (act.dataset.act === "add-col") {
-      return void rebuild(() => {
-        block.header.push("");
-        block.align.push("");
-        block.rows.forEach((row) => row.push(""));
-      });
-    }
-    if (act.dataset.act === "del-col") {
-      return void rebuild(() => {
-        if (block.header.length <= 1) return;
-        block.header.pop();
-        block.align.pop();
-        block.rows.forEach((row) => row.pop());
-      });
-    }
-  });
-
   paint();
   view.read = () => {
     if (view.touched) readCells();
   };
   view.focus = () => caret.focusEnd(wrap.querySelector("th"));
   view.isEmpty = () => false;
+
+  // Rows and columns act at the CELL the caret is in, not at the end of the
+  // table: "add a row" after the third row is what the author means when the
+  // caret is in the third row.
+  view.options = () => [
+    { kind: "btn", act: "row+", icon: "fa-arrow-down", label: "Row below", tt: "row_add", wide: true },
+    { kind: "btn", act: "row-", icon: "fa-trash", label: "Remove row", tt: "row_del", wide: true, disabled: activeRow < 0 || block.rows.length <= 1 },
+    { kind: "btn", act: "col+", icon: "fa-arrow-right", label: "Column after", tt: "col_add", wide: true },
+    { kind: "btn", act: "col-", icon: "fa-trash", label: "Remove column", tt: "col_del", wide: true, disabled: block.header.length <= 1 },
+    { kind: "sep" },
+    { kind: "btn", act: "align", arg: "", icon: "fa-align-justify", label: "Default alignment", tt: "align_default", on: !block.align[activeCol] },
+    { kind: "btn", act: "align", arg: "left", icon: "fa-align-left", label: "Align left", tt: "align_left", on: block.align[activeCol] === "left" },
+    { kind: "btn", act: "align", arg: "center", icon: "fa-align-center", label: "Align centre", tt: "align_center", on: block.align[activeCol] === "center" },
+    { kind: "btn", act: "align", arg: "right", icon: "fa-align-right", label: "Align right", tt: "align_right", on: block.align[activeCol] === "right" },
+  ];
+
+  view.act = (act, arg) => {
+    const at = activeRow < 0 ? block.rows.length - 1 : activeRow;
+
+    if (act === "align") return void rebuild(() => (block.align[activeCol] = arg));
+    if (act === "row+") return void rebuild(() => block.rows.splice(at + 1, 0, block.header.map(() => "")));
+    if (act === "row-") {
+      return void rebuild(() => {
+        if (block.rows.length > 1 && activeRow >= 0) block.rows.splice(activeRow, 1);
+      });
+    }
+    if (act === "col+") {
+      return void rebuild(() => {
+        block.header.splice(activeCol + 1, 0, "");
+        block.align.splice(activeCol + 1, 0, "");
+        block.rows.forEach((row) => row.splice(activeCol + 1, 0, ""));
+      });
+    }
+    if (act === "col-") {
+      return void rebuild(() => {
+        if (block.header.length <= 1) return;
+        block.header.splice(activeCol, 1);
+        block.align.splice(activeCol, 1);
+        block.rows.forEach((row) => row.splice(activeCol, 1));
+        activeCol = Math.max(0, activeCol - 1);
+      });
+    }
+  };
 }
 
 /* ─── component ────────────────────────────────────────────────────────────── */
 
+/* ─── component ────────────────────────────────────────────────────────────── */
+
 const NOTE_COLORS = ["default", "info", "success", "warning", "danger", "primary"];
+const FOLDING_COLORS = [
+  "default", "blue", "cyan", "green", "yellow", "orange",
+  "red", "pink", "purple", "gray", "white", "black",
+];
+const BTN_STYLES = [
+  { arg: "", icon: "fa-align-left", label: "In the line" },
+  { arg: "center", icon: "fa-align-center", label: "Centred" },
+  { arg: "large", icon: "fa-maximize", label: "Large" },
+  { arg: "center large", icon: "fa-expand", label: "Large, centred" },
+];
 const COMMON_ICONS = [
   "", "fa-circle-info", "fa-lightbulb", "fa-triangle-exclamation", "fa-circle-check",
   "fa-circle-xmark", "fa-bell", "fa-star", "fa-bookmark", "fa-flask", "fa-quote-left",
+  "fa-book", "fa-code", "fa-link", "fa-download", "fa-play", "fa-fire", "fa-heart",
 ];
+
+function swatchRow(list, current, dot) {
+  return list.map((colour) => ({
+    kind: "swatch",
+    act: "colour",
+    arg: colour,
+    cls: dot(colour),
+    label: colour,
+    on: colour === current,
+  }));
+}
+
+function iconRow(current) {
+  return [
+    { kind: "label", label: "Icon", tt: "icon" },
+    ...COMMON_ICONS.map((icon) => ({
+      kind: "btn",
+      act: "icon",
+      arg: icon,
+      icon: icon || "fa-ban",
+      label: icon || "None",
+      on: (current || "") === icon,
+    })),
+  ];
+}
+
+/**
+ * A component's own words, edited where the reader will see them.
+ *
+ * A note's title belongs on the note, not in a field floating above it — that
+ * is the whole reason this editor works on the rendered article. The icon the
+ * emitter put there stays; everything else is replaced by one editable span, so
+ * what is typed is plain text and lands in the tag's arguments unescaped.
+ */
+function inPlace(host, value, onInput) {
+  if (!host) return null;
+
+  for (const node of Array.from(host.childNodes)) {
+    if (node.nodeType === 1 && node.tagName === "I") continue;
+    node.remove();
+  }
+
+  const span = document.createElement("span");
+  span.className = "ed-inplace";
+  span.contentEditable = "true";
+  span.spellcheck = false;
+  span.textContent = value;
+  host.appendChild(span);
+
+  span.addEventListener("input", () => onInput(span.textContent.replace(/\s+/g, " ").trim()));
+  span.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") e.preventDefault();
+  });
+  return span;
+}
 
 function mountComponent(view) {
   const { block, ctx } = view;
@@ -669,111 +867,122 @@ function mountComponent(view) {
   wrap.className = "ed-component";
   wrap.dataset.kind = kind || "unknown";
   view.body.appendChild(wrap);
-  wireBarFade(wrap);
 
   // A tag with no browser emitter is edited as its source. Nothing is lost:
   // the block still round-trips byte for byte.
-  if (!kind || kind === "tabs") {
-    return mountComponentSource(view, wrap, kind);
-  }
+  if (!kind) return mountComponentSource(view, wrap, kind);
+  if (kind === "tabs") return mountTabs(view, wrap);
 
   const argv = block.args ? block.args.trim().split(/\s+/) : [];
   const parsed = parseComponentArgs(kind, argv, block.args || "");
 
-  wrap.innerHTML = `
-    <div class="ed-component-bar" contenteditable="false">
-      <span class="ed-chip"><i class="fa-solid fa-cube" aria-hidden="true"></i>${escapeHTML(block.name)}</span>
-      <div class="ed-swatches" role="group"></div>
-      ${kind === "note" || kind === "noteLarge" ? `<button type="button" class="ed-icon-btn" title="${escapeHTML(ctx.t("icon", "Icon"))}"><i class="fa-solid ${escapeHTML(parsed.icon || "fa-face-smile")}"></i></button>` : ""}
-      ${parsed.hasTitle ? `<input class="ed-component-title" placeholder="${escapeHTML(ctx.t("title", "Title"))}" value="${escapeHTML(parsed.title || "")}">` : ""}
-      <button type="button" class="ed-component-remove" title="${escapeHTML(ctx.t("remove_block", "Remove"))}"><i class="fa-solid fa-trash"></i></button>
-    </div>
-    <div class="ed-component-render"></div>`;
-
-  const swatches = wrap.querySelector(".ed-swatches");
-  const palette = kind === "box" ? api.BOX_COLORS : NOTE_COLORS;
-  swatches.innerHTML = palette
-    .map(
-      (color) =>
-        `<button type="button" class="ed-swatch" data-color="${escapeHTML(color)}" data-on="${color === parsed.color ? "1" : "0"}" title="${escapeHTML(color)}"><span class="ed-swatch-dot ${kind === "box" ? "post-box post-box-" + escapeHTML(color) : "note " + escapeHTML(color)}"></span></button>`
-    )
-    .join("");
-
-  const host = wrap.querySelector(".ed-component-render");
+  const host = document.createElement("div");
+  host.className = "ed-component-render";
+  wrap.appendChild(host);
 
   const writeArgs = () => {
     block.args = buildComponentArgs(kind, parsed);
     view.touch();
   };
 
+  const wireTitle = () => {
+    if (kind === "noteLarge") {
+      inPlace(host.querySelector(".notel-title"), parsed.title || "", (text) => {
+        parsed.title = text;
+        writeArgs();
+      });
+      return;
+    }
+    if (kind === "folding") {
+      const details = host.querySelector("details");
+      if (details) details.open = true;
+      inPlace(host.querySelector("summary"), parsed.title || "", (text) => {
+        parsed.title = text;
+        writeArgs();
+      });
+      return;
+    }
+    if (kind === "btn") {
+      const anchor = host.querySelector("a.button");
+      if (anchor) anchor.addEventListener("click", (e) => e.preventDefault());
+      inPlace(anchor, parsed.text || "", (text) => {
+        parsed.text = text;
+        writeArgs();
+      });
+    }
+  };
+
   const paint = () => {
     host.innerHTML = renderBlock(block);
+    wireTitle();
+    if (kind === "btn") return;
     const inner = host.querySelector(".markdown-body, .notel-content, .post-box, .content");
     if (!inner || parsed.bodyKind === "text") return mountComponentBody(view, host, parsed);
     mountComponentBody(view, inner, parsed);
   };
 
-  swatches.addEventListener("click", (e) => {
-    const swatch = e.target.closest(".ed-swatch");
-    if (!swatch) return;
-    e.preventDefault();
-    parsed.color = swatch.dataset.color;
-    for (const node of swatches.children) node.dataset.on = node === swatch ? "1" : "0";
-    writeArgs();
-    morphHeight(wrap, paint);
-  });
-
-  const iconBtn = wrap.querySelector(".ed-icon-btn");
-  if (iconBtn) {
-    iconBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      openIconPicker(iconBtn, parsed.icon, (icon) => {
-        parsed.icon = icon;
-        iconBtn.querySelector("i").className = "fa-solid " + (icon || "fa-face-smile");
-        writeArgs();
-        morphHeight(wrap, paint);
-      });
-    });
-  }
-
-  const titleInput = wrap.querySelector(".ed-component-title");
-  if (titleInput) {
-    titleInput.addEventListener("input", () => {
-      parsed.title = titleInput.value;
-      writeArgs();
-    });
-    titleInput.addEventListener("change", () => morphHeight(wrap, paint));
-  }
-
-  wrap.querySelector(".ed-component-remove").addEventListener("click", (e) => {
-    e.preventDefault();
-    ctx.onDelete(block.id, "prev");
-  });
-
   paint();
+
   view.read = () => {};
   view.focus = () => {
     const editable = wrap.querySelector("[contenteditable=true]");
     if (editable) caret.focusEnd(editable);
   };
   view.isEmpty = () => false;
-}
 
-/**
- * The chip bar steps back while the body is being typed into, and returns on
- * the next pointer move. Hover alone left it lit for the whole of an editing
- * session — the pointer is over the card the entire time you are writing in it,
- * and on a touch screen the tap that opened the card latches `:hover` for good.
- */
-function wireBarFade(wrap) {
-  const wake = () => {
-    if (wrap.dataset.typing) delete wrap.dataset.typing;
+  view.options = (open) => {
+    const rows = [];
+    if (kind === "box") rows.push(...swatchRow(api.BOX_COLORS, parsed.color, (c) => "post-box post-box-" + c));
+    else if (kind === "folding") rows.push(...swatchRow(FOLDING_COLORS, parsed.color, (c) => "ed-fold-dot " + c));
+    else if (kind === "note" || kind === "noteLarge") rows.push(...swatchRow(NOTE_COLORS, parsed.color, (c) => "note " + c));
+
+    if (kind === "note" || kind === "noteLarge" || kind === "btn") {
+      rows.push(
+        { kind: "sep" },
+        {
+          kind: "btn",
+          act: "sub",
+          arg: "icon",
+          icon: parsed.icon || "fa-face-smile",
+          label: "Icon",
+          tt: "icon",
+          on: open === "icon",
+        }
+      );
+    }
+    if (kind === "btn") {
+      rows.push(
+        { kind: "sep" },
+        ...BTN_STYLES.map((style) => ({
+          kind: "btn",
+          act: "colour",
+          arg: style.arg,
+          icon: style.icon,
+          label: style.label,
+          on: (parsed.color || "") === style.arg,
+        })),
+        { kind: "sep" },
+        { kind: "btn", act: "address", icon: "fa-link", label: "Address", tt: "address", wide: true }
+      );
+    }
+    return rows;
   };
-  wrap.addEventListener("input", (e) => {
-    if (!e.target.closest(".ed-component-bar")) wrap.dataset.typing = "1";
-  });
-  wrap.addEventListener("pointermove", wake);
-  wrap.addEventListener("pointerdown", wake);
+
+  view.subOptions = (key) => (key === "icon" ? iconRow(parsed.icon) : []);
+
+  view.act = async (act, arg) => {
+    if (act === "colour") parsed.color = arg;
+    else if (act === "icon") parsed.icon = arg;
+    else if (act === "address") {
+      const url = await ctx.ask("url", parsed.url || "https://");
+      if (url == null) return;
+      parsed.url = url.trim();
+    } else return;
+
+    writeArgs();
+    await morphHeight(wrap, paint);
+    ctx.onOptionsChanged();
+  };
 }
 
 function mountComponentBody(view, host, parsed) {
@@ -798,22 +1007,198 @@ function mountComponentBody(view, host, parsed) {
   host.addEventListener("focus", () => view.ctx.onFocus(view));
 }
 
+/* ─── tabs ─────────────────────────────────────────────────────────────────── */
+
+const TAB_PANE = /<!--\s*tab (.*?)\s*-->\n?([\s\S]*?)<!--\s*endtab\s*-->/g;
+
+function readPanes(body) {
+  TAB_PANE.lastIndex = 0;
+  const out = [];
+  let match;
+  while ((match = TAB_PANE.exec(String(body == null ? "" : body))) !== null) {
+    out.push({ caption: match[1], body: match[2].trim() });
+  }
+  return out.length ? out : [{ caption: "Tab 1", body: "" }];
+}
+
+const capLabel = (caption) => String(caption).split("@")[0].trim();
+const capIcon = (caption) => (String(caption).split("@")[1] || "").trim();
+
+/**
+ * Tabs, edited as tabs.
+ *
+ * The pane markers are HTML comments, so the whole component used to fall back
+ * to a textarea — the one component whose whole point is that you look at one
+ * pane at a time, shown as all of them at once with their markers in the way.
+ * Here the nav is the nav: the chip is the caption, editable where it is read,
+ * and only the open pane is mounted, which is also what the published tab does.
+ */
+function mountTabs(view, wrap) {
+  const { block, ctx } = view;
+  const api = window.RedefineComponents;
+
+  const parts = api.splitArgs(block.args ? block.args.trim().split(/\s+/) : []);
+  const group = { name: (parts[0] || "").trim(), active: Number(parts[1]) || 0 };
+  const panes = readPanes(block.body);
+  let open = Math.min(panes.length - 1, Math.max(0, (group.active || 1) - 1));
+
+  wrap.innerHTML = `
+    <div class="ed-tabs">
+      <div class="ed-tabs-nav" contenteditable="false"></div>
+      <div class="ed-tabs-pane markdown-body ed-rich" contenteditable="true" spellcheck="true"></div>
+    </div>`;
+
+  const nav = wrap.querySelector(".ed-tabs-nav");
+  const pane = wrap.querySelector(".ed-tabs-pane");
+
+  const writeArgs = () => {
+    block.args = group.active ? `${group.name}::${group.active}` : group.name;
+    view.touch();
+  };
+
+  const writeBody = () => {
+    block.body = panes
+      .map((p) => `<!-- tab ${p.caption} -->\n\n${p.body}\n\n<!-- endtab -->`)
+      .join("\n\n");
+    view.touch();
+  };
+
+  const readPane = () => {
+    if (panes[open]) panes[open].body = richToMarkdown(pane);
+  };
+
+  const paintNav = () => {
+    nav.innerHTML =
+      panes
+        .map(
+          (p, i) =>
+            `<span class="ed-tab-chip" data-i="${i}" data-on="${i === open ? "1" : "0"}">
+               ${capIcon(p.caption) ? `<i class="${escapeHTML(capIcon(p.caption))}"></i>` : ""}
+               <span class="ed-tab-cap"></span>
+             </span>`
+        )
+        .join("") +
+      `<button type="button" class="ed-tab-add" title="${escapeHTML(ctx.t("tab_add", "Add tab"))}"><i class="fa-solid fa-plus"></i></button>`;
+
+    nav.querySelectorAll(".ed-tab-chip").forEach((chip) => {
+      const i = Number(chip.dataset.i);
+      inPlace(chip.querySelector(".ed-tab-cap"), capLabel(panes[i].caption), (text) => {
+        const icon = capIcon(panes[i].caption);
+        panes[i].caption = icon ? `${text}@${icon}` : text;
+        writeBody();
+      });
+    });
+  };
+
+  const paintPane = () => {
+    pane.innerHTML = renderMarkdown(panes[open] ? panes[open].body : "");
+    ctx.observeImages();
+  };
+
+  const show = (i) => {
+    if (i === open) return;
+    readPane();
+    open = Math.max(0, Math.min(panes.length - 1, i));
+    paintNav();
+    morphHeight(wrap, paintPane);
+    ctx.onOptionsChanged();
+  };
+
+  nav.addEventListener("click", (e) => {
+    if (e.target.closest(".ed-tab-add")) {
+      e.preventDefault();
+      readPane();
+      panes.push({ caption: `Tab ${panes.length + 1}`, body: "" });
+      writeBody();
+      return void show(panes.length - 1);
+    }
+    const chip = e.target.closest(".ed-tab-chip");
+    if (chip && !e.target.closest(".ed-inplace")) {
+      e.preventDefault();
+      show(Number(chip.dataset.i));
+    }
+  });
+
+  pane.addEventListener("input", () => {
+    readPane();
+    writeBody();
+  });
+  pane.addEventListener("paste", (e) => onPaste(view, e));
+  pane.addEventListener("focus", () => ctx.onFocus(view));
+
+  paintNav();
+  paintPane();
+
+  view.read = readPane;
+  view.editable = pane;
+  view.focus = () => caret.focusEnd(pane);
+  view.isEmpty = () => false;
+
+  view.options = () => [
+    { kind: "btn", act: "tab-add", icon: "fa-plus", label: "Add tab", tt: "tab_add", wide: true },
+    { kind: "btn", act: "tab-del", icon: "fa-trash", label: "Remove tab", tt: "tab_del", wide: true, disabled: panes.length <= 1 },
+    { kind: "btn", act: "tab-move", arg: "-1", icon: "fa-arrow-left", label: "Move left", tt: "tab_left", disabled: open === 0 },
+    { kind: "btn", act: "tab-move", arg: "1", icon: "fa-arrow-right", label: "Move right", tt: "tab_right", disabled: open === panes.length - 1 },
+    { kind: "sep" },
+    { kind: "btn", act: "tab-first", icon: "fa-thumbtack", label: "Open this one first", tt: "tab_first", wide: true, on: group.active === open + 1 },
+    { kind: "btn", act: "tab-name", icon: "fa-tag", label: group.name || "Group name", tt: "tab_name", wide: true },
+    { kind: "sep" },
+    { kind: "btn", act: "sub", arg: "tabicon", icon: capIcon(panes[open].caption) || "fa-face-smile", label: "Tab icon", tt: "icon" },
+  ];
+
+  view.subOptions = (key) => (key === "tabicon" ? iconRow(capIcon(panes[open].caption).replace(/^fa-solid\s+/, "")) : []);
+
+  view.act = async (act, arg) => {
+    if (act === "tab-add") {
+      readPane();
+      panes.push({ caption: `Tab ${panes.length + 1}`, body: "" });
+      writeBody();
+      show(panes.length - 1);
+    } else if (act === "tab-del") {
+      if (panes.length <= 1) return;
+      panes.splice(open, 1);
+      open = Math.max(0, open - 1);
+      writeBody();
+      paintNav();
+      await morphHeight(wrap, paintPane);
+    } else if (act === "tab-move") {
+      const to = open + Number(arg);
+      if (to < 0 || to >= panes.length) return;
+      readPane();
+      const [moved] = panes.splice(open, 1);
+      panes.splice(to, 0, moved);
+      open = to;
+      writeBody();
+      paintNav();
+    } else if (act === "tab-first") {
+      group.active = group.active === open + 1 ? 0 : open + 1;
+      writeArgs();
+    } else if (act === "tab-name") {
+      const name = await ctx.ask("name", group.name);
+      if (name == null) return;
+      group.name = name.trim();
+      writeArgs();
+    } else if (act === "icon") {
+      const label = capLabel(panes[open].caption);
+      panes[open].caption = arg ? `${label}@fa-solid ${arg}` : label;
+      writeBody();
+      paintNav();
+    } else {
+      return;
+    }
+    ctx.onOptionsChanged();
+  };
+}
+
 /** The fallback editor: the tag's own source, exactly as it will be committed. */
 function mountComponentSource(view, wrap, kind) {
   const { block, ctx } = view;
   wrap.innerHTML = `
-    <div class="ed-component-bar" contenteditable="false">
-      <span class="ed-chip"><i class="fa-solid fa-cube" aria-hidden="true"></i>${escapeHTML(block.name)}</span>
-      <input class="ed-component-args" spellcheck="false" placeholder="${escapeHTML(ctx.t("arguments", "arguments"))}" value="${escapeHTML(block.args || "")}">
-      <button type="button" class="ed-source-toggle" title="${escapeHTML(ctx.t("toggle_source", "Show source"))}"><i class="fa-solid fa-pen-to-square"></i></button>
-      <button type="button" class="ed-component-remove" title="${escapeHTML(ctx.t("remove_block", "Remove"))}"><i class="fa-solid fa-trash"></i></button>
-    </div>
     <div class="ed-preview"></div>
     <textarea class="ed-source" spellcheck="false"></textarea>`;
 
   const source = wrap.querySelector(".ed-source");
   const preview = wrap.querySelector(".ed-preview");
-  const args = wrap.querySelector(".ed-component-args");
   source.value = block.body == null ? "" : block.body;
 
   const grow = () => {
@@ -835,40 +1220,36 @@ function mountComponentSource(view, wrap, kind) {
     view.touch();
     grow();
   });
-  args.addEventListener("input", () => {
-    block.args = args.value;
-    view.touch();
-  });
+  source.addEventListener("focus", () => ctx.onFocus(view));
   source.addEventListener("blur", () => {
     if (!wrap.contains(document.activeElement)) show("preview");
   });
-  wrap.querySelector(".ed-source-toggle").addEventListener("click", () => {
-    if (wrap.dataset.mode === "source") show("preview");
-    else show("source").then(() => source.focus());
-  });
   preview.addEventListener("click", () => show("source").then(() => source.focus()));
-  wrap.querySelector(".ed-component-remove").addEventListener("click", (e) => {
-    e.preventDefault();
-    ctx.onDelete(block.id, "prev");
-  });
 
-  wrap.dataset.mode = block.body == null ? "preview" : "preview";
+  wrap.dataset.mode = "preview";
   paint();
 
   view.read = () => {};
   view.focus = () => show("source").then(() => source.focus());
   view.isEmpty = () => false;
-  if (kind === "tabs") wrap.dataset.kind = "tabs";
+  view.showSource = () => show("source");
+
+  view.options = () => [
+    { kind: "btn", act: "args", icon: "fa-sliders", label: "Arguments", tt: "arguments", wide: true },
+  ];
+  view.act = async (act) => {
+    if (act !== "args") return;
+    const args = await ctx.ask("args", block.args || "");
+    if (args == null) return;
+    block.args = args.trim();
+    view.touch();
+    paint();
+    ctx.onOptionsChanged();
+  };
 }
 
-/**
- * The tag's arguments, in the shape its editor needs.
- *
- * `note` takes `color` then an optional FontAwesome icon then extra classes;
- * `folding` and `noteLarge` also carry a title. The split is the emitter's own
- * (`components.splitIcon`), so what the editor shows and what the build renders
- * cannot disagree about which argument is which.
- */
+/* ─── the tag's arguments, both ways ───────────────────────────────────────── */
+
 function parseComponentArgs(kind, argv, raw) {
   const api = window.RedefineComponents;
 
@@ -888,6 +1269,23 @@ function parseComponentArgs(kind, argv, raw) {
     };
   }
 
+  if (kind === "btn") {
+    const parts = api.splitArgs(argv).map((part) => String(part).trim());
+    let cls = "";
+    let text = "";
+    let url = "";
+    let icon = "";
+    if (parts.length >= 4) [cls, text, url, icon] = parts;
+    else if (parts.length === 3) {
+      if (/fa-/.test(parts[2])) [text, url, icon] = parts;
+      else [cls, text, url] = parts;
+    } else if (parts.length === 2) [text, url] = parts;
+    else if (parts.length === 1) [text] = parts;
+
+    const name = (icon.match(/fa-[\w-]+/g) || []).filter((c) => c !== "fa-solid" && c !== "fa-regular").pop() || "";
+    return { color: cls, text, url, icon: name, bodyKind: "none", hasTitle: false, extra: [] };
+  }
+
   const color = argv[0] || "default";
   const { icon, rest } = api.splitIcon(argv.slice(1), "");
   const iconName = (icon.match(/fa-[\w-]+(?="|\s|$)/g) || []).filter((c) => c !== "fa-solid" && c !== "fa-regular").pop() || "";
@@ -902,48 +1300,18 @@ function buildComponentArgs(kind, parsed) {
   if (kind === "box") return parsed.color;
   if (kind === "folding") return [parsed.color, parsed.title].join("::");
 
+  if (kind === "btn") {
+    const icon = parsed.icon ? "fa-solid " + parsed.icon : "";
+    if (icon) return [parsed.color, parsed.text, parsed.url, icon].join("::");
+    if (parsed.color) return [parsed.color, parsed.text, parsed.url].join("::");
+    return [parsed.text, parsed.url].join("::");
+  }
+
   const parts = [parsed.color];
   if (parsed.icon) parts.push(parsed.icon);
   if (kind === "noteLarge" && parsed.title) parts.push(parsed.title);
   else if (parsed.extra && parsed.extra.length) parts.push(parsed.extra.join(" "));
   return parts.filter(Boolean).join(" ");
-}
-
-function openIconPicker(anchor, current, onPick) {
-  const existing = document.querySelector(".ed-icon-picker");
-  if (existing) existing.remove();
-
-  const menu = document.createElement("div");
-  menu.className = "ed-icon-picker";
-  menu.innerHTML = COMMON_ICONS.map(
-    (icon) =>
-      `<button type="button" data-icon="${escapeHTML(icon)}" data-on="${icon === current ? "1" : "0"}">${icon ? `<i class="fa-solid ${escapeHTML(icon)}"></i>` : '<i class="fa-solid fa-ban"></i>'}</button>`
-  ).join("");
-
-  // Absolutely positioned, so DOCUMENT coordinates — a viewport rect used raw
-  // put the picker a whole scroll offset above the button it belongs to.
-  document.body.appendChild(menu);
-  const rect = anchor.getBoundingClientRect();
-  const height = menu.offsetHeight;
-  const above = window.innerHeight - rect.bottom < height + 16;
-  menu.style.top = (above ? rect.top - height - 6 : rect.bottom + 6) + window.scrollY + "px";
-  menu.style.left =
-    Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 12)) + window.scrollX + "px";
-  pop(menu);
-
-  menu.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-icon]");
-    if (!btn) return;
-    onPick(btn.dataset.icon);
-    menu.remove();
-  });
-
-  const close = (e) => {
-    if (menu.contains(e.target) || anchor.contains(e.target)) return;
-    menu.remove();
-    document.removeEventListener("pointerdown", close, true);
-  };
-  setTimeout(() => document.addEventListener("pointerdown", close, true), 0);
 }
 
 /* ─── rule ─────────────────────────────────────────────────────────────────── */

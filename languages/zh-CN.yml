@@ -453,3 +453,48 @@ editor:
   m_mark: 高亮
   m_link: 链接
   m_clear: 清除格式
+  m_colour: 高亮颜色
+  m_nohl: 取消高亮
+  m_unlink: 移除链接
+  m_kbd: 按键
+  m_sup: 上标
+  m_sub: 下标
+  m_u: 下划线
+  tab_format: 格式
+  tab_block: 区块
+  tab_insert: 插入
+  tab_source: 原文
+  b_heading1: 一级标题
+  b_heading4: 四级标题
+  b_raw: 原始 HTML
+  b_icode: 行内代码
+  b_imath: 行内公式
+  b_link: 链接
+  src_on: 编辑该块的 Markdown 原文
+  src_off: 返回渲染视图
+  src_hint: 该块完整的原文，包含全部标记。
+  move_up: 上移
+  move_down: 下移
+  duplicate: 复制
+  address: 地址
+  plain: 纯文本
+  other: 其他
+  row_add: 在下方插入行
+  row_del: 删除该行
+  col_add: 在右侧插入列
+  col_del: 删除该列
+  align_left: 左对齐
+  align_center: 居中
+  align_right: 右对齐
+  tab_add: 添加标签页
+  tab_del: 删除标签页
+  tab_left: 左移
+  tab_right: 右移
+  tab_first: 设为默认打开
+  tab_name: 分组名称
+  ask_url: 地址
+  ask_lang: 语言
+  ask_name: 名称
+  ask_args: 参数
+  ask_tex: LaTeX
+  apply: 应用

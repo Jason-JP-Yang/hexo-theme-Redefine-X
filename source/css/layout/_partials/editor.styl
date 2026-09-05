@@ -543,6 +543,11 @@ textarea.ed-f-input
 // Genuinely floating over live content, so one of the three surfaces that earns
 // a compositor layer. Fixed rather than sticky: it belongs to the session, not
 // to a scroll container, and the article no longer has one to stick inside.
+//
+// A rounded RECTANGLE, not a pill. It carries a tab strip over one or two rows
+// of controls that WRAP rather than scroll — a control past the end of a row is
+// a control the author cannot see — and a 999px radius on a box that tall bows
+// its ends into half-circles that match nothing else on the site.
 .ed-toolbar
   position fixed
   // Below the document bar's pinned band. `--ed-docbar-h` is that bar's measured
@@ -550,64 +555,133 @@ textarea.ed-f-input
   top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top + 12px))
   left 50%
   z-index $z-index-4
+  width min(calc(100vw - 24px), 760px)
   transform translateX(-50%)
   pointer-events none
   transition top $ed-morph
 
   +redefine-tablet()
     top auto
-    bottom 16px
+    bottom 12px
 
-.ed-toolbar-inner
+.ed-toolbar-card
   display flex
-  align-items center
-  gap 2px
-  padding 5px 7px
+  flex-direction column
+  gap 4px
+  padding 6px
   border 1px solid var(--border-color)
-  border-radius 999px
+  border-radius $ed-radius
   background var(--third-background-color-transparent)
   backdrop-filter saturate(180%) blur(14px)
   -webkit-backdrop-filter saturate(180%) blur(14px)
-  box-shadow 0 6px 22px -12px var(--shadow-color-1)
+  box-shadow 0 10px 30px -14px var(--shadow-color-1)
   pointer-events auto
   overflow hidden
 
-.ed-toolbar-face
+.ed-toolbar-tabs
   display flex
+  gap 3px
+
+.ed-tab
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 6px
+  flex 1 1 0
+  min-width 0
+  padding 5px 10px
+  border none
+  border-radius 9px
+  background transparent
+  color var(--third-text-color)
+  font-size 0.7rem
+  font-weight 600
+  cursor pointer
+  transition background $ed-fade, color $ed-fade
+
+  span
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+  &:hover
+    background var(--second-background-color)
+    color var(--first-text-color)
+
+  &[data-on="1"]
+    background var(--primary-color)
+    color $ed-on-primary
+
+  +redefine-mobile()
+    span
+      display none
+
+.ed-toolbar-row
+  display flex
+  flex-wrap wrap
   align-items center
   gap 2px
+  padding 2px
 
   &[hidden]
     display none
 
+.ed-toolbar-sub
+  padding-top 6px
+  border-top 1px solid var(--border-color)
+
+.ed-tool-label
+  padding 0 8px 0 3px
+  color var(--third-text-color)
+  font-size 0.64rem
+  font-weight 600
+  letter-spacing 0.03em
+  text-transform uppercase
+
 .ed-tool
-  display grid
-  place-items center
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 6px
   width 30px
   height 30px
+  padding 0
   border none
   border-radius 8px
   background transparent
   color var(--second-text-color)
   font-size 0.82rem
   cursor pointer
-  transition background $ed-fade, color $ed-fade, transform 0.18s ease
+  transition background $ed-fade, color $ed-fade
 
-  &:hover
+  &.is-wide
+    width auto
+    padding 0 10px
+    font-size 0.72rem
+
+  &:hover:not(:disabled)
     background var(--second-background-color)
     color var(--first-text-color)
-    transform translateY(-1px)
 
   &[data-on="1"]
     background var(--primary-color)
     color $ed-on-primary
 
+  // Half the selection carries the mark. Neither on nor off, and pressing it
+  // fills in the rest rather than taking the half away.
+  &[data-on="2"]
+    background var(--second-background-color)
+    box-shadow inset 0 0 0 1px var(--primary-color)
+
+  &:disabled
+    opacity 0.32
+    cursor default
+
 .ed-tool-sep
   width 1px
   height 18px
-  margin 0 4px
+  margin 0 5px
   background var(--border-color)
-
 // ─── block shell ────────────────────────────────────────────
 // No padding, no margin, no background: the wrapper must be dimensionally
 // invisible, or every line in the editor breaks somewhere the published post
@@ -644,21 +718,18 @@ textarea.ed-f-input
   &[data-drop="after"]::after
     bottom -4px
 
-// The block travelling with the pointer. Drawn here rather than handed to
-// `setDragImage`, which measures a rectangle of its own choosing and rescales
-// it under an emulated viewport — see startGhost() in editor/motion.js.
-.ed-ghost
+// The snapshot the browser drags. Clipped to the block's own border box, so the
+// gutter — which is positioned OUTSIDE that box — is not in the picture and the
+// grab point lands where it was measured. Off-screen but rendered:
+// `setDragImage` photographs it during dragstart and it is dropped next tick.
+.ed-dragshot
   position fixed
   top 0
-  left 0
-  z-index ($z-index-5 + 2)
+  left -10000px
+  overflow hidden
   border-radius 10px
   background var(--background-color)
-  box-shadow 0 20px 44px -20px var(--shadow-color-1)
-  opacity 0.9
   pointer-events none
-  user-select none
-
 // The article zeroes the top margin of its first child. With blocks that child
 // is a wrapper, so the rule has to reach one level further in — otherwise the
 // body starts a line lower here than it will once published.
@@ -751,17 +822,26 @@ textarea.ed-f-input
   mark
     padding 0 2px
     border-radius 3px
-    background var(--box-amber-bg)
-    color var(--box-amber-text)
 
-// `<mark>` is written as inline HTML rather than as invented markdown, so it
-// has to look right in the PUBLISHED article too.
-.markdown-body mark
+// `<mark>` is written as inline HTML rather than as invented markdown, so it has
+// to look right in the PUBLISHED article too. The colours are the box palette's:
+// one set of highlight colours for the site, not a second set for the editor.
+.markdown-body mark,
+.ed-rich mark
   padding 0 2px
   border-radius 3px
   background var(--box-amber-bg)
   color var(--box-amber-text)
 
+for $hl in 'amber' 'yellow' 'lime' 'green' 'teal' 'cyan' 'blue' 'indigo' 'purple' 'pink' 'red' 'gray'
+  .markdown-body mark.hl-{$hl},
+  .ed-rich mark.hl-{$hl}
+    background unquote('var(--box-' + $hl + '-bg)')
+    color unquote('var(--box-' + $hl + '-text)')
+
+  .ed-swatch-dot.hl-{$hl}
+    background unquote('var(--box-' + $hl + '-bg)')
+    box-shadow inset 0 0 0 1px unquote('var(--box-' + $hl + '-text)')
 // ─── source blocks ──────────────────────────────────────────
 .ed-source-block
   position relative
@@ -780,14 +860,6 @@ textarea.ed-f-input
   &[data-mode="source"] .ed-preview
     display none
 
-.ed-source-bar
-  display flex
-  align-items center
-  gap 8px
-  padding 6px 10px
-  border-bottom 1px solid var(--border-color)
-  background var(--second-background-color)
-
 .ed-chip
   display inline-flex
   align-items center
@@ -797,50 +869,6 @@ textarea.ed-f-input
   letter-spacing 0.03em
   text-transform uppercase
   color var(--third-text-color)
-
-.ed-lang,
-.ed-component-args,
-.ed-component-title
-  flex 1 1 auto
-  min-width 0
-  padding 3px 7px
-  border 1px solid transparent
-  border-radius 7px
-  background transparent
-  color var(--second-text-color)
-  font-size 0.74rem
-  outline none
-  transition border-color $ed-fade, background $ed-fade
-
-  &:focus
-    border-color var(--border-color)
-    background var(--background-color)
-
-.ed-source-toggle,
-.ed-component-remove
-  display grid
-  place-items center
-  flex-shrink 0
-  width 26px
-  height 26px
-  margin-left auto
-  border none
-  border-radius 7px
-  background transparent
-  color var(--third-text-color)
-  font-size 0.74rem
-  cursor pointer
-  transition background $ed-fade, color $ed-fade
-
-  &:hover
-    background var(--third-background-color)
-    color var(--second-text-color)
-
-.ed-component-remove
-  margin-left 0
-
-  &:hover
-    color var(--box-red-text)
 
 .ed-source
   display block
@@ -898,10 +926,6 @@ textarea.ed-f-input
 .ed-figure
   position relative
 
-  &:hover .ed-image-tools
-    opacity 1
-    transform none
-
   figcaption
     outline none
     cursor text
@@ -910,41 +934,6 @@ textarea.ed-f-input
       content attr(data-placeholder)
       color var(--third-text-color)
       opacity 0.7
-
-.ed-image-tools
-  position absolute
-  top 10px
-  right 10px
-  z-index 2
-  display flex
-  gap 4px
-  padding 4px
-  border-radius 10px
-  background var(--third-background-color-transparent)
-  backdrop-filter blur(12px)
-  -webkit-backdrop-filter blur(12px)
-  opacity 0
-  transform translateY(-4px)
-  transition opacity $ed-fade, transform $ed-morph
-
-  button
-    display grid
-    place-items center
-    width 26px
-    height 26px
-    border none
-    border-radius 7px
-    background transparent
-    color var(--second-text-color)
-    font-size 0.74rem
-    cursor pointer
-    transition background $ed-fade
-
-    &:hover
-      background var(--background-color)
-
-    &[data-act="remove"]:hover
-      color var(--box-red-text)
 
 // ─── table ──────────────────────────────────────────────────
 .ed-table-block
@@ -962,41 +951,11 @@ textarea.ed-f-input
     &:focus
       box-shadow inset 0 0 0 2px var(--primary-color)
 
-.ed-table-bar
-  display flex
-  flex-wrap wrap
-  align-items center
-  gap 6px
-  padding 6px 10px
-  border-bottom 1px solid var(--border-color)
-  background var(--second-background-color)
-
-  button
-    display inline-flex
-    align-items center
-    gap 4px
-    padding 3px 8px
-    border 1px solid var(--border-color)
-    border-radius 7px
-    background var(--background-color)
-    color var(--third-text-color)
-    font-size 0.68rem
-    cursor pointer
-    transition background $ed-fade, color $ed-fade
-
-    &:hover
-      background var(--third-background-color)
-      color var(--second-text-color)
-
-.ed-table-align
-  display inline-flex
-  gap 2px
-  margin-right 4px
-
-  button
-    padding 3px 6px
-
 // ─── components ─────────────────────────────────────────────
+// Nothing is drawn ON a component any more. Its colour, its icon, its title and
+// its panes are reached from the toolbar's Block tab or typed in place, so what
+// is on the canvas is the component as it will be published — which is the only
+// reason this editor works on the article rather than beside it.
 .ed-component
   position relative
   margin 1.2rem 0
@@ -1004,45 +963,15 @@ textarea.ed-f-input
   border-radius 12px
   transition border-color $ed-fade
 
-  &:hover
+  &:hover,
+  .ed-block[data-on="1"] &
     border-color var(--border-color)
-
-  // Pointer devices only: a tap latches `:hover` on a touch screen and the bar
-  // would never dim again. Without hover to reveal it, it simply stays legible.
-  @media (hover: hover)
-    &:hover .ed-component-bar
-      opacity 1
-      transform none
-
-  @media (hover: none)
-    .ed-component-bar
-      opacity 1
-      transform none
-
-  // Writing in the card puts the chrome back down — the pointer sits over the
-  // card for the whole time you are typing in it, so hover alone kept it lit.
-  &[data-typing="1"] .ed-component-bar
-    opacity 0.35
-    transform translateY(-2px)
 
   &[data-mode="preview"] .ed-source
     display none
 
   &[data-mode="source"] .ed-preview
     display none
-
-.ed-component-bar
-  display flex
-  align-items center
-  gap 8px
-  padding 5px 8px
-  border-bottom 1px solid var(--border-color)
-  background var(--second-background-color)
-  border-radius 11px 11px 0 0
-  opacity 0.35
-  transform translateY(-2px)
-  transition opacity $ed-fade, transform $ed-morph
-
 .ed-component-render
   padding 4px
 
@@ -1051,10 +980,6 @@ textarea.ed-f-input
 
   > *:last-child
     margin-bottom 0
-
-.ed-swatches
-  display flex
-  gap 3px
 
 .ed-swatch
   display grid
@@ -1079,22 +1004,6 @@ textarea.ed-f-input
   width 11px
   height 11px
   border-radius 4px
-
-.ed-icon-btn
-  display grid
-  place-items center
-  width 24px
-  height 24px
-  border 1px solid var(--border-color)
-  border-radius 7px
-  background var(--background-color)
-  color var(--second-text-color)
-  font-size 0.72rem
-  cursor pointer
-  transition background $ed-fade
-
-  &:hover
-    background var(--third-background-color)
 
 .ed-unknown
   border 1px solid var(--border-color)
@@ -1141,10 +1050,124 @@ textarea.ed-f-input
 .ed-rule
   padding 8px 0
 
-// ─── slash menu & popovers ──────────────────────────────────
+// ─── editing in place ───────────────────────────────────────
+// A component's title is typed where the reader will read it. The span is the
+// only editable thing inside the component, so it says so under the pointer and
+// stays invisible otherwise.
+.ed-inplace
+  outline none
+  border-radius 4px
+  cursor text
+  transition box-shadow $ed-fade
+
+  &:hover
+    box-shadow 0 0 0 2px var(--third-background-color)
+
+  &:focus
+    box-shadow 0 0 0 2px var(--primary-color)
+
+// ─── tabs ───────────────────────────────────────────────────
+// One pane at a time, which is what a tab IS. The nav is the nav: each chip is
+// its own caption, edited where it is read.
+.ed-tabs
+  margin 0
+  border 1px solid var(--border-color)
+  border-radius 12px
+  overflow hidden
+
+.ed-tabs-nav
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 4px
+  padding 6px
+  border-bottom 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-tab-chip
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 4px 10px
+  border 1px solid transparent
+  border-radius 8px
+  background var(--background-color)
+  color var(--second-text-color)
+  font-size 0.74rem
+  cursor pointer
+  transition border-color $ed-fade, color $ed-fade
+
+  &[data-on="1"]
+    border-color var(--primary-color)
+    color var(--first-text-color)
+
+.ed-tab-add
+  display grid
+  place-items center
+  width 26px
+  height 26px
+  border 1px dashed var(--border-color)
+  border-radius 8px
+  background transparent
+  color var(--third-text-color)
+  font-size 0.7rem
+  cursor pointer
+  transition border-color $ed-fade, color $ed-fade
+
+  &:hover
+    border-color var(--primary-color)
+    color var(--primary-color)
+
+.ed-tabs-pane
+  padding 10px 14px
+  outline none
+
+  > *:first-child
+    margin-top 0
+
+  > *:last-child
+    margin-bottom 0
+
+// The dot the toolbar draws for a folding block's style.
+.ed-fold-dot
+  background var(--second-background-color)
+  box-shadow inset 0 0 0 1px var(--border-color)
+
+for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
+  .ed-fold-dot.{$fc}
+    background unquote('var(--box-' + $fc + '-bg)')
+
+.ed-fold-dot.white
+  background #fff
+
+.ed-fold-dot.black
+  background #222
+
+// ─── the block's own markdown ───────────────────────────────
+.ed-raw
+  display block
+  width 100%
+  min-height 4.5em
+  padding 12px 14px
+  border 1px solid var(--primary-color)
+  border-radius 10px
+  background var(--second-background-color)
+  color var(--first-text-color)
+  font-family $ed-mono
+  font-size 0.8rem
+  line-height 1.6
+  tab-size 2
+  outline none
+  resize none
+  white-space pre
+  overflow-x auto
+
+  &[hidden]
+    display none
+
+// ─── slash menu & the one prompt ────────────────────────────
 .ed-slash,
-.ed-more-menu,
-.ed-icon-picker
+.ed-ask
   position absolute
   z-index ($z-index-5 + 1)
   padding 6px
@@ -1160,8 +1183,7 @@ textarea.ed-f-input
   max-height 302px
   overflow-y auto
 
-.ed-slash-row,
-.ed-more-menu button
+.ed-slash-row
   display flex
   align-items center
   gap 9px
@@ -1189,38 +1211,57 @@ textarea.ed-f-input
   &[data-on="1"] i
     color var(--primary-color)
 
-.ed-more-menu
-  width 216px
-
 .ed-slash-empty
   padding 14px 10px
   color var(--third-text-color)
   font-size 0.78rem
   text-align center
 
-.ed-icon-picker
+// The toolbar holds no fields, so the values that genuinely have to be typed —
+// an address, a name, a language — are asked for here, and the toolbar goes
+// back to being buttons.
+.ed-ask
+  display flex
+  align-items center
+  gap 6px
+  width 340px
+  max-width calc(100vw - 32px)
+
+.ed-ask-label
+  flex-shrink 0
+  padding-left 4px
+  color var(--third-text-color)
+  font-size 0.64rem
+  font-weight 600
+  letter-spacing 0.03em
+  text-transform uppercase
+
+.ed-ask-input
+  flex 1 1 auto
+  min-width 0
+  padding 5px 8px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-size 0.76rem
+  outline none
+
+  &:focus
+    border-color var(--primary-color)
+
+.ed-ask-ok
   display grid
-  grid-template-columns repeat(6, 28px)
-  gap 2px
-
-  button
-    display grid
-    place-items center
-    width 28px
-    height 28px
-    border 1px solid transparent
-    border-radius 7px
-    background transparent
-    color var(--second-text-color)
-    cursor pointer
-    transition background $ed-fade, border-color $ed-fade
-
-    &:hover
-      background var(--second-background-color)
-
-    &[data-on="1"]
-      border-color var(--primary-color)
-
+  place-items center
+  flex-shrink 0
+  width 28px
+  height 28px
+  border none
+  border-radius 8px
+  background var(--primary-color)
+  color $ed-on-primary
+  font-size 0.72rem
+  cursor pointer
 // ─── the console's link into here ───────────────────────────
 .bm-write
   display inline-flex
@@ -1270,5 +1311,5 @@ textarea.ed-f-input
   .ed-tool,
   .ed-gutter,
   .ed-stage,
-  .ed-component-bar
+  .ed-swatch
     transition none !important

@@ -451,3 +451,48 @@ editor:
   m_mark: Highlight
   m_link: Link
   m_clear: Clear formatting
+  m_colour: Highlight colour
+  m_nohl: No highlight
+  m_unlink: Remove link
+  m_kbd: Key
+  m_sup: Superscript
+  m_sub: Subscript
+  m_u: Underline
+  tab_format: Format
+  tab_block: Block
+  tab_insert: Insert
+  tab_source: Source
+  b_heading1: Heading 1
+  b_heading4: Heading 4
+  b_raw: Raw HTML
+  b_icode: Inline code
+  b_imath: Inline equation
+  b_link: Link
+  src_on: Edit this block's markdown
+  src_off: Back to the rendered block
+  src_hint: Every marker this block is written with.
+  move_up: Move up
+  move_down: Move down
+  duplicate: Duplicate
+  address: Address
+  plain: Plain text
+  other: Other
+  row_add: Row below
+  row_del: Remove row
+  col_add: Column after
+  col_del: Remove column
+  align_left: Align left
+  align_center: Align centre
+  align_right: Align right
+  tab_add: Add tab
+  tab_del: Remove tab
+  tab_left: Move left
+  tab_right: Move right
+  tab_first: Open this one first
+  tab_name: Group name
+  ask_url: Address
+  ask_lang: Language
+  ask_name: Name
+  ask_args: Arguments
+  ask_tex: LaTeX
+  apply: Apply

@@ -651,6 +651,15 @@ export function htmlToInline(node) {
     const tag = child.tagName.toLowerCase();
     const kind = child.getAttribute("data-md");
 
+    // A node the editor rendered from markdown it cannot read back — a button,
+    // a box, anything inserted into a component's body — carries its own source
+    // and is emitted as that source, unchanged.
+    const source = child.getAttribute("data-md-src");
+    if (source != null) {
+      out += source;
+      continue;
+    }
+
     if (tag === "br") {
       out += "\n";
     } else if (tag === "code" || kind === "code") {

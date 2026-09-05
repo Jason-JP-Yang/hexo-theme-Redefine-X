@@ -25,15 +25,19 @@
  */
 
 import { createView, makeBlock } from "./blocks.js";
-import { CATALOGUE, createSlashMenu, createToolbar, openMoreMenu } from "./toolbar.js";
+import { INSERTS, askFor, createSlashMenu, createToolbar } from "./toolbar.js";
+import { conversions, entryFor, fieldsFor, linesOf } from "./convert.js";
 import {
   docToMarkdown,
+  emitBlock,
   escapeHTML,
   markdownToDoc,
+  nextId,
   parseBlocks,
   parseFrontMatter,
   setFrontMatterKey,
 } from "./markdown.js";
+import { insertInline } from "./inline.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
 import {
@@ -51,7 +55,7 @@ import initLazyLoad, {
 import { assetURL } from "../../tools/vaultCrypto.js";
 import * as session from "./session.js";
 import * as gitea from "./gitea.js";
-import { contentChanged, crossFade, enter, exit, flip, moveGhost, pop, stopGhost } from "./motion.js";
+import { contentChanged, crossFade, enter, exit, flip, pop } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -390,17 +394,21 @@ async function activate(host) {
 
   const ctx = {
     t,
-    onInsert: (key) => insertFromCatalogue(key, null),
-    onPick: (item, hostView) => insertFromCatalogue(item.key, hostView),
-    onMore: (anchor) => openMoreMenu(anchor, { t, onInsert: (key) => insertFromCatalogue(key, null) }),
-    onMarked: () => {
-      if (state.focused) {
-        state.focused.touch();
-        state.focused.read();
-      }
+    view: () => state.focused,
+    richRoot,
+    onInsert: (key) => insertItem(key, null),
+    onPick: (item, hostView) => (item.kind === "convert" ? convertTo(item.key) : insertItem(item.key, hostView)),
+    onConvert: (key) => convertTo(key),
+    onSource: (on) => toggleSource(on),
+    onAct: (act, arg) => {
+      if (act === "move") return void moveFocused(Number(arg));
+      if (act === "duplicate") return void duplicateFocused();
+      if (act === "delete") return void (state.focused && deleteBlock(state.focused.block.id, "prev"));
+      if (state.focused && state.focused.act) state.focused.act(act, arg);
     },
+    onMarked: commitInline,
+    ask: (kind, current) => askFor(ui.toolbar.el, { t }, kind, current),
     ownsSelection: (sel) => state.canvas.contains(sel.anchorNode),
-    link_url: t("link_url", "Link URL"),
   };
   ui.toolbar = createToolbar(ctx);
   ui.slash = createSlashMenu(ctx);
@@ -421,6 +429,7 @@ async function activate(host) {
   enter(ui.front.el);
   syncHeader();
   wire();
+  ui.toolbar.sync();
   contentChanged();
 
   if (identity.fresh) state.titleHost.querySelector(".ed-title").focus();
@@ -445,7 +454,7 @@ async function deactivate() {
   if (ui.toolbar) ui.toolbar.el.remove();
   if (ui.slash) ui.slash.el.remove();
   if (ui.file) ui.file.remove();
-  document.querySelectorAll(".ed-more-menu, .ed-icon-picker").forEach((el) => el.remove());
+  document.querySelectorAll(".ed-ask, .ed-dragshot").forEach((el) => el.remove());
 
   await crossFade(state.canvas, () => {
     state.canvas.replaceChildren(...state.snapshot);
@@ -542,9 +551,19 @@ function blockCtx() {
     t,
     onChange: markDirty,
     onFocus: (view) => {
+      const moved = state.focused !== view;
       state.focused = view;
       for (const other of state.views) other.el.dataset.on = other === view ? "1" : "0";
+      // The Block tab is about THIS block, so it is repainted the moment the
+      // caret lands in another one.
+      if (moved && ui && ui.toolbar) ui.toolbar.sync();
     },
+    onOptionsChanged: () => {
+      if (ui && ui.toolbar) ui.toolbar.refresh();
+    },
+    onRemount: (id) => remountBlock(id),
+    onRawEdited: (id, text) => applyRaw(id, text),
+    ask: (kind, current) => askFor(ui.toolbar.el, { t }, kind, current),
     onInsertAfter: (id) => insertBlock(makeBlock("paragraph"), id, true),
     onSplit: (id, tailText) => {
       const index = indexOf(id);
@@ -569,7 +588,6 @@ function blockCtx() {
     },
     onDragEnd: () => {
       state.dragId = null;
-      stopGhost();
       stopEdgeScroll();
       document.removeEventListener("dragover", onDocDragOver);
       document.removeEventListener("drop", onDocDrop);
@@ -726,17 +744,233 @@ function pasteMarkdown(id, text) {
   if (here && here.isEmpty && here.isEmpty()) deleteBlock(id, "next");
 }
 
-function insertFromCatalogue(key, host) {
-  const item = CATALOGUE.find((c) => c.key === key);
+/* ─── the four ways of editing ─────────────────────────────────────────────── */
+
+/** The contenteditable the caret is in, which is what an inline mark acts on. */
+function richRoot() {
+  const node = document.activeElement;
+  if (!node || !state.canvas || !state.canvas.contains(node)) return null;
+  if (!node.isContentEditable) return null;
+  const root = node.closest("[contenteditable=true]");
+  // A component's title is plain text — the tag's arguments, not its body — so
+  // it is editable without being formattable.
+  return root && !root.classList.contains("ed-inplace") ? root : null;
+}
+
+/**
+ * Write an inline change back into the document.
+ *
+ * `view.read()` is not enough on its own: a component's body, a tab's pane and a
+ * table's cells are read by their OWN input listeners, and a mark applied from
+ * the toolbar fires no input event. Replaying one is what makes formatting
+ * inside a note reach the file — without it the note looked right and saved
+ * unchanged.
+ */
+function commitInline() {
+  const root = richRoot();
+  if (root) root.dispatchEvent(new Event("input", { bubbles: true }));
+  if (state.focused) {
+    state.focused.touch();
+    state.focused.read();
+  }
+}
+
+/**
+ * Change what this block IS, carrying its words across.
+ *
+ * The conversion is expressed in plain lines, so nothing can be lost on the way
+ * — and a target that cannot hold those lines (a heading, given three of them)
+ * is refused here as well as greyed out in the toolbar, because the slash menu
+ * reaches the same table.
+ */
+function convertTo(key) {
+  const view = state.focused;
+  const entry = entryFor(key);
+  if (!view || !entry) return;
+
+  const allowed = conversions(view.block).find((row) => row.key === key);
+  if (!allowed || allowed.disabled || allowed.on) return;
+
+  view.read();
+  const lines = linesOf(view.block);
+  convertBlock(view.block.id, entry.type, fieldsFor(entry, lines));
+}
+
+/** Insert at the caret: inline where the caret is inline, a block where not. */
+function insertItem(key, host) {
+  const item = INSERTS.find((entry) => entry.key === key);
   if (!item) return;
 
-  const type = item.type || (item.key === "heading2" || item.key === "heading3" ? "heading" : item.key);
   const target = host || state.focused;
+  const root = richRoot();
+
+  if (item.where === "mark" && root) {
+    if (key === "link") {
+      return void askFor(ui.toolbar.el, { t }, "url", "https://").then((url) => {
+        if (url == null) return;
+        ui.toolbar.applyMark("link", { href: url });
+      });
+    }
+    return void ui.toolbar.applyMark("code", {});
+  }
+
+  if (item.where === "inline" && root && target) {
+    return void insertInlineNode(key);
+  }
+
+  const spec = BLOCK_SEEDS[key];
+  if (!spec) return;
 
   if (target && target.isEmpty && target.isEmpty()) {
-    return void convertBlock(target.block.id, type, item.fields);
+    return void convertBlock(target.block.id, spec.type, spec.fields);
   }
-  insertBlock(makeBlock(type, item.fields), target ? target.block.id : null, true);
+  insertBlock(makeBlock(spec.type, spec.fields), target ? target.block.id : null, true);
+}
+
+/** What each insertable BLOCK starts life as. */
+const BLOCK_SEEDS = {
+  image: { type: "image", fields: { url: "", alt: "" } },
+  table: { type: "table" },
+  code: { type: "code", fields: { lang: "", code: "" } },
+  math: { type: "math", fields: { tex: "" } },
+  mermaid: { type: "mermaid", fields: { code: "graph TD\n  A --> B" } },
+  hr: { type: "hr" },
+  note: { type: "component", fields: { name: "note", args: "info", body: "" } },
+  notel: { type: "component", fields: { name: "notel", args: "info fa-circle-info Title", body: "" } },
+  box: { type: "component", fields: { name: "box", args: "blue", body: "" } },
+  folding: { type: "component", fields: { name: "folding", args: "blue::Details", body: "" } },
+  tabs: { type: "component", fields: { name: "tabs", args: "GROUP", body: "<!-- tab One -->\n\n<!-- endtab -->" } },
+  btn: { type: "component", fields: { name: "btn", args: "Label::https://", body: null } },
+};
+
+/**
+ * The things that go INTO a line rather than after it.
+ *
+ * An image dropped into a paragraph is an inline image, which is a different
+ * thing from an image block, and markdown says so: `![](…)` inside a sentence.
+ * The node carries the same `data-md` the parser emits, so it reads back out as
+ * the markdown it came from.
+ */
+async function insertInlineNode(key) {
+  const root = richRoot();
+  if (!root) return;
+
+  if (key === "image") {
+    const picked = await pickImage();
+    if (!picked) return;
+    const img = document.createElement("img");
+    img.setAttribute("data-md", "image");
+    img.src = resolveAsset(picked.site, state.pending);
+    img.alt = "";
+    img.dataset.mdSrc = `![](${picked.site})`;
+    insertInline(root, img);
+  } else if (key === "imath") {
+    const tex = await askFor(ui.toolbar.el, { t }, "tex", "");
+    if (tex == null) return;
+    const span = document.createElement("span");
+    span.className = "ed-math-inline";
+    span.setAttribute("data-md", "math");
+    span.setAttribute("data-tex", tex);
+    span.textContent = tex;
+    insertInline(root, span);
+  } else {
+    return;
+  }
+
+  commitInline();
+}
+
+/* ─── the block's own markdown ─────────────────────────────────────────────── */
+
+function toggleSource(on) {
+  const view = state.focused;
+  if (!view) return;
+  if (on) view.showRaw();
+  else view.hideRaw();
+  if (ui && ui.toolbar) ui.toolbar.refresh();
+}
+
+/**
+ * What the author typed into the raw field, back through the parser.
+ *
+ * It may come back as several blocks, or as none. Both are ordinary: a section
+ * pasted in whole is several, and clearing the field is a deletion — the one
+ * thing that must not happen is a block left holding text the parser never saw.
+ */
+function applyRaw(id, text) {
+  const index = indexOf(id);
+  if (index < 0) return;
+
+  const blocks = parseBlocks(text).map((b) => Object.assign(b, { dirty: true }));
+  const old = state.doc.blocks[index];
+
+  if (!blocks.length) return void deleteBlock(id, "prev");
+  if (blocks.length === 1 && blocks[0].type === old.type && emitBlock(blocks[0]) === emitBlock(old)) {
+    return void remountBlock(id);
+  }
+
+  blocks[blocks.length - 1].after = old.after;
+  state.doc.blocks.splice(index, 1, ...blocks);
+
+  const views = blocks.map((block) => createView(block, blockCtx()));
+  state.views[index].el.replaceWith(...views.map((v) => v.el));
+  state.views.splice(index, 1, ...views);
+
+  markDirty();
+  renumberFigures();
+  contentChanged();
+  if (views[0].focus) views[0].focus("end");
+}
+
+/** Rebuild one block's view in place — its own fields decided to change shape. */
+function remountBlock(id) {
+  const index = indexOf(id);
+  if (index < 0) return;
+  const block = state.doc.blocks[index];
+  const view = createView(block, blockCtx());
+  state.views[index].el.replaceWith(view.el);
+  state.views[index] = view;
+  state.focused = view;
+  if (view.focus) view.focus("end");
+  renumberFigures();
+  contentChanged();
+  if (ui && ui.toolbar) ui.toolbar.sync();
+}
+
+function moveFocused(delta) {
+  const view = state.focused;
+  if (!view) return;
+  const from = indexOf(view.block.id);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= state.doc.blocks.length) return;
+
+  const nodes = state.views.map((v) => v.el);
+  flip(nodes, () => {
+    const [block] = state.doc.blocks.splice(from, 1);
+    state.doc.blocks.splice(to, 0, block);
+    const [moved] = state.views.splice(from, 1);
+    state.views.splice(to, 0, moved);
+    const anchor = state.views[to + (delta > 0 ? -1 : 1)];
+    if (delta > 0) anchor.el.after(moved.el);
+    else anchor.el.before(moved.el);
+  });
+
+  markDirty();
+  renumberFigures();
+}
+
+function duplicateFocused() {
+  const view = state.focused;
+  if (!view) return;
+  view.read();
+  const copy = Object.assign({}, view.block, { id: nextId(), dirty: true, src: "" });
+  if (copy.items) copy.items = copy.items.map((item) => Object.assign({}, item));
+  if (copy.header) {
+    copy.header = copy.header.slice();
+    copy.align = copy.align.slice();
+    copy.rows = copy.rows.map((row) => row.slice());
+  }
+  insertBlock(copy, view.block.id, true);
 }
 
 /* ─── drag reorder ─────────────────────────────────────────────────────────── */
@@ -822,7 +1056,6 @@ function onDocDragOver(e) {
   if (!state.dragId) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-  moveGhost(e.clientX, e.clientY);
   startEdgeScroll(e.clientY);
   paintDrop(dropTargetAt(e.clientY));
 }
@@ -1163,7 +1396,12 @@ function onKey(e) {
   }
   if (!state.canvas.contains(document.activeElement)) return;
 
-  const marks = { b: "strong", i: "em", k: "link" };
+  if (e.key === "k") {
+    e.preventDefault();
+    return void insertItem("link", null);
+  }
+
+  const marks = { b: "strong", i: "em", u: "u", e: "code" };
   if (marks[e.key]) {
     e.preventDefault();
     ui.toolbar.applyMark(marks[e.key]);
@@ -1229,7 +1467,7 @@ export function teardownEditor() {
 
   unwire();
   releaseDocbarHeight();
-  document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-more-menu, .ed-icon-picker").forEach((el) => el.remove());
+  document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot").forEach((el) => el.remove());
   document.documentElement.classList.remove("blog-editing");
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   Object.assign(state, {

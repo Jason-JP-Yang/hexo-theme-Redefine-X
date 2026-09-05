@@ -29,7 +29,18 @@ export function richToMarkdown(root) {
 
     const tag = node.tagName;
 
-    if (/^H[1-6]$/.test(tag)) {
+    // Rendered from markdown this walk cannot read back — a note inside a note,
+    // a table, a button. It carries its own source and goes out as that source,
+    // which is what makes inserting one into a component body safe.
+    const source = node.getAttribute("data-md-src");
+    if (source != null) {
+      parts.push(source);
+      continue;
+    }
+
+    if (tag === "TABLE") {
+      parts.push(tableToMarkdown(node));
+    } else if (/^H[1-6]$/.test(tag)) {
       parts.push("#".repeat(Number(tag[1])) + " " + htmlToInline(node));
     } else if (LIST_TAGS.has(tag)) {
       parts.push(listToMarkdown(node, 0));
@@ -57,6 +68,20 @@ export function richToMarkdown(root) {
   }
 
   return parts.filter((p) => p !== "").join("\n\n");
+}
+
+function tableToMarkdown(table) {
+  const rows = Array.from(table.querySelectorAll("tr")).map((tr) =>
+    Array.from(tr.children).map((cell) => htmlToInline(cell).replace(/\|/g, "\\|").trim())
+  );
+  if (!rows.length) return "";
+
+  const width = Math.max(...rows.map((row) => row.length));
+  const line = (cells) =>
+    "| " + Array.from({ length: width }, (_, i) => cells[i] || "").join(" | ") + " |";
+
+  const head = rows.shift();
+  return [line(head), line(head.map(() => "---")), ...rows.map(line)].join("\n");
 }
 
 function listToMarkdown(list, depth) {
@@ -100,7 +125,7 @@ export function sanitizePaste(html) {
     "BLOCKQUOTE", "PRE", "CODE", "STRONG", "B", "EM", "I", "DEL", "S",
     "A", "IMG", "HR", "MARK", "KBD", "SUP", "SUB",
   ]);
-  const ATTRS = { A: ["href", "title"], IMG: ["src", "alt", "title"] };
+  const ATTRS = { A: ["href", "title"], IMG: ["src", "alt", "title"], MARK: ["class"] };
 
   const walk = (node) => {
     for (const child of Array.from(node.childNodes)) {
