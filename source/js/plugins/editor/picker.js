@@ -42,12 +42,32 @@
 
 import { escapeHTML } from "./markdown.js";
 import * as gitea from "./gitea.js";
-import { imageSize, previewImage } from "./assets.js";
-import { pop } from "./motion.js";
+import { createEdgeScroll, pop, setDragImage } from "./motion.js";
 
 const ROOT = "source/images";
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg|bmp)$/i;
 const MENU_MAX = 40;
+const SPLIT_KEY = "rdfx.picker.split";
+// The width the panel stops being two columns, matching $media-max-width.
+const STACK_AT = 768;
+
+/* ─── the page behind a dialogue does not scroll ───────────────────────────── */
+
+/**
+ * The image viewer's own lock, verbatim: `documentElement.style.overflow`, set
+ * on open and cleared on close. Counted, because the property sheet can open
+ * over the browser and closing the inner one must not unlock the page under the
+ * outer one.
+ */
+let locks = 0;
+
+function lockPage() {
+  if (locks++ === 0) document.documentElement.style.overflow = "hidden";
+}
+
+function unlockPage() {
+  if (locks > 0 && --locks === 0) document.documentElement.style.overflow = "";
+}
 
 /** `source/images/a/b.png` → `/images/a/b.png`, which is what markdown wants. */
 export function siteAddress(path) {
@@ -251,6 +271,7 @@ export function openSheet(ctx, title, groups, values) {
       if (done) return;
       done = true;
       mask.remove();
+      unlockPage();
       document.removeEventListener("keydown", onKey, true);
       resolve(value);
     };
@@ -283,6 +304,7 @@ export function openSheet(ctx, title, groups, values) {
 
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
+    lockPage();
     pop(mask.querySelector(".ed-sheet"));
     const first = mask.querySelector(".ed-f-input");
     if (first) first.focus();
@@ -352,6 +374,7 @@ export function openPicker(ctx, opts = {}) {
 
         <div class="ed-pick-body">
           <div class="ed-pick-side" role="tree"></div>
+          <div class="ed-pick-grip" role="separator" aria-orientation="vertical" tabindex="0"></div>
           <div class="ed-pick-view">
             <div class="ed-pick-stage"></div>
             <dl class="ed-pick-meta"></dl>
@@ -372,7 +395,9 @@ export function openPicker(ctx, opts = {}) {
       </section>`;
 
     const card = mask.querySelector(".ed-picker");
+    const body = mask.querySelector(".ed-pick-body");
     const side = mask.querySelector(".ed-pick-side");
+    const grip = mask.querySelector(".ed-pick-grip");
     const stage = mask.querySelector(".ed-pick-stage");
     const meta = mask.querySelector(".ed-pick-meta");
     const field = mask.querySelector(".ed-pick-field");
@@ -388,7 +413,6 @@ export function openPicker(ctx, opts = {}) {
     let cursor = 0;
     let hits = [];
     let done = false;
-    let previewToken = 0;
 
     /* ─── the model, with the staged tidy-up applied ───────────────────── */
 
@@ -551,9 +575,36 @@ export function openPicker(ctx, opts = {}) {
       return value ? `<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd>` : "";
     }
 
+    /**
+     * Fit the preview to the pane at its OWN shape.
+     *
+     * The preloader carries the picture's intrinsic size, so the box it should
+     * occupy is arithmetic rather than a guess: the largest rectangle of that
+     * ratio that fits the stage, and never larger than the picture itself — a
+     * 200px thumbnail blown up to fill a 600px pane is not what it looks like.
+     * Recomputed whenever the stage changes size, which the splitter does.
+     */
+    let shot = null;
+    let shotSize = null;
+
+    function fitShot() {
+      if (!shot) return;
+      if (!shotSize || !shotSize.width || !shotSize.height) {
+        shot.style.removeProperty("width");
+        shot.style.removeProperty("height");
+        return;
+      }
+      const box = stage.getBoundingClientRect();
+      if (!box.width || !box.height) return;
+      const scale = Math.min(box.width / shotSize.width, box.height / shotSize.height, 1);
+      shot.style.width = Math.round(shotSize.width * scale) + "px";
+      shot.style.height = Math.round(shotSize.height * scale) + "px";
+    }
+
     function paintPreview() {
-      const token = ++previewToken;
       ok.disabled = !chosen || !IMAGE.test(chosen);
+      shot = null;
+      shotSize = null;
       stage.innerHTML = "";
       meta.innerHTML = "";
 
@@ -566,24 +617,23 @@ export function openPicker(ctx, opts = {}) {
 
       const node = nodes.get(chosen);
       const origin = ctx.stage.origin(chosen);
-      const known = imageSize(siteAddress(chosen));
+      const address = siteAddress(chosen);
 
-      const shot = previewImage(siteAddress(chosen), ctx.pending);
-      stage.appendChild(shot.el);
+      // The article's own preloader, handed to the article's own observer: the
+      // same skeleton, the same swap, the same compressed-or-original decision
+      // the published page makes. A second image pipeline here would drift.
+      shotSize = ctx.naturalSize(address);
+      shot = ctx.buildPreloader(address);
+      stage.appendChild(shot);
+      fitShot();
+      ctx.observeImages();
 
-      const describe = (dims) => {
-        if (token !== previewToken) return;
-        const size = dims || known;
-        meta.innerHTML =
-          metaRow(t("pick_name", "Name"), nameOf(chosen)) +
-          metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
-          metaRow(t("pick_dims", "Size"), size ? `${size.width} × ${size.height}` : "") +
-          metaRow(t("pick_bytes", "File"), readableSize(node && node.size)) +
-          (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
-      };
-
-      describe(null);
-      shot.ready.then(describe);
+      meta.innerHTML =
+        metaRow(t("pick_name", "Name"), nameOf(chosen)) +
+        metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
+        metaRow(t("pick_dims", "Size"), shotSize ? `${shotSize.width} × ${shotSize.height}` : "") +
+        metaRow(t("pick_bytes", "File"), readableSize(node && node.size)) +
+        (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
     }
 
     function select(path, animate) {
@@ -812,7 +862,10 @@ export function openPicker(ctx, opts = {}) {
     function finish(value) {
       if (done) return;
       done = true;
+      scroller.stop();
+      watch.disconnect();
       mask.remove();
+      unlockPage();
       document.removeEventListener("keydown", onKey, true);
       resolve(value);
     }
@@ -900,18 +953,22 @@ export function openPicker(ctx, opts = {}) {
       select(hit.dataset.path);
     });
 
-    /* Dragging a row onto a folder is a staged move. */
-    let dragging = "";
+    /* ─── dragging, the way a block is dragged ─────────────────────────── */
 
-    side.addEventListener("dragstart", (e) => {
-      const row = e.target.closest(".ed-pick-row");
-      if (!row || row.dataset.editing) return;
-      dragging = row.parentElement.dataset.path;
-      if (dragging === ROOT) return void (dragging = "");
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", dragging);
-      row.dataset.carry = "1";
-    });
+    /**
+     * The same gesture as the canvas: the carried row fades, the browser draws a
+     * clipped clone of it, an insertion line says exactly where it will land,
+     * and holding near an edge scrolls the tree.
+     *
+     * A tree has one more thing to say than a list does — WHICH FOLDER — so the
+     * folder that will receive it is ringed while the line marks the position
+     * inside it. Both are the article's own drop styling; a second visual
+     * language for the same gesture is how a control stops feeling like part of
+     * the same program.
+     */
+    let dragging = "";
+    let dropAt = "";
+    const scroller = createEdgeScroll(side);
 
     /** Which folder the pointer is over: a file means the folder holding it. */
     function dropFolder(e) {
@@ -929,19 +986,73 @@ export function openPicker(ctx, opts = {}) {
       return parentOf(dragging) !== target;
     }
 
+    /** Where inside `target` the carried row will be, once it is sorted in. */
+    function landing(target) {
+      const holder = nodes.get(target);
+      if (!holder || !holder.kids) return null;
+      const key = rank({ type: nodes.get(dragging).type, path: dragging });
+      const rows = Array.from(holder.kids.children).filter((el) => el.dataset.path !== dragging);
+      const before = rows.find((el) => {
+        const other = nodes.get(el.dataset.path);
+        return other && rank({ type: other.type, path: el.dataset.path }) > key;
+      });
+      return { holder, before: before || null, last: rows[rows.length - 1] || null };
+    }
+
+    function paintDrop(target) {
+      const key = target || "";
+      if (key === dropAt) return;
+      dropAt = key;
+
+      for (const el of side.querySelectorAll("[data-drop], [data-into]")) {
+        delete el.dataset.drop;
+        delete el.dataset.into;
+      }
+      if (!target) return;
+
+      const holder = nodes.get(target);
+      if (holder) holder.row.dataset.into = "1";
+
+      const spot = landing(target);
+      if (!spot) return;
+      if (spot.before) spot.before.dataset.drop = "before";
+      else if (spot.last) spot.last.dataset.drop = "after";
+      else if (holder) holder.row.dataset.drop = "empty";
+    }
+
+    side.addEventListener("dragstart", (e) => {
+      const row = e.target.closest(".ed-pick-row");
+      if (!row || row.dataset.editing) return;
+      const path = row.parentElement.dataset.path;
+      if (path === ROOT) return;
+      dragging = path;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", dragging);
+      // The clipped clone the blocks use, so the ghost is the row rather than
+      // whatever the pointer happened to be over inside it.
+      setDragImage(e, row);
+      row.dataset.carry = "1";
+    });
+
     side.addEventListener("dragover", (e) => {
+      if (!dragging) return;
       const target = dropFolder(e);
-      if (!canDrop(target)) return;
+      scroller.track(e.clientY);
+      if (!canDrop(target)) return void paintDrop("");
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      for (const el of side.querySelectorAll("[data-drop]")) delete el.dataset.drop;
-      const holder = nodes.get(target);
-      if (holder) holder.row.dataset.drop = "1";
+      paintDrop(target);
+    });
+
+    side.addEventListener("dragleave", (e) => {
+      if (dragging && !side.contains(e.relatedTarget)) paintDrop("");
     });
 
     side.addEventListener("drop", (e) => {
+      if (!dragging) return;
       const target = dropFolder(e);
-      for (const el of side.querySelectorAll("[data-drop]")) delete el.dataset.drop;
+      paintDrop("");
+      scroller.stop();
       if (!canDrop(target)) return;
       e.preventDefault();
       applyMove(dragging, `${target}/${nameOf(dragging)}`);
@@ -950,16 +1061,89 @@ export function openPicker(ctx, opts = {}) {
 
     side.addEventListener("dragend", () => {
       dragging = "";
-      for (const el of side.querySelectorAll("[data-drop], [data-carry]")) {
-        delete el.dataset.drop;
-        delete el.dataset.carry;
+      scroller.stop();
+      paintDrop("");
+      for (const el of side.querySelectorAll("[data-carry]")) delete el.dataset.carry;
+    });
+
+    /* ─── the splitter ─────────────────────────────────────────────────── */
+
+    /**
+     * How much of the width the tree gets, remembered between sessions. A file
+     * manager is used differently depending on what is being looked for — a
+     * name in a deep folder wants the tree, a picture wants the picture — and
+     * the only person who knows which is the one holding the mouse.
+     */
+    // Side by side above 768px and stacked below it, so the grip resizes a
+    // different axis at each width and each axis remembers its own share.
+    const stacked = () => window.matchMedia(`(max-width: ${STACK_AT}px)`).matches;
+    const axis = () => (stacked() ? { prop: "--ed-pick-vsplit", key: SPLIT_KEY + ".v" } : { prop: "--ed-pick-split", key: SPLIT_KEY });
+
+    function applySplit(fraction) {
+      const { prop, key } = axis();
+      const value = Math.max(0.2, Math.min(0.75, fraction));
+      body.style.setProperty(prop, value);
+      try {
+        window.localStorage.setItem(key, String(value));
+      } catch (err) {
+        /* a browser that refuses storage simply forgets */
       }
+      fitShot();
+    }
+
+    for (const { prop, key } of [
+      { prop: "--ed-pick-split", key: SPLIT_KEY },
+      { prop: "--ed-pick-vsplit", key: SPLIT_KEY + ".v" },
+    ]) {
+      let held = 0;
+      try {
+        held = parseFloat(window.localStorage.getItem(key)) || 0;
+      } catch (err) {
+        held = 0;
+      }
+      if (held) body.style.setProperty(prop, Math.max(0.2, Math.min(0.75, held)));
+    }
+
+    grip.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      grip.dataset.on = "1";
+
+      const box = body.getBoundingClientRect();
+      const move = (ev) =>
+        applySplit(stacked() ? (ev.clientY - box.top) / box.height : (ev.clientX - box.left) / box.width);
+      const up = () => {
+        delete grip.dataset.on;
+        grip.releasePointerCapture(e.pointerId);
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", up);
+        grip.removeEventListener("pointercancel", up);
+      };
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", up);
+      grip.addEventListener("pointercancel", up);
+    });
+
+    grip.addEventListener("keydown", (e) => {
+      const back = stacked() ? "ArrowUp" : "ArrowLeft";
+      const on = stacked() ? "ArrowDown" : "ArrowRight";
+      const step = e.key === back ? -0.04 : e.key === on ? 0.04 : 0;
+      if (!step) return;
+      e.preventDefault();
+      const now = parseFloat(getComputedStyle(body).getPropertyValue(axis().prop)) || 0.42;
+      applySplit(now + step);
     });
 
     /* ─── open ─────────────────────────────────────────────────────────── */
 
+    // The stage changes size with the splitter, with the window, and with the
+    // panel's own layout settling after it is inserted.
+    const watch = new ResizeObserver(() => fitShot());
+    watch.observe(stage);
+
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
+    lockPage();
     pop(card);
 
     side.innerHTML = `<p class="ed-pick-blank">${escapeHTML(t("pick_loading", "Reading the repository…"))}</p>`;

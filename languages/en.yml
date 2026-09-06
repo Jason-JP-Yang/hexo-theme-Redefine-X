@@ -376,7 +376,6 @@ editor:
   arguments: arguments
   remove_block: Remove
   replace: Replace
-  alt_text: Alt text
   caption: Caption
   icon: Icon
   title: Title
@@ -501,7 +500,6 @@ editor:
   open_folder: Open folder
   open_viewer: Open viewer
   auto_exif: Read EXIF at build time
-  hover_title: Hover text
   no_deeper: A note, folding or tab group cannot go inside another one.
   sheet_hint: Leave everything empty for a plain picture.
   g_caption: Caption

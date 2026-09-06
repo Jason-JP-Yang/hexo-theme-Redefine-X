@@ -68,6 +68,42 @@ export function manifestKey(src) {
     .split(/[?#]/)[0];
 }
 
+/* ─── a picture that is about to be renamed is still at its old address ────── */
+
+/**
+ * Where the bytes are RIGHT NOW, whatever the markdown has been changed to say.
+ *
+ * Renaming a picture in the browser does not rename anything: it records a move
+ * and rewrites the addresses in the post, and the file only arrives at its new
+ * name when the commit lands and the next build sweeps the rest of the site.
+ * Until then the site — and the repository — still serve the OLD path.
+ *
+ * So there are two different questions about one picture, and conflating them
+ * is what made every renamed image break the moment it was renamed:
+ *
+ *   what the document SAYS   → the new address, which is what gets committed
+ *   where the bytes ARE      → the old one, which is what a request must use
+ *
+ * Every fetching path below asks this first, and nothing else in the editor has
+ * to know that a rename is pending. The editor installs the mapping when it
+ * opens (it is the staged tidy-up, run backwards) and clears it when it closes.
+ */
+let rewind = null;
+
+export function registerRewind(fn) {
+  rewind = fn;
+}
+
+function here(src) {
+  const value = String(src || "");
+  if (!rewind || !value) return value;
+  try {
+    return rewind(value) || value;
+  } catch (err) {
+    return value;
+  }
+}
+
 /** `[route, width, height]`, or null when the build never touched this image. */
 function record(src) {
   const row = manifest && manifest[manifestKey(src)];
@@ -86,13 +122,14 @@ function routeFor(src) {
  * page referenced — and the caller leaves the aspect ratio to the browser.
  */
 export function imageSize(src) {
-  const row = record(src);
+  const at = here(src);
+  const row = record(at);
   if (row && row[1] && row[2]) return { width: row[1], height: row[2] };
 
   // A withheld image is not in the public manifest at all; its size travels in
   // the post's own sealed metadata instead.
-  const key = manifestKey(src);
-  const wh = sealedSizes && (sealedSizes[routeFor(src)] || sealedSizes[key]);
+  const key = manifestKey(at);
+  const wh = sealedSizes && (sealedSizes[routeFor(at)] || sealedSizes[key]);
   return wh && wh[0] ? { width: wh[0], height: wh[1] } : null;
 }
 
@@ -103,7 +140,7 @@ export function isTranscoded(src) {
 
 /** `/images/a.png` → `source/images/a.png`, which is what the repository calls it. */
 export function repoPath(src) {
-  const key = manifestKey(src);
+  const key = manifestKey(here(src));
   return key ? "source/" + key : "";
 }
 
@@ -115,7 +152,7 @@ export function repoPath(src) {
  * the author is most likely to be looking at it.
  */
 export function repoURL(src, list) {
-  const value = String(src || "");
+  const value = here(src);
   if (!value || /^(blob:|data:|https?:|\/\/)/i.test(value)) return Promise.resolve("");
   if (staged(value, list)) return Promise.resolve("");
   return blobURL(repoPath(value));
@@ -130,7 +167,7 @@ function staged(src, list) {
  * @param {Array}  list  assets added this session, not yet committed
  */
 export function resolveAsset(src, list) {
-  const value = String(src || "");
+  const value = here(src);
   if (!value) return "";
   if (/^(blob:|data:|https?:|\/\/)/i.test(value)) return value;
 
@@ -148,8 +185,9 @@ export function resolveAsset(src, list) {
  * path when it is not. The sealed map carries both keys.
  */
 function sealedHash(src, list) {
-  if (!sealed || staged(src, list) || /^(blob:|data:|https?:|\/\/)/i.test(src)) return null;
-  return sealed[routeFor(src)] || sealed[manifestKey(src)] || null;
+  const at = here(src);
+  if (!sealed || staged(at, list) || /^(blob:|data:|https?:|\/\/)/i.test(at)) return null;
+  return sealed[routeFor(at)] || sealed[manifestKey(at)] || null;
 }
 
 // What the build reserves for an image it could not measure.
@@ -237,56 +275,12 @@ export function bindImage(img, src, list) {
 }
 
 /**
- * A picture shown at its own shape.
- *
- * The canvas mounts `.img-preloader`, because there it has to reserve the box
- * the published page reserves before the bytes arrive. A PREVIEW has nothing to
- * reserve — it is the only thing in its pane — so it is a plain `<img>` that
- * takes the aspect ratio from the file itself, which is the one place a guessed
- * ratio would be visible as a distortion. The skeleton underneath it is the
- * article's own, so the wait looks the same as it does everywhere else.
- *
- * @returns {{el: HTMLElement, img: HTMLImageElement, ready: Promise<{width, height}|null>}}
+ * The intrinsic pixels of a picture, whether the build measured it or this
+ * session did. The picker sizes its preview from this rather than letting the
+ * image size itself, so the skeleton reserves the shape the picture will be.
  */
-export function previewImage(src, list) {
-  const el = document.createElement("div");
-  el.className = "ed-shot";
-
-  const skeleton = document.createElement("div");
-  skeleton.className = "img-preloader-skeleton";
-  const img = document.createElement("img");
-  img.alt = "";
-  img.decoding = "async";
-  el.append(skeleton, img);
-
-  const value = String(src || "");
-  const ready = new Promise((done) => {
-    if (!value) return void done(null);
-
-    let tried = false;
-    const settle = () => {
-      el.dataset.ready = "1";
-      done({ width: img.naturalWidth, height: img.naturalHeight });
-    };
-    img.addEventListener("load", settle);
-    img.addEventListener("error", () => {
-      if (tried) {
-        el.dataset.failed = "1";
-        return void done(null);
-      }
-      tried = true;
-      repoURL(value, list).then((url) => {
-        if (url) img.src = url;
-        else {
-          el.dataset.failed = "1";
-          done(null);
-        }
-      });
-    });
-
-    const pending = staged(value, list);
-    img.src = pending ? pending.url : resolveAsset(value, list);
-  });
-
-  return { el, img, ready };
+export function naturalSize(src, list) {
+  const pending = staged(here(src), list);
+  if (pending && pending.width) return { width: pending.width, height: pending.height };
+  return imageSize(src);
 }

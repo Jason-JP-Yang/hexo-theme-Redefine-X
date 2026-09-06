@@ -88,7 +88,9 @@ export function caretRect() {
   const rect = probe.getBoundingClientRect();
   const parent = probe.parentNode;
   parent.removeChild(probe);
-  parent.normalize();
+  // Deliberately NOT normalize(): merging adjacent text nodes would swallow the
+  // zero-width boundary anchors either side of a mark, and those are the only
+  // reason the caret can be put inside a format rather than beside it.
   return rect;
 }
 

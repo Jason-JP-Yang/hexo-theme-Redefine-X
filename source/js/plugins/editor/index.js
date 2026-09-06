@@ -45,6 +45,8 @@ import {
   bindImage,
   buildPreloader,
   loadManifest,
+  naturalSize,
+  registerRewind,
   repoURL,
   resolveAsset,
   setVaultAssets,
@@ -140,36 +142,51 @@ function pageIdentity(host) {
 /* ─── chrome ───────────────────────────────────────────────────────────────── */
 
 /**
- * Publish the document bar's height so the floating toolbar can sit under it.
+ * Publish the document bar's BOX, so the floating toolbar can sit under it and
+ * inside the same column.
  *
- * Measured rather than assumed: the bar wraps at narrow widths and grows a row
- * whenever a notice or the publish progress appears, and a toolbar parked at a
- * guessed offset lands on top of it the moment either happens.
+ * Three numbers, all measured, none assumed:
  *
- * What is published is the last value, compared against itself. The earlier
- * version compared the PINNED state instead and returned early whenever it had
- * not changed — so a bar that grew a notice row while already pinned published
- * nothing, and the toolbar stayed where the shorter bar had left it, which is
- * to say underneath the notice. Height and pinning both move the toolbar; only
- * the number they produce decides whether anything is written.
+ *   --ed-docbar-h  how much vertical room to leave. Zero unless the bar is
+ *                  actually pinned — unpinned it is still down in the article
+ *                  clearing nothing, and reserving its height left a band of
+ *                  empty page under the navbar.
+ *   --ed-docbar-x  where the article's column starts.
+ *   --ed-docbar-w  how wide it is.
+ *
+ * The last two are why: the toolbar was centred on the VIEWPORT, and an article
+ * with a table of contents is not centred on the viewport — so a toolbar that
+ * was 760px wide because the viewport allowed it sat across the contents rail.
+ * The document bar is inside the column and already the right width and the
+ * right shape, so it is the thing to copy rather than a number to guess.
+ *
+ * What is published is compared against itself. The earlier version compared
+ * the PINNED state and returned early whenever it had not changed — so a bar
+ * that grew a notice row while already pinned published nothing, and the
+ * toolbar stayed where the shorter bar had left it, underneath the notice.
  */
-function watchDocbarHeight(bar) {
-  let published = -1;
+function watchDocbar(bar) {
+  let last = "";
 
   const measure = () => {
     // Sticky means its top stops at the pin line and goes no further, so being
     // at the line IS being pinned. One pixel of slack for fractional layout.
     const style = getComputedStyle(bar);
     const stick = parseFloat(style.top) || 0;
-    const pinned = style.position === "sticky" && bar.getBoundingClientRect().top <= stick + 1;
+    const rect = bar.getBoundingClientRect();
+    const pinned = style.position === "sticky" && rect.top <= stick + 1;
 
-    // Zero unless the bar is actually PINNED. Unpinned it is still down in the
-    // article, clearing nothing, and reserving its height left a band of empty
-    // page under the navbar with the toolbar stranded below it.
-    const value = pinned ? Math.round(bar.offsetHeight) : 0;
-    if (value === published) return;
-    published = value;
-    document.documentElement.style.setProperty("--ed-docbar-h", `${value}px`);
+    const h = pinned ? Math.round(bar.offsetHeight) : 0;
+    const x = Math.round(rect.left);
+    const w = Math.round(rect.width);
+    const key = `${h}|${x}|${w}`;
+    if (key === last) return;
+    last = key;
+
+    const root = document.documentElement.style;
+    root.setProperty("--ed-docbar-h", `${h}px`);
+    root.setProperty("--ed-docbar-x", `${x}px`);
+    root.setProperty("--ed-docbar-w", `${w}px`);
   };
 
   measure();
@@ -181,12 +198,23 @@ function watchDocbarHeight(bar) {
   const mo = new MutationObserver(measure);
   mo.observe(bar, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
   const off = onScroll(measure, null, "editor docbar pin");
-  return { disconnect: () => { ro.disconnect(); mo.disconnect(); off(); } };
+  window.addEventListener("resize", measure);
+  return {
+    disconnect: () => {
+      ro.disconnect();
+      mo.disconnect();
+      off();
+      window.removeEventListener("resize", measure);
+    },
+  };
 }
 
-function releaseDocbarHeight() {
+function releaseDocbar() {
   if (ui && ui.barSize) ui.barSize.disconnect();
-  document.documentElement.style.removeProperty("--ed-docbar-h");
+  const root = document.documentElement.style;
+  root.removeProperty("--ed-docbar-h");
+  root.removeProperty("--ed-docbar-x");
+  root.removeProperty("--ed-docbar-w");
 }
 
 function buildDocbar() {
@@ -333,7 +361,7 @@ async function activate(host) {
     close: ui.bar.querySelector(".ed-close"),
     progress: ui.bar.querySelector(".ed-progress"),
     notice: ui.bar.querySelector(".ed-notice"),
-    barSize: watchDocbarHeight(ui.bar),
+    barSize: watchDocbar(ui.bar),
   });
 
   ui.file = document.createElement("input");
@@ -431,6 +459,12 @@ async function activate(host) {
   // build the author has only just started.
   registerSrcFallback((node) => repoURL(node.dataset.edSrc || "", state.pending));
 
+  // A rename is a note to the build, not an act on the file. The document is
+  // rewritten to the new address immediately, because that is what gets
+  // committed; every REQUEST is rewound to where the bytes still are, because
+  // nothing has moved yet. See the header of assets.js.
+  registerRewind(liveAddress);
+
   ui.front = createFrontCard(state.doc, {
     t,
     onChange: onFrontChange,
@@ -492,7 +526,7 @@ async function deactivate() {
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
   unwire();
-  releaseDocbarHeight();
+  releaseDocbar();
 
   const bar = ui.bar;
   const front = ui.front && ui.front.el;
@@ -521,6 +555,8 @@ async function deactivate() {
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   gitea.forgetBlobs();
   forgetTree();
+  registerRewind(null);
+  state.boxes.clear();
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
     put: [], doc: null, entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
@@ -677,11 +713,15 @@ function blockCtx(box) {
 }
 
 /**
- * Everything the theme's `{% exifimage %}` can be told, in one sheet.
+ * Everything the theme's `{% exifimage %}` can be told, and NOTHING ELSE.
  *
- * The fields ARE the tag's: scripts/modules/image-exif.js reads exactly these
- * names out of the `<!-- exif-info -->` comment, and the ones left empty are
- * the ones the build fills in from the file itself when auto-exif is on.
+ * The fields ARE the tag's, one for one: a caption title and an auto-exif
+ * switch in its arguments, a description in the image line, and the seventeen
+ * names scripts/modules/image-exif.js matches inside `<!-- exif-info -->`. The
+ * ones left empty are the ones the build fills in from the file itself when
+ * auto-exif is on; a field the tag has no idea about is not a field, and
+ * offering one is offering the author a way to break their own post — a hover
+ * title, for instance, is read by the tag as part of the image's PATH.
  */
 async function imageProps(block) {
   const api = window.RedefineComponents;
@@ -701,8 +741,7 @@ async function imageProps(block) {
         label: t("g_caption", "Caption"),
         fields: [
           { key: "exifTitle", label: t("f_title", "Title"), wide: true },
-          { key: "alt", label: t("alt_text", "Description"), wide: true },
-          { key: "title", label: t("hover_title", "Hover text"), wide: true },
+          { key: "alt", label: t("f_description", "Description"), wide: true },
           { key: "autoExif", label: t("auto_exif", "Read EXIF at build time"), kind: "toggle" },
         ],
       },
@@ -717,7 +756,7 @@ async function imageProps(block) {
       ]),
     ],
     Object.assign(
-      { exifTitle: block.exifTitle || "", alt: block.alt || "", title: block.title || "", autoExif: block.autoExif !== false },
+      { exifTitle: block.exifTitle || "", alt: block.alt || "", autoExif: block.autoExif !== false },
       info
     )
   );
@@ -725,9 +764,10 @@ async function imageProps(block) {
 
   const exif = {};
   for (const key of Object.keys(labels)) if (answer[key]) exif[key] = answer[key];
+  // `title` is deliberately absent: a plain image keeps whatever hover text it
+  // was written with, and this sheet never invents one.
   return {
     alt: answer.alt,
-    title: answer.title,
     exifTitle: answer.exifTitle,
     autoExif: answer.autoExif !== false,
     exif,
@@ -805,36 +845,33 @@ function dropBox(box) {
 }
 
 /**
- * The boxes still on the canvas, forgetting the ones that are not.
+ * Forget every box drawn inside `el`, because `el` is about to be discarded.
  *
- * A component that is repainted or remounted builds a fresh box and abandons
- * its old one, and an abandoned box's element is detached — where every
- * measurement reads zero. Left in the set it would offer a drop slot at the top
- * of the viewport and a block that no longer exists to `locate`, so the set is
- * swept here rather than at each of the half-dozen places that replace a view.
+ * A component builds its box while its own view is still being CONSTRUCTED and
+ * therefore still detached from the page, so "is it connected?" cannot be the
+ * test for whether a box is alive — asked at the wrong moment it answers no
+ * about a box that is seconds old, and dropping it there takes the note's
+ * blocks out of `locate` entirely: no dragging, no deleting, no inserting, no
+ * typing. Abandonment is an event, not a state, so it is recorded where it
+ * happens: every place that replaces or removes a view calls this first.
  */
-function liveBoxes() {
-  const out = [];
+function dropBoxesIn(el) {
+  if (!el) return;
   for (const box of state.boxes) {
-    if (box !== state.root && !(box.el && box.el.isConnected)) {
-      state.boxes.delete(box);
-      continue;
-    }
-    out.push(box);
+    if (box !== state.root && box.el && el.contains(box.el)) state.boxes.delete(box);
   }
-  return out;
 }
 
 /** Every view on the canvas, in the order they are painted. */
 function allViews() {
   const out = [];
-  for (const box of liveBoxes()) out.push(...box.views);
+  for (const box of state.boxes) out.push(...box.views);
   return out;
 }
 
 /** Which box holds this block, and where in it. */
 function locate(id) {
-  for (const box of liveBoxes()) {
+  for (const box of state.boxes) {
     const index = box.views.findIndex((v) => v.block.id === id);
     if (index >= 0) return { box, index, view: box.views[index] };
   }
@@ -878,7 +915,10 @@ function mountBlock(block, box) {
  * holds is replaced from outside — switching tab panes, for instance.
  */
 function fillBox(box, markdown) {
-  for (const view of box.views) view.el.remove();
+  for (const view of box.views) {
+    dropBoxesIn(view.el);
+    view.el.remove();
+  }
   box.views.length = 0;
   box.blocks.length = 0;
 
@@ -929,6 +969,7 @@ async function deleteBlock(id, move) {
   }
 
   await exit(view.el);
+  dropBoxesIn(view.el);
   view.el.remove();
   box.views.splice(index, 1);
   box.blocks.splice(index, 1);
@@ -976,6 +1017,7 @@ function convertBlock(id, type, fields) {
 
   const view = createView(block, blockCtx(box));
   view.box = box;
+  dropBoxesIn(box.views[index].el);
   box.views[index].el.replaceWith(view.el);
   box.views[index] = view;
   state.focused = view;
@@ -1060,7 +1102,7 @@ function convertTo(key) {
  * link, a highlight, a code span, an equation — needs words to act on, so it
  * belongs to the selection and lives in Format.
  */
-function insertItem(key, host) {
+async function insertItem(key, host) {
   const item = INSERTS.find((entry) => entry.key === key);
   if (!item) return;
 
@@ -1074,10 +1116,21 @@ function insertItem(key, host) {
     return void notice("warn", t("no_deeper", "A note, folding or tab group cannot go inside another one."));
   }
 
-  if (target && target.isEmpty && target.isEmpty()) {
-    return void convertBlock(target.block.id, spec.type, spec.fields);
+  // A picture is the one insert that cannot start empty: an image block with no
+  // address is a broken image, drawn as a failure the author did not cause. So
+  // the picture is chosen FIRST and the block is made from the answer — and
+  // cancelling the browser inserts nothing at all.
+  let fields = spec.fields;
+  if (key === "image") {
+    const picked = await pickImage();
+    if (!picked) return;
+    fields = { url: picked.site, alt: "" };
   }
-  insertBlock(makeBlock(spec.type, spec.fields), target ? target.block.id : null, true);
+
+  if (target && target.isEmpty && target.isEmpty()) {
+    return void convertBlock(target.block.id, spec.type, fields);
+  }
+  insertBlock(makeBlock(spec.type, fields), target ? target.block.id : null, true);
 }
 
 /** What each insertable BLOCK starts life as. */
@@ -1135,6 +1188,7 @@ function applyRaw(id, text) {
     view.box = box;
     return view;
   });
+  dropBoxesIn(box.views[index].el);
   box.views[index].el.replaceWith(...views.map((v) => v.el));
   box.views.splice(index, 1, ...views);
 
@@ -1152,6 +1206,7 @@ function remountBlock(id) {
   const { box, index } = at;
   const view = createView(box.blocks[index], blockCtx(box));
   view.box = box;
+  dropBoxesIn(box.views[index].el);
   box.views[index].el.replaceWith(view.el);
   box.views[index] = view;
   state.focused = view;
@@ -1257,8 +1312,12 @@ function dropSlots() {
   const nesting = held && held.view.nests;
 
   const out = [];
-  for (const box of liveBoxes()) {
+  for (const box of state.boxes) {
     if (nesting && box.depth >= 1) continue;
+    // Measurements on a detached element are all zero, which would put a slot
+    // at the top of the viewport. During a drag there is nothing being built,
+    // so anything detached here is genuinely not on the page.
+    if (!box.el || !box.el.isConnected) continue;
     // A box drawn inside the block being carried is going with it.
     if (carried && box.el !== state.canvas && carried.contains(box.el)) continue;
 
@@ -1385,7 +1444,7 @@ async function onDocDrop(e) {
 
   // Order is the one thing a moved block cannot carry in `src`: its trailing
   // separator belonged to the position it left.
-  for (const box of liveBoxes()) box.blocks.forEach((b) => (b.after = b.after || "\n\n"));
+  for (const box of state.boxes) box.blocks.forEach((b) => (b.after = b.after || "\n\n"));
   writeBox(leaving);
   if (arriving !== leaving) writeBox(arriving);
   if (emptying) leaving.onEmpty();
@@ -1414,6 +1473,19 @@ async function onCanvasDrop(e) {
 }
 
 /* ─── assets ───────────────────────────────────────────────────────────────── */
+
+/**
+ * An address the document uses, mapped back to where that file still IS.
+ *
+ * The staged tidy-up run backwards. `/images/new.png` was written into the post
+ * a moment ago and nothing on the site or in the repository answers to it yet,
+ * so a request has to go to `/images/old.png` until the commit lands.
+ */
+function liveAddress(src) {
+  const value = String(src || "");
+  if (!state.stage || !state.stage.dirty || !value.startsWith("/")) return value;
+  return siteAddress(state.stage.origin("source" + value));
+}
 
 /**
  * Point this document at where its pictures are about to be.
@@ -1460,7 +1532,17 @@ function applyStagedMoves() {
  */
 async function pickImage(current) {
   const picked = await openPicker(
-    { t, stage: state.stage, pending: state.pending, upload: stageImage, observeImages },
+    {
+      t,
+      stage: state.stage,
+      pending: state.pending,
+      upload: stageImage,
+      observeImages,
+      // The article's own preloader and the article's own measurements, so the
+      // preview loads, sizes and skeletons exactly the way the page does.
+      buildPreloader: (src) => buildPreloader(src, "", state.pending),
+      naturalSize: (src) => naturalSize(src, state.pending),
+    },
     { current }
   );
   if (!picked) return null;
@@ -1512,7 +1594,7 @@ function markDirty() {
 function readAll() {
   // Innermost first: a nested box has to be read and written back into its
   // component before the component itself is read.
-  const boxes = liveBoxes().sort((a, b) => b.depth - a.depth);
+  const boxes = Array.from(state.boxes).sort((a, b) => b.depth - a.depth);
   for (const box of boxes) {
     for (const view of box.views) if (view.read) view.read();
     writeBox(box);
@@ -1839,11 +1921,13 @@ export function teardownEditor() {
   if (!state.on) return;
 
   unwire();
-  releaseDocbarHeight();
+  releaseDocbar();
   document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot").forEach((el) => el.remove());
   document.documentElement.classList.remove("blog-editing");
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   gitea.forgetBlobs();
+  registerRewind(null);
+  state.boxes.clear();
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, put: [],
     doc: null, entry: null, pending: [], dirty: false, focused: null,

@@ -41,6 +41,29 @@ $ed-docbar-top-tablet = ($navbar-height * 0.9 + 10px)
 $ed-docbar-top-mobile = ($navbar-height * 0.8 + 8px)
 $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
 
+// The theme's own thin scrollbar, from the instant-notes field: 6px, a rounded
+// thumb on a transparent track, no arrows, and the Firefox pair beside it. Every
+// scrolling surface the editor adds uses this one — a browser default scrollbar
+// inside a card that has been styled to the pixel is the loudest thing in it.
+ed-scroll()
+  scrollbar-width thin
+  scrollbar-color var(--fourth-text-color) transparent
+
+  &::-webkit-scrollbar
+    width 6px
+    height 6px
+
+  &::-webkit-scrollbar-track
+    background transparent
+
+  &::-webkit-scrollbar-thumb
+    border-radius 3px
+    background var(--fourth-text-color)
+    transition background $ed-fade
+
+  &:hover::-webkit-scrollbar-thumb
+    background var(--third-text-color)
+
 @keyframes ed-breathe
   0%, 100%
     opacity 0.35
@@ -68,16 +91,37 @@ $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo
 // buttons has a home in the corner rail on a phone — so the pencil is rendered
 // in BOTH and each width shows one of them. Two nodes, one behaviour: the
 // editor wires every `.tool-edit-post` it finds.
-.side-tools-container .tool-edit-post
-  display none
+//
+// Three selector parts and `!important`, because the thing being overridden is
+// `html.blog-admin .blog-admin-only { display: flex !important }` in
+// notifications.styl. A two-part selector ties with it on specificity and loses
+// on source order, which is why BOTH pencils showed on a desktop.
+html.blog-admin .side-tools-container .tool-edit-post
+  display none !important
 
   +redefine-mobile()
-    display flex
+    display flex !important
+
+html.blog-admin .post-tools-container .tool-edit-post
+  +redefine-mobile()
+    display none !important
 
 // While editing, the way out is the bar's own ×. A second entrance to a room
-// you are already in is just a thing to press by mistake.
-html.blog-editing .tool-edit-post
+// you are already in is just a thing to press by mistake. Written last and at
+// the same weight as the rules above, so it wins over both of them.
+html.blog-editing .side-tools-container .tool-edit-post,
+html.blog-editing .post-tools-container .tool-edit-post
   display none !important
+
+// `position: sticky` needs a scrolling ancestor, and `overflow-x: hidden`
+// creates one: article-content.styl clips the post container horizontally below
+// 640px, which silently turned the document bar from pinned into static on
+// exactly the width where pinning matters most. `clip` does the same clipping
+// without becoming a scroll container, so the bar pins on a phone too — and if
+// a browser does not know `clip`, the declaration is dropped and the behaviour
+// is the one that shipped.
+html.blog-editing .post-page-container
+  overflow-x clip
 
 // A post with nothing in it yet is still a page you have to be able to aim at.
 .article-content-container.is-editing .article-content
@@ -593,16 +637,16 @@ textarea.ed-f-input
   // left a band of empty page under the navbar. The switch is animated by the
   // transition below, so the toolbar slides rather than jumps.
   top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top + 12px))
-  // Insets rather than a 50% offset and a translate: the translated box was
-  // sized from 100vw, which on a phone includes the scrollbar gutter and a hair
-  // of overscroll, so the card ran past both edges before it had a chance to
-  // wrap. Two insets and `margin auto` can never be wider than the viewport.
-  left 10px
-  right 10px
+  // The document bar's own box, measured and republished from JS. Centring on
+  // the VIEWPORT is what put the toolbar across the table of contents: an
+  // article with a contents rail is not centred on the viewport, and a card
+  // 760px wide because the viewport allowed it is not the width of the column
+  // it belongs to. Copying the bar makes the two the same object in two rows.
+  left var(--ed-docbar-x, 10px)
+  width var(--ed-docbar-w, calc(100vw - 20px))
+  right auto
   z-index $z-index-4
-  width auto
-  max-width 760px
-  margin 0 auto
+  max-width 100%
   pointer-events none
   transition top $ed-morph
 
@@ -613,8 +657,6 @@ textarea.ed-f-input
     top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-tablet + 10px))
 
   +redefine-mobile()
-    left 6px
-    right 6px
     top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
 
 .ed-toolbar-card
@@ -678,6 +720,7 @@ textarea.ed-f-input
   max-height 34svh
   overflow-y auto
   overscroll-behavior contain
+  ed-scroll()
 
   &[hidden]
     display none
@@ -1084,26 +1127,72 @@ textarea.ed-f-input
   font-size 0.72rem
 
 // ─── the picture browser ────────────────────────────────────
+// Two panes and a grip between them. The share is a custom property so the
+// splitter can write one number and the grid can do the arithmetic.
 .ed-pick-body
   display grid
-  grid-template-columns minmax(0, 0.85fr) minmax(0, 1.15fr)
+  grid-template-columns calc(var(--ed-pick-split, 0.42) * 100%) 7px minmax(0, 1fr)
   min-height 0
   flex 1 1 auto
 
+  // Stacked, the same grip resizes the other axis — a phone has the same
+  // question about how much tree and how much picture, just turned ninety
+  // degrees. `touch-action: none` on the grip is what lets a finger drag it
+  // without the panel scrolling underneath.
   +redefine-tablet()
     grid-template-columns minmax(0, 1fr)
-    grid-template-rows minmax(0, 1fr) minmax(0, 1.1fr)
+    grid-template-rows calc(var(--ed-pick-vsplit, 0.42) * 100%) 11px minmax(0, 1fr)
 
 .ed-pick-side
   min-height 0
+  min-width 0
   padding 8px 0 12px
-  border-right 1px solid var(--border-color)
   overflow-y auto
   overscroll-behavior contain
+  ed-scroll()
+
+
+// A column of its own rather than a border: it IS the border, and it is what
+// you take hold of. The rule stays hairline until it is worth noticing.
+.ed-pick-grip
+  position relative
+  cursor col-resize
+  background var(--border-color)
+  background-clip content-box
+  padding 0 3px
+  outline none
+  touch-action none
+  transition background $ed-fade
+
+  &:hover,
+  &:focus-visible,
+  &[data-on="1"]
+    background var(--primary-color)
+
+  // A finger needs something to find: a short pill drawn across the rule.
+  &::after
+    content ""
+    position absolute
+    top 50%
+    left 50%
+    width 3px
+    height 34px
+    border-radius 3px
+    background var(--fourth-text-color)
+    transform translate(-50%, -50%)
+    transition background $ed-fade
+
+  &:hover::after,
+  &[data-on="1"]::after
+    background $ed-on-primary
 
   +redefine-tablet()
-    border-right none
-    border-bottom 1px solid var(--border-color)
+    cursor row-resize
+    padding 5px 0
+
+    &::after
+      width 42px
+      height 3px
 
 // Open and closed, with nothing measured. `0fr → 1fr` on a grid row is the one
 // height transition that needs no scrollHeight, so it stays exact however deep
@@ -1125,7 +1214,7 @@ textarea.ed-f-input
 .ed-pick-node[data-open="1"] > .ed-pick-row .ed-pick-twist i
   transform rotate(90deg)
 
-.ed-pick-node[data-type="dir"][data-open="1"] > .ed-pick-row .ed-pick-icon
+.ed-pick-node[data-type="dir"][data-open="1"] > .ed-pick-row:not([data-on="1"]) .ed-pick-icon
   color var(--primary-color)
 
 // One indent per level, drawn by nesting rather than by a padding the row has
@@ -1147,6 +1236,7 @@ textarea.ed-f-input
   color var(--first-text-color)
 
 .ed-pick-row
+  position relative
   display flex
   align-items center
   gap 7px
@@ -1162,15 +1252,26 @@ textarea.ed-f-input
   &:hover
     background var(--second-background-color)
 
+  // --primary-color is a dark cardinal red, so EVERYTHING on it is white: the
+  // chevron, the folder, the name and the flag. Leaving any of them on their
+  // own token puts near-black ink on dark red, which is the row you can no
+  // longer read being the row you just selected.
   &[data-on="1"]
     background var(--primary-color)
     color $ed-on-primary
 
     i,
-    .ed-pick-flag
+    .ed-pick-icon,
+    .ed-pick-twist,
+    .ed-pick-name
       color $ed-on-primary
 
-  &[data-drop="1"]
+    .ed-pick-flag
+      background rgba(255, 255, 255, 0.22)
+      color $ed-on-primary
+
+  // The folder a dragged row will land in.
+  &[data-into="1"]
     box-shadow inset 0 0 0 2px var(--primary-color)
 
   &[data-carry="1"]
@@ -1180,6 +1281,35 @@ textarea.ed-f-input
     background var(--second-background-color)
     box-shadow inset 0 0 0 1px var(--primary-color)
     cursor text
+
+// The insertion line, the article canvas's own: same bar, same halo, same
+// entrance. One gesture, one visual language.
+.ed-pick-node
+  position relative
+
+.ed-pick-node[data-drop="before"]::before,
+.ed-pick-node[data-drop="after"]::after,
+.ed-pick-row[data-drop="empty"]::after
+  content ""
+  position absolute
+  left 0
+  right 8px
+  height 3px
+  border-radius 3px
+  background var(--primary-color)
+  box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+  animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+  pointer-events none
+
+.ed-pick-node[data-drop="before"]::before
+  top -2px
+
+.ed-pick-node[data-drop="after"]::after
+  bottom -2px
+
+.ed-pick-row[data-drop="empty"]::after
+  bottom -3px
+  right 0
 
 .ed-pick-twist
   display grid
@@ -1232,63 +1362,45 @@ textarea.ed-f-input
   flex-direction column
   gap 12px
   min-height 0
+  min-width 0
   padding 14px
 
+// The picture at its OWN shape and its own SIZE. The article's preloader is
+// what goes in here — same skeleton, same swap, same compressed-or-original
+// decision — and the box it occupies is set from the picture's real pixels, so
+// the skeleton is already the shape of what is arriving. Nothing is upscaled:
+// a 200px thumbnail stretched across a 600px pane is not what it looks like.
 .ed-pick-stage
   display grid
   place-items center
   flex 1 1 auto
   min-height 0
+  min-width 0
   border-radius 12px
   background var(--second-background-color)
   overflow hidden
 
-// The picture at its OWN shape: the box is the pane and the image is contained
-// inside it, so nothing is cropped and nothing is stretched whatever it is.
-.ed-shot
-  position relative
-  display grid
-  place-items center
-  width 100%
-  height 100%
-  min-height 0
+  > .img-preloader
+    max-width 100%
+    max-height 100%
+    border-radius 10px
+    overflow hidden
 
-  // The article's own shimmer, restated: that rule is scoped to
-  // `.img-preloader`, and this is not one — it is a preview, which reserves
-  // nothing and takes its shape from the file.
-  .img-preloader-skeleton
-    position absolute
-    inset 0
-    opacity 1
-    background linear-gradient(90deg, var(--third-background-color) 0%, var(--second-background-color) 50%, var(--third-background-color) 100%)
-    background-size 200% 100%
-    animation img-preloader-shimmer 1.5s infinite ease-in-out
-    transition opacity $ed-fade
+    // The shim carries an inline `height:auto` from the build's own markup; in
+    // here the box is already exact, so it fills it instead of deriving it.
+    > .img-preloader-shim
+      width 100% !important
+      height 100% !important
 
-  img
+  // Once the observer has swapped it in, the intrinsic size arrives as width
+  // and height ATTRIBUTES, and these two caps scale it down without ever
+  // distorting or enlarging it.
+  > img
     max-width 100%
     max-height 100%
     width auto
     height auto
-    object-fit contain
-    opacity 0
-    transition opacity 0.22s ease
-
-  &[data-ready="1"]
-    .img-preloader-skeleton
-      opacity 0
-
-    img
-      opacity 1
-
-  &[data-failed="1"]
-    .img-preloader-skeleton
-      opacity 0
-
-    &::after
-      content "✕"
-      color var(--box-red-text)
-      font-size 1.6rem
+    border-radius 10px
 
 .ed-pick-blank
   display flex
@@ -1375,6 +1487,7 @@ textarea.ed-f-input
   box-shadow 0 14px 38px -18px var(--shadow-color-1)
   overflow-y auto
   overscroll-behavior contain
+  ed-scroll()
 
   &[hidden]
     display none
@@ -1431,6 +1544,8 @@ textarea.ed-f-input
   min-height 0
   padding 14px
   overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
 
 .ed-sheet-group + .ed-sheet-group
   margin-top 16px
@@ -1738,6 +1853,7 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   resize none
   white-space pre
   overflow-x auto
+  ed-scroll()
 
   &[hidden]
     display none
@@ -1759,6 +1875,8 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   width 232px
   max-height 302px
   overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
 
 .ed-slash-row
   display flex

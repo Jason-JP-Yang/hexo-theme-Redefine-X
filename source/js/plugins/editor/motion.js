@@ -171,6 +171,49 @@ export function setDragImage(e, el) {
   setTimeout(() => shot.remove(), 0);
 }
 
+/**
+ * Hold a drag near an edge and the thing under it scrolls, faster the closer to
+ * the edge you hold.
+ *
+ * `dragover` fires often enough to track the pointer but nowhere near evenly
+ * enough to scroll from, so it only records a position and a rAF loop does the
+ * moving. `el` is the container that scrolls; pass nothing for the page.
+ */
+const EDGE = 90;
+const EDGE_SPEED = 18;
+
+export function createEdgeScroll(el) {
+  let raf = 0;
+  let y = 0;
+
+  const step = () => {
+    raf = 0;
+    const rect = el ? el.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    const zone = Math.max(24, Math.min(EDGE, (rect.bottom - rect.top) / 3));
+
+    let delta = 0;
+    if (y < rect.top + zone) delta = -EDGE_SPEED * Math.min(1, (rect.top + zone - y) / zone);
+    else if (y > rect.bottom - zone) delta = EDGE_SPEED * Math.min(1, (y - rect.bottom + zone) / zone);
+
+    if (delta) {
+      if (el) el.scrollTop += delta;
+      else window.scrollBy(0, delta);
+    }
+    raf = requestAnimationFrame(step);
+  };
+
+  return {
+    track(next) {
+      y = next;
+      if (!raf) raf = requestAnimationFrame(step);
+    },
+    stop() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+    },
+  };
+}
+
 /** Tell the theme's scroll scheduler the page just changed height. */
 export function contentChanged() {
   try {

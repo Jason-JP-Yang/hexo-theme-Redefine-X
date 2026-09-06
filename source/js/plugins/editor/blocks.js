@@ -755,7 +755,10 @@ function mountImage(view) {
   // Typing in the caption IS typing the alt text; the numbering prefix is the
   // page's, not the author's, so it is stripped back off on the way out.
   caption.addEventListener("input", () => {
-    const text = caption.textContent.replace(/^\s*Figure\s+\d+\.?\s*/i, "").trim();
+    const text = caption.textContent
+      .replace(/​/g, "")
+      .replace(/^\s*Figure\s+\d+\.?\s*/i, "")
+      .trim();
     block.alt = text;
     view.touch();
   });

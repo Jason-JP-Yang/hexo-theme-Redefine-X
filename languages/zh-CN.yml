@@ -378,7 +378,6 @@ editor:
   arguments: 参数
   remove_block: 删除
   replace: 替换
-  alt_text: 替代文本
   caption: 图注
   icon: 图标
   title: 标题
@@ -503,7 +502,6 @@ editor:
   open_folder: 打开图片库
   open_viewer: 放大查看
   auto_exif: 构建时读取 EXIF
-  hover_title: 悬停提示
   no_deeper: 提示框、折叠块与标签组不能再嵌套一层。
   sheet_hint: 全部留空即为普通图片。
   g_caption: 图注

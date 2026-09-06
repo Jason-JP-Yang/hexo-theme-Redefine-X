@@ -511,6 +511,20 @@ export function emitBlock(b) {
 }
 
 /**
+ * The seventeen fields `{% exifimage %}` understands, in the order its own
+ * documentation lists them — see the header of scripts/modules/image-exif.js.
+ * Anything else in the comment is not a field: the tag's `extractCustomInfo`
+ * matches only these names, so writing another one would emit a line that reads
+ * as EXIF here and as nothing at all in the published post.
+ */
+const EXIF_KEYS = [
+  "Make", "Model", "LensModel", "ExposureTime", "Aperture", "ISOSpeedRatings",
+  "FocalLength", "ExposureProgram", "MeteringMode", "Flash", "DateTimeOriginal",
+  "GPSLatitude", "GPSLongitude", "GPSAltitude", "WhiteBalance", "FocusMode",
+  "ExposureBias",
+];
+
+/**
  * One picture, in whichever of its two spellings it needs: `![alt](path)` says
  * all a plain image has, and a caption title or a line of camera data needs the
  * theme's `{% exifimage %}`, which is the only form that carries them. The block
@@ -518,10 +532,18 @@ export function emitBlock(b) {
  */
 function emitImage(b) {
   const info = b.exif || {};
-  const written = Object.keys(info).filter((k) => info[k]);
-  const line = "![" + (b.alt || "") + "](" + b.url + (b.title ? ' "' + b.title + '"' : "") + ")";
-  if (!b.exifTitle && !written.length) return line;
+  const written = EXIF_KEYS.filter((k) => info[k]);
+  if (!b.exifTitle && !written.length) {
+    // Plain markdown, where a quoted third argument IS the hover title.
+    return "![" + (b.alt || "") + "](" + b.url + (b.title ? ' "' + b.title + '"' : "") + ")";
+  }
 
+  // Inside the tag it is NOT. `extractImageInfo` reads the path with
+  // `\(([^)]+)\)`, so a quoted title becomes part of the path and the published
+  // page gets `src="/images/x.png &quot;hover&quot;"` — a broken picture, from
+  // a field that looked harmless. The tag has no hover text; the caption title
+  // and the description are what it carries, and they are written above.
+  const line = "![" + (b.alt || "") + "](" + b.url + ")";
   const args = [b.exifTitle || "", b.autoExif === false ? "auto-exif:false" : ""].filter(Boolean).join(" ");
   const body = written.length
     ? [line, "<!-- exif-info"].concat(written.map((k) => k + ": " + info[k]), ["-->"]).join("\n")
@@ -538,7 +560,7 @@ function imageFromExif(args, body) {
   if (comment) {
     for (const row of comment[1].split(/\r?\n/)) {
       const pair = row.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
-      if (pair && pair[2].trim()) info[pair[1]] = pair[2].trim();
+      if (pair && pair[2].trim() && EXIF_KEYS.includes(pair[1])) info[pair[1]] = pair[2].trim();
     }
   }
 

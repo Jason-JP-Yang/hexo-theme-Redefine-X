@@ -207,13 +207,20 @@ function carve(range) {
   }
 }
 
-/** Every text node the range covers, in document order. */
+/**
+ * Every text node the range covers, in document order.
+ *
+ * Boundary anchors are skipped in both this and `touched`: they are the
+ * editor's own punctuation and marking them would wrap a zero-width space in a
+ * `<strong>`, or — worse — make a selection that merely touches one report
+ * itself as already bold and toggle the wrong way.
+ */
 function covered(range, root) {
   const out = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
-    if (!node.nodeValue.length) continue;
+    if (!node.nodeValue.length || isZwsp(node)) continue;
     const probe = document.createRange();
     probe.selectNodeContents(node);
     if (
@@ -232,7 +239,7 @@ function touched(range, root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
-    if (!node.nodeValue.trim()) continue;
+    if (!node.nodeValue.trim() || isZwsp(node)) continue;
     const probe = document.createRange();
     probe.selectNodeContents(node);
     if (
@@ -451,48 +458,75 @@ export function isBlankText(text) {
 }
 
 /**
- * Give BOTH ends of every mark somewhere to stand.
+ * Give every side of every mark somewhere for the caret to stand.
  *
  * `Hello *World*, Jason` has ONE visual point between `World` and the comma and
- * TWO meanings for it: keep typing inside the italics, or after them. The
- * browser offers whichever it feels like, so the author types `!` and gets
- * `*World!*` when they wanted `*World*!` — with no way to say which.
+ * TWO meanings for it: keep typing inside the italics, or after them. A browser
+ * offers whichever it feels like, so the author types `!` and gets `*World!*`
+ * when they wanted `*World*!` — with no way to say which.
  *
- * So each boundary is given a text node of its own to hold the caret. A
- * zero-width space is a real position the arrow keys step through, which makes
- * the two meanings two places.
+ * Putting a zero-width space OUTSIDE the mark gives the outside meaning a real
+ * text node of its own. It does not give the inside meaning one, and that is
+ * why the closing end of a format could be controlled and the opening end could
+ * not: at a closing boundary the "inside" position is the end of the mark's own
+ * text, which browsers are willing to keep distinct, while at an opening
+ * boundary it is offset 0 of that text — visually identical to the position
+ * just before the tag, and collapsed into it by every caret-movement
+ * implementation there is. No amount of outside anchoring reaches it.
  *
- * The earlier version anchored a boundary only where the neighbour was another
- * mark or nothing at all — which is every CLOSING boundary of a mark at the end
- * of a run, and almost no opening one, since an opening boundary usually has
- * ordinary words in front of it. That is exactly the asymmetry that was
- * reported: the end of a format could be stepped either side of and the start
- * could not. A plain text node beside a mark is not an anchor; it is the outside
- * of the mark and the inside of the sentence, and the browser collapses the two
- * positions into one. Every boundary gets an anchor now, and the pass is
- * idempotent because a boundary that already has one is left alone — so two
- * touching marks still get one anchor between them, giving the three positions
- * that run genuinely has.
+ * So a mark is anchored on FOUR sides: one zero-width space immediately outside
+ * each end, and one immediately inside each end. The inside pair is the whole
+ * fix — it turns "offset 0 of the mark's text" into "a text node that is a
+ * child of the mark", which is a position the arrow keys stop at and typing
+ * lands inside.
+ *
+ * The outside anchors are shared between neighbours, so two touching marks get
+ * one between them rather than two:
+ *
+ *   *Hello***World**   →   ​<em>​Hello​</em>​<strong>​World​</strong>​
+ *                                        ↑    ↑    ↑
+ *                                   inside  between  inside
+ *                                    the em          the strong
+ *
+ * which is exactly the three things the author could mean there. Nested marks
+ * stack the same way, one position per level. The pass is idempotent: a side
+ * that already has an anchor is left alone. They are the editor's, never the
+ * author's, and every read path strips them.
  */
 export function anchorMarks(root) {
   if (!root) return;
-  const marks = Array.from(root.querySelectorAll("*")).filter(isMarkNode);
 
-  for (const el of marks) {
-    if (!el.parentNode) continue;
-    if (!isZwsp(el.previousSibling)) {
-      el.parentNode.insertBefore(document.createTextNode(ZWSP), el);
-    }
-    if (!isZwsp(el.nextSibling)) {
-      el.parentNode.insertBefore(document.createTextNode(ZWSP), el.nextSibling);
-    }
+  const put = (parent, before) => parent.insertBefore(document.createTextNode(ZWSP), before);
+
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    if (!isMarkNode(el) || !el.parentNode) continue;
+    // An empty mark is about to be removed by `tidy`; anchoring it would keep
+    // it alive, because a mark holding two anchors is not an empty one.
+    if (!el.firstChild) continue;
+
+    if (!isZwsp(el.previousSibling)) put(el.parentNode, el);
+    if (!isZwsp(el.nextSibling)) put(el.parentNode, el.nextSibling);
+
+    // Inline code and inline math are LITERAL: their contents are characters,
+    // not markup, and a zero-width space inside them would be a character in
+    // the code span.
+    if (el.tagName === "CODE" || (el.dataset && el.dataset.md === "math")) continue;
+    if (!isZwsp(el.firstChild)) put(el, el.firstChild);
+    if (!isZwsp(el.lastChild)) put(el, null);
   }
 }
 
+/** An anchor earns its place beside a mark, or just inside one's edge. */
+function anchorWanted(node) {
+  if (isMarkNode(node.previousSibling) || isMarkNode(node.nextSibling)) return true;
+  const parent = node.parentNode;
+  return !!(isMarkNode(parent) && (parent.firstChild === node || parent.lastChild === node));
+}
+
 /**
- * Drop the anchors that are no longer beside a mark, and collapse the ones that
- * doubled up — a mark removed between two of them leaves both behind, and two
- * zero-width spaces in a row are two caret stops that mean the same thing.
+ * Drop the anchors that no longer sit at a mark's edge, and collapse the ones
+ * that doubled up — a mark removed between two of them leaves both behind, and
+ * two zero-width spaces in a row are two caret stops that mean the same thing.
  */
 export function dropStrayAnchors(root) {
   if (!root) return;
@@ -503,12 +537,12 @@ export function dropStrayAnchors(root) {
 
   for (const anchor of seen) {
     if (!anchor.isConnected) continue;
-    if (!isMarkNode(anchor.previousSibling) && !isMarkNode(anchor.nextSibling)) {
+    if (!anchorWanted(anchor)) {
       anchor.remove();
       continue;
     }
     if (anchor.nodeValue !== ZWSP) anchor.nodeValue = ZWSP;
-    if (isZwsp(anchor.nextSibling)) anchor.nextSibling.remove();
+    while (isZwsp(anchor.nextSibling)) anchor.nextSibling.remove();
   }
 }
 
