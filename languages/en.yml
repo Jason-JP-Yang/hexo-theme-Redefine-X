@@ -354,9 +354,14 @@ editor:
   publish: Publish
   publish_draft: Publish this draft over the post it replaces?
   publish_direct: Commit this straight to the published post?
-  discard: This post has unsaved changes. Leave it?
-  recover: An unsaved local copy from
-  recover_tail: was found. Restore it?
+  publish_over: Publish over the post
+  cancel: Cancel
+  quit: Leave without saving
+  discard: This post has changes that are not committed yet.
+  recover_title: Unsaved local copy
+  recover: There is a copy of this post that was never committed.
+  recover_use: Restore it
+  recover_drop: Open what is committed
   editing_draft: You are editing the draft that supersedes this post.
   stale: The published copy is behind the repository - a build is probably still running.
   conflict_hint: This file changed in the repository. Your text is safe here - open the post in a new tab to see what landed, then re-apply.

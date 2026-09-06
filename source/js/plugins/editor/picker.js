@@ -201,6 +201,99 @@ export function createStage() {
   };
 }
 
+/* ─── a question ───────────────────────────────────────────────────────────── */
+
+/**
+ * The small dialogue: one question, and its answers as buttons.
+ *
+ * Same frame as the browser and the property sheet, one size down. Everything
+ * the editor used to ask through `window.confirm` asks here — which is not a
+ * matter of taste: a native confirm has exactly two answers, and "you have
+ * unsaved work" has three. Save it as a draft, publish it, or leave it behind.
+ *
+ * @param {object} opts { icon, title, message, note, actions }
+ *   `actions` is `[{ key, label, icon, kind }]`, `kind` being "primary",
+ *   "danger" or nothing. The first primary answers Enter.
+ * @returns {Promise<string|null>} the chosen key, or null for dismissed
+ */
+export function openAsk(ctx, opts) {
+  const t = ctx.t;
+  const actions = opts.actions || [];
+
+  return new Promise((resolve) => {
+    const mask = document.createElement("div");
+    mask.className = "ed-picker-mask";
+    mask.innerHTML = `
+      <section class="ed-prompt" role="dialog" aria-modal="true">
+        <header class="ed-picker-bar">
+          <span class="ed-picker-name"><i class="fa-solid ${escapeHTML(opts.icon || "fa-circle-question")}" aria-hidden="true"></i>${escapeHTML(opts.title || "")}</span>
+          <span class="ed-picker-acts">
+            <button type="button" data-act="close" title="${escapeHTML(t("close", "Close"))}"><i class="fa-solid fa-xmark"></i></button>
+          </span>
+        </header>
+        <div class="ed-prompt-body">
+          ${escapeHTML(opts.message || "")}
+          ${opts.note ? `<span class="ed-prompt-note">${escapeHTML(opts.note)}</span>` : ""}
+        </div>
+        <footer class="ed-picker-foot ed-prompt-foot">
+          ${actions
+            .map(
+              (act) => `<button type="button" class="ed-act${act.kind === "primary" ? " ed-act-primary" : act.kind === "danger" ? " ed-act-danger" : ""}" data-key="${escapeHTML(act.key)}">
+                ${act.icon ? `<i class="fa-solid ${escapeHTML(act.icon)}" aria-hidden="true"></i>` : ""}<span>${escapeHTML(act.label)}</span>
+              </button>`
+            )
+            .join("")}
+        </footer>
+      </section>`;
+
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      mask.remove();
+      unlockPage();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        return finish(null);
+      }
+      if (e.key === "Enter") {
+        const main = actions.find((a) => a.kind === "primary");
+        if (main) {
+          e.preventDefault();
+          finish(main.key);
+        }
+      }
+    };
+
+    mask.addEventListener("click", (e) => {
+      if (e.target === mask || e.target.closest('[data-act="close"]')) return finish(null);
+      const answer = e.target.closest("[data-key]");
+      if (answer) finish(answer.dataset.key);
+    });
+
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(mask);
+    lockPage();
+    pop(mask.querySelector(".ed-prompt"));
+    const main = mask.querySelector(".ed-act-primary") || mask.querySelector("[data-key]");
+    if (main) main.focus();
+  });
+}
+
+/** Close anything this module has open, and release the page with it. */
+export function closeDialogs() {
+  const open = document.querySelectorAll(".ed-picker-mask");
+  for (const mask of open) mask.remove();
+  if (open.length) {
+    locks = 0;
+    document.documentElement.style.overflow = "";
+  }
+}
+
 /* ─── a sheet of fields ────────────────────────────────────────────────────── */
 
 /**
@@ -576,36 +669,30 @@ export function openPicker(ctx, opts = {}) {
     }
 
     /**
-     * Fit the preview to the pane at its OWN shape.
+     * The preview: one `<img>`, sized by CSS.
      *
-     * The preloader carries the picture's intrinsic size, so the box it should
-     * occupy is arithmetic rather than a guess: the largest rectangle of that
-     * ratio that fits the stage, and never larger than the picture itself — a
-     * 200px thumbnail blown up to fill a 600px pane is not what it looks like.
-     * Recomputed whenever the stage changes size, which the splitter does.
+     * It used to mount the article's `.img-preloader` and hand it to the
+     * article's lazyload observer, which built an `<img>` inside it — three
+     * layers and an IntersectionObserver for a picture the author has just
+     * clicked on, with nothing to defer and nothing to be lazy about. Worse,
+     * the nesting is what made the size uncontrollable: the caps applied to the
+     * wrapper while the picture inside sized itself, so the preview could stand
+     * taller than the pane.
+     *
+     * What survives is what was actually needed. `naturalSize` gives the
+     * intrinsic pixels, which go on as `width`/`height` attributes so the box is
+     * the picture's shape before a byte arrives and as `--shot-w` so nothing is
+     * upscaled; `bindImage` keeps the resolution rules — a staged upload's blob,
+     * a sealed image's decrypted bytes, and the repository fallback for a
+     * picture committed minutes ago that the site has not published yet.
      */
-    let shot = null;
     let shotSize = null;
-
-    function fitShot() {
-      if (!shot) return;
-      if (!shotSize || !shotSize.width || !shotSize.height) {
-        shot.style.removeProperty("width");
-        shot.style.removeProperty("height");
-        return;
-      }
-      const box = stage.getBoundingClientRect();
-      if (!box.width || !box.height) return;
-      const scale = Math.min(box.width / shotSize.width, box.height / shotSize.height, 1);
-      shot.style.width = Math.round(shotSize.width * scale) + "px";
-      shot.style.height = Math.round(shotSize.height * scale) + "px";
-    }
 
     function paintPreview() {
       ok.disabled = !chosen || !IMAGE.test(chosen);
-      shot = null;
       shotSize = null;
       stage.innerHTML = "";
+      stage.style.removeProperty("--shot-w");
       meta.innerHTML = "";
 
       if (!chosen || !IMAGE.test(chosen)) {
@@ -619,14 +706,22 @@ export function openPicker(ctx, opts = {}) {
       const origin = ctx.stage.origin(chosen);
       const address = siteAddress(chosen);
 
-      // The article's own preloader, handed to the article's own observer: the
-      // same skeleton, the same swap, the same compressed-or-original decision
-      // the published page makes. A second image pipeline here would drift.
       shotSize = ctx.naturalSize(address);
-      shot = ctx.buildPreloader(address);
+      const shot = document.createElement("img");
+      shot.alt = nameOf(chosen);
+      shot.dataset.ready = "0";
+      if (shotSize && shotSize.width && shotSize.height) {
+        shot.width = shotSize.width;
+        shot.height = shotSize.height;
+        stage.style.setProperty("--shot-w", shotSize.width + "px");
+      }
+      shot.addEventListener("load", () => (shot.dataset.ready = "1"), { once: true });
+      // A picture that cannot be fetched at all stops shimmering rather than
+      // promising forever. `bindImage`'s repository retry re-points `src`, and a
+      // retry that works fires `load` and puts it back.
+      shot.addEventListener("error", () => (shot.dataset.ready = "err"));
       stage.appendChild(shot);
-      fitShot();
-      ctx.observeImages();
+      ctx.bindImage(shot, address);
 
       meta.innerHTML =
         metaRow(t("pick_name", "Name"), nameOf(chosen)) +
@@ -863,7 +958,6 @@ export function openPicker(ctx, opts = {}) {
       if (done) return;
       done = true;
       scroller.stop();
-      watch.disconnect();
       mask.remove();
       unlockPage();
       document.removeEventListener("keydown", onKey, true);
@@ -1088,7 +1182,6 @@ export function openPicker(ctx, opts = {}) {
       } catch (err) {
         /* a browser that refuses storage simply forgets */
       }
-      fitShot();
     }
 
     for (const { prop, key } of [
@@ -1135,11 +1228,6 @@ export function openPicker(ctx, opts = {}) {
     });
 
     /* ─── open ─────────────────────────────────────────────────────────── */
-
-    // The stage changes size with the splitter, with the window, and with the
-    // panel's own layout settling after it is inserted.
-    const watch = new ResizeObserver(() => fitShot());
-    watch.observe(stage);
 
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);

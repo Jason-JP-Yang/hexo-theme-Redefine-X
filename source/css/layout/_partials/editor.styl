@@ -64,6 +64,14 @@ ed-scroll()
   &:hover::-webkit-scrollbar-thumb
     background var(--third-text-color)
 
+// Stylus owns `min()` and `max()` as its OWN functions and folds them at
+// compile time. `min(1040px, 100%)` came out of the compiler as `100%`, which
+// is why the picture browser was always exactly the size of the window with a
+// 20px border — the cap it was given never reached the browser. `s()` hands the
+// CSS function through untouched.
+css-min(a, b)
+  s("min(%s, %s)", a, b)
+
 @keyframes ed-breathe
   0%, 100%
     opacity 0.35
@@ -1044,38 +1052,60 @@ textarea.ed-f-input
 .ed-math-error
   color var(--box-red-text)
 
-// ─── the picture browser & the property sheet ───────────────
+// ─── the dialogue family ────────────────────────────────────
+// Three sizes, one frame. The picture browser and the property sheet are
+// LARGE, the question the editor asks before it lets go of unsaved work is
+// SMALL, and all three share the bar, the footer and the material — a second
+// shape for the same job reads as a second application.
+//
+// The gutter scales with the viewport rather than sitting at a flat 20px: on a
+// laptop that flat number put a 660px-tall panel within a hair of the window
+// edge, so the dialogue WAS the screen. A phone lands on the floor of the
+// clamp, which is what it had before.
+$ed-pop-gap = "clamp(18px, 5vmin, 60px)"
+$ed-pop-w = 960px
+$ed-pop-h = 620px
+
 .ed-picker-mask
   position fixed
   inset 0
   z-index ($z-index-5 + 3)
   display grid
   place-items center
-  padding 20px
+  padding unquote($ed-pop-gap)
   background var(--shadow-color-1)
   backdrop-filter blur(4px)
   -webkit-backdrop-filter blur(4px)
 
-// A FIXED box. The two things inside it that vary most — a tree that can be
-// six levels deep and a picture that can be any shape — are exactly the two
-// that would resize it under the pointer between one click and the next, so it
-// is given its size once and everything inside it scrolls.
 .ed-picker,
-.ed-sheet
+.ed-sheet,
+.ed-prompt
   display flex
   flex-direction column
-  width min(1040px, 100%)
-  height min(660px, 100%)
   border 1px solid var(--border-color)
   border-radius $ed-radius
   background var(--background-color)
   box-shadow 0 24px 60px -24px var(--shadow-color-1)
   overflow hidden
 
+// A FIXED box. The two things inside it that vary most — a tree that can be
+// six levels deep and a picture that can be any shape — are exactly the two
+// that would resize it under the pointer between one click and the next, so it
+// is given its size once and everything inside it scrolls.
+.ed-picker
+  width css-min($ed-pop-w, 100%)
+  height css-min($ed-pop-h, 100%)
+
 .ed-sheet
-  width min(880px, 100%)
+  width css-min(820px, 100%)
   height auto
-  max-height min(660px, 100%)
+  max-height css-min($ed-pop-h, 100%)
+
+// One question and its answers. Tall enough for the message, never taller.
+.ed-prompt
+  width css-min(440px, 100%)
+  height auto
+  max-height 100%
 
 .ed-picker-bar
   display flex
@@ -1125,6 +1155,51 @@ textarea.ed-f-input
   flex 1 1 auto
   color var(--third-text-color)
   font-size 0.72rem
+
+// ─── the small dialogue ─────────────────────────────────────
+.ed-prompt-body
+  flex 0 1 auto
+  min-height 0
+  padding 16px 16px 4px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+  color var(--second-text-color)
+  font-size 0.82rem
+  line-height 1.6
+
+.ed-prompt-note
+  display block
+  margin-top 8px
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.7rem
+  overflow-wrap anywhere
+
+// Answers wrap rather than squeeze: three of them at a phone's width is two
+// rows, not three buttons with their labels cut off.
+.ed-prompt-foot
+  flex-wrap wrap
+  justify-content flex-end
+  gap 8px
+  padding 12px 16px 16px
+  border-top-color transparent
+  background transparent
+
+  .ed-act
+    flex 0 1 auto
+
+.ed-act-danger
+  border-color transparent
+  background var(--box-red-text)
+  color $ed-on-primary
+
+  i
+    color $ed-on-primary
+
+  &:hover:not(:disabled)
+    background var(--box-red-text)
+    filter brightness(1.08)
 
 // ─── the picture browser ────────────────────────────────────
 // Two panes and a grip between them. The share is a custom property so the
@@ -1365,11 +1440,19 @@ textarea.ed-f-input
   min-width 0
   padding 14px
 
-// The picture at its OWN shape and its own SIZE. The article's preloader is
-// what goes in here — same skeleton, same swap, same compressed-or-original
-// decision — and the box it occupies is set from the picture's real pixels, so
-// the skeleton is already the shape of what is arriving. Nothing is upscaled:
-// a 200px thumbnail stretched across a 600px pane is not what it looks like.
+// One picture, at its own shape and its own size.
+//
+// This used to mount the article's `.img-preloader` and hand it to the article's
+// lazyload observer, which then built an `<img>` inside it — a skeleton, an
+// IntersectionObserver and a swap, wrapped around one picture the author has
+// just clicked on. There is nothing to defer here and nothing to be lazy about,
+// and the nesting is what made the size un-constrainable: the caps landed on
+// the wrapper while the picture inside it sized itself.
+//
+// So it is an `<img>`, and the three lines below are the whole sizing rule.
+// `width`/`height` attributes carry the intrinsic ratio, so the box is right
+// before the bytes arrive; `--shot-w` stops a 200px thumbnail being blown up
+// across a 600px pane; `max-height` is the height limit.
 .ed-pick-stage
   display grid
   place-items center
@@ -1380,27 +1463,27 @@ textarea.ed-f-input
   background var(--second-background-color)
   overflow hidden
 
-  > .img-preloader
-    max-width 100%
-    max-height 100%
-    border-radius 10px
-    overflow hidden
-
-    // The shim carries an inline `height:auto` from the build's own markup; in
-    // here the box is already exact, so it fills it instead of deriving it.
-    > .img-preloader-shim
-      width 100% !important
-      height 100% !important
-
-  // Once the observer has swapped it in, the intrinsic size arrives as width
-  // and height ATTRIBUTES, and these two caps scale it down without ever
-  // distorting or enlarging it.
   > img
-    max-width 100%
-    max-height 100%
+    grid-area 1 / 1
+    display block
     width auto
     height auto
+    max-width css-min(100%, var(--shot-w, 100%))
+    max-height 100%
     border-radius 10px
+    transition opacity $ed-fade
+
+  // Until it decodes, the box it already occupies IS the skeleton — the theme's
+  // own shimmer, on the element that is about to hold the picture.
+  > img[data-ready="0"]
+    background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
+    animation ed-shot-wait 1.5s ease-in-out infinite
+
+@keyframes ed-shot-wait
+  from
+    background-position 100% 0
+  to
+    background-position -100% 0
 
 .ed-pick-blank
   display flex
@@ -1628,20 +1711,35 @@ textarea.ed-f-input
       opacity 0.7
 
 // ─── table ──────────────────────────────────────────────────
+// The table draws its own frame — markdown.styl gives `.table-container > table`
+// the header band, the radius and the zebra the published one has. A second
+// frame here would box it twice, so this wrapper only holds the margin.
 .ed-table-block
   margin 1.2rem 0
-  border 1px solid var(--border-color)
-  border-radius 12px
-  overflow hidden
 
   table
     margin 0
 
+  // Zebra and a rule between columns is enough to read a table that has content
+  // in it. An EMPTY one being filled in has neither, and a grid of invisible
+  // cells is not editable — so every cell gets the rule the columns already use,
+  // in the colour they already use, while the caret is in this block's article.
   th, td
     outline none
+    border-bottom 1px solid var(--shadow-color-1)
 
-    &:focus
-      box-shadow inset 0 0 0 2px var(--primary-color)
+  tbody tr:last-child td
+    border-bottom none
+
+  th:focus,
+  td:focus
+    box-shadow inset 0 0 0 2px var(--primary-color)
+
+// Wide tables scroll inside the block instead of pushing the article sideways.
+.table-container
+  max-width 100%
+  overflow-x auto
+  ed-scroll()
 
 // ─── components ─────────────────────────────────────────────
 // Nothing is drawn ON a component any more. Its colour, its icon, its title and

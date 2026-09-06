@@ -89,6 +89,12 @@ jobs:
       - name: Pin the build clock
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
+      # Before anything reads a path: the editor's renames arrive as a note in
+      # source/_data/image-moves.json, and Hexo parses _config*.yml and
+      # source/_data while it initialises.
+      - name: Apply the editor's picture moves
+        run: npm run images:moves
+
       - name: Every image must already be transcoded
         run: npm run images:index -- --check
 

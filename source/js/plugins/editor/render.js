@@ -211,6 +211,21 @@ function unknownComponent(b) {
 let mathjaxPromise = null;
 
 /**
+ * The TeX packages scripts/filters/mathjax-render.js loads, one for one.
+ *
+ * An equation using `\cancel`, `\bbox` or `\ket` renders in the published post
+ * and has to render here, or the editor is showing an error where the site
+ * will show mathematics.
+ */
+const TEX_PACKAGES = [
+  "ams", "newcommand", "autoload", "textmacros", "noundefined",
+  "configmacros", "cases", "mathtools", "boldsymbol", "cancel",
+  "color", "enclose", "extpfeil", "html", "physics",
+  "unicode", "upgreek", "bbox", "amscd", "action", "braket",
+  "centernot", "gensymb", "noerrors", "verb",
+];
+
+/**
  * MathJax, on demand.
  *
  * The site does not ship a browser MathJax: every equation is rendered to SVG
@@ -218,6 +233,11 @@ let mathjaxPromise = null;
  * typesetting cost. The editor is the one page that has to typeset live, so it
  * loads the CDN build the first time a formula needs it and never on a page
  * without one.
+ *
+ * Version 4, and the SAME configuration the filter uses. It was v3 here and v4
+ * there, with four packages against twenty-five — two typesetters with
+ * different fonts, different metrics and different macros, one of them claiming
+ * to show what the other would publish.
  */
 export function loadMathJax() {
   if (mathjaxPromise) return mathjaxPromise;
@@ -226,15 +246,20 @@ export function loadMathJax() {
     if (window.MathJax && window.MathJax.tex2svgPromise) return resolve(window.MathJax);
 
     window.MathJax = {
-      loader: { load: ["input/tex-full", "output/svg"] },
-      tex: { inlineMath: [["$", "$"]], displayMath: [["$$", "$$"]], packages: { "[+]": ["ams", "physics", "cases", "mathtools"] } },
+      loader: { load: ["input/tex", "output/svg", ...TEX_PACKAGES.map((p) => "[tex]/" + p)] },
+      tex: {
+        inlineMath: [["$", "$"]],
+        displayMath: [["$$", "$$"]],
+        packages: { "[+]": TEX_PACKAGES },
+        tags: "none",
+      },
       svg: { fontCache: "local" },
       // The editor converts its own equations with tex2svgPromise, which is
       // unaffected by this. What it stops is the SITE plugin's blanket
       // `typesetPromise()` sweeping the canvas and rendering everything a
       // second time — including the plain-text stand-in inside a chip that is
       // being edited, which it would have turned into an equation mid-keystroke.
-      options: { ignoreHtmlClass: "ed-no-typeset" },
+      options: { ignoreHtmlClass: "ed-no-typeset", enableAssistiveMml: false },
       startup: {
         typeset: false,
         ready() {
@@ -245,13 +270,38 @@ export function loadMathJax() {
     };
 
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg-full.js";
+    script.src = "https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js";
     script.async = true;
     script.onerror = () => resolve(null);
     document.head.appendChild(script);
   });
 
   return mathjaxPromise;
+}
+
+/**
+ * MathJax's own stylesheet, once.
+ *
+ * `tex2svgPromise` hands back a node and inserts nothing — the render actions
+ * that would add the stylesheet only run for a full `typeset()`. The build does
+ * this explicitly (`MathJax.svgStylesheet()` → `<style id="mathjax-svg-css">`
+ * inside the article), and the editor takes that article apart, so on an open
+ * post the rules are not in the document at all. Without them `mjx-container`
+ * is unstyled and `mjx-assistive-mml` is not hidden, which is what put a second
+ * unformatted copy of every equation on the page.
+ */
+function installMathStyles(mj) {
+  if (!mj || document.getElementById("ed-mathjax-svg-css")) return;
+  let css = "";
+  try {
+    css = mj.startup.adaptor.textContent(mj.svgStylesheet());
+  } catch (err) {
+    return;
+  }
+  const style = document.createElement("style");
+  style.id = "ed-mathjax-svg-css";
+  style.textContent = css;
+  document.head.appendChild(style);
 }
 
 /** Typeset one `[data-tex]` host in place. Safe to call on a node with none. */
@@ -274,6 +324,7 @@ export async function typesetMath(host) {
   if (!nodes.length) return;
 
   const mj = await loadMathJax();
+  installMathStyles(mj);
 
   for (const node of nodes) {
     const tex = node.getAttribute("data-tex") || "";
@@ -288,13 +339,25 @@ export async function typesetMath(host) {
     }
     try {
       const svg = await mj.tex2svgPromise(tex, { display });
-      target.innerHTML = "";
-      target.appendChild(svg);
+      // The build keeps only the <svg>. Doing the same here is what makes the
+      // two agree — and it is the belt to `enableAssistiveMml: false`'s braces,
+      // since a screen-reader sidecar the CSS is not hiding renders as a second
+      // copy of the equation, stacked one glyph per line.
+      for (const mml of svg.querySelectorAll("mjx-assistive-mml")) mml.remove();
+      target.replaceChildren(svg);
       node.classList.remove("ed-math-error");
     } catch (err) {
       target.textContent = tex;
       node.classList.add("ed-math-error");
     }
+  }
+
+  // The published page's own overflow pass, on the blocks it was written for:
+  // an equation wider than the column scrolls with its caret hints instead of
+  // pushing the article sideways. Skipping it was the last way a display
+  // equation here could stand differently from the one that gets published.
+  if (typeof window.__redefineXMathJaxOverflow === "function") {
+    window.__redefineXMathJaxOverflow();
   }
 }
 

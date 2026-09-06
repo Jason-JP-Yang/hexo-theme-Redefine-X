@@ -120,6 +120,15 @@ for (const abs of files) {
 }
 
 if (check) {
+  // An unapplied note means half these paths are about to change, and every
+  // renamed picture would be reported as uncached when its transcode is sitting
+  // right there under the old name.
+  if (fs.existsSync(path.join(cfg.sourceDir, "_data", "image-moves.json"))) {
+    console.log(
+      "[images:index] source/_data/image-moves.json has not been applied yet — run " +
+        "`npm run images:moves` first, or this report is about the old names.\n"
+    );
+  }
   if (missing.length) {
     console.log(
       `[images:index] ${missing.length} of ${live.size} image(s) have no cached transcode ` +

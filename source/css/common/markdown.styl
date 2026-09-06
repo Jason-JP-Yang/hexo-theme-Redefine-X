@@ -228,12 +228,13 @@
 
   
 
-  // `.ed-body` is the editor's block wrapper. A table inside one is
-  // still a table in this article, and without it named here the editor's
-  // tables had no borders, no header band and no zebra at all.
+  // `.table-container` is the wrapper both the editor's table block and its
+  // markdown previews emit. Naming `.ed-body > table` here matched nothing —
+  // the table is two levels below it — so an editable table had no borders, no
+  // header band and no zebra, and there was no way to see where a cell ended.
   & > table,
   .tab-pane > table,
-  .ed-body > table
+  .table-container > table
     border-spacing 0
     border-collapse collapse
     width 100%

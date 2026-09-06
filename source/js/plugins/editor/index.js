@@ -38,7 +38,7 @@ import {
   parseFrontMatter,
   setFrontMatterKey,
 } from "./markdown.js";
-import { createStage, forgetTree, openPicker, openSheet, siteAddress } from "./picker.js";
+import { closeDialogs, createStage, forgetTree, openAsk, openPicker, openSheet, siteAddress } from "./picker.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
 import {
@@ -427,8 +427,20 @@ async function activate(host) {
 
       const cached = await session.recover(state.doc.path, entry.grant);
       if (cached && cached.source !== docToMarkdown(state.doc)) {
-        const when = new Date(cached.at).toLocaleString();
-        if (window.confirm(`${t("recover", "An unsaved local copy from")} ${when} ${t("recover_tail", "was found. Restore it?")}`)) {
+        const answer = await openAsk(
+          { t },
+          {
+            icon: "fa-clock-rotate-left",
+            title: t("recover_title", "Unsaved local copy"),
+            message: t("recover", "There is a copy of this post that was never committed."),
+            note: new Date(cached.at).toLocaleString(),
+            actions: [
+              { key: "yes", label: t("recover_use", "Restore it"), icon: "fa-rotate-left", kind: "primary" },
+              { key: "no", label: t("recover_drop", "Open what is committed") },
+            ],
+          }
+        );
+        if (answer === "yes") {
           Object.assign(state.doc, markdownToDoc(cached.source), {
             path: state.doc.path, sha: state.doc.sha, entry,
           });
@@ -517,11 +529,68 @@ async function activate(host) {
   if (identity.fresh) state.titleHost.querySelector(".ed-title").focus();
 }
 
+/* ─── letting go of unsaved work ───────────────────────────────────────────── */
+
+/**
+ * The one question worth interrupting somebody for, asked properly.
+ *
+ * `window.confirm` has two answers, and this has three: the work can be
+ * committed as a draft, published, or abandoned. Offering only "leave / stay"
+ * meant the way OUT of the editor was never the way to keep what was in it,
+ * which is how a native prompt turns a save into a decision under pressure.
+ *
+ * A save that fails leaves the editor open with its own error showing —
+ * `doSave` swallows the error into a notice and leaves `dirty` set, so that
+ * flag is the answer to "did the work survive".
+ *
+ * @returns {Promise<boolean>} true when it is safe to leave
+ */
+async function confirmLeave() {
+  if (!state.on || !state.dirty) return true;
+  // Asking is asynchronous, so a second press — the close button twice, a link
+  // while the dialogue is already up — must not open a second dialogue over the
+  // first and start a second teardown behind it.
+  if (state.leaving) return false;
+  state.leaving = true;
+
+  try {
+    const draft = (state.entry || {}).draft;
+    const answer = await openAsk(
+      { t },
+      {
+        icon: "fa-triangle-exclamation",
+        title: t("unsaved", "Unsaved changes"),
+        message: t("discard", "This post has changes that are not committed yet."),
+        note: state.doc ? state.doc.path : "",
+        actions: [
+          { key: "draft", label: t("save", "Save draft"), icon: "fa-floppy-disk", kind: "primary" },
+          {
+            key: "publish",
+            label: draft ? t("publish_over", "Publish over the post") : t("publish", "Publish"),
+            icon: "fa-paper-plane",
+          },
+          { key: "quit", label: t("quit", "Leave without saving"), icon: "fa-arrow-right-from-bracket", kind: "danger" },
+        ],
+      }
+    );
+
+    if (!answer) return false;
+    if (answer === "quit") return true;
+
+    await doSave(answer);
+    return !state.dirty;
+  } finally {
+    state.leaving = false;
+  }
+}
+
 /* ─── deactivate ───────────────────────────────────────────────────────────── */
 
 async function deactivate() {
   if (!state.on) return;
-  if (state.dirty && !window.confirm(t("discard", "This post has unsaved changes. Leave it?"))) return;
+  // `state.on` is re-read after the await: the question is asynchronous, and
+  // what it was asked about may be gone by the time it is answered.
+  if (!(await confirmLeave()) || !state.on) return;
 
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
@@ -537,6 +606,7 @@ async function deactivate() {
   if (ui.slash) ui.slash.el.remove();
   if (ui.file) ui.file.remove();
   document.querySelectorAll(".ed-ask, .ed-dragshot").forEach((el) => el.remove());
+  closeDialogs();
 
   await crossFade(state.canvas, () => {
     state.canvas.replaceChildren(...state.snapshot);
@@ -559,7 +629,7 @@ async function deactivate() {
   state.boxes.clear();
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
-    put: [], doc: null, entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
+    put: [], doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null, vaultChoice: undefined,
   });
   ui = null;
   contentChanged();
@@ -1537,11 +1607,12 @@ async function pickImage(current) {
       stage: state.stage,
       pending: state.pending,
       upload: stageImage,
-      observeImages,
-      // The article's own preloader and the article's own measurements, so the
-      // preview loads, sizes and skeletons exactly the way the page does.
-      buildPreloader: (src) => buildPreloader(src, "", state.pending),
+      // The article's own measurements and the article's own resolution rules —
+      // a staged blob, a sealed image's decrypted bytes, the repository fallback
+      // — on a plain `<img>`. The preview is one picture the author just asked
+      // for; there is nothing to lazy-load.
       naturalSize: (src) => naturalSize(src, state.pending),
+      bindImage: (img, src) => bindImage(img, src, state.pending),
     },
     { current }
   );
@@ -1758,11 +1829,23 @@ function startProgress(result) {
 function wire() {
   ui.save.addEventListener("click", () => doSave("draft"));
 
-  ui.publish.addEventListener("click", () => {
-    const question = (state.entry || {}).draft
-      ? t("publish_draft", "Publish this draft over the post it replaces?")
-      : t("publish_direct", "Commit this straight to the published post?");
-    if (window.confirm(question)) doSave("publish");
+  ui.publish.addEventListener("click", async () => {
+    const answer = await openAsk(
+      { t },
+      {
+        icon: "fa-paper-plane",
+        title: t("publish", "Publish"),
+        message: (state.entry || {}).draft
+          ? t("publish_draft", "Publish this draft over the post it replaces?")
+          : t("publish_direct", "Commit this straight to the published post?"),
+        note: state.doc ? state.doc.path : "",
+        actions: [
+          { key: "go", label: t("publish", "Publish"), icon: "fa-paper-plane", kind: "primary" },
+          { key: "no", label: t("cancel", "Cancel") },
+        ],
+      }
+    );
+    if (answer === "go") doSave("publish");
   });
 
   state.titleHost.addEventListener("click", async (e) => {
@@ -1788,6 +1871,7 @@ function wire() {
   document.addEventListener("selectionchange", onSelectionChange);
   document.addEventListener("keydown", onKey, true);
   document.addEventListener("focusin", onFocusIn);
+  document.addEventListener("click", onNavAway, true);
   window.addEventListener("beforeunload", onLeave);
 }
 
@@ -1798,6 +1882,7 @@ function unwire() {
   document.removeEventListener("selectionchange", onSelectionChange);
   document.removeEventListener("keydown", onKey, true);
   document.removeEventListener("focusin", onFocusIn);
+  document.removeEventListener("click", onNavAway, true);
   document.removeEventListener("dragover", onDocDragOver);
   document.removeEventListener("drop", onDocDrop);
   window.removeEventListener("beforeunload", onLeave);
@@ -1821,7 +1906,7 @@ async function onCanvasPaste(e) {
 function onFocusIn(e) {
   if (!state.on || !ui || !ui.toolbar) return;
   if (state.canvas.contains(e.target) || ui.toolbar.el.contains(e.target)) return;
-  if (e.target.closest && e.target.closest(".ed-ask, .ed-slash")) return;
+  if (e.target.closest && e.target.closest(".ed-ask, .ed-slash, .ed-picker-mask")) return;
 
   for (const view of allViews()) view.el.dataset.on = "0";
   state.focused = null;
@@ -1837,9 +1922,14 @@ function onKey(e) {
   if (!state.on) return;
   if (ui.slash && ui.slash.key(e)) return;
 
-  if (e.key === "Escape" && !state.canvas.contains(document.activeElement)) {
-    e.preventDefault();
-    return void deactivate();
+  // A dialogue owns Escape while it is open. This handler is registered first,
+  // so without the check it closed the picker AND asked to leave the post.
+  if (e.key === "Escape") {
+    if (document.querySelector(".ed-picker-mask, .ed-ask")) return;
+    if (!state.canvas.contains(document.activeElement)) {
+      e.preventDefault();
+      return void deactivate();
+    }
   }
 
   const mod = e.metaKey || e.ctrlKey;
@@ -1863,10 +1953,62 @@ function onKey(e) {
   }
 }
 
+/**
+ * The last resort, and the ONLY thing left that a browser draws itself.
+ *
+ * Closing the tab, reloading, and the back button cannot be held open long
+ * enough to ask a question, so this is the browser's own prompt or nothing.
+ * Every navigation the page CAN hold — which is all of them, on a site running
+ * swup — is caught by `onNavAway` below and asked properly.
+ */
 function onLeave(e) {
   if (!state.dirty) return;
   e.preventDefault();
   e.returnValue = "";
+}
+
+/**
+ * A link, pressed while there is uncommitted work.
+ *
+ * The site navigates with swup, so an in-site link never unloads the document:
+ * `beforeunload` does not fire, no prompt appears, and the article the editor
+ * was mounted on is simply swapped out from under it. Losing a post to a
+ * mis-aimed click on the navbar is not a thing an editor may do.
+ *
+ * Capture on `document` is what makes this work — swup's own delegated listener
+ * is a bubbling one, so stopping the event here stops the visit before it is
+ * ever proposed.
+ */
+function onNavAway(e) {
+  if (!state.on || !state.dirty || e.defaultPrevented) return;
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+  const link = e.target.closest && e.target.closest("a[href]");
+  if (!link) return;
+
+  // A new tab keeps the editor exactly where it is; the editor's own chrome is
+  // not navigation; and a link in the canvas is text being edited, which the
+  // browser does not follow anyway.
+  const target = link.getAttribute("target");
+  if (target && target !== "_self") return;
+  if (link.closest(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-picker-mask")) return;
+  if (state.canvas && state.canvas.contains(link)) return;
+
+  const href = link.href;
+  if (!href || !/^https?:/i.test(href)) return;
+  // An anchor on this very page is not leaving it.
+  if (href.replace(/#.*$/, "") === location.href.replace(/#.*$/, "")) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  confirmLeave().then((go) => {
+    if (!go) return;
+    // Whatever the answer was, the work is either committed or deliberately
+    // abandoned — so the unload prompt has nothing left to protect.
+    state.dirty = false;
+    window.location.href = href;
+  });
 }
 
 /* ─── boot ─────────────────────────────────────────────────────────────────── */
@@ -1923,6 +2065,7 @@ export function teardownEditor() {
   unwire();
   releaseDocbar();
   document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot").forEach((el) => el.remove());
+  closeDialogs();
   document.documentElement.classList.remove("blog-editing");
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   gitea.forgetBlobs();
@@ -1930,7 +2073,7 @@ export function teardownEditor() {
   state.boxes.clear();
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, put: [],
-    doc: null, entry: null, pending: [], dirty: false, focused: null,
+    doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null,
   });
   ui = null;
 }

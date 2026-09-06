@@ -356,9 +356,14 @@ editor:
   publish: 发布
   publish_draft: 用这份草稿覆盖它所取代的文章？
   publish_direct: 直接提交到已发布的文章？
-  discard: 这篇文章有未保存的改动，确定离开？
-  recover: 发现一份未保存的本地副本，时间为
-  recover_tail: ，要恢复它吗？
+  publish_over: 覆盖发布
+  cancel: 取消
+  quit: 不保存，直接离开
+  discard: 这篇文章有尚未提交的改动。
+  recover_title: 未保存的本地副本
+  recover: 这篇文章有一份从未提交过的副本。
+  recover_use: 恢复副本
+  recover_drop: 打开已提交的版本
   editing_draft: 你正在编辑取代这篇文章的草稿。
   stale: 已发布的版本落后于仓库 — 构建可能还在进行中。
   conflict_hint: 仓库中的这个文件已经改变。你的文字仍在这里 — 请在新标签页打开这篇文章查看已落地的内容，然后重新应用改动。
