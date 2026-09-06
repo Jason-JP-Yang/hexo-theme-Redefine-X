@@ -496,3 +496,34 @@ editor:
   ask_args: Arguments
   ask_tex: LaTeX
   apply: Apply
+  depth: Depth
+  properties: Picture properties
+  open_folder: Open folder
+  open_viewer: Open viewer
+  auto_exif: Read EXIF at build time
+  hover_title: Hover text
+  no_deeper: A note, folding or tab group cannot go inside another one.
+  sheet_hint: Leave everything empty for a plain picture.
+  g_caption: Caption
+  g_camera: Camera
+  g_lens: Lens
+  g_exposure: Exposure
+  g_other: Other
+  pick_title: Pictures
+  pick_root: images
+  pick_upload: Add a picture
+  pick_mkdir: New folder
+  pick_rename: Rename
+  pick_folder: New folder
+  pick_search: Search every folder
+  pick_use: Use this picture
+  pick_new: new
+  pick_unsaved: unsaved
+  pick_none: Nothing here yet
+  pick_hint: Choose a picture, or drag one onto a folder to move it.
+  pick_loading: Reading the repository...
+  pick_name: Name
+  pick_where: Folder
+  pick_dims: Size
+  pick_bytes: File
+  pick_moved: Moving from

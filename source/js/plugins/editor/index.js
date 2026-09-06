@@ -38,7 +38,6 @@ import {
   parseFrontMatter,
   setFrontMatterKey,
 } from "./markdown.js";
-import { insertInline } from "./inline.js";
 import { createStage, forgetTree, openPicker, openSheet, siteAddress } from "./picker.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
@@ -46,12 +45,14 @@ import {
   bindImage,
   buildPreloader,
   loadManifest,
+  repoURL,
   resolveAsset,
   setVaultAssets,
   siteRoot,
 } from "./assets.js";
 import initLazyLoad, {
   forceLoadAllPreloaders,
+  registerSrcFallback,
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
 import { assetURL } from "../../tools/vaultCrypto.js";
@@ -83,7 +84,6 @@ const state = {
   titleSnapshot: [],
   put: [],
   doc: null,
-  views: [],
   root: null,
   boxes: new Set(),
   focused: null,
@@ -145,34 +145,43 @@ function pageIdentity(host) {
  * Measured rather than assumed: the bar wraps at narrow widths and grows a row
  * whenever a notice or the publish progress appears, and a toolbar parked at a
  * guessed offset lands on top of it the moment either happens.
+ *
+ * What is published is the last value, compared against itself. The earlier
+ * version compared the PINNED state instead and returned early whenever it had
+ * not changed — so a bar that grew a notice row while already pinned published
+ * nothing, and the toolbar stayed where the shorter bar had left it, which is
+ * to say underneath the notice. Height and pinning both move the toolbar; only
+ * the number they produce decides whether anything is written.
  */
 function watchDocbarHeight(bar) {
-  let pinned = false;
-  let height = 0;
-
-  const publish = () => {
-    // Only while the bar is actually PINNED. Unpinned it is still down in the
-    // article, clearing nothing, and reserving its height left a band of empty
-    // page under the navbar with the toolbar stranded below it.
-    document.documentElement.style.setProperty("--ed-docbar-h", `${pinned ? height : 0}px`);
-  };
+  let published = -1;
 
   const measure = () => {
-    height = Math.round(bar.offsetHeight);
     // Sticky means its top stops at the pin line and goes no further, so being
     // at the line IS being pinned. One pixel of slack for fractional layout.
-    const stick = parseFloat(getComputedStyle(bar).top) || 0;
-    const now = getComputedStyle(bar).position === "sticky" && bar.getBoundingClientRect().top <= stick + 1;
-    if (now === pinned && document.documentElement.style.getPropertyValue("--ed-docbar-h")) return;
-    pinned = now;
-    publish();
+    const style = getComputedStyle(bar);
+    const stick = parseFloat(style.top) || 0;
+    const pinned = style.position === "sticky" && bar.getBoundingClientRect().top <= stick + 1;
+
+    // Zero unless the bar is actually PINNED. Unpinned it is still down in the
+    // article, clearing nothing, and reserving its height left a band of empty
+    // page under the navbar with the toolbar stranded below it.
+    const value = pinned ? Math.round(bar.offsetHeight) : 0;
+    if (value === published) return;
+    published = value;
+    document.documentElement.style.setProperty("--ed-docbar-h", `${value}px`);
   };
 
   measure();
   const ro = new ResizeObserver(measure);
   ro.observe(bar);
+  // The notice, the progress rail and the tag row are children that appear and
+  // disappear; a ResizeObserver on the bar sees the height they cause, and this
+  // sees the ones that arrive without changing it yet.
+  const mo = new MutationObserver(measure);
+  mo.observe(bar, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
   const off = onScroll(measure, null, "editor docbar pin");
-  return { disconnect: () => { ro.disconnect(); off(); } };
+  return { disconnect: () => { ro.disconnect(); mo.disconnect(); off(); } };
 }
 
 function releaseDocbarHeight() {
@@ -416,6 +425,12 @@ async function activate(host) {
   // The same one plugins/vault.js installs, for the pages it is not loaded on.
   registerSrcResolver((node) => assetURL(node.getAttribute("data-vault-asset")));
 
+  // A picture committed a minute ago is in the repository and not yet on the
+  // site. The site is still asked first — that is the copy readers get — and
+  // this is what stops the answer being a broken image for the length of a
+  // build the author has only just started.
+  registerSrcFallback((node) => repoURL(node.dataset.edSrc || "", state.pending));
+
   ui.front = createFrontCard(state.doc, {
     t,
     onChange: onFrontChange,
@@ -504,10 +519,11 @@ async function deactivate() {
   document.documentElement.classList.remove("blog-editing");
 
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
+  gitea.forgetBlobs();
   forgetTree();
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
-    put: [], doc: null, views: [], entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
+    put: [], doc: null, entry: null, pending: [], dirty: false, focused: null, vaultChoice: undefined,
   });
   ui = null;
   contentChanged();
@@ -788,16 +804,37 @@ function dropBox(box) {
   state.boxes.delete(box);
 }
 
+/**
+ * The boxes still on the canvas, forgetting the ones that are not.
+ *
+ * A component that is repainted or remounted builds a fresh box and abandons
+ * its old one, and an abandoned box's element is detached — where every
+ * measurement reads zero. Left in the set it would offer a drop slot at the top
+ * of the viewport and a block that no longer exists to `locate`, so the set is
+ * swept here rather than at each of the half-dozen places that replace a view.
+ */
+function liveBoxes() {
+  const out = [];
+  for (const box of state.boxes) {
+    if (box !== state.root && !(box.el && box.el.isConnected)) {
+      state.boxes.delete(box);
+      continue;
+    }
+    out.push(box);
+  }
+  return out;
+}
+
 /** Every view on the canvas, in the order they are painted. */
 function allViews() {
   const out = [];
-  for (const box of state.boxes) out.push(...box.views);
+  for (const box of liveBoxes()) out.push(...box.views);
   return out;
 }
 
 /** Which box holds this block, and where in it. */
 function locate(id) {
-  for (const box of state.boxes) {
+  for (const box of liveBoxes()) {
     const index = box.views.findIndex((v) => v.block.id === id);
     if (index >= 0) return { box, index, view: box.views[index] };
   }
@@ -1060,43 +1097,6 @@ const BLOCK_SEEDS = {
   btn: { type: "component", fields: { name: "btn", args: "Label::https://", body: null } },
 };
 
-/**
- * The things that go INTO a line rather than after it.
- *
- * An image dropped into a paragraph is an inline image, which is a different
- * thing from an image block, and markdown says so: `![](…)` inside a sentence.
- * The node carries the same `data-md` the parser emits, so it reads back out as
- * the markdown it came from.
- */
-async function insertInlineNode(key) {
-  const root = richRoot();
-  if (!root) return;
-
-  if (key === "image") {
-    const picked = await pickImage();
-    if (!picked) return;
-    const img = document.createElement("img");
-    img.setAttribute("data-md", "image");
-    img.src = resolveAsset(picked.site, state.pending);
-    img.alt = "";
-    img.dataset.mdSrc = `![](${picked.site})`;
-    insertInline(root, img);
-  } else if (key === "imath") {
-    const tex = await askFor(ui.toolbar.el, { t }, "tex", "");
-    if (tex == null) return;
-    const span = document.createElement("span");
-    span.className = "ed-math-inline";
-    span.setAttribute("data-md", "math");
-    span.setAttribute("data-tex", tex);
-    span.textContent = tex;
-    insertInline(root, span);
-  } else {
-    return;
-  }
-
-  commitInline();
-}
-
 /* ─── the block's own markdown ─────────────────────────────────────────────── */
 
 function toggleSource(on) {
@@ -1234,42 +1234,65 @@ function stopEdgeScroll() {
 }
 
 /**
- * Which slot the pointer is over, decided by geometry rather than by hit
- * testing what is under it.
+ * Every place a block could land, as a POSITION IN A BOX.
  *
- * `e.target.closest(".ed-block")` only answers while the pointer is inside a
- * block's own box, so the gutter, the article's padding, the gap between two
- * paragraphs and everything past the last one all came back as "nowhere" — no
- * indicator, and the cursor went to no-drop. Every Y inside the page maps to a
- * slot here, including above the first block and below the last.
+ * "After the third paragraph" and "before the fourth" are one place, not two.
+ * Expressed as `{box, index}` they collapse into a single entry; expressed as
+ * `{block, before|after}`, which is how this used to work, they stayed two —
+ * two lines you could aim at a pixel apart that did exactly the same thing.
+ *
+ * A box's slots are its own: the gap after the last block INSIDE a note and the
+ * gap after the note itself are genuinely different destinations even though
+ * they are drawn a few pixels apart, and keying on the box is what keeps them
+ * apart. Each slot carries the Y of the line that would be drawn for it, so
+ * choosing one is a matter of which line the pointer is nearest — which needs
+ * no hit testing, and therefore answers everywhere on the page: in the gutter,
+ * in the article's padding, above the first block and below the last.
  */
-function dropTargetAt(y) {
+function dropSlots() {
   const held = state.dragId ? locate(state.dragId) : null;
   const carried = held ? held.view.el : null;
-  // Document order, from the DOM, so a block nested inside a note is a target
-  // in the place it is drawn rather than wherever its box happens to sit in a
-  // list. Its own subtree is not: a block cannot be dropped inside itself.
-  const rows = Array.from(state.canvas.querySelectorAll(".ed-block")).filter(
-    (el) => !carried || (el !== carried && !carried.contains(el))
-  );
-  if (!rows.length) return null;
-
-  // A nested box takes no block that would open a third level.
+  // A component that opens a box of its own cannot go into one: that would be
+  // a note inside a note, which the markdown can express and nobody can read.
   const nesting = held && held.view.nests;
 
-  for (const el of rows) {
-    const at = locate(el.dataset.id);
-    if (!at) continue;
-    if (nesting && at.box.depth >= 1) continue;
-    const rect = el.getBoundingClientRect();
-    if (y < rect.bottom) {
-      return { id: el.dataset.id, where: y < rect.top + rect.height / 2 ? "before" : "after" };
+  const out = [];
+  for (const box of liveBoxes()) {
+    if (nesting && box.depth >= 1) continue;
+    // A box drawn inside the block being carried is going with it.
+    if (carried && box.el !== state.canvas && carried.contains(box.el)) continue;
+
+    const live = box.views.filter((view) => view.el !== carried);
+    if (!live.length) {
+      const rect = box.el.getBoundingClientRect();
+      out.push({ box, index: 0, y: rect.top + 2, depth: box.depth });
+      continue;
+    }
+    for (const view of live) {
+      const rect = view.el.getBoundingClientRect();
+      out.push({ box, index: box.views.indexOf(view), y: rect.top, depth: box.depth });
+    }
+    const last = live[live.length - 1];
+    out.push({
+      box,
+      index: box.views.indexOf(last) + 1,
+      y: last.el.getBoundingClientRect().bottom,
+      depth: box.depth,
+    });
+  }
+  return out;
+}
+
+/** The slot whose line is nearest the pointer; ties go to the deeper box. */
+function dropTargetAt(y) {
+  let best = null;
+  for (const slot of dropSlots()) {
+    const gap = Math.abs(slot.y - y);
+    if (!best || gap < best.gap - 0.5 || (gap < best.gap + 0.5 && slot.depth > best.slot.depth)) {
+      best = { gap, slot };
     }
   }
-  const last = rows[rows.length - 1];
-  const at = locate(last.dataset.id);
-  if (nesting && at && at.box.depth >= 1) return null;
-  return { id: last.dataset.id, where: "after" };
+  return best ? best.slot : null;
 }
 
 /**
@@ -1279,14 +1302,24 @@ function dropTargetAt(y) {
  * the pseudo-element down and built it again several times a second, which
  * restarted its entrance animation each time — the flicker was the indicator
  * being recreated, not redrawn.
+ *
+ * A slot is drawn ABOVE the block that would follow it, and only the last slot
+ * in a box is drawn below the block before it — one line per place, so what is
+ * on screen and what will happen are the same count.
  */
 function paintDrop(target) {
-  const key = target ? target.id + ":" + target.where : "";
+  const anchor = target
+    ? target.index < target.box.views.length
+      ? { view: target.box.views[target.index], where: "before" }
+      : { view: target.box.views[target.box.views.length - 1], where: "after" }
+    : null;
+
+  const key = anchor && anchor.view ? anchor.view.block.id + ":" + anchor.where : "";
   if (key === state.dropAt) return;
   state.dropAt = key;
 
   for (const view of allViews()) {
-    const want = target && view.block.id === target.id ? target.where : "";
+    const want = anchor && anchor.view === view ? anchor.where : "";
     if (view.el.dataset.drop !== want) view.el.dataset.drop = want;
   }
 }
@@ -1314,13 +1347,17 @@ async function onDocDrop(e) {
   if (!target) return;
 
   const held = locate(dragId);
-  const dest = locate(target.id);
-  if (!held || !dest || held.view === dest.view) return;
+  if (!held) return;
 
-  const after = target.where === "after";
-  const anchor = dest.view.el;
   const leaving = held.box;
-  const arriving = dest.box;
+  const arriving = target.box;
+  // The slot's index counts the block being carried while it is still in the
+  // list, so taking it out of an earlier position shifts every later one down.
+  let at = target.index;
+  if (leaving === arriving) {
+    if (held.index < at) at -= 1;
+    if (at === held.index) return;
+  }
 
   // A note left with nothing in it is not a note. Noted before the move, acted
   // on after, so the block being carried is safely somewhere else first.
@@ -1330,13 +1367,13 @@ async function onDocDrop(e) {
     leaving.views.splice(held.index, 1);
     const [block] = leaving.blocks.splice(held.index, 1);
 
-    const to = arriving.views.indexOf(dest.view);
-    const at = to + (after ? 1 : 0);
-    arriving.views.splice(at, 0, held.view);
-    arriving.blocks.splice(at, 0, block);
+    const index = Math.max(0, Math.min(at, arriving.views.length));
+    arriving.views.splice(index, 0, held.view);
+    arriving.blocks.splice(index, 0, block);
 
-    if (after) anchor.after(held.view.el);
-    else anchor.before(held.view.el);
+    const before = arriving.views[index + 1];
+    if (before) before.el.before(held.view.el);
+    else arriving.el.appendChild(held.view.el);
   });
 
   // The view's ctx is bound to the box it was built in, so a block that changed
@@ -1348,7 +1385,7 @@ async function onDocDrop(e) {
 
   // Order is the one thing a moved block cannot carry in `src`: its trailing
   // separator belonged to the position it left.
-  for (const box of state.boxes) box.blocks.forEach((b) => (b.after = b.after || "\n\n"));
+  for (const box of liveBoxes()) box.blocks.forEach((b) => (b.after = b.after || "\n\n"));
   writeBox(leaving);
   if (arriving !== leaving) writeBox(arriving);
   if (emptying) leaving.onEmpty();
@@ -1435,9 +1472,9 @@ async function pickImage(current) {
 async function stageImage(file, dir) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let path = await gitea.assetPath(file.name, bytes);
-  // The picker can say where it should land; without one it goes where every
-  // pasted picture has always gone.
-  if (dir && dir !== "source/images/posts") path = dir.replace(/\/+$/, "") + "/" + path.split("/").pop();
+  // The picker says which folder is open; a paste or a drop has no opinion and
+  // goes where every pasted picture has always gone.
+  if (dir) path = String(dir).replace(/\/+$/, "") + "/" + path.split("/").pop();
   const existing = state.pending.find((a) => a.path === path);
   if (existing) return existing;
 
@@ -1475,7 +1512,7 @@ function markDirty() {
 function readAll() {
   // Innermost first: a nested box has to be read and written back into its
   // component before the component itself is read.
-  const boxes = Array.from(state.boxes).sort((a, b) => b.depth - a.depth);
+  const boxes = liveBoxes().sort((a, b) => b.depth - a.depth);
   for (const box of boxes) {
     for (const view of box.views) if (view.read) view.read();
     writeBox(box);
@@ -1752,7 +1789,9 @@ function onLeave(e) {
 
 /* ─── boot ─────────────────────────────────────────────────────────────────── */
 
-let pencil = null;
+// Two of them: one in the article's tools rail, one in the corner rail a phone
+// gets instead. CSS shows whichever belongs to the width; both are wired.
+let pencils = [];
 
 /**
  * An encrypted post mounts its article only after it decrypts, and the pencil
@@ -1781,8 +1820,8 @@ export async function initEditor() {
   // Wired even when the article is not in the DOM yet: an encrypted post mounts
   // its container only after it decrypts, and the pencil resolves the host when
   // it is pressed rather than now.
-  pencil = document.querySelector(".tool-edit-post");
-  if (pencil) pencil.addEventListener("click", onPencil);
+  pencils = Array.from(document.querySelectorAll(".tool-edit-post"));
+  for (const node of pencils) node.addEventListener("click", onPencil);
 }
 
 function onPencil(e) {
@@ -1795,10 +1834,8 @@ export function teardownEditor() {
   clearTimeout(state.stashTimer);
   stopEdgeScroll();
 
-  if (pencil) {
-    pencil.removeEventListener("click", onPencil);
-    pencil = null;
-  }
+  for (const node of pencils) node.removeEventListener("click", onPencil);
+  pencils = [];
   if (!state.on) return;
 
   unwire();
@@ -1806,9 +1843,10 @@ export function teardownEditor() {
   document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot").forEach((el) => el.remove());
   document.documentElement.classList.remove("blog-editing");
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
+  gitea.forgetBlobs();
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, put: [],
-    doc: null, views: [], entry: null, pending: [], dirty: false, focused: null,
+    doc: null, entry: null, pending: [], dirty: false, focused: null,
   });
   ui = null;
 }

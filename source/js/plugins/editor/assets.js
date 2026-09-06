@@ -27,6 +27,7 @@
  */
 
 import { assetURL, registerAssetKey } from "../../tools/vaultCrypto.js";
+import { blobURL } from "./gitea.js";
 
 let manifest = null;
 let sealed = null;
@@ -100,6 +101,26 @@ export function isTranscoded(src) {
   return !!record(src);
 }
 
+/** `/images/a.png` → `source/images/a.png`, which is what the repository calls it. */
+export function repoPath(src) {
+  const key = manifestKey(src);
+  return key ? "source/" + key : "";
+}
+
+/**
+ * The same picture, read out of the repository instead of off the site.
+ *
+ * Used only after the site has said it does not have it — the minutes between
+ * committing an image and the deploy that publishes it, which is exactly when
+ * the author is most likely to be looking at it.
+ */
+export function repoURL(src, list) {
+  const value = String(src || "");
+  if (!value || /^(blob:|data:|https?:|\/\/)/i.test(value)) return Promise.resolve("");
+  if (staged(value, list)) return Promise.resolve("");
+  return blobURL(repoPath(value));
+}
+
 function staged(src, list) {
   return (list || []).find((a) => a.site === src || a.path === src) || null;
 }
@@ -148,6 +169,9 @@ export function buildPreloader(src, alt, list) {
   const el = document.createElement("div");
   el.className = "img-preloader";
   el.dataset.alt = alt || "";
+  // What the markdown says, kept beside what it resolved to: the repository
+  // fallback needs the address, and `data-src` by then is a published route.
+  el.dataset.edSrc = String(src || "");
 
   // A sealed image has no URL until its bytes are decrypted, so it carries the
   // hash instead and the registered resolver opens it — the same path an
@@ -193,6 +217,13 @@ export function bindImage(img, src, list) {
   const hash = sealedHash(value, list);
 
   if (!hash) {
+    img.dataset.edSrc = value;
+    img.onerror = () => {
+      img.onerror = null;
+      repoURL(value, list).then((url) => {
+        if (url && img.dataset.edSrc === value) img.src = url;
+      });
+    };
     img.src = resolveAsset(value, list);
     return;
   }
@@ -203,4 +234,59 @@ export function bindImage(img, src, list) {
     // The element may have been re-pointed at something else while we waited.
     if (url && img.dataset.edSealed === hash) img.src = url;
   });
+}
+
+/**
+ * A picture shown at its own shape.
+ *
+ * The canvas mounts `.img-preloader`, because there it has to reserve the box
+ * the published page reserves before the bytes arrive. A PREVIEW has nothing to
+ * reserve — it is the only thing in its pane — so it is a plain `<img>` that
+ * takes the aspect ratio from the file itself, which is the one place a guessed
+ * ratio would be visible as a distortion. The skeleton underneath it is the
+ * article's own, so the wait looks the same as it does everywhere else.
+ *
+ * @returns {{el: HTMLElement, img: HTMLImageElement, ready: Promise<{width, height}|null>}}
+ */
+export function previewImage(src, list) {
+  const el = document.createElement("div");
+  el.className = "ed-shot";
+
+  const skeleton = document.createElement("div");
+  skeleton.className = "img-preloader-skeleton";
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  el.append(skeleton, img);
+
+  const value = String(src || "");
+  const ready = new Promise((done) => {
+    if (!value) return void done(null);
+
+    let tried = false;
+    const settle = () => {
+      el.dataset.ready = "1";
+      done({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.addEventListener("load", settle);
+    img.addEventListener("error", () => {
+      if (tried) {
+        el.dataset.failed = "1";
+        return void done(null);
+      }
+      tried = true;
+      repoURL(value, list).then((url) => {
+        if (url) img.src = url;
+        else {
+          el.dataset.failed = "1";
+          done(null);
+        }
+      });
+    });
+
+    const pending = staged(value, list);
+    img.src = pending ? pending.url : resolveAsset(value, list);
+  });
+
+  return { el, img, ready };
 }

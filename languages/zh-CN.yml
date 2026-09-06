@@ -498,3 +498,34 @@ editor:
   ask_args: 参数
   ask_tex: LaTeX
   apply: 应用
+  depth: 层级
+  properties: 图片属性
+  open_folder: 打开图片库
+  open_viewer: 放大查看
+  auto_exif: 构建时读取 EXIF
+  hover_title: 悬停提示
+  no_deeper: 提示框、折叠块与标签组不能再嵌套一层。
+  sheet_hint: 全部留空即为普通图片。
+  g_caption: 图注
+  g_camera: 机身
+  g_lens: 镜头
+  g_exposure: 曝光
+  g_other: 其他
+  pick_title: 图片库
+  pick_root: images
+  pick_upload: 上传图片
+  pick_mkdir: 新建文件夹
+  pick_rename: 重命名
+  pick_folder: 新建文件夹
+  pick_search: 搜索全部文件夹
+  pick_use: 使用这张图片
+  pick_new: 新增
+  pick_unsaved: 未提交
+  pick_none: 这里还没有内容
+  pick_hint: 选择一张图片，或把它拖到文件夹里移动。
+  pick_loading: 正在读取仓库…
+  pick_name: 文件名
+  pick_where: 所在文件夹
+  pick_dims: 尺寸
+  pick_bytes: 大小
+  pick_moved: 移动自

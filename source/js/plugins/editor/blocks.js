@@ -26,7 +26,7 @@ import { emitBlock, escapeHTML, htmlToInline, inlineToHTML, nextId } from "./mar
 import { renderBlock, renderMarkdown, renderMermaid, typesetMath } from "./render.js";
 import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
-import { anchorMarks } from "./inline.js";
+import { anchorMarks, isBlankText } from "./inline.js";
 import { crossFade, morphHeight, setDragImage } from "./motion.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
@@ -218,6 +218,11 @@ function mountRich(view) {
   host.addEventListener("input", () => {
     view.touch();
     autoFormat(view);
+    // A mark that has just come into existence — typed shorthand, a pasted
+    // fragment — needs its boundaries before the caret is asked to stand on
+    // one. Inserting only ever happens BESIDE a mark, so the text node the
+    // caret is in is never the one that changes.
+    anchorMarks(host);
   });
   host.addEventListener("paste", (e) => onPaste(view, e));
   host.addEventListener("keydown", (e) => richKeydown(view, e));
@@ -238,7 +243,9 @@ function mountRich(view) {
   };
 
   view.focus = (where) => (where === "start" ? caret.focusStart(host) : caret.focusEnd(host));
-  view.isEmpty = () => !host.textContent.trim();
+  // The boundary anchors are the editor's, not the author's: a line holding
+  // nothing but them is an empty line, and Backspace has to delete it.
+  view.isEmpty = () => isBlankText(host.textContent);
 
   // Heading levels 5 and 6 are not offered as conversions — four is already
   // more depth than a post uses — but a file that carries one has to be able to
@@ -368,7 +375,7 @@ function wireInlineMath(host, view) {
  */
 function autoFormat(view) {
   const host = view.editable;
-  const text = host.textContent;
+  const text = host.textContent.replace(/​/g, "");
 
   if (view.block.type === "paragraph") {
     const lead = text.match(/^(#{1,6}|>|-|\*|\d+\.|```)\s$/);
@@ -719,7 +726,14 @@ function mountImage(view) {
         { resolve: (p) => ctx.resolveAsset(p) }
       );
       const img = wrap.querySelector("img");
-      if (img) img.setAttribute("data-no-viewer", "");
+      if (img) {
+        img.setAttribute("data-no-viewer", "");
+        // Through bindImage rather than left as the emitter wrote it: that is
+        // the path that falls back to the repository when the site does not
+        // have this picture yet, which for an EXIF figure is otherwise the one
+        // shape of image with no second chance.
+        ctx.bindImage(img, block.url);
+      }
       return;
     }
 
@@ -1149,7 +1163,7 @@ function mountComponentBody(view, host, parsed) {
     host.contentEditable = "true";
     host.classList.add("ed-rich");
     host.addEventListener("input", () => {
-      block.body = host.textContent;
+      block.body = host.textContent.replace(/​/g, "");
       view.touch();
     });
     return;

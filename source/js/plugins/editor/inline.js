@@ -275,7 +275,7 @@ function tidy(root) {
   for (const el of Array.from(root.querySelectorAll("*"))) {
     if (!el.parentNode || !isMarkNode(el)) continue;
 
-    if (!el.firstChild || (!el.textContent && !el.querySelector("img, br"))) {
+    if (!el.firstChild || (isBlankText(el.textContent) && !el.querySelector("img, br"))) {
       el.remove();
       continue;
     }
@@ -439,13 +439,19 @@ function select(sel, nodes) {
 /* ─── the caret at a boundary ──────────────────────────────────────────────── */
 
 const ZWSP = "​";
+const ONLY_ZWSP = /^​+$/;
 
 function isZwsp(node) {
-  return node && node.nodeType === 3 && node.nodeValue === ZWSP;
+  return !!node && node.nodeType === 3 && ONLY_ZWSP.test(node.nodeValue);
+}
+
+/** Nothing but anchors: an empty mark, however many anchors it accumulated. */
+export function isBlankText(text) {
+  return !String(text || "").replace(/​/g, "").trim();
 }
 
 /**
- * Give every mark boundary somewhere to stand.
+ * Give BOTH ends of every mark somewhere to stand.
  *
  * `Hello *World*, Jason` has ONE visual point between `World` and the comma and
  * TWO meanings for it: keep typing inside the italics, or after them. The
@@ -454,9 +460,19 @@ function isZwsp(node) {
  *
  * So each boundary is given a text node of its own to hold the caret. A
  * zero-width space is a real position the arrow keys step through, which makes
- * the two meanings two places; between two touching marks there are three,
- * which is exactly the number of things the author could mean there. They are
- * the editor's, never the author's, and every read path strips them.
+ * the two meanings two places.
+ *
+ * The earlier version anchored a boundary only where the neighbour was another
+ * mark or nothing at all — which is every CLOSING boundary of a mark at the end
+ * of a run, and almost no opening one, since an opening boundary usually has
+ * ordinary words in front of it. That is exactly the asymmetry that was
+ * reported: the end of a format could be stepped either side of and the start
+ * could not. A plain text node beside a mark is not an anchor; it is the outside
+ * of the mark and the inside of the sentence, and the browser collapses the two
+ * positions into one. Every boundary gets an anchor now, and the pass is
+ * idempotent because a boundary that already has one is left alone — so two
+ * touching marks still get one anchor between them, giving the three positions
+ * that run genuinely has.
  */
 export function anchorMarks(root) {
   if (!root) return;
@@ -464,29 +480,36 @@ export function anchorMarks(root) {
 
   for (const el of marks) {
     if (!el.parentNode) continue;
-    const before = el.previousSibling;
-    const after = el.nextSibling;
-
-    if ((!before || isMarkNode(before)) && !isZwsp(before)) {
+    if (!isZwsp(el.previousSibling)) {
       el.parentNode.insertBefore(document.createTextNode(ZWSP), el);
     }
-    if ((!after || isMarkNode(after)) && !isZwsp(after)) {
+    if (!isZwsp(el.nextSibling)) {
       el.parentNode.insertBefore(document.createTextNode(ZWSP), el.nextSibling);
     }
   }
 }
 
-/** Drop the anchors that no longer sit beside a mark. */
+/**
+ * Drop the anchors that are no longer beside a mark, and collapse the ones that
+ * doubled up — a mark removed between two of them leaves both behind, and two
+ * zero-width spaces in a row are two caret stops that mean the same thing.
+ */
 export function dropStrayAnchors(root) {
   if (!root) return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const dead = [];
+  const seen = [];
   let node;
-  while ((node = walker.nextNode())) {
-    if (!isZwsp(node)) continue;
-    if (!isMarkNode(node.previousSibling) && !isMarkNode(node.nextSibling)) dead.push(node);
+  while ((node = walker.nextNode())) if (isZwsp(node)) seen.push(node);
+
+  for (const anchor of seen) {
+    if (!anchor.isConnected) continue;
+    if (!isMarkNode(anchor.previousSibling) && !isMarkNode(anchor.nextSibling)) {
+      anchor.remove();
+      continue;
+    }
+    if (anchor.nodeValue !== ZWSP) anchor.nodeValue = ZWSP;
+    if (isZwsp(anchor.nextSibling)) anchor.nextSibling.remove();
   }
-  for (const n of dead) n.remove();
 }
 
 /* ─── holding a selection across a prompt ──────────────────────────────────── */

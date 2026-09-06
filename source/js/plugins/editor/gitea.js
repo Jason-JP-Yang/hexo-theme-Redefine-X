@@ -217,19 +217,73 @@ export async function commit(files, message) {
   return { sha, short: sha.slice(0, 7), files: body.files || [] };
 }
 
-/** Where an image the editor uploaded will live. Content-addressed so the same
- *  picture pasted twice is committed once. */
+/**
+ * Where an image the editor uploaded will live.
+ *
+ * Content-addressed, so the same picture pasted twice is committed once — and
+ * the digest is stripped off the stem before it is put back on. A picture
+ * already carrying one is exactly what you get by saving a file the editor
+ * named and adding it again, and appending unconditionally turned
+ * `16-0e1a33510ad8.png` into `16-0e1a33510ad8-0e1a33510ad8.png`, then into a
+ * third copy of the same twelve characters the time after that.
+ */
 export async function assetPath(name, bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hash = Array.from(new Uint8Array(digest).slice(0, 6))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   const ext = (String(name).match(/\.([a-z0-9]+)$/i) || [, "png"])[1].toLowerCase();
-  const stem = String(name)
-    .replace(/\.[^.]+$/, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "image";
+  const stem =
+    String(name)
+      .replace(/\.[^.]+$/, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(-[0-9a-f]{12})+$/, "")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "image";
   return `source/images/posts/${stem}-${hash}.${ext}`;
+}
+
+/* ─── reading bytes the site does not serve yet ─────────────────────────────── */
+
+/**
+ * A repository file as an object URL.
+ *
+ * The site is the right place to fetch a picture from — it is the copy the
+ * reader gets, compressed where the build compressed it. But between committing
+ * an image and the deploy that publishes it there is a window, minutes long,
+ * where the site simply does not have it: the editor asked for `/images/…` and
+ * got a 404, and the author was shown a broken picture for something they had
+ * just added. This is the second answer, used only when the first one fails.
+ *
+ * Cached per path for the session, and revoked with the rest of the session's
+ * object URLs.
+ */
+const blobs = new Map();
+
+export function blobURL(path) {
+  const key = String(path || "").replace(/^\/+/, "");
+  if (!key) return Promise.resolve("");
+  if (blobs.has(key)) return blobs.get(key);
+
+  const pending = (async () => {
+    try {
+      const t = await getTicket();
+      const res = await call(`/media/${encodeURI(key)}?ref=${encodeURIComponent(t.branch)}`);
+      if (!res.ok) return "";
+      return URL.createObjectURL(await res.blob());
+    } catch (err) {
+      return "";
+    }
+  })();
+
+  blobs.set(key, pending);
+  return pending;
+}
+
+export function forgetBlobs() {
+  for (const pending of blobs.values()) {
+    pending.then((url) => url && URL.revokeObjectURL(url)).catch(() => {});
+  }
+  blobs.clear();
 }

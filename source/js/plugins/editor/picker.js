@@ -2,10 +2,25 @@
  * The picture browser.
  *
  * Every way of naming an image — a block's address, a replacement, the cover,
- * the thumbnail, the banner — used to be its own control, and two of them were
- * a text field you had to type a repository path into from memory. They are one
- * control now: a file manager over `source/images`, with the tree on the left
- * and the picture on the right, which is the shape everybody already knows.
+ * the thumbnail, the banner — is this one control: a file manager over
+ * `source/images`, tree on the left, the picture on the right, and along the
+ * bottom the one field that is both "what is chosen" and "search for something
+ * else".
+ *
+ * ── Why the tree is built once and then mutated ─────────────────────────────
+ *
+ * A tree that re-renders on every click cannot animate: the node that was
+ * opening is a different element by the time the frame lands, so the transition
+ * restarts from nothing and the whole panel flickers. So the DOM is built once
+ * from the listing and every action after that MOVES nodes — a rename rewrites
+ * one label, a drag re-parents one subtree, a new folder inserts one node. Open
+ * and closed is a `grid-template-rows: 0fr → 1fr` transition on the child
+ * container, which needs no measurement and stays smooth however deep it nests.
+ *
+ * The dialogue is a FIXED size. A panel that resizes as its contents change is
+ * a panel that jumps under the pointer between one click and the next, and the
+ * two things inside it that vary most — a deep tree and a tall picture — are
+ * exactly the two that would do it.
  *
  * ── Where the tree comes from, and when a change is real ────────────────────
  *
@@ -22,22 +37,42 @@
  * on the next generate, rewrites what it names and deletes it. Doing it here
  * would mean pulling every post in the site into the browser to find out.
  *
- * The preview is the article's own preloader, so a picture is fetched and shown
- * here exactly as the page fetches and shows it — compressed where the build
- * compressed it, original where it did not.
+ * Nothing here is a browser prompt. A name is typed where the name is read.
  */
 
 import { escapeHTML } from "./markdown.js";
 import * as gitea from "./gitea.js";
-import { buildPreloader, siteRoot } from "./assets.js";
+import { imageSize, previewImage } from "./assets.js";
 import { pop } from "./motion.js";
 
 const ROOT = "source/images";
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg|bmp)$/i;
+const MENU_MAX = 40;
 
 /** `source/images/a/b.png` → `/images/a/b.png`, which is what markdown wants. */
 export function siteAddress(path) {
   return "/" + String(path || "").replace(/^source\//, "");
+}
+
+function parentOf(path) {
+  const cut = String(path).lastIndexOf("/");
+  return cut < 0 ? "" : path.slice(0, cut);
+}
+
+function nameOf(path) {
+  return String(path).split("/").pop();
+}
+
+function safeName(name) {
+  return String(name).replace(/[\\/]/g, "-").replace(/^\.+/, "").trim();
+}
+
+function readableSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (!n) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1024 / 1024).toFixed(2) + " MB";
 }
 
 /* ─── what the repository holds, read once per session ─────────────────────── */
@@ -123,8 +158,21 @@ export function createStage() {
       else moves.push({ from: start, to });
       folders.delete(to.replace(/\/[^/]+$/, ""));
     },
+    /** A folder that exists only here. Renaming one re-keys it in place. */
     folder(path) {
       if (path) folders.add(path);
+    },
+    renameFolder(from, to) {
+      if (!folders.has(from)) return false;
+      folders.delete(from);
+      folders.add(to);
+      for (const held of Array.from(folders)) {
+        if (held.startsWith(from + "/")) {
+          folders.delete(held);
+          folders.add(to + held.slice(from.length));
+        }
+      }
+      return true;
     },
     clear() {
       moves.length = 0;
@@ -241,16 +289,43 @@ export function openSheet(ctx, title, groups, values) {
   });
 }
 
+/* ─── the search ───────────────────────────────────────────────────────────── */
+
+/**
+ * How well `text` answers `query`, or -1 for not at all.
+ *
+ * A subsequence match, which is what people expect of a file box — `ipst`
+ * finds `images/posts` — with the weight on runs of adjacent characters and on
+ * characters that start a word, so an exact fragment always outranks letters
+ * scattered across a long path. Shorter paths win ties, and the basename is
+ * scored separately because that is usually what is being typed.
+ */
+function scoreOne(text, query) {
+  const hay = text.toLowerCase();
+  let at = 0;
+  let total = 0;
+  let run = 0;
+
+  for (const ch of query) {
+    const found = hay.indexOf(ch, at);
+    if (found < 0) return -1;
+    run = found === at && at > 0 ? run + 1 : 0;
+    total += 12 + run * 8;
+    const before = found > 0 ? hay[found - 1] : "/";
+    if (/[\/\-_. ]/.test(before)) total += 10;
+    at = found + 1;
+  }
+  return total - hay.length * 0.2;
+}
+
+function searchScore(path, query) {
+  const base = scoreOne(nameOf(path), query);
+  const full = scoreOne(path, query);
+  if (base < 0 && full < 0) return -1;
+  return Math.max(base >= 0 ? base + 24 : -1, full);
+}
+
 /* ─── the dialogue ─────────────────────────────────────────────────────────── */
-
-function parentOf(path) {
-  const cut = String(path).lastIndexOf("/");
-  return cut < 0 ? "" : path.slice(0, cut);
-}
-
-function nameOf(path) {
-  return String(path).split("/").pop();
-}
 
 /**
  * @param {object} ctx   { t, stage, pending, upload }
@@ -274,134 +349,416 @@ export function openPicker(ctx, opts = {}) {
             <button type="button" data-act="close" title="${escapeHTML(t("close", "Close"))}"><i class="fa-solid fa-xmark"></i></button>
           </span>
         </header>
-        <div class="ed-picker-body">
-          <div class="ed-picker-side">
-            <label class="ed-picker-find">
-              <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-              <input class="ed-picker-search" spellcheck="false" placeholder="${escapeHTML(t("pick_search", "Search every folder"))}">
-            </label>
-            <div class="ed-picker-tree" role="tree"></div>
-          </div>
-          <div class="ed-picker-view">
-            <div class="ed-picker-shot"></div>
-            <div class="ed-picker-meta"></div>
+
+        <div class="ed-pick-body">
+          <div class="ed-pick-side" role="tree"></div>
+          <div class="ed-pick-view">
+            <div class="ed-pick-stage"></div>
+            <dl class="ed-pick-meta"></dl>
           </div>
         </div>
-        <footer class="ed-picker-foot">
-          <code class="ed-picker-path"></code>
-          <button type="button" class="ed-act ed-act-primary ed-picker-ok" disabled>
+
+        <footer class="ed-pick-foot">
+          <div class="ed-pick-field">
+            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            <input class="ed-pick-input" spellcheck="false" autocomplete="off"
+                   placeholder="${escapeHTML(t("pick_search", "Search every folder"))}">
+            <div class="ed-pick-menu" hidden></div>
+          </div>
+          <button type="button" class="ed-act ed-act-primary ed-pick-ok" disabled>
             <i class="fa-solid fa-check" aria-hidden="true"></i><span>${escapeHTML(t("pick_use", "Use this picture"))}</span>
           </button>
         </footer>
       </section>`;
 
-    const tree = mask.querySelector(".ed-picker-tree");
-    const shot = mask.querySelector(".ed-picker-shot");
-    const meta = mask.querySelector(".ed-picker-meta");
-    const foot = mask.querySelector(".ed-picker-path");
-    const ok = mask.querySelector(".ed-picker-ok");
-    const search = mask.querySelector(".ed-picker-search");
+    const card = mask.querySelector(".ed-picker");
+    const side = mask.querySelector(".ed-pick-side");
+    const stage = mask.querySelector(".ed-pick-stage");
+    const meta = mask.querySelector(".ed-pick-meta");
+    const field = mask.querySelector(".ed-pick-field");
+    const input = mask.querySelector(".ed-pick-input");
+    const menu = mask.querySelector(".ed-pick-menu");
+    const ok = mask.querySelector(".ed-pick-ok");
 
-    const open = new Set([ROOT]);
+    /** path → { el, row, kids, type, size, staged, fresh } */
+    const nodes = new Map();
     let rows = [];
     let chosen = opts.current ? String(opts.current).replace(/^\//, "source/") : "";
-    let query = "";
+    let searching = false;
+    let cursor = 0;
+    let hits = [];
     let done = false;
+    let previewToken = 0;
 
     /* ─── the model, with the staged tidy-up applied ───────────────────── */
 
+    /**
+     * What the tree holds once the staged tidy-up is applied.
+     *
+     * Files first, folders after — and a repository folder is kept only if a
+     * file still resolves inside it. A folder whose contents were all moved out
+     * is a folder git will not have either, and listing it would mean the tree
+     * showed a place nothing could be in.
+     */
     function model() {
       const seen = new Map();
+      seen.set(ROOT, { path: ROOT, type: "dir" });
+      const here = [];
+
       for (const row of rows) {
+        if (row.type !== "file") continue;
         const path = ctx.stage.resolve(row.path);
         seen.set(path, Object.assign({}, row, { path }));
-      }
-      for (const folder of ctx.stage.folders) {
-        if (!seen.has(folder)) seen.set(folder, { path: folder, type: "dir", fresh: true });
+        here.push(path);
       }
       // A picture added in this session is real to the author the moment it is
       // added, whatever the repository still says.
       for (const asset of ctx.pending || []) {
         const path = ctx.stage.resolve(asset.path);
-        if (!seen.has(path)) seen.set(path, { path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
+        if (seen.has(path)) continue;
+        seen.set(path, { path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
+        here.push(path);
       }
-      return Array.from(seen.values()).sort((a, b) => {
-        if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
-        return a.path.localeCompare(b.path);
-      });
+      for (const row of rows) {
+        if (row.type !== "dir" || row.path === ROOT || seen.has(row.path)) continue;
+        if (here.some((file) => file.startsWith(row.path + "/"))) seen.set(row.path, { path: row.path, type: "dir" });
+      }
+      for (const folder of ctx.stage.folders) {
+        if (!seen.has(folder)) seen.set(folder, { path: folder, type: "dir", fresh: true });
+      }
+      return Array.from(seen.values());
     }
 
-    /** Which rows to draw: the open branches, or every match while searching. */
-    function visible() {
-      const all = model();
-      if (query) {
-        const q = query.toLowerCase();
-        return all.filter((row) => row.type === "file" && row.path.toLowerCase().includes(q)).slice(0, 400);
-      }
-      return all.filter((row) => {
-        if (row.path === ROOT) return false;
-        const parent = parentOf(row.path);
-        return open.has(parent);
-      });
+    function files() {
+      const out = [];
+      for (const [path, node] of nodes) if (node.type === "file") out.push(path);
+      return out;
     }
 
-    function paintTree() {
-      const list = visible();
-      tree.innerHTML = list.length
-        ? list
-            .map((row) => {
-              const depth = query ? 0 : row.path.split("/").length - ROOT.split("/").length - 1;
-              const isDir = row.type === "dir";
-              const icon = isDir
-                ? open.has(row.path)
-                  ? "fa-folder-open"
-                  : "fa-folder"
-                : "fa-image";
-              const label = query ? row.path.replace(ROOT + "/", "") : nameOf(row.path);
-              return `<div class="ed-picker-row" role="treeitem" draggable="true"
-                        data-path="${escapeHTML(row.path)}" data-type="${row.type}"
-                        data-on="${row.path === chosen ? "1" : "0"}"
-                        style="padding-left:${8 + depth * 14}px">
-                        <i class="fa-solid ${icon}" aria-hidden="true"></i>
-                        <span>${escapeHTML(label)}</span>
-                        ${row.staged ? `<em class="ed-picker-flag">${escapeHTML(t("pick_new", "new"))}</em>` : ""}
-                        ${row.fresh ? `<em class="ed-picker-flag">${escapeHTML(t("pick_unsaved", "unsaved"))}</em>` : ""}
-                      </div>`;
-            })
-            .join("")
-        : `<p class="ed-picker-empty">${escapeHTML(t("pick_none", "Nothing here yet"))}</p>`;
+    /* ─── building the tree, once ──────────────────────────────────────── */
+
+    function rank(node) {
+      return (node.type === "dir" ? "0" : "1") + nameOf(node.path).toLowerCase();
+    }
+
+    function makeNode(entry) {
+      const isDir = entry.type === "dir";
+      const el = document.createElement("div");
+      el.className = "ed-pick-node";
+      el.dataset.path = entry.path;
+      el.dataset.type = entry.type;
+      el.dataset.open = isDir && entry.path === ROOT ? "1" : "0";
+
+      el.innerHTML = `
+        <div class="ed-pick-row" draggable="true" role="treeitem" data-on="0">
+          ${isDir ? `<button type="button" class="ed-pick-twist" tabindex="-1"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>` : `<span class="ed-pick-twist is-leaf"></span>`}
+          <i class="fa-solid ${isDir ? "fa-folder" : "fa-image"} ed-pick-icon" aria-hidden="true"></i>
+          <span class="ed-pick-name"></span>
+          ${entry.staged ? `<em class="ed-pick-flag">${escapeHTML(t("pick_new", "new"))}</em>` : ""}
+          ${entry.fresh ? `<em class="ed-pick-flag">${escapeHTML(t("pick_unsaved", "unsaved"))}</em>` : ""}
+        </div>
+        ${isDir ? `<div class="ed-pick-kids"><div class="ed-pick-kids-in"></div></div>` : ""}`;
+
+      const node = {
+        el,
+        row: el.querySelector(".ed-pick-row"),
+        label: el.querySelector(".ed-pick-name"),
+        kids: isDir ? el.querySelector(".ed-pick-kids-in") : null,
+        type: entry.type,
+        size: entry.size || 0,
+        staged: !!entry.staged,
+        fresh: !!entry.fresh,
+      };
+      node.label.textContent = nameOf(entry.path);
+      nodes.set(entry.path, node);
+      return node;
+    }
+
+    /** Put `node` among its siblings: folders first, then by name. */
+    function place(path) {
+      const node = nodes.get(path);
+      const parent = nodes.get(parentOf(path));
+      if (!node || !parent || !parent.kids) return;
+
+      const key = rank({ type: node.type, path });
+      const siblings = Array.from(parent.kids.children);
+      const before = siblings.find((el) => {
+        const other = nodes.get(el.dataset.path);
+        return other && rank({ type: other.type, path: el.dataset.path }) > key;
+      });
+      if (before) parent.kids.insertBefore(node.el, before);
+      else parent.kids.appendChild(node.el);
+    }
+
+    /** Create every folder on the way to `path` that is not there yet. */
+    function ensureBranch(path) {
+      if (!path || path === ROOT || !path.startsWith(ROOT + "/") || nodes.has(path)) return;
+      ensureBranch(parentOf(path));
+      makeNode({ path, type: "dir" });
+      place(path);
+    }
+
+    function mount() {
+      nodes.clear();
+      side.innerHTML = "";
+
+      const root = makeNode({ path: ROOT, type: "dir" });
+      side.appendChild(root.el);
+      root.row.classList.add("is-root");
+      root.label.textContent = t("pick_root", "images");
+
+      for (const entry of model().sort((a, b) => a.path.localeCompare(b.path))) {
+        if (entry.path === ROOT) continue;
+        ensureBranch(parentOf(entry.path));
+        if (!nodes.has(entry.path)) {
+          makeNode(entry);
+          place(entry.path);
+        }
+      }
+    }
+
+    /* ─── selection, revealing, preview ────────────────────────────────── */
+
+    function open(path, on) {
+      const node = nodes.get(path);
+      if (node && node.type === "dir") node.el.dataset.open = on ? "1" : "0";
+    }
+
+    function reveal(path) {
+      let cur = parentOf(path);
+      while (cur && cur.startsWith(ROOT)) {
+        open(cur, true);
+        cur = parentOf(cur);
+      }
+      const node = nodes.get(path);
+      if (node) node.row.scrollIntoView({ block: "nearest" });
+    }
+
+    function paintSelection() {
+      for (const [path, node] of nodes) node.row.dataset.on = path === chosen ? "1" : "0";
+    }
+
+    function paintPath(animate) {
+      if (document.activeElement === input && searching) return;
+      input.value = chosen ? siteAddress(chosen) : "";
+      if (animate) field.animate(
+        [{ opacity: 0.35, transform: "translateY(3px)" }, { opacity: 1, transform: "none" }],
+        { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+      );
+    }
+
+    function metaRow(label, value) {
+      return value ? `<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd>` : "";
     }
 
     function paintPreview() {
-      foot.textContent = chosen ? siteAddress(chosen) : "";
+      const token = ++previewToken;
       ok.disabled = !chosen || !IMAGE.test(chosen);
-      shot.innerHTML = "";
-      meta.textContent = "";
+      stage.innerHTML = "";
+      meta.innerHTML = "";
 
       if (!chosen || !IMAGE.test(chosen)) {
-        meta.textContent = t("pick_hint", "Choose a picture, or drag one onto a folder to move it.");
+        stage.innerHTML = `<p class="ed-pick-blank"><i class="fa-solid fa-images" aria-hidden="true"></i>${escapeHTML(
+          t("pick_hint", "Choose a picture, or drag one onto a folder to move it.")
+        )}</p>`;
         return;
       }
-      // The article's own preloader, so what is shown here is what the page
-      // would fetch — the compressed product where there is one.
-      shot.appendChild(buildPreloader(siteAddress(chosen), "", ctx.pending));
-      if (ctx.observeImages) ctx.observeImages();
 
+      const node = nodes.get(chosen);
       const origin = ctx.stage.origin(chosen);
-      meta.textContent = origin === chosen ? chosen : `${origin}  →  ${chosen}`;
+      const known = imageSize(siteAddress(chosen));
+
+      const shot = previewImage(siteAddress(chosen), ctx.pending);
+      stage.appendChild(shot.el);
+
+      const describe = (dims) => {
+        if (token !== previewToken) return;
+        const size = dims || known;
+        meta.innerHTML =
+          metaRow(t("pick_name", "Name"), nameOf(chosen)) +
+          metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
+          metaRow(t("pick_dims", "Size"), size ? `${size.width} × ${size.height}` : "") +
+          metaRow(t("pick_bytes", "File"), readableSize(node && node.size)) +
+          (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
+      };
+
+      describe(null);
+      shot.ready.then(describe);
     }
 
-    function paint() {
-      paintTree();
+    function select(path, animate) {
+      chosen = path;
+      paintSelection();
+      paintPath(animate !== false);
       paintPreview();
+    }
+
+    /* ─── the search menu ──────────────────────────────────────────────── */
+
+    function paintMenu() {
+      // The field holds the chosen file's address when nothing has been typed,
+      // and that is not a query — it would filter the list down to the one
+      // thing already chosen, which is the one thing nobody is looking for.
+      const raw = input.value.trim();
+      const query = raw && raw !== siteAddress(chosen) ? raw.toLowerCase().replace(/^\//, "") : "";
+      const all = files();
+
+      hits = (query
+        ? all
+            .map((path) => ({ path, score: searchScore(path.replace(/^source\//, ""), query) }))
+            .filter((hit) => hit.score >= 0)
+            .sort((a, b) => b.score - a.score)
+        : all.sort().map((path) => ({ path, score: 0 }))
+      ).slice(0, MENU_MAX);
+
+      if (cursor >= hits.length) cursor = Math.max(0, hits.length - 1);
+
+      menu.innerHTML = hits.length
+        ? hits
+            .map(
+              (hit, i) =>
+                `<button type="button" class="ed-pick-hit" data-path="${escapeHTML(hit.path)}" data-on="${i === cursor ? "1" : "0"}">
+                   <i class="fa-solid fa-image" aria-hidden="true"></i>
+                   <span class="ed-pick-hit-name">${escapeHTML(nameOf(hit.path))}</span>
+                   <span class="ed-pick-hit-dir">${escapeHTML(parentOf(hit.path).replace(/^source\//, "/"))}</span>
+                 </button>`
+            )
+            .join("")
+        : `<p class="ed-pick-blank">${escapeHTML(t("pick_none", "Nothing here yet"))}</p>`;
+    }
+
+    function openMenu() {
+      searching = true;
+      cursor = 0;
+      paintMenu();
+      if (menu.hidden) {
+        menu.hidden = false;
+        pop(menu);
+      }
+    }
+
+    function closeMenu(restore) {
+      searching = false;
+      menu.hidden = true;
+      if (restore !== false) paintPath(false);
+    }
+
+    function takeHit() {
+      const hit = hits[cursor];
+      if (!hit) return;
+      closeMenu();
+      reveal(hit.path);
+      select(hit.path);
+    }
+
+    /* ─── renaming, in place ───────────────────────────────────────────── */
+
+    let renaming = "";
+
+    function beginRename(path) {
+      const node = nodes.get(path);
+      if (!node || path === ROOT || renaming) return;
+      renaming = path;
+
+      const was = nameOf(path);
+      node.label.contentEditable = "true";
+      node.label.spellcheck = false;
+      node.row.dataset.editing = "1";
+      node.label.focus();
+      document.execCommand("selectAll", false, null);
+
+      const stop = (commit) => {
+        if (renaming !== path) return;
+        renaming = "";
+        node.label.contentEditable = "false";
+        delete node.row.dataset.editing;
+        node.label.removeEventListener("keydown", onKeys);
+        node.label.removeEventListener("blur", onBlur);
+
+        const next = safeName(node.label.textContent);
+        if (!commit || !next || next === was) {
+          node.label.textContent = was;
+          return;
+        }
+        node.label.textContent = next;
+        applyMove(path, parentOf(path) + "/" + next);
+      };
+
+      const onKeys = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          stop(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          stop(false);
+        }
+      };
+      const onBlur = () => stop(true);
+
+      node.label.addEventListener("keydown", onKeys);
+      node.label.addEventListener("blur", onBlur);
+    }
+
+    /* ─── moving, which is also what a rename is ───────────────────────── */
+
+    /**
+     * Re-key this node and everything under it, then re-parent the element.
+     *
+     * A folder move is recorded as its FILES moving, one entry each. Git has no
+     * directories to move — a commit that named one would be a commit Gitea
+     * refuses — and the address rewriting downstream wants file paths anyway.
+     * A folder that exists only in this session has no files to record, so it is
+     * simply re-keyed in place.
+     */
+    function applyMove(from, to) {
+      if (!from || !to || from === to || nodes.has(to)) return;
+
+      const node = nodes.get(from);
+      if (!node) return;
+
+      const affected = Array.from(nodes.keys()).filter((p) => p === from || p.startsWith(from + "/"));
+      ctx.stage.renameFolder(from, to);
+      for (const path of affected) {
+        const held = nodes.get(path);
+        if (held && held.type === "file") ctx.stage.move(path, to + path.slice(from.length));
+      }
+
+      const moved = new Map();
+      for (const path of affected) {
+        moved.set(to + path.slice(from.length), nodes.get(path));
+        nodes.delete(path);
+      }
+      for (const [path, held] of moved) {
+        nodes.set(path, held);
+        held.el.dataset.path = path;
+      }
+
+      node.label.textContent = nameOf(to);
+      ensureBranch(parentOf(to));
+      place(to);
+      open(parentOf(to), true);
+
+      if (chosen === from || chosen.startsWith(from + "/")) select(to + chosen.slice(from.length));
+      else paintPath(false);
     }
 
     /* ─── acting on it ─────────────────────────────────────────────────── */
 
-    async function ask(kind, current) {
-      // The dialogue owns the screen, so its own prompt is a plain one.
-      const value = window.prompt(t("ask_" + kind, kind === "mkdir" ? "Folder name" : "New name"), current || "");
-      return value == null ? null : value.trim();
+    /** Where a new picture or folder goes: the selected folder, or the default. */
+    function currentDir() {
+      const node = chosen && nodes.get(chosen);
+      if (node) return node.type === "dir" ? chosen : parentOf(chosen) || ROOT;
+      const posts = ROOT + "/posts";
+      return nodes.has(posts) ? posts : ROOT;
+    }
+
+    function addNode(entry) {
+      ensureBranch(parentOf(entry.path));
+      if (!nodes.has(entry.path)) {
+        makeNode(entry);
+        place(entry.path);
+      }
+      open(parentOf(entry.path), true);
     }
 
     async function onAct(act) {
@@ -410,45 +767,45 @@ export function openPicker(ctx, opts = {}) {
       if (act === "upload") {
         const file = await pickFile();
         if (!file) return;
-        const asset = await ctx.upload(file, chosen && !IMAGE.test(chosen) ? chosen : parentOf(chosen) || ROOT);
+        const asset = await ctx.upload(file, currentDir());
         if (!asset) return;
-        chosen = ctx.stage.resolve(asset.path);
-        return paint();
+        const path = ctx.stage.resolve(asset.path);
+        addNode({ path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
+        reveal(path);
+        return void select(path);
       }
 
       if (act === "mkdir") {
-        const base = chosen && !IMAGE.test(chosen) ? chosen : parentOf(chosen) || ROOT;
-        const name = await ask("mkdir", "");
-        if (!name) return;
-        ctx.stage.folder(`${base}/${name.replace(/[/\\]/g, "-")}`);
-        open.add(base);
-        return paint();
+        const base = currentDir();
+        let name = t("pick_folder", "New folder");
+        let n = 2;
+        while (nodes.has(`${base}/${name}`)) name = `${t("pick_folder", "New folder")} ${n++}`;
+        const path = `${base}/${name}`;
+        ctx.stage.folder(path);
+        addNode({ path, type: "dir", fresh: true });
+        reveal(path);
+        select(path);
+        return void beginRename(path);
       }
 
       if (act === "rename") {
-        if (!chosen || chosen === ROOT) return;
-        const name = await ask("rename", nameOf(chosen));
-        if (!name || name === nameOf(chosen)) return;
-        const to = `${parentOf(chosen)}/${name.replace(/[/\\]/g, "-")}`;
-        ctx.stage.move(chosen, to);
-        chosen = to;
-        return paint();
+        if (chosen && chosen !== ROOT) beginRename(chosen);
       }
     }
 
     function pickFile() {
       return new Promise((res) => {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = "image/*";
-        input.hidden = true;
-        document.body.appendChild(input);
-        input.addEventListener("change", () => {
-          const file = input.files && input.files[0];
-          input.remove();
+        const el = document.createElement("input");
+        el.type = "file";
+        el.accept = "image/*";
+        el.hidden = true;
+        document.body.appendChild(el);
+        el.addEventListener("change", () => {
+          const file = el.files && el.files[0];
+          el.remove();
           res(file || null);
         });
-        input.click();
+        el.click();
       });
     }
 
@@ -461,10 +818,14 @@ export function openPicker(ctx, opts = {}) {
     }
 
     function onKey(e) {
-      if (e.key === "Escape") {
+      if (e.key !== "Escape" || renaming) return;
+      if (!menu.hidden) {
         e.preventDefault();
-        finish(null);
+        input.blur();
+        return void closeMenu();
       }
+      e.preventDefault();
+      finish(null);
     }
 
     /* ─── wiring ───────────────────────────────────────────────────────── */
@@ -472,26 +833,36 @@ export function openPicker(ctx, opts = {}) {
     mask.addEventListener("click", (e) => {
       if (e.target === mask) return finish(null);
       const act = e.target.closest("[data-act]");
-      if (act) {
+      if (act && card.contains(act)) {
         e.preventDefault();
         return void onAct(act.dataset.act);
       }
-      const row = e.target.closest(".ed-picker-row");
-      if (row) {
-        e.preventDefault();
-        const path = row.dataset.path;
-        if (row.dataset.type === "dir") {
-          if (open.has(path)) open.delete(path);
-          else open.add(path);
-        }
-        chosen = path;
-        return paint();
-      }
     });
 
-    mask.addEventListener("dblclick", (e) => {
-      const row = e.target.closest(".ed-picker-row");
-      if (row && row.dataset.type === "file") finish({ path: row.dataset.path, site: siteAddress(row.dataset.path) });
+    side.addEventListener("click", (e) => {
+      const row = e.target.closest(".ed-pick-row");
+      if (!row || row.dataset.editing) return;
+      e.preventDefault();
+      const path = row.parentElement.dataset.path;
+      const node = nodes.get(path);
+      if (node && node.type === "dir") {
+        // Clicking the row selects the folder; only the chevron folds it, so a
+        // click meant for "put the next picture here" never closes the branch.
+        if (e.target.closest(".ed-pick-twist") || path === chosen) {
+          open(path, node.el.dataset.open !== "1");
+        } else {
+          open(path, true);
+        }
+      }
+      select(path);
+    });
+
+    side.addEventListener("dblclick", (e) => {
+      const row = e.target.closest(".ed-pick-row");
+      if (!row) return;
+      const path = row.parentElement.dataset.path;
+      const node = nodes.get(path);
+      if (node && node.type === "file") finish({ path, site: siteAddress(path) });
     });
 
     ok.addEventListener("click", () => {
@@ -499,68 +870,112 @@ export function openPicker(ctx, opts = {}) {
       finish({ path: chosen, site: siteAddress(chosen) });
     });
 
-    search.addEventListener("input", () => {
-      query = search.value.trim();
-      paint();
+    /* The one field: what is chosen, and the way to look for something else. */
+    input.addEventListener("focus", () => {
+      input.select();
+      openMenu();
+    });
+    input.addEventListener("input", openMenu);
+    input.addEventListener("blur", () => setTimeout(() => closeMenu(), 120));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (menu.hidden) return void openMenu();
+        cursor = Math.max(0, Math.min(hits.length - 1, cursor + (e.key === "ArrowDown" ? 1 : -1)));
+        paintMenu();
+        const on = menu.querySelector('[data-on="1"]');
+        if (on) on.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        takeHit();
+      }
+    });
+
+    menu.addEventListener("mousedown", (e) => e.preventDefault());
+    menu.addEventListener("click", (e) => {
+      const hit = e.target.closest("[data-path]");
+      if (!hit) return;
+      closeMenu();
+      reveal(hit.dataset.path);
+      select(hit.dataset.path);
     });
 
     /* Dragging a row onto a folder is a staged move. */
     let dragging = "";
-    tree.addEventListener("dragstart", (e) => {
-      const row = e.target.closest(".ed-picker-row");
-      if (!row) return;
-      dragging = row.dataset.path;
+
+    side.addEventListener("dragstart", (e) => {
+      const row = e.target.closest(".ed-pick-row");
+      if (!row || row.dataset.editing) return;
+      dragging = row.parentElement.dataset.path;
+      if (dragging === ROOT) return void (dragging = "");
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", dragging);
+      row.dataset.carry = "1";
     });
-    tree.addEventListener("dragover", (e) => {
-      const row = e.target.closest('.ed-picker-row[data-type="dir"]');
-      if (!row || !dragging || row.dataset.path === dragging) return;
+
+    /** Which folder the pointer is over: a file means the folder holding it. */
+    function dropFolder(e) {
+      const row = e.target.closest(".ed-pick-row");
+      if (!row) return ROOT;
+      const path = row.parentElement.dataset.path;
+      const node = nodes.get(path);
+      return node && node.type === "dir" ? path : parentOf(path) || ROOT;
+    }
+
+    function canDrop(target) {
+      if (!dragging || !target) return false;
+      if (target === dragging) return false;
+      if ((target + "/").startsWith(dragging + "/")) return false;
+      return parentOf(dragging) !== target;
+    }
+
+    side.addEventListener("dragover", (e) => {
+      const target = dropFolder(e);
+      if (!canDrop(target)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      row.dataset.drop = "1";
+      for (const el of side.querySelectorAll("[data-drop]")) delete el.dataset.drop;
+      const holder = nodes.get(target);
+      if (holder) holder.row.dataset.drop = "1";
     });
-    tree.addEventListener("dragleave", (e) => {
-      const row = e.target.closest(".ed-picker-row");
-      if (row) delete row.dataset.drop;
-    });
-    tree.addEventListener("drop", (e) => {
-      const row = e.target.closest('.ed-picker-row[data-type="dir"]');
-      if (!row || !dragging) return;
+
+    side.addEventListener("drop", (e) => {
+      const target = dropFolder(e);
+      for (const el of side.querySelectorAll("[data-drop]")) delete el.dataset.drop;
+      if (!canDrop(target)) return;
       e.preventDefault();
-      delete row.dataset.drop;
-      // A folder cannot be dropped inside itself.
-      if (!(row.dataset.path + "/").startsWith(dragging + "/")) {
-        const to = `${row.dataset.path}/${nameOf(dragging)}`;
-        ctx.stage.move(dragging, to);
-        if (chosen === dragging) chosen = to;
+      applyMove(dragging, `${target}/${nameOf(dragging)}`);
+      dragging = "";
+    });
+
+    side.addEventListener("dragend", () => {
+      dragging = "";
+      for (const el of side.querySelectorAll("[data-drop], [data-carry]")) {
+        delete el.dataset.drop;
+        delete el.dataset.carry;
       }
-      dragging = "";
-      open.add(row.dataset.path);
-      paint();
     });
-    tree.addEventListener("dragend", () => {
-      dragging = "";
-      for (const row of tree.querySelectorAll("[data-drop]")) delete row.dataset.drop;
-    });
+
+    /* ─── open ─────────────────────────────────────────────────────────── */
 
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
-    pop(mask.querySelector(".ed-picker"));
+    pop(card);
 
-    tree.innerHTML = `<p class="ed-picker-empty">${escapeHTML(t("pick_loading", "Reading the repository…"))}</p>`;
+    side.innerHTML = `<p class="ed-pick-blank">${escapeHTML(t("pick_loading", "Reading the repository…"))}</p>`;
     paintPreview();
 
     loadTree().then((loaded) => {
       rows = loaded;
-      // Open every branch on the way to what is already chosen.
-      let cur = parentOf(chosen);
-      while (cur && cur.startsWith(ROOT)) {
-        open.add(cur);
-        cur = parentOf(cur);
+      mount();
+      if (chosen && nodes.has(chosen)) {
+        reveal(chosen);
+        select(chosen, false);
+      } else {
+        chosen = "";
+        open(ROOT, true);
+        paintPath(false);
       }
-      paint();
-      search.focus();
     });
   });
 }

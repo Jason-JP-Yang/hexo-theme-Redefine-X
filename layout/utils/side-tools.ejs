@@ -33,6 +33,14 @@
 	</ul>
 
 	<ul class="visible-tools-list">
+		<%# The article's own tools rail is hidden below 640px, and the pencil with
+			it. The corner rail is what a phone has instead, so the pencil is
+			rendered here too and CSS shows exactly one of the two. %>
+		<% if (theme.backend && theme.backend.vault_enable && (is_post() || (page.type === "vault" && page.vault_kind !== "masonry"))) { %>
+		<li class="right-bottom-tools tool-edit-post blog-admin-only flex justify-center items-center" title="<%= __('editor.edit_post') %>">
+			<i class="fa-regular fa-pen-to-square"></i>
+		</li>
+		<% } %>
 		<li class="right-bottom-tools toggle-tools-list flex justify-center items-center">
 			<i class="fa-regular fa-cog <% if (theme.global.side_tools && theme.global.side_tools.gear_rotation !== false) { %>fa-spin<% } %>"></i>
 		</li>

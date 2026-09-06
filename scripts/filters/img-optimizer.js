@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const imageSize = require("image-size");
 const { spawn } = require("child_process");
 const { BuildIndex, skipAvif } = require("../lib/build-index");
 
@@ -571,10 +572,43 @@ const successfulConversions = new Set();
 const queue = new TaskQueue(2);
 
 // Rebuilt per build. `indexedKeys` is what survives the prune; `skippedEncodes`
-// is what was asked for while encoding was off.
+// is what was asked for while encoding was off; `dims` is the intrinsic size of
+// EVERY source image this build saw, transcoded or not.
 let index = null;
 const indexedKeys = new Set();
 const skippedEncodes = [];
+const dims = new Map();
+
+/**
+ * The source image's own pixels, read from its header.
+ *
+ * Measured for every candidate rather than only for the ones a page referenced,
+ * because the editor's picture browser previews files nothing has used yet and
+ * has to reserve the right box for them. AVIF cannot be measured by this
+ * library and does not need to be: the transcode preserves the aspect ratio, so
+ * the source's size is the one the page lays out with.
+ */
+async function measure(relPath, absPath) {
+  if (dims.has(relPath)) return;
+  try {
+    const size = imageSize(absPath);
+    if (size && size.width && size.height) {
+      return void dims.set(relPath, { width: size.width, height: size.height });
+    }
+  } catch (e) {
+    /* fall through to the decoder, which reads more than the header */
+  }
+
+  // A file the header reader cannot parse — an unusual JPEG, a CMYK profile —
+  // is still an image the encoder can open. One process for the handful that
+  // get here is cheaper than a picture laid out at the wrong shape.
+  try {
+    const meta = await ImageMeta.probe(absPath);
+    if (meta && meta.width && meta.height) dims.set(relPath, { width: meta.width, height: meta.height });
+  } catch (e) {
+    /* genuinely unreadable: the size stays unknown */
+  }
+}
 
 async function scanAndProcessAllImages() {
   const config = ConfigManager.get();
@@ -586,6 +620,7 @@ async function scanAndProcessAllImages() {
   index = new BuildIndex(path.join(hexo.source_dir, "build"), INDEX_FILE);
   indexedKeys.clear();
   skippedEncodes.length = 0;
+  dims.clear();
 
   queue.concurrency = config.MAX_CONCURRENCY;
   const mode = skipAvif() ? "cache only (RDFX_SKIP_AVIF)" : config.encoder;
@@ -634,32 +669,29 @@ function transcodeMap() {
 /**
  * The manifest body: `source path -> [published route, width, height]`.
  *
- * Sizes come from the lazyload filter, which is the only pass that measures
- * them; an image no page referenced has none and gets zeros. `hidden` is the
- * set of routes the vault withheld — passed in rather than consulted here,
- * because this file must not know that encrypted posts exist.
+ * EVERY source image is listed, not only the compressed ones. There are exactly
+ * two published states — transcoded, where the product's route is the only one
+ * served, and not transcoded, where the original's route is — and the editor
+ * cannot tell them apart by looking at a path. Listing only the transcoded half
+ * meant every other picture fell through to a guess, which is how an
+ * un-compressed image ended up pointing at an AVIF that was never written.
+ *
+ * Sizes are the source file's own, measured during the scan. The lazyload pass
+ * is consulted only as a second opinion for anything the scan could not read.
+ * `hidden` is the set of routes the vault withheld — passed in rather than
+ * consulted here, because this file must not know that encrypted posts exist.
  */
 function manifestBody(hidden) {
   const sizes = (hexo.extend.helper.get("lazyloadSizes") || (() => new Map()))();
   const map = transcodeMap();
   const out = {};
 
-  for (const rel of Object.keys(map).sort()) {
-    const route = map[rel];
+  const keys = new Set([...dims.keys(), ...Object.keys(map)]);
+  for (const rel of keys) {
+    const route = map[rel] || rel;
     if (hidden && hidden.has(route)) continue;
-    const dims = sizes.get(route) || sizes.get(rel) || null;
-    out[rel] = [route, dims ? dims.width : 0, dims ? dims.height : 0];
-  }
-
-  // An image this build did NOT transcode keeps its ORIGINAL route, and the
-  // editor still has to know its size or it reserves a guessed box and the
-  // picture lands at the wrong shape. On a CI runner, which never starts an
-  // encoder, this is most of them — so the manifest describes every image the
-  // build measured, not only the ones it compressed.
-  for (const [route, dims] of sizes) {
-    if (route.startsWith("build/") || out[route]) continue;
-    if (hidden && hidden.has(route)) continue;
-    out[route] = [route, dims.width, dims.height];
+    const wh = dims.get(rel) || sizes.get(route) || sizes.get(rel) || null;
+    out[rel] = [route, wh ? wh.width : 0, wh ? wh.height : 0];
   }
 
   const sorted = {};
@@ -692,7 +724,9 @@ function publishManifest() {
 
   const body = manifestBody(null);
   hexo.route.set("build/manifest.json", () => body);
-  hexo.log.info(`[img-optimizer] build/manifest.json lists ${successfulConversions.size} transcode(s).`);
+  hexo.log.info(
+    `[img-optimizer] build/manifest.json lists ${dims.size} image(s), ${successfulConversions.size} of them transcoded.`
+  );
 }
 
 async function gatherFiles() {
@@ -825,11 +859,7 @@ async function processFile(absPath, config) {
   const isBitmap = PathManager.isSupportedBitmap(ext);
   const isSvg = PathManager.isSupportedSvg(ext);
 
-  if ((!isBitmap && !isSvg) ||
-    (isBitmap && !config.ENABLE_AVIF) ||
-    (isSvg && !config.ENABLE_SVG)) {
-    return;
-  }
+  if (!isBitmap && !isSvg) return;
 
   let relPath;
   if (absPath.startsWith(hexo.source_dir)) {
@@ -844,6 +874,12 @@ async function processFile(absPath, config) {
   relPath = relPath.replace(/\\/g, "/");
 
   if (relPath.startsWith("build/")) return;
+
+  // Before every exit below: an excluded image and an image the encoder is off
+  // for are both still published, and both still need a size in the manifest.
+  await measure(relPath, absPath);
+
+  if ((isBitmap && !config.ENABLE_AVIF) || (isSvg && !config.ENABLE_SVG)) return;
 
   // Check EXCLUDE patterns
   const excludePatterns = config.EXCLUDE || [];
@@ -927,10 +963,22 @@ function cleanupRoutes() {
 // HTML Replacement
 // ----------------------------------------------------------------------------
 
+/**
+ * Point every local image at the path it is actually published under.
+ *
+ * The decision is `successfulConversions` — what this build TRANSCODED — and
+ * nothing else. It used to be the config alone: "AVIF is on, so this must be an
+ * AVIF", written before the scan's answer was consulted. Every image the build
+ * declined, failed to encode, or was told to skip (the CI runner, which never
+ * starts an encoder) therefore had its `src` rewritten to a `build/…​.avif` that
+ * was never written, while its ORIGINAL route was left in place and served —
+ * the picture was on the site, at a path no page pointed to.
+ *
+ * The scan runs at `before_generate` and is awaited, so by the time any post
+ * renders the set is complete and this is a lookup rather than a guess.
+ */
 function replaceImagesInHtml(str) {
   if (!str || typeof str !== "string" || str.length === 0) return str;
-
-  const config = ConfigManager.get();
 
   const processTag = (tagContent, attrName) => {
     if (/\bdata-no-avif\b/i.test(tagContent)) return null;
@@ -945,18 +993,12 @@ function replaceImagesInHtml(str) {
     const local = PathManager.resolveSourceImagePath(originalSrc.split("#")[0].split("?")[0]);
     if (!local) return null;
 
-    // Optimistic check: based on config only, independent of processing state
+    // The only question worth asking: does a product exist? An image without one
+    // keeps the route it already has, and rewriting it would break it.
+    if (!successfulConversions.has(local.rel)) return null;
+
     const ext = path.extname(local.rel).toLowerCase();
-    const isBitmap = PathManager.isSupportedBitmap(ext);
-    const isSvg = PathManager.isSupportedSvg(ext);
-
-    if ((!isBitmap && !isSvg) ||
-      (isBitmap && !config.ENABLE_AVIF) ||
-      (isSvg && !config.ENABLE_SVG)) {
-      return null;
-    }
-
-    const { routePath } = PathManager.buildOptimizedPath(local.rel, isBitmap);
+    const { routePath } = PathManager.buildOptimizedPath(local.rel, PathManager.isSupportedBitmap(ext));
     const url = encodeURI(path.posix.join(hexo.config.root || "/", routePath));
 
     // Inject data-original-src to preserve the link to the original image

@@ -33,8 +33,12 @@ $ed-fade = 0.13s ease
 // the console and the error book already do it.
 $ed-on-primary = #fff
 // Where the document bar pins, and the anchor the floating toolbar is placed
-// under. One value, so the two cannot drift back onto the same band.
+// under. One value per width, so the two cannot drift back onto the same band —
+// and the narrow ones track the navbar, which shrinks at both breakpoints the
+// way page.styl already says it does.
 $ed-docbar-top = ($navbar-height + 12px)
+$ed-docbar-top-tablet = ($navbar-height * 0.9 + 10px)
+$ed-docbar-top-mobile = ($navbar-height * 0.8 + 8px)
 $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
 
 @keyframes ed-breathe
@@ -59,6 +63,16 @@ $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo
 
   &:hover i
     color var(--primary-color)
+
+// The article's tools rail is `display: none` below 640px — every one of its
+// buttons has a home in the corner rail on a phone — so the pencil is rendered
+// in BOTH and each width shows one of them. Two nodes, one behaviour: the
+// editor wires every `.tool-edit-post` it finds.
+.side-tools-container .tool-edit-post
+  display none
+
+  +redefine-mobile()
+    display flex
 
 // While editing, the way out is the bar's own ×. A second entrance to a room
 // you are already in is just a thing to press by mistake.
@@ -120,8 +134,30 @@ html.blog-editing .tool-edit-post
   @media (min-width 768px)
     margin 26px 32px 16px
 
+  // Pinned at every width. It used to go `static` on a tablet and a phone,
+  // which is where the file you are editing, the save button and the publish
+  // button all scrolled away — the three controls least able to afford it.
   +redefine-tablet()
-    position static
+    top $ed-docbar-top-tablet
+    margin 18px 10px 12px
+
+  // Two halves, one above the other. `margin-left: auto` on the actions only
+  // pushes them right while there is room to push into; below this width there
+  // is not, so the two halves were competing for the same line and the file
+  // path ran under the buttons.
+  +redefine-mobile()
+    top $ed-docbar-top-mobile
+    gap 6px
+    margin 14px 8px 12px
+    padding 8px 10px
+
+    .ed-docbar-id
+      flex 1 1 100%
+
+    .ed-docbar-actions
+      width 100%
+      margin-left 0
+      justify-content flex-end
 
 // Both halves wrap, and either may take a whole row of its own. A file path is
 // the one thing here that can be any length, so it is what gives way first —
@@ -557,16 +593,29 @@ textarea.ed-f-input
   // left a band of empty page under the navbar. The switch is animated by the
   // transition below, so the toolbar slides rather than jumps.
   top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top + 12px))
-  left 50%
+  // Insets rather than a 50% offset and a translate: the translated box was
+  // sized from 100vw, which on a phone includes the scrollbar gutter and a hair
+  // of overscroll, so the card ran past both edges before it had a chance to
+  // wrap. Two insets and `margin auto` can never be wider than the viewport.
+  left 10px
+  right 10px
   z-index $z-index-4
-  width min(calc(100vw - 24px), 760px)
-  transform translateX(-50%)
+  width auto
+  max-width 760px
+  margin 0 auto
   pointer-events none
   transition top $ed-morph
 
+  // At the top at every width, under the document bar, exactly as on a desktop.
+  // Parked at the bottom of a phone it sat on the keyboard, and the tab you
+  // needed was the one the keyboard had covered.
   +redefine-tablet()
-    top auto
-    bottom 12px
+    top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-tablet + 10px))
+
+  +redefine-mobile()
+    left 6px
+    right 6px
+    top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
 
 .ed-toolbar-card
   display flex
@@ -616,16 +665,19 @@ textarea.ed-f-input
     background var(--primary-color)
     color $ed-on-primary
 
-  +redefine-mobile()
-    span
-      display none
-
+// A tab is a NAME. Hiding the labels on a phone left two unlabelled icons that
+// change what the whole toolbar is about — a cube and a plus, side by side,
+// with nothing to say which mode you were in.
 .ed-toolbar-row
   display flex
   flex-wrap wrap
   align-items center
   gap 2px
   padding 2px
+  // A row of twenty-two languages must not become a card taller than the phone.
+  max-height 34svh
+  overflow-y auto
+  overscroll-behavior contain
 
   &[hidden]
     display none
@@ -660,8 +712,15 @@ textarea.ed-f-input
 
   &.is-wide
     width auto
+    max-width 100%
+    min-width 0
     padding 0 10px
     font-size 0.72rem
+
+    span
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
 
   &:hover:not(:disabled)
     background var(--second-background-color)
@@ -954,17 +1013,26 @@ textarea.ed-f-input
   backdrop-filter blur(4px)
   -webkit-backdrop-filter blur(4px)
 
+// A FIXED box. The two things inside it that vary most — a tree that can be
+// six levels deep and a picture that can be any shape — are exactly the two
+// that would resize it under the pointer between one click and the next, so it
+// is given its size once and everything inside it scrolls.
 .ed-picker,
 .ed-sheet
   display flex
   flex-direction column
-  width min(880px, 100%)
-  max-height min(680px, 100%)
+  width min(1040px, 100%)
+  height min(660px, 100%)
   border 1px solid var(--border-color)
   border-radius $ed-radius
   background var(--background-color)
   box-shadow 0 24px 60px -24px var(--shadow-color-1)
   overflow hidden
+
+.ed-sheet
+  width min(880px, 100%)
+  height auto
+  max-height min(660px, 100%)
 
 .ed-picker-bar
   display flex
@@ -1002,126 +1070,6 @@ textarea.ed-f-input
     &:hover
       background var(--third-background-color)
 
-.ed-picker-body
-  display grid
-  grid-template-columns minmax(0, 1fr) minmax(0, 1.15fr)
-  min-height 0
-  flex 1 1 auto
-
-  +redefine-tablet()
-    grid-template-columns minmax(0, 1fr)
-    grid-template-rows minmax(0, 1fr) minmax(0, 1fr)
-
-.ed-picker-side
-  display flex
-  flex-direction column
-  min-height 0
-  border-right 1px solid var(--border-color)
-
-  +redefine-tablet()
-    border-right none
-    border-bottom 1px solid var(--border-color)
-
-.ed-picker-find
-  display flex
-  align-items center
-  gap 8px
-  padding 8px 12px
-  border-bottom 1px solid var(--border-color)
-  color var(--third-text-color)
-  font-size 0.74rem
-
-  input
-    flex 1 1 auto
-    min-width 0
-    border none
-    background transparent
-    color var(--first-text-color)
-    font-size 0.78rem
-    outline none
-
-.ed-picker-tree
-  flex 1 1 auto
-  min-height 0
-  padding 6px 0
-  overflow-y auto
-
-.ed-picker-row
-  display flex
-  align-items center
-  gap 8px
-  padding 5px 12px 5px 8px
-  color var(--second-text-color)
-  font-size 0.78rem
-  cursor pointer
-  user-select none
-  transition background $ed-fade
-
-  i
-    flex-shrink 0
-    width 14px
-    color var(--third-text-color)
-    font-size 0.76rem
-
-  span
-    overflow hidden
-    text-overflow ellipsis
-    white-space nowrap
-
-  &:hover
-    background var(--second-background-color)
-
-  &[data-on="1"]
-    background var(--primary-color)
-    color $ed-on-primary
-
-    i
-      color $ed-on-primary
-
-  &[data-drop="1"]
-    box-shadow inset 0 0 0 2px var(--primary-color)
-
-.ed-picker-flag
-  margin-left auto
-  padding 1px 6px
-  border-radius 999px
-  background var(--box-amber-bg)
-  color var(--box-amber-text)
-  font-size 0.6rem
-  font-style normal
-
-.ed-picker-empty
-  padding 22px 14px
-  color var(--third-text-color)
-  font-size 0.76rem
-  text-align center
-
-.ed-picker-view
-  display flex
-  flex-direction column
-  gap 10px
-  min-height 0
-  padding 14px
-  overflow-y auto
-
-.ed-picker-shot
-  display grid
-  place-items center
-  flex 1 1 auto
-  min-height 0
-
-  .img-preloader,
-  img
-    max-width 100%
-    max-height 46vh
-    border-radius 10px
-
-.ed-picker-meta
-  color var(--third-text-color)
-  font-family $ed-mono
-  font-size 0.7rem
-  word-break break-all
-
 .ed-picker-foot
   display flex
   align-items center
@@ -1130,20 +1078,353 @@ textarea.ed-f-input
   border-top 1px solid var(--border-color)
   background var(--second-background-color)
 
-.ed-picker-path
-  flex 1 1 auto
-  min-width 0
-  overflow hidden
-  color var(--second-text-color)
-  font-family $ed-mono
-  font-size 0.72rem
-  text-overflow ellipsis
-  white-space nowrap
-
 .ed-picker-hint
   flex 1 1 auto
   color var(--third-text-color)
   font-size 0.72rem
+
+// ─── the picture browser ────────────────────────────────────
+.ed-pick-body
+  display grid
+  grid-template-columns minmax(0, 0.85fr) minmax(0, 1.15fr)
+  min-height 0
+  flex 1 1 auto
+
+  +redefine-tablet()
+    grid-template-columns minmax(0, 1fr)
+    grid-template-rows minmax(0, 1fr) minmax(0, 1.1fr)
+
+.ed-pick-side
+  min-height 0
+  padding 8px 0 12px
+  border-right 1px solid var(--border-color)
+  overflow-y auto
+  overscroll-behavior contain
+
+  +redefine-tablet()
+    border-right none
+    border-bottom 1px solid var(--border-color)
+
+// Open and closed, with nothing measured. `0fr → 1fr` on a grid row is the one
+// height transition that needs no scrollHeight, so it stays exact however deep
+// it nests and however much the branch under it changes while it is open.
+.ed-pick-kids
+  display grid
+  grid-template-rows 0fr
+  opacity 0
+  transition grid-template-rows $ed-morph, opacity $ed-fade
+
+  > .ed-pick-kids-in
+    min-height 0
+    overflow hidden
+
+.ed-pick-node[data-open="1"] > .ed-pick-kids
+  grid-template-rows 1fr
+  opacity 1
+
+.ed-pick-node[data-open="1"] > .ed-pick-row .ed-pick-twist i
+  transform rotate(90deg)
+
+.ed-pick-node[data-type="dir"][data-open="1"] > .ed-pick-row .ed-pick-icon
+  color var(--primary-color)
+
+// One indent per level, drawn by nesting rather than by a padding the row has
+// to be told about — so a subtree that is dragged somewhere else is correctly
+// indented the moment it lands.
+.ed-pick-kids-in
+  padding-left 14px
+  border-left 1px solid var(--border-color)
+  margin-left 15px
+
+// The top level is the panel's own left edge; it needs no rail of its own.
+.ed-pick-side > .ed-pick-node > .ed-pick-kids > .ed-pick-kids-in
+  padding-left 6px
+  margin-left 0
+  border-left none
+
+.ed-pick-row.is-root
+  font-weight 600
+  color var(--first-text-color)
+
+.ed-pick-row
+  display flex
+  align-items center
+  gap 7px
+  padding 5px 10px 5px 4px
+  border-radius 8px
+  margin 1px 8px 1px 0
+  color var(--second-text-color)
+  font-size 0.78rem
+  cursor pointer
+  user-select none
+  transition background $ed-fade, color $ed-fade, box-shadow $ed-fade
+
+  &:hover
+    background var(--second-background-color)
+
+  &[data-on="1"]
+    background var(--primary-color)
+    color $ed-on-primary
+
+    i,
+    .ed-pick-flag
+      color $ed-on-primary
+
+  &[data-drop="1"]
+    box-shadow inset 0 0 0 2px var(--primary-color)
+
+  &[data-carry="1"]
+    opacity 0.45
+
+  &[data-editing="1"]
+    background var(--second-background-color)
+    box-shadow inset 0 0 0 1px var(--primary-color)
+    cursor text
+
+.ed-pick-twist
+  display grid
+  place-items center
+  flex-shrink 0
+  width 18px
+  height 18px
+  padding 0
+  border none
+  background transparent
+  color var(--third-text-color)
+  font-size 0.62rem
+  cursor pointer
+
+  i
+    transition transform $ed-morph
+
+  &.is-leaf
+    pointer-events none
+
+.ed-pick-icon
+  flex-shrink 0
+  width 15px
+  color var(--third-text-color)
+  font-size 0.78rem
+  text-align center
+
+.ed-pick-name
+  flex 1 1 auto
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  outline none
+
+  &[contenteditable="true"]
+    text-overflow clip
+
+.ed-pick-flag
+  flex-shrink 0
+  padding 1px 6px
+  border-radius 999px
+  background var(--box-amber-bg)
+  color var(--box-amber-text)
+  font-size 0.6rem
+  font-style normal
+
+.ed-pick-view
+  display flex
+  flex-direction column
+  gap 12px
+  min-height 0
+  padding 14px
+
+.ed-pick-stage
+  display grid
+  place-items center
+  flex 1 1 auto
+  min-height 0
+  border-radius 12px
+  background var(--second-background-color)
+  overflow hidden
+
+// The picture at its OWN shape: the box is the pane and the image is contained
+// inside it, so nothing is cropped and nothing is stretched whatever it is.
+.ed-shot
+  position relative
+  display grid
+  place-items center
+  width 100%
+  height 100%
+  min-height 0
+
+  // The article's own shimmer, restated: that rule is scoped to
+  // `.img-preloader`, and this is not one — it is a preview, which reserves
+  // nothing and takes its shape from the file.
+  .img-preloader-skeleton
+    position absolute
+    inset 0
+    opacity 1
+    background linear-gradient(90deg, var(--third-background-color) 0%, var(--second-background-color) 50%, var(--third-background-color) 100%)
+    background-size 200% 100%
+    animation img-preloader-shimmer 1.5s infinite ease-in-out
+    transition opacity $ed-fade
+
+  img
+    max-width 100%
+    max-height 100%
+    width auto
+    height auto
+    object-fit contain
+    opacity 0
+    transition opacity 0.22s ease
+
+  &[data-ready="1"]
+    .img-preloader-skeleton
+      opacity 0
+
+    img
+      opacity 1
+
+  &[data-failed="1"]
+    .img-preloader-skeleton
+      opacity 0
+
+    &::after
+      content "✕"
+      color var(--box-red-text)
+      font-size 1.6rem
+
+.ed-pick-blank
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 10px
+  padding 24px 16px
+  color var(--third-text-color)
+  font-size 0.76rem
+  text-align center
+
+  i
+    font-size 1.5rem
+    opacity 0.5
+
+.ed-pick-meta
+  display grid
+  grid-template-columns auto minmax(0, 1fr)
+  gap 3px 12px
+  flex-shrink 0
+  margin 0
+  font-size 0.72rem
+
+  dt
+    color var(--third-text-color)
+
+  dd
+    margin 0
+    color var(--second-text-color)
+    font-family $ed-mono
+    overflow-wrap anywhere
+
+// The one field along the bottom: what is chosen, and the way to look for
+// something else. It is the same control because they are the same question.
+.ed-pick-foot
+  display flex
+  align-items center
+  gap 10px
+  padding 10px 12px
+  border-top 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-pick-field
+  position relative
+  display flex
+  align-items center
+  gap 8px
+  flex 1 1 auto
+  min-width 0
+  padding 6px 11px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  color var(--third-text-color)
+  transition border-color $ed-fade
+
+  &:focus-within
+    border-color var(--primary-color)
+
+.ed-pick-input
+  flex 1 1 auto
+  min-width 0
+  border none
+  background transparent
+  color var(--first-text-color)
+  font-family $ed-mono
+  font-size 0.76rem
+  outline none
+
+.ed-pick-menu
+  position absolute
+  left -1px
+  right -1px
+  bottom calc(100% + 8px)
+  z-index 2
+  max-height 300px
+  padding 5px
+  border 1px solid var(--border-color)
+  border-radius 12px
+  background var(--third-background-color-transparent)
+  backdrop-filter saturate(180%) blur(16px)
+  -webkit-backdrop-filter saturate(180%) blur(16px)
+  box-shadow 0 14px 38px -18px var(--shadow-color-1)
+  overflow-y auto
+  overscroll-behavior contain
+
+  &[hidden]
+    display none
+
+.ed-pick-hit
+  display flex
+  align-items center
+  gap 8px
+  width 100%
+  padding 6px 9px
+  border none
+  border-radius 8px
+  background transparent
+  color var(--second-text-color)
+  font-size 0.76rem
+  text-align left
+  cursor pointer
+  transition background $ed-fade
+
+  i
+    flex-shrink 0
+    width 14px
+    color var(--third-text-color)
+    font-size 0.74rem
+
+  &:hover,
+  &[data-on="1"]
+    background var(--second-background-color)
+
+.ed-pick-hit-name
+  flex-shrink 0
+  max-width 55%
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  color var(--first-text-color)
+
+.ed-pick-hit-dir
+  flex 1 1 auto
+  min-width 0
+  overflow hidden
+  text-align right
+  text-overflow ellipsis
+  white-space nowrap
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.68rem
+
+.ed-pick-ok
+  flex-shrink 0
 
 .ed-sheet-body
   flex 1 1 auto

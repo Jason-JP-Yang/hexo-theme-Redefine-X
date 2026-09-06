@@ -260,6 +260,20 @@ export function registerSrcResolver(fn) {
   srcResolver = fn;
 }
 
+/**
+ * A second address to try when the first one 404s.
+ *
+ * The editor registers one: an image committed a minute ago is in the
+ * repository but not yet on the site, and the repository can be read directly.
+ * Nothing else registers one, so for a reader this stays exactly one request per
+ * picture and one error state when it fails.
+ */
+let srcFallback = null;
+
+export function registerSrcFallback(fn) {
+  srcFallback = fn;
+}
+
 async function srcFor(preloader) {
   const direct = preloader.dataset.src;
   if (direct) return direct;
@@ -285,11 +299,26 @@ async function processPreloader(preloader) {
 
   try {
     const img = await requestImageBySrc(src, alt);
-    replacePreloader(preloader, img);
+    return void replacePreloader(preloader, img);
   } catch (error) {
-    console.error("[lazyload]", error);
-    showError(preloader, src);
+    /* the fallback below is the second chance; the error state is the last */
   }
+
+  let spare = "";
+  try {
+    spare = srcFallback ? (await srcFallback(preloader, src)) || "" : "";
+  } catch (e) {
+    spare = "";
+  }
+
+  if (spare) {
+    try {
+      return void replacePreloader(preloader, await requestImageBySrc(spare, alt));
+    } catch (e) {
+      /* fall through */
+    }
+  }
+  showError(preloader, src);
 }
 
 /**

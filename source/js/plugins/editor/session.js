@@ -401,8 +401,12 @@ export async function save(doc, mode, pending, choice, stage) {
   let minted = null;
   let keysEnc = null;
 
+  // At the path the staged tidy-up says it ends up at, not the one it was
+  // uploaded under: a picture added and then renamed in the browser has no sha
+  // to move, so the rename can only happen by committing it under the new name.
   for (const asset of pending || []) {
-    files.push({ operation: "create", path: asset.path, content: gitea.toBase64(asset.bytes) });
+    const at = stage ? stage.resolve(asset.path) : asset.path;
+    files.push({ operation: "create", path: at, content: gitea.toBase64(asset.bytes) });
   }
   files.push(...(await movedFiles(stage)));
 
