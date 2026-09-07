@@ -510,17 +510,35 @@ export function createToolbar(ctx) {
 
     const rows = subKey ? subItems() : [];
     const wasHidden = sub.hidden;
-    sub.hidden = !rows.length;
-    if (rows.length) paint(sub, rows, t);
-    else sub.__sig = "";
+    const still = animate && !reduced();
+    const opening = wasHidden && rows.length > 0;
+    // Closing is DEFERRED. Hiding the second row and then collapsing the card
+    // leaves an empty band shrinking where the row was; kept in flow it is
+    // concealed under the card's own edge, which is the way it arrived.
+    const closing = still && !wasHidden && !rows.length;
 
-    if (!animate || reduced() || (!moved && wasHidden === sub.hidden)) {
+    if (rows.length) {
+      sub.hidden = false;
+      paint(sub, rows, t);
+    } else {
+      sub.__sig = "";
+      if (!closing) sub.hidden = true;
+    }
+
+    if (!animate || reduced() || (!moved && wasHidden === sub.hidden && !closing)) {
       if (ghost) ghost.remove();
       return;
     }
 
     const token = ++morph;
-    const after = card.offsetHeight;
+    let after;
+    if (closing) {
+      sub.hidden = true;
+      after = card.offsetHeight;
+      sub.hidden = false;
+    } else {
+      after = card.offsetHeight;
+    }
 
     // The rows scroll when they are taller than the cap, and a card that is
     // MID-TRAVEL between two heights is briefly shorter than the row inside it
@@ -536,11 +554,25 @@ export function createToolbar(ctx) {
         easing: EASE,
       });
     }
+    // The second row rises into the space the card is opening for it, rather
+    // than standing there at full strength while the card catches up.
+    if (opening && still) {
+      sub.animate(
+        [
+          { opacity: 0, transform: "translateY(-6px)" },
+          { opacity: 1, transform: "none" },
+        ],
+        { duration: MORPH_MS, easing: EASE }
+      );
+    }
+
     // Both animations start in this frame and both run for MORPH_MS, so one
     // timer lifts the clip for both. `token` is what stops a switch made
     // mid-travel from having its predecessor uncover it early.
     setTimeout(() => {
-      if (token === morph) delete card.dataset.morph;
+      if (token !== morph) return;
+      delete card.dataset.morph;
+      if (closing) sub.hidden = true;
     }, MORPH_MS);
   }
 
