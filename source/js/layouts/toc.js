@@ -148,23 +148,50 @@ function buildController() {
   return utils;
 }
 
+/** Show or hide the rail. Hidden, NEVER removed — see `refreshTOC`. */
+function setEmpty(empty) {
+  document
+    .querySelectorAll(".toc-content-container, .toc-marker")
+    .forEach((elem) => elem.classList.toggle("is-empty", empty));
+}
+
 export function initTOC() {
   const utils = buildController();
   controller = utils;
 
+  setEmpty(utils.navItems.length === 0);
   if (utils.navItems.length > 0) {
     utils.showTOCAside();
     utils.measureSections();
   } else {
     controller = null;
-    document
-      .querySelectorAll(".toc-content-container, .toc-marker")
-      .forEach((elem) => {
-        elem.remove();
-      });
   }
 
   return utils;
+}
+
+/**
+ * Rebuild the controller over a list that has CHANGED, without touching whether
+ * the aside is open.
+ *
+ * The editor writes its own entries into `.post-toc` as headings are typed,
+ * added and removed (plugins/editor/toc.js), and then needs the links, the
+ * heading elements and their offsets looked up again. `initTOC` would do that
+ * too, but it also decides the aside's open state from stored preferences —
+ * which would fold the rail shut under somebody in the middle of using it.
+ *
+ * The rail is hidden rather than deleted when a post has no headings, for this
+ * function's sake: a post can grow its first heading while it is being edited,
+ * and a node that was removed cannot be filled back in.
+ */
+export function refreshTOC() {
+  const utils = buildController();
+  const has = utils.navItems.length > 0;
+  controller = has ? utils : null;
+  setEmpty(!has);
+  if (has) utils.measureSections();
+  invalidateMetrics();
+  return controller;
 }
 
 // Heading offsets shift whenever the article's height changes — a lazy image

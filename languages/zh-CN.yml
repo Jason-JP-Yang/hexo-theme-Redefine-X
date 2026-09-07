@@ -377,6 +377,8 @@ editor:
   cover_drop: 移除头图
   placeholder: 开始书写，或按 / 插入区块
   insert: 插入区块
+  insert_above: 在上方插入区块
+  insert_end: 在末尾添加区块
   drag: 拖动以调整顺序
   toggle_source: 显示源码
   language: 语言
@@ -468,8 +470,11 @@ editor:
   tab_block: 区块
   tab_insert: 插入
   tab_source: 原文
+  b_heading: 标题
   b_heading1: 一级标题
   b_heading4: 四级标题
+  b_heading5: 五级标题
+  b_heading6: 六级标题
   b_raw: 原始 HTML
   b_icode: 行内代码
   b_imath: 行内公式
@@ -502,7 +507,6 @@ editor:
   ask_args: 参数
   ask_tex: LaTeX
   apply: 应用
-  depth: 层级
   properties: 图片属性
   open_folder: 打开图片库
   open_viewer: 放大查看

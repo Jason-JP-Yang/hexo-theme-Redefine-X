@@ -375,6 +375,8 @@ editor:
   cover_drop: Remove cover
   placeholder: Write, or press / for a block
   insert: Insert block
+  insert_above: Insert a block above
+  insert_end: Add a block at the end
   drag: Drag to reorder
   toggle_source: Show source
   language: language
@@ -466,8 +468,11 @@ editor:
   tab_block: Block
   tab_insert: Insert
   tab_source: Source
+  b_heading: Heading
   b_heading1: Heading 1
   b_heading4: Heading 4
+  b_heading5: Heading 5
+  b_heading6: Heading 6
   b_raw: Raw HTML
   b_icode: Inline code
   b_imath: Inline equation
@@ -500,7 +505,6 @@ editor:
   ask_args: Arguments
   ask_tex: LaTeX
   apply: Apply
-  depth: Depth
   properties: Picture properties
   open_folder: Open folder
   open_viewer: Open viewer

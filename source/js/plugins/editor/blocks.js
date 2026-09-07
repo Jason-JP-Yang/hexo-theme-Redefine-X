@@ -57,7 +57,7 @@ export function createView(block, ctx) {
 
   el.innerHTML = `
     <div class="ed-gutter" contenteditable="false">
-      <button type="button" class="ed-gutter-btn ed-add" title="${escapeHTML(ctx.t("insert", "Insert block"))}" tabindex="-1">
+      <button type="button" class="ed-gutter-btn ed-add" title="${escapeHTML(ctx.t("insert_above", "Insert a block above"))}" tabindex="-1">
         <i class="fa-solid fa-plus" aria-hidden="true"></i>
       </button>
       <button type="button" class="ed-gutter-btn ed-handle" title="${escapeHTML(ctx.t("drag", "Drag to reorder"))}" draggable="true" tabindex="-1">
@@ -74,7 +74,9 @@ export function createView(block, ctx) {
   view.touch = () => {
     view.touched = true;
     block.dirty = true;
-    ctx.onChange();
+    // The view goes with it: the contents rail only has to be rebuilt when the
+    // block that changed is a heading, and that is the cheapest place to know.
+    ctx.onChange(view);
   };
 
   if (RICH_TYPES.has(block.type)) mountRich(view);
@@ -84,9 +86,14 @@ export function createView(block, ctx) {
   else if (block.type === "component") mountComponent(view);
   else mountRule(view);
 
+  // ABOVE, not below. The button sits at the top-left of the block it belongs
+  // to, level with that block's first line, so "the new one goes here" is the
+  // only reading of it — and inserting below meant the block you pressed on
+  // stayed put while a line appeared under it, which is the one place you were
+  // not looking. The gap after the LAST block has its own button; see `ed-tail`.
   el.querySelector(".ed-add").addEventListener("click", (e) => {
     e.preventDefault();
-    ctx.onInsertAfter(block.id);
+    ctx.onInsertBefore(block.id);
   });
 
   // A press anywhere in the block is a press ON the block. Without this an
@@ -247,26 +254,11 @@ function mountRich(view) {
   // nothing but them is an empty line, and Backspace has to delete it.
   view.isEmpty = () => isBlankText(host.textContent);
 
-  // Heading levels 5 and 6 are not offered as conversions — four is already
-  // more depth than a post uses — but a file that carries one has to be able to
-  // say so, so the depth control covers all six.
+  // No heading control here. The toolbar owns the one Heading button and the
+  // levels behind it — see `headingControl` in toolbar.js. This used to add a
+  // SECOND one beside the conversion list's four, which is how the Block row
+  // came to say "heading" five times.
   view.options = (open) => {
-    if (block.type === "heading") {
-      // One control that opens the depths, the way the highlighter opens the
-      // palette. Six H icons in a row said nothing about which was which.
-      return [
-        {
-          kind: "btn",
-          act: "sub",
-          arg: "level",
-          icon: "fa-heading",
-          label: "Heading " + (block.level || 2),
-          tt: "b_heading" + (block.level || 2),
-          wide: true,
-          on: open === "level",
-        },
-      ];
-    }
     if (block.type === "list") {
       return [
         { kind: "btn", act: "ordered", arg: "0", icon: "fa-list-ul", label: "Bullets", tt: "b_list", on: !block.ordered },
@@ -275,23 +267,6 @@ function mountRich(view) {
     }
     return [];
   };
-
-  view.subOptions = (key) =>
-    key !== "level" || block.type !== "heading"
-      ? []
-      : [
-          { kind: "label", label: "Depth", tt: "depth" },
-          ...[1, 2, 3, 4, 5, 6].map((level) => ({
-            kind: "btn",
-            act: "level",
-            arg: level,
-            icon: "fa-heading",
-            label: "Heading " + level,
-            tt: "b_heading" + level,
-            wide: true,
-            on: (block.level || 2) === level,
-          })),
-        ];
 
   view.act = (act, arg) => {
     if (act === "level") {
@@ -666,9 +641,24 @@ function mountSource(view) {
   view.isEmpty = () => !source.value.trim();
   view.refresh = paint;
 
+  // A diagram's palette is written INTO its SVG, so it does not follow the
+  // site's light/dark switch — it has to be drawn again under the other theme.
+  // The published page does this for its own diagrams in plugins/mermaid.js;
+  // this is the editor's copy, for the ones on the canvas.
+  if (block.type === "mermaid") {
+    const retheme = () => {
+      if (wrap.dataset.mode !== "source") paint();
+    };
+    window.addEventListener("redefine:color-scheme-change", retheme);
+    view.release = () => window.removeEventListener("redefine:color-scheme-change", retheme);
+  }
+
   // Everything starts rendered: opening a document should look like the post.
   wrap.dataset.mode = "preview";
-  paint();
+  // A diagram, an equation and a code listing all paint asynchronously, so the
+  // block's height is not knowable in the tick it is created. `enter` waits on
+  // this rather than measuring an empty preview and jumping afterwards.
+  view.ready = paint();
 }
 
 /* ─── image ────────────────────────────────────────────────────────────────── */

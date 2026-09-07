@@ -656,7 +656,19 @@ textarea.ed-f-input
   z-index $z-index-4
   max-width 100%
   pointer-events none
-  transition top $ed-morph
+  transition top $ed-morph, opacity 0.14s ease-out, transform 0.14s ease-out
+
+  // At the very top of the page the document bar is not pinned — it is still
+  // down in the article where it was written — and a toolbar hanging under the
+  // navbar with nothing above it reads as chrome that has come loose. It gets
+  // out of the way there and comes back the moment the page is scrolled. Fast,
+  // because it answers a scroll: anything slower lags behind the gesture.
+  &[data-perch="hide"]
+    opacity 0
+    transform translateY(-8px)
+
+    .ed-toolbar-card
+      pointer-events none
 
   // At the top at every width, under the document bar, exactly as on a desktop.
   // Parked at the bottom of a phone it sat on the keyboard, and the tab you
@@ -732,6 +744,13 @@ textarea.ed-f-input
 
   &[hidden]
     display none
+
+// A card MID-TRAVEL between two heights is briefly shorter than the row inside
+// it, so switching from Block to Insert flashed a scrollbar down the toolbar's
+// right edge for the length of the animation. Clipped while it moves, scrollable
+// again the moment it arrives.
+.ed-toolbar-card[data-morph="1"] .ed-toolbar-row
+  overflow hidden
 
 .ed-toolbar-sub
   padding-top 6px
@@ -831,6 +850,66 @@ textarea.ed-f-input
 
   &[data-drop="after"]::after
     bottom -4px
+
+// ─── the gap after the last block ───────────────────────────
+// Every block's gutter `+` inserts ABOVE it, which leaves exactly one place in
+// a box no button can reach: the end. So each box — the article, a tab pane, a
+// large note, a folding — ends with one of these. It is also where the drop
+// indicator goes when a dragged block is heading for that gap, which is why the
+// line is drawn ON it rather than under the block before it: the `+` IS the
+// gap, and the block lands immediately above it.
+//
+// Quiet until it is wanted. A dashed outline that only fills in on hover, so a
+// document at rest reads as its own text and not as a column of controls.
+.ed-tail
+  position relative
+  display flex
+  align-items center
+  justify-content center
+  width 100%
+  height 30px
+  margin 6px 0 0
+  padding 0
+  border 1px dashed var(--border-color)
+  border-radius 9px
+  background transparent
+  color var(--third-text-color)
+  font-size 0.72rem
+  cursor pointer
+  opacity 0.42
+  transition opacity $ed-fade, border-color $ed-fade, background $ed-fade, color $ed-fade
+
+  &:hover,
+  &:focus-visible
+    opacity 1
+    border-color var(--primary-color)
+    background var(--second-background-color)
+    color var(--primary-color)
+    outline none
+
+  &[data-drop="1"]
+    opacity 1
+    border-style solid
+    border-color var(--primary-color)
+
+    &::before
+      content ""
+      position absolute
+      left 0
+      right 0
+      top -6px
+      height 3px
+      border-radius 3px
+      background var(--primary-color)
+      box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+      animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+
+// Inside a note or a tab pane it is smaller: the box is already framed, and a
+// second full-strength dashed rectangle inside that frame is two boxes.
+.ed-nest > .ed-tail
+  height 24px
+  margin-top 4px
+  opacity 0.3
 
 // The snapshot the browser drags. Clipped to the block's own border box, so the
 // gutter — which is positioned OUTSIDE that box — is not in the picture and the
@@ -1023,7 +1102,9 @@ textarea.ed-f-input
   > .ed-block:first-child .ed-body > *
     margin-top 0
 
-  > .ed-block:last-child .ed-body > *
+  // `:last-of-type`, not `:last-child`: every box now ends with its own `+`
+  // button, so the last BLOCK is no longer the last child of anything.
+  > .ed-block:last-of-type .ed-body > *
     margin-bottom 0
 
 // ─── an equation in a sentence ──────────────────────────────

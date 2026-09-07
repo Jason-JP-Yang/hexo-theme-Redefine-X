@@ -39,6 +39,7 @@ import {
   setFrontMatterKey,
 } from "./markdown.js";
 import { closeDialogs, createStage, forgetTree, openAsk, openPicker, openSheet, siteAddress } from "./picker.js";
+import { holdTOC, releaseTOC, scheduleTOC } from "./toc.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
 import {
@@ -61,7 +62,7 @@ import { assetURL } from "../../tools/vaultCrypto.js";
 import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as gitea from "./gitea.js";
-import { contentChanged, crossFade, enter, exit, flip, pop } from "./motion.js";
+import { contentChanged, crossFade, enter, exit, flip, pop, toolbarIn, toolbarOut } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -100,6 +101,8 @@ const state = {
   stashTimer: null,
   scrollRAF: 0,
   pointerY: 0,
+  leaving: false,
+  perchOff: null,
 };
 
 let ui = null;
@@ -525,8 +528,42 @@ async function activate(host) {
   wire();
   ui.toolbar.sync();
   contentChanged();
+  holdTOC(state.canvas);
+
+  // Shown on the way in whatever the scroll position is — the toolbar arriving
+  // IS the editor opening — and only then handed over to the perch rule below.
+  ui.toolbar.el.dataset.perch = "show";
+  await toolbarIn(ui.toolbar.el);
+  state.perchOff = watchPerch(ui.toolbar.el);
 
   if (identity.fresh) state.titleHost.querySelector(".ed-title").focus();
+}
+
+/**
+ * The toolbar belongs to the pinned document bar, so it keeps that bar's hours.
+ *
+ * At the very top of the page the bar is not pinned — it is still down in the
+ * article where it was written — and a floating toolbar hanging under the
+ * navbar with nothing above it reads as chrome that has come loose. It shows on
+ * the way in, gets out of the way when the page is scrolled back to the top,
+ * and comes back the moment it is not.
+ *
+ * Through the theme's scroll scheduler: `read` measures, `write` mutates, and
+ * neither ever does the other's job.
+ */
+const PERCH_AT = 24;
+
+function watchPerch(el) {
+  let want = "show";
+  return onScroll(
+    (m) => {
+      want = (m ? m.scrollY : window.scrollY) > PERCH_AT ? "show" : "hide";
+    },
+    () => {
+      if (el.dataset.perch !== want) el.dataset.perch = want;
+    },
+    "editor toolbar perch"
+  );
 }
 
 /* ─── letting go of unsaved work ───────────────────────────────────────────── */
@@ -602,14 +639,26 @@ async function deactivate() {
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
   unwire();
-  releaseDocbar();
+  if (state.perchOff) state.perchOff();
 
+  // The toolbar leaves FIRST, and `releaseDocbar` comes after it.
+  //
+  // Its left edge and width are `var(--ed-docbar-x/w)`, published by the
+  // document bar; releasing those first left the toolbar with no width to
+  // inherit, so it snapped out to the full viewport for the length of its own
+  // disappearance. `toolbarOut` also freezes the box it measured, so taking the
+  // variables away underneath it changes nothing.
   const bar = ui.bar;
   const front = ui.front && ui.front.el;
+  const floating = ui.toolbar && ui.toolbar.el;
+
+  if (floating) await toolbarOut(floating);
+  releaseDocbar();
+
   await Promise.all([exit(bar), front ? exit(front) : Promise.resolve()]);
   bar.remove();
   if (front) front.remove();
-  if (ui.toolbar) ui.toolbar.el.remove();
+  if (floating) floating.remove();
   if (ui.slash) ui.slash.el.remove();
   if (ui.file) ui.file.remove();
   document.querySelectorAll(".ed-ask, .ed-dragshot").forEach((el) => el.remove());
@@ -623,6 +672,10 @@ async function deactivate() {
   // Anything that was mid-swap when the article was taken apart was released by
   // the loader; this is where it gets picked up again.
   observeImages();
+  // After the article is back, not before: the published list anchors on the
+  // heading ids in THAT article, and measuring them while the canvas still held
+  // editor blocks would put every heading at infinity.
+  releaseTOC();
 
   for (const node of state.put) node.classList.remove("ed-put-away");
   state.canvas.classList.remove("ed-no-typeset");
@@ -637,6 +690,7 @@ async function deactivate() {
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
     put: [], doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null, vaultChoice: undefined,
+    perchOff: null,
   });
   ui = null;
   contentChanged();
@@ -715,9 +769,10 @@ function blockCtx(box) {
   return {
     t,
     box: home,
-    onChange: () => {
+    onChange: (view) => {
       writeBox(home);
       markDirty();
+      if (view && view.block && view.block.type === "heading") refreshTOC();
     },
     onFocus: (view) => {
       const moved = state.focused !== view;
@@ -747,7 +802,7 @@ function blockCtx(box) {
     onRemount: (id) => remountBlock(id),
     onRawEdited: (id, text) => applyRaw(id, text),
     ask: (kind, current) => askFor(ui.toolbar.el, { t }, kind, current),
-    onInsertAfter: (id) => insertBlock(makeBlock("paragraph"), id, true),
+    onInsertBefore: (id) => insertBlock(makeBlock("paragraph"), id, true, null, "before"),
     onSplit: (id, tailText) => {
       const view = insertBlock(makeBlock("paragraph", { text: tailText }), id, false);
       if (view && view.focus) view.focus("start");
@@ -911,13 +966,45 @@ function figureIndex(id) {
  * markdown can express but nobody can read, so a nested box refuses to take a
  * block that would open a third.
  */
+/**
+ * The button at the END of a box.
+ *
+ * Every block's gutter `+` inserts ABOVE it, which leaves exactly one place in
+ * a box that no button can reach: after the last block. Inside a tab pane, a
+ * large note or a folding that is the only place there is when the component
+ * holds one line — and at the foot of the article it is where writing actually
+ * continues. So each box grows a tail of its own, and it is also where the drop
+ * indicator goes when a dragged block is heading for the end (see `paintDrop`).
+ */
+function makeTail(box) {
+  const tail = document.createElement("button");
+  tail.type = "button";
+  tail.className = "ed-tail";
+  tail.contentEditable = "false";
+  tail.tabIndex = -1;
+  tail.title = t("insert_end", "Add a block at the end");
+  tail.innerHTML = `<i class="fa-solid fa-plus" aria-hidden="true"></i>`;
+  tail.addEventListener("mousedown", (e) => e.preventDefault());
+  tail.addEventListener("click", (e) => {
+    e.preventDefault();
+    insertBlock(makeBlock("paragraph"), null, true, box);
+  });
+  return tail;
+}
+
+let boxSeq = 0;
+
 function createBox(blocks, el, opts) {
   const box = Object.assign({ blocks, views: [], el, depth: 0, write: null, onEmpty: null }, opts || {});
+  box.uid = ++boxSeq;
+  box.tail = makeTail(box);
+  el.appendChild(box.tail);
   state.boxes.add(box);
   return box;
 }
 
 function dropBox(box) {
+  if (box.tail) box.tail.remove();
   state.boxes.delete(box);
 }
 
@@ -935,7 +1022,13 @@ function dropBox(box) {
 function dropBoxesIn(el) {
   if (!el) return;
   for (const box of state.boxes) {
-    if (box !== state.root && box.el && el.contains(box.el)) state.boxes.delete(box);
+    if (box === state.root || !box.el || !el.contains(box.el)) continue;
+    for (const view of box.views) releaseView(view);
+    state.boxes.delete(box);
+  }
+  // The view being discarded is not in a box of its own, so it is released here.
+  for (const box of state.boxes) {
+    for (const view of box.views) if (view.el === el) releaseView(view);
   }
 }
 
@@ -980,9 +1073,20 @@ function mountBlock(block, box) {
   const home = box || state.root;
   const view = createView(block, blockCtx(home));
   view.box = home;
-  home.el.appendChild(view.el);
+  // Before the tail, which is the last thing in every box.
+  home.el.insertBefore(view.el, home.tail || null);
   home.views.push(view);
   return view;
+}
+
+/** A view being discarded: anything it subscribed to outside itself goes too. */
+function releaseView(view) {
+  if (view && view.release) view.release();
+}
+
+/** The contents rail follows the headings on the canvas. Debounced; see toc.js. */
+function refreshTOC() {
+  if (state.on && state.canvas) scheduleTOC(state.canvas);
 }
 
 /**
@@ -1008,23 +1112,39 @@ function fillBox(box, markdown) {
   renumberFigures();
 }
 
-function insertBlock(block, afterId, focus, box) {
-  const at = afterId == null ? null : locate(afterId);
+/**
+ * Put a block into a box.
+ *
+ * `where` is "after" (the default, and what Enter does) or "before" — the
+ * gutter's `+`, which reads as "a new block here" and used to mean "a new block
+ * one line further down".
+ */
+function insertBlock(block, anchorId, focus, box, where) {
+  const at = anchorId == null ? null : locate(anchorId);
   const home = box || (at ? at.box : state.root);
-  const index = at ? at.index : home.blocks.length - 1;
+  const index = at
+    ? where === "before"
+      ? at.index
+      : at.index + 1
+    : home.blocks.length;
 
-  home.blocks.splice(index + 1, 0, block);
+  home.blocks.splice(index, 0, block);
   const view = createView(block, blockCtx(home));
   view.box = home;
 
-  const anchor = home.views[index];
-  if (anchor) anchor.el.after(view.el);
-  else home.el.appendChild(view.el);
-  home.views.splice(index + 1, 0, view);
+  const next = home.views[index];
+  if (next) next.el.before(view.el);
+  else home.el.insertBefore(view.el, home.tail || null);
+  home.views.splice(index, 0, view);
 
-  enter(view.el).then(() => {
+  // `view.ready` is the block's own first paint where it has one — a diagram or
+  // an equation renders asynchronously, and measuring before that finished is
+  // what made a new block at the end of an article stutter and then snap to a
+  // different height.
+  enter(view.el, view.ready).then(() => {
     if (focus && view.focus) view.focus("start");
     contentChanged();
+    refreshTOC();
   });
   renumberFigures();
   writeBox(home);
@@ -1058,6 +1178,7 @@ async function deleteBlock(id, move) {
   writeBox(box);
   markDirty();
   contentChanged();
+  refreshTOC();
 }
 
 /** Backspace at the head of a block folds it into the one above. */
@@ -1103,6 +1224,7 @@ function convertBlock(id, type, fields) {
   writeBox(box);
   markDirty();
   contentChanged();
+  refreshTOC();
 }
 
 /** A multi-line paste is a document: it arrives as blocks, not as one line. */
@@ -1439,24 +1561,27 @@ function dropTargetAt(y) {
  * restarted its entrance animation each time — the flicker was the indicator
  * being recreated, not redrawn.
  *
- * A slot is drawn ABOVE the block that would follow it, and only the last slot
- * in a box is drawn below the block before it — one line per place, so what is
- * on screen and what will happen are the same count.
+ * A slot is drawn ABOVE the block that would follow it, and the LAST slot in a
+ * box is drawn on that box's `+` — which is the thing actually standing in that
+ * gap, and which the block would land immediately before. One line per place,
+ * so what is on screen and what will happen are the same count.
  */
 function paintDrop(target) {
-  const anchor = target
-    ? target.index < target.box.views.length
-      ? { view: target.box.views[target.index], where: "before" }
-      : { view: target.box.views[target.box.views.length - 1], where: "after" }
-    : null;
+  const tail = target && target.index >= target.box.views.length ? target.box : null;
+  const anchor = target && !tail ? target.box.views[target.index] : null;
 
-  const key = anchor && anchor.view ? anchor.view.block.id + ":" + anchor.where : "";
+  const key = tail ? "tail:" + tail.uid : anchor ? anchor.block.id : "";
   if (key === state.dropAt) return;
   state.dropAt = key;
 
   for (const view of allViews()) {
-    const want = anchor && anchor.view === view ? anchor.where : "";
+    const want = anchor === view ? "before" : "";
     if (view.el.dataset.drop !== want) view.el.dataset.drop = want;
+  }
+  for (const box of state.boxes) {
+    if (!box.tail) continue;
+    const want = box === tail ? "1" : "";
+    if (box.tail.dataset.drop !== want) box.tail.dataset.drop = want;
   }
 }
 
@@ -1499,7 +1624,10 @@ async function onDocDrop(e) {
   // on after, so the block being carried is safely somewhere else first.
   const emptying = leaving !== arriving && leaving.views.length === 1 && leaving.onEmpty;
 
-  await flip(Array.from(state.canvas.querySelectorAll(".ed-block")), () => {
+  // The tails travel too: a block leaving a note shortens it, and a `+` that
+  // teleports to its new place while everything around it slides is the one
+  // thing on screen that did not move like the rest.
+  await flip(Array.from(state.canvas.querySelectorAll(".ed-block, .ed-tail")), () => {
     leaving.views.splice(held.index, 1);
     const [block] = leaving.blocks.splice(held.index, 1);
 
@@ -1509,7 +1637,7 @@ async function onDocDrop(e) {
 
     const before = arriving.views[index + 1];
     if (before) before.el.before(held.view.el);
-    else arriving.el.appendChild(held.view.el);
+    else arriving.el.insertBefore(held.view.el, arriving.tail || null);
   });
 
   // The view's ctx is bound to the box it was built in, so a block that changed
@@ -1766,6 +1894,12 @@ async function doSave(mode) {
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);
     startProgress(result);
+
+    // Publishing is the end of a piece of work, and what it produces — the
+    // commit line, the build rail, the document bar — is all at the top of the
+    // page, while the author is almost always at the bottom of it. The same
+    // journey the corner's own button makes (tools/scrollTopBottom.js).
+    if (result.published) window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
     if (err.kind === "conflict") {
       notice("error", t("conflict_hint", "This file changed in the repository. Your text is safe here — open the post in a new tab to see what landed, then re-apply."));
@@ -2092,7 +2226,10 @@ export function teardownEditor() {
   if (!state.on) return;
 
   unwire();
+  if (state.perchOff) state.perchOff();
   releaseDocbar();
+  releaseTOC();
+  for (const box of state.boxes) for (const view of box.views) releaseView(view);
   document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot").forEach((el) => el.remove());
   closeDialogs();
   document.documentElement.classList.remove("blog-editing");
@@ -2101,7 +2238,7 @@ export function teardownEditor() {
   registerRewind(null);
   state.boxes.clear();
   Object.assign(state, {
-    on: false, host: null, canvas: null, titleHost: null, put: [],
+    on: false, host: null, canvas: null, titleHost: null, put: [], perchOff: null,
     doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null,
   });
   ui = null;

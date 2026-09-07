@@ -206,6 +206,32 @@ export function createToolbar(ctx) {
     return items;
   }
 
+  const HEADING = /^heading[1-6]$/;
+
+  /**
+   * The one heading button, and what it says.
+   *
+   * Named for the level the block already is, so the row reports the state
+   * rather than merely offering it — the same way the code block's language
+   * button is the language. Greyed out for the same reason the four separate
+   * ones were: a heading is one line, and a block holding three cannot become
+   * one without somebody deciding which two to lose.
+   */
+  function headingControl(block) {
+    const legal = conversions(block).find((entry) => HEADING.test(entry.key));
+    const level = block && block.type === "heading" ? block.level || 2 : 0;
+    return {
+      kind: "btn",
+      act: "sub",
+      arg: "heading",
+      icon: "fa-heading",
+      label: level ? "Heading " + level : "Heading",
+      tt: level ? "b_heading" + level : "b_heading",
+      on: !!level || subKey === "heading",
+      disabled: !legal || legal.disabled,
+    };
+  }
+
   function blockItems() {
     const view = ctx.view();
     // Read first: legality is decided from the block's CONTENT, and a block
@@ -214,16 +240,33 @@ export function createToolbar(ctx) {
     // heading.
     if (view && view.read) view.read();
     const block = view && view.block;
-    const rows = conversions(block).map((entry) => ({
-      kind: "btn",
-      act: "convert",
-      arg: entry.key,
-      icon: entry.icon,
-      label: entry.label,
-      tt: "b_" + entry.key,
-      on: entry.on,
-      disabled: entry.disabled,
-    }));
+
+    // ONE heading control, not five. The conversion list offers H1–H4 as four
+    // buttons wearing the same icon, and the heading block then added a fifth
+    // that opened the depths — so the row said "heading" five times and four of
+    // those were indistinguishable at a glance. They collapse into a single
+    // button that opens the levels in the second row, the way the highlighter
+    // opens its palette.
+    const rows = [];
+    let headingDone = false;
+    for (const entry of conversions(block)) {
+      if (HEADING.test(entry.key)) {
+        if (headingDone) continue;
+        headingDone = true;
+        rows.push(headingControl(block));
+        continue;
+      }
+      rows.push({
+        kind: "btn",
+        act: "convert",
+        arg: entry.key,
+        icon: entry.icon,
+        label: entry.label,
+        tt: "b_" + entry.key,
+        on: entry.on,
+        disabled: entry.disabled,
+      });
+    }
 
     const own = view && view.options ? view.options(subKey) : [];
     const common = [
@@ -290,6 +333,33 @@ export function createToolbar(ctx) {
     }
 
     const view = ctx.view();
+
+    if (subKey === "heading") {
+      const block = view && view.block;
+      const legal = conversions(block).find((entry) => HEADING.test(entry.key));
+      if (!legal || legal.disabled) return [];
+      const here = block && block.type === "heading" ? block.level || 2 : 0;
+      // Five and six are offered only to a block that is ALREADY a heading. The
+      // conversion list stops at four on purpose — four is more depth than a
+      // post uses — but a file that carries an H6 has to be able to say so.
+      const levels = here ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4];
+      return [
+        { kind: "label", label: "Heading", tt: "b_heading" },
+        ...levels.map((level) => ({
+          kind: "btn",
+          act: "hlevel",
+          arg: level,
+          icon: "fa-heading",
+          label: "Heading " + level,
+          tt: "b_heading" + level,
+          wide: true,
+          on: here === level,
+        })),
+        { kind: "sep" },
+        { kind: "btn", act: "convert", arg: "paragraph", icon: "fa-paragraph", label: "Text", tt: "b_paragraph", wide: true },
+      ];
+    }
+
     if (view && view.subOptions) return view.subOptions(subKey) || [];
     return [];
   }
@@ -344,10 +414,22 @@ export function createToolbar(ctx) {
     const token = ++morph;
     const after = card.offsetHeight;
     if (before === after || token !== morph) return;
-    card.animate([{ height: before + "px" }, { height: after + "px" }], {
+
+    // The rows scroll when they are taller than the cap, and a card that is
+    // MID-TRAVEL between two heights is briefly shorter than the row inside it
+    // — so switching from Block to Insert flashed a scrollbar down the right of
+    // the toolbar for a quarter of a second. It is clipped while it travels and
+    // scrollable again the moment it arrives.
+    card.dataset.morph = "1";
+    const run = card.animate([{ height: before + "px" }, { height: after + "px" }], {
       duration: MORPH_MS,
       easing: EASE,
     });
+    run.finished
+      .catch(() => {})
+      .then(() => {
+        if (token === morph) delete card.dataset.morph;
+      });
   }
 
   /* ─── what the editor calls ──────────────────────────────────────────── */
@@ -447,6 +529,16 @@ export function createToolbar(ctx) {
       clearMarks(root);
       ctx.onMarked();
       return void sync();
+    }
+
+    // Four levels are a conversion — any block can become one. Five and six
+    // only exist on a block that is already a heading, so they are a setting on
+    // that block rather than a type it turns into.
+    if (act === "hlevel") {
+      const level = Number(arg) || 2;
+      if (level <= 4) ctx.onConvert("heading" + level);
+      else ctx.onAct("level", level);
+      return void render(true);
     }
 
     if (act === "convert") return void ctx.onConvert(arg);

@@ -26,6 +26,20 @@ function settle(animation) {
 }
 
 /**
+ * One painted frame.
+ *
+ * Every height below is measured after one of these. A box that has just had
+ * its contents replaced is not finished laying out at the end of the task that
+ * replaced them — an SVG whose glyph metrics have only just been applied, a
+ * textarea that has not yet been asked for its scrollHeight, a font that
+ * swapped in — and a height measured in the same tick is a height the animation
+ * then has to correct in front of the reader.
+ */
+function nextFrame() {
+  return new Promise((done) => requestAnimationFrame(() => done()));
+}
+
+/**
  * Change what is inside `el` while animating its height between the two
  * measurements. `mutate` may be async — a block that has to typeset before its
  * height is knowable is the normal case, not the exception.
@@ -35,6 +49,7 @@ export async function morphHeight(el, mutate) {
 
   const from = el.offsetHeight;
   await mutate();
+  await nextFrame();
   const to = el.offsetHeight;
   if (from === to) return;
 
@@ -47,9 +62,14 @@ export async function morphHeight(el, mutate) {
 }
 
 /**
- * The swap every source⇄render toggle uses: the old content leaves through a
- * short blur while the box resizes underneath it, and the new one arrives the
- * same way. Same shape as editing an instant-note bubble.
+ * The swap every source⇄render toggle uses: the old content blurs out, the new
+ * one arrives, and the box travels to its new height WHILE that happens.
+ *
+ * The height used to be its own step between the two fades, which is a quarter
+ * of a second in which the box is empty and moving. On an equation that is the
+ * whole of the effect — a small textarea becomes a tall rendered formula, so
+ * the reader watches an invisible box stretch a long way and only then get its
+ * contents. Overlapping them means the formula arrives as the space for it does.
  */
 export async function crossFade(el, mutate) {
   if (reduced()) return void (await mutate());
@@ -61,30 +81,69 @@ export async function crossFade(el, mutate) {
     )
   );
 
-  await morphHeight(el, mutate);
+  const from = el.offsetHeight;
+  await mutate();
+  await nextFrame();
+  const to = el.offsetHeight;
 
   el.getAnimations().forEach((a) => a.cancel());
-  await settle(
+
+  const runs = [
     el.animate(
       [{ opacity: 0, filter: BLUR }, { opacity: 1, filter: "none" }],
       { duration: FADE_MS, easing: "ease-out" }
-    )
-  );
+    ),
+  ];
+  if (from !== to) {
+    runs.push(el.animate([{ height: from + "px" }, { height: to + "px" }], { duration: MORPH_MS, easing: EASE }));
+  }
+  await Promise.all(runs.map(settle));
 }
 
-/** A block arriving: it grows from nothing while the ones below it move down. */
-export async function enter(el) {
+/**
+ * A block arriving: it grows from nothing while the ones below it move down.
+ *
+ * `ready` is the block's own first paint, where it has one — a diagram, an
+ * equation and a code block all render asynchronously, and a height measured
+ * before that finished is a height the block then jumps away from the instant
+ * the animation ends. The block is held collapsed until it can be measured
+ * truthfully, which is also why it never flashes at full size first: the inline
+ * height goes back to `0` in the same tick it was cleared to measure, so the
+ * browser has no frame in which to paint the open state.
+ */
+export async function enter(el, ready) {
   if (reduced()) return;
-  const height = el.offsetHeight;
-  await settle(
-    el.animate(
-      [
-        { height: 0, opacity: 0, filter: BLUR, marginBottom: 0 },
-        { height: height + "px", opacity: 1, filter: "none" },
-      ],
-      { duration: MORPH_MS, easing: EASE }
-    )
+  el.style.overflow = "hidden";
+
+  let height;
+  if (ready) {
+    // Held shut while it renders, so it never flashes at full size first: the
+    // inline height goes back to `0` in the same tick it was cleared to
+    // measure, and the browser has no frame in which to paint the open state.
+    el.style.height = "0px";
+    await Promise.resolve(ready).catch(() => {});
+    await nextFrame();
+    el.style.height = "";
+    height = el.offsetHeight;
+    el.style.height = "0px";
+  } else {
+    // A paragraph knows its height the moment it exists, and waiting a frame
+    // for it would mean the caret landing in a box that has not opened yet.
+    height = el.offsetHeight;
+  }
+
+  const run = el.animate(
+    [
+      { height: 0, opacity: 0, filter: BLUR, marginBottom: 0 },
+      { height: height + "px", opacity: 1, filter: "none" },
+    ],
+    { duration: MORPH_MS, easing: EASE }
   );
+  // Cleared while the animation owns the property, so there is no frame in
+  // which the inline `0` and the animation disagree.
+  el.style.height = "";
+  await settle(run);
+  el.style.overflow = "";
 }
 
 /** A block leaving. Resolves once it is safe to remove from the DOM. */
@@ -129,6 +188,55 @@ export async function flip(nodes, mutate) {
     );
   }
   await Promise.all(runs.map(settle));
+}
+
+/**
+ * The floating toolbar arriving and leaving.
+ *
+ * Slower than `pop`, and deliberately: this is a whole surface appearing over
+ * the article rather than a menu answering a click, and the same 180ms that
+ * reads as responsive on a popover reads as a flicker on something this size.
+ * It travels from under the document bar, which is where it belongs.
+ */
+export const TOOLBAR_IN_MS = 360;
+export const TOOLBAR_OUT_MS = 240;
+
+export function toolbarIn(el) {
+  if (reduced()) return Promise.resolve();
+  return settle(
+    el.animate(
+      [
+        { opacity: 0, transform: "translateY(-14px) scale(0.965)" },
+        { opacity: 1, transform: "none" },
+      ],
+      { duration: TOOLBAR_IN_MS, easing: EASE }
+    )
+  );
+}
+
+/**
+ * Leaving. The box is FROZEN first — the toolbar's width and left edge are
+ * `var(--ed-docbar-x/w)`, published by the document bar, and teardown takes
+ * those away: without this the toolbar snapped to the full viewport width for
+ * the length of its own exit animation before disappearing.
+ */
+export function toolbarOut(el) {
+  const box = el.getBoundingClientRect();
+  el.style.left = box.left + "px";
+  el.style.width = box.width + "px";
+  el.style.top = box.top + "px";
+  el.style.transition = "none";
+
+  if (reduced()) return Promise.resolve();
+  return settle(
+    el.animate(
+      [
+        { opacity: 1, transform: "none" },
+        { opacity: 0, transform: "translateY(-10px) scale(0.97)" },
+      ],
+      { duration: TOOLBAR_OUT_MS, easing: "ease-in", fill: "forwards" }
+    )
+  );
 }
 
 /** The pop a menu or popover makes. */
