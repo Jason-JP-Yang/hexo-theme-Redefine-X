@@ -44,4 +44,19 @@
 
 		<div class="article-content markdown-body px-2 sm:px-6 md:px-8 pb-8"></div>
 	</div>
+
+	<%# The contents rail, empty. A post being written has no headings to list
+	    yet, and `toc()` has no content to read — plugins/editor/toc.js fills it
+	    from the canvas as headings are typed, exactly as it does on a published
+	    post being edited. Hidden by `is-empty` until there is a first one. %>
+	<% if (theme.articles.toc.enable === true) { %>
+	<div class="toc-content-container is-empty">
+		<div class="post-toc-wrap">
+			<div class="post-toc">
+				<div class="toc-title"><%- __('toc') %></div>
+				<div class="page-title"></div>
+			</div>
+		</div>
+	</div>
+	<% } %>
 </div>

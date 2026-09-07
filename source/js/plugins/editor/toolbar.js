@@ -104,12 +104,40 @@ const TAB_INSERT = { key: "insert", icon: "fa-plus", label: "Insert" };
 
 /* ─── rendering the control vocabulary ─────────────────────────────────────── */
 
+/**
+ * An icon name, or a whole class list.
+ *
+ * Almost everything here is a solid glyph and says so by naming only the glyph.
+ * A button that has to come from another family — the markdown mark is a BRAND
+ * — gives the full list instead, so that one button is not a reason for every
+ * other one to start repeating `fa-solid`.
+ */
+function iconClass(icon) {
+  const name = String(icon || "fa-circle");
+  return name.includes(" ") ? name : "fa-solid " + name;
+}
+
+/**
+ * `on` and `open` are different questions, and conflating them is what put two
+ * lit buttons in a row that describes ONE block.
+ *
+ * `on`   — this is what the block IS, or what the selection already carries.
+ * `open` — this is the button whose second row is showing. It is a place you
+ *          are looking, not a state the document is in, so it reads as an open
+ *          drawer rather than as an applied setting.
+ *
+ * Pressing Heading on a paragraph used to light Heading while Text was still
+ * lit, which said the block was both.
+ */
 function control(item, t) {
   if (item.kind === "sep") return `<span class="ed-tool-sep"></span>`;
   if (item.kind === "label") return `<span class="ed-tool-label">${escapeHTML(t(item.tt || item.label, item.label))}</span>`;
 
   const label = escapeHTML(t(item.tt || item.label, item.label));
-  const state = ` data-on="${item.on ? "1" : item.mixed ? "2" : "0"}"${item.disabled ? " disabled" : ""}`;
+  const state =
+    ` data-on="${item.on ? "1" : item.mixed ? "2" : "0"}"` +
+    (item.open ? ` data-open="1"` : "") +
+    (item.disabled ? " disabled" : "");
   const data =
     ` data-act="${escapeHTML(item.act || "")}"` +
     ` data-arg="${escapeHTML(item.arg == null ? "" : String(item.arg))}"`;
@@ -119,7 +147,7 @@ function control(item, t) {
   }
   const text = item.wide ? `<span>${label}</span>` : "";
   return `<button type="button" class="ed-tool${item.wide ? " is-wide" : ""}"${data}${state} title="${label}">
-    <i class="fa-solid ${escapeHTML(item.icon || "fa-circle")}" aria-hidden="true"></i>${text}</button>`;
+    <i class="${escapeHTML(iconClass(item.icon))}" aria-hidden="true"></i>${text}</button>`;
 }
 
 /** Repaint only when the row actually differs: a selection change fires often. */
@@ -175,7 +203,10 @@ export function createToolbar(ctx) {
       icon: mark.icon,
       label: mark.label,
       tt: "m_" + mark.key,
-      on: mark.colours ? subKey === "highlight" || s.active.has(mark.key) : s.active.has(mark.key),
+      // Lit when the SELECTION carries the mark, never merely because its
+      // palette is showing — that is `open`, one row below.
+      on: s.active.has(mark.key),
+      open: mark.colours && subKey === "highlight",
       mixed: s.partial.has(mark.key),
       disabled: dead || (locked && mark.key !== "code"),
     }));
@@ -216,6 +247,10 @@ export function createToolbar(ctx) {
    * button is the language. Greyed out for the same reason the four separate
    * ones were: a heading is one line, and a block holding three cannot become
    * one without somebody deciding which two to lose.
+   *
+   * Lit ONLY when the block is a heading. Opening the levels used to light it
+   * too, so a paragraph showed Text and Heading both lit at once — a row that
+   * claims a block is two types is worse than a row that claims nothing.
    */
   function headingControl(block) {
     const legal = conversions(block).find((entry) => HEADING.test(entry.key));
@@ -227,7 +262,8 @@ export function createToolbar(ctx) {
       icon: "fa-heading",
       label: level ? "Heading " + level : "Heading",
       tt: level ? "b_heading" + level : "b_heading",
-      on: !!level || subKey === "heading",
+      on: !!level,
+      open: subKey === "heading",
       disabled: !legal || legal.disabled,
     };
   }
@@ -285,7 +321,10 @@ export function createToolbar(ctx) {
       kind: "btn",
       act: "source",
       arg: raw ? "off" : "on",
-      icon: raw ? "fa-eye" : "fa-file-code",
+      // The markdown mark, not a second file-with-code glyph: `fa-file-code` is
+      // already the Raw HTML conversion sitting a few buttons to the left, and
+      // two identical icons meaning different things is no icon at all.
+      icon: raw ? "fa-eye" : "fa-brands fa-markdown",
       label: raw ? "Back to the rendered block" : "Show this block's markdown",
       tt: raw ? "src_off" : "src_on",
       on: raw,
@@ -343,6 +382,10 @@ export function createToolbar(ctx) {
       // conversion list stops at four on purpose — four is more depth than a
       // post uses — but a file that carries an H6 has to be able to say so.
       const levels = here ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4];
+      // Levels, and nothing else. The palette below the highlighter offers
+      // colours; it does not offer "not text". Text is already a button in the
+      // row above, and a second way to reach it from inside Heading made the
+      // drawer a place where you could leave the drawer's subject entirely.
       return [
         { kind: "label", label: "Heading", tt: "b_heading" },
         ...levels.map((level) => ({
@@ -355,8 +398,6 @@ export function createToolbar(ctx) {
           wide: true,
           on: here === level,
         })),
-        { kind: "sep" },
-        { kind: "btn", act: "convert", arg: "paragraph", icon: "fa-paragraph", label: "Text", tt: "b_paragraph", wide: true },
       ];
     }
 
@@ -366,7 +407,10 @@ export function createToolbar(ctx) {
 
   function openSub(key) {
     subKey = subKey === key ? "" : key;
-    render();
+    // Animated like every other change to the card: the second row opening is
+    // the card growing by a row, and it used to appear at full height under a
+    // toolbar that had not moved.
+    render(true);
   }
 
   /* ─── painting ───────────────────────────────────────────────────────── */
@@ -378,6 +422,17 @@ export function createToolbar(ctx) {
   }
 
   let morph = 0;
+
+  /**
+   * Where each face sits on the strip, so a switch has a DIRECTION.
+   *
+   * Format and Block share slot zero — they are the same question asked of a
+   * selection or of a block, and one replaces the other in place — so moving
+   * between them is not a journey and gets no slide.
+   */
+  const SLOT = { format: 0, block: 0, insert: 1 };
+  const SLIDE = 22;
+  let at = 0;
 
   /** Slot one is Format while there is a selection and Block when there is not. */
   function paintTabs(tab) {
@@ -394,10 +449,60 @@ export function createToolbar(ctx) {
       tabs.__sig = html;
       tabs.innerHTML = html;
     }
+    // The lit tab is one shape that MOVES between the two, drawn behind them by
+    // the strip itself. Repainting the buttons cannot interrupt it, which is the
+    // point: the strip is rebuilt whenever Format takes slot zero from Block,
+    // and a background that belonged to a button would have restarted there.
+    tabs.dataset.at = String(SLOT[tab] || 0);
+  }
+
+  /**
+   * The old row leaving as the new one arrives, both at once.
+   *
+   * A copy of the row as it was is left behind, absolutely placed over where it
+   * stood, and the two cross. Sequencing them instead — out, then in — doubles
+   * the time before the toolbar can be used again, and the pause in the middle
+   * is a toolbar with nothing in it.
+   */
+  function crossSlide(ghost, dir) {
+    card.appendChild(ghost);
+    const gone = ghost.animate(
+      [
+        { opacity: 1, transform: "none" },
+        { opacity: 0, transform: `translateX(${-dir * SLIDE}px)` },
+      ],
+      { duration: MORPH_MS, easing: EASE, fill: "forwards" }
+    );
+    gone.finished.catch(() => {}).then(() => ghost.remove());
+
+    main.animate(
+      [
+        { opacity: 0, transform: `translateX(${dir * SLIDE}px)` },
+        { opacity: 1, transform: "none" },
+      ],
+      { duration: MORPH_MS, easing: EASE }
+    );
+  }
+
+  function snapshot(row) {
+    const ghost = row.cloneNode(true);
+    ghost.className = "ed-toolbar-row ed-toolbar-ghost";
+    ghost.removeAttribute("data-row");
+    ghost.style.top = row.offsetTop + "px";
+    ghost.style.left = row.offsetLeft + "px";
+    ghost.style.width = row.offsetWidth + "px";
+    ghost.style.height = row.offsetHeight + "px";
+    return ghost;
   }
 
   async function render(animate) {
     const tab = el.dataset.tab;
+    const slot = SLOT[tab] || 0;
+    const dir = animate && !reduced() && slot !== at ? (slot > at ? 1 : -1) : 0;
+    // Taken BEFORE the row is repainted, because what leaves is what was there.
+    const ghost = dir ? snapshot(main) : null;
+    at = slot;
+
     paintTabs(tab);
 
     const before = animate ? card.offsetHeight : 0;
@@ -409,27 +514,34 @@ export function createToolbar(ctx) {
     if (rows.length) paint(sub, rows, t);
     else sub.__sig = "";
 
-    if (!animate || reduced() || (!moved && wasHidden === sub.hidden)) return;
+    if (!animate || reduced() || (!moved && wasHidden === sub.hidden)) {
+      if (ghost) ghost.remove();
+      return;
+    }
 
     const token = ++morph;
     const after = card.offsetHeight;
-    if (before === after || token !== morph) return;
 
     // The rows scroll when they are taller than the cap, and a card that is
     // MID-TRAVEL between two heights is briefly shorter than the row inside it
     // — so switching from Block to Insert flashed a scrollbar down the right of
     // the toolbar for a quarter of a second. It is clipped while it travels and
-    // scrollable again the moment it arrives.
+    // scrollable again the moment it arrives. The sliding rows need the same
+    // clip, so the card wears it for the whole of both animations.
     card.dataset.morph = "1";
-    const run = card.animate([{ height: before + "px" }, { height: after + "px" }], {
-      duration: MORPH_MS,
-      easing: EASE,
-    });
-    run.finished
-      .catch(() => {})
-      .then(() => {
-        if (token === morph) delete card.dataset.morph;
+    if (ghost) crossSlide(ghost, dir);
+    if (before !== after) {
+      card.animate([{ height: before + "px" }, { height: after + "px" }], {
+        duration: MORPH_MS,
+        easing: EASE,
       });
+    }
+    // Both animations start in this frame and both run for MORPH_MS, so one
+    // timer lifts the clip for both. `token` is what stops a switch made
+    // mid-travel from having its predecessor uncover it early.
+    setTimeout(() => {
+      if (token === morph) delete card.dataset.morph;
+    }, MORPH_MS);
   }
 
   /* ─── what the editor calls ──────────────────────────────────────────── */
