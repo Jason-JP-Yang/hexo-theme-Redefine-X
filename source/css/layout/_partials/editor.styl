@@ -725,6 +725,7 @@ textarea.ed-f-input
 .ed-toolbar-tabs
   position relative
   display flex
+  flex 0 0 auto
   gap 3px
 
   // ONE lit shape that travels between the two tabs, rather than a background
@@ -789,6 +790,13 @@ textarea.ed-f-input
   align-items center
   gap 2px
   padding 2px
+  // The card is a flex COLUMN whose height is animated, so while it travels to
+  // a taller state it is briefly shorter than what is in it — and a flex item
+  // that may shrink does. Opening the second row squashed the first one into it
+  // for the length of the animation, which read as the new row covering the old.
+  // The rows keep their size and the card clips instead, so the second row is
+  // revealed from under the edge rather than crushing the one above it.
+  flex 0 0 auto
   // A row of twenty-two languages must not become a card taller than the phone.
   max-height 34svh
   overflow-y auto

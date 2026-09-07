@@ -517,7 +517,6 @@ editor:
   g_exposure: Exposure
   g_other: Other
   pick_title: Pictures
-  pick_root: images
   pick_upload: Add a picture
   pick_mkdir: New folder
   pick_rename: Rename

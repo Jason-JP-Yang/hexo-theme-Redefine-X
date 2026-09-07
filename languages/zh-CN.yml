@@ -519,7 +519,6 @@ editor:
   g_exposure: 曝光
   g_other: 其他
   pick_title: 图片库
-  pick_root: images
   pick_upload: 上传图片
   pick_mkdir: 新建文件夹
   pick_rename: 重命名

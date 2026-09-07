@@ -2,10 +2,10 @@
  * The picture browser.
  *
  * Every way of naming an image — a block's address, a replacement, the cover,
- * the thumbnail, the banner — is this one control: a file manager over
- * `source/images`, tree on the left, the picture on the right, and along the
- * bottom the one field that is both "what is chosen" and "search for something
- * else".
+ * the thumbnail, the banner — is this one control: a file manager over the
+ * repository's picture roots, tree on the left, the picture on the right, and
+ * along the bottom the one field that is both "what is chosen" and "search for
+ * something else".
  *
  * ── Why the tree is built once and then mutated ─────────────────────────────
  *
@@ -44,9 +44,21 @@
 
 import { escapeHTML } from "./markdown.js";
 import * as gitea from "./gitea.js";
-import { createEdgeScroll, pop, setDragImage } from "./motion.js";
+import { EASE, MORPH_MS, createEdgeScroll, pop, setDragImage } from "./motion.js";
 
-const ROOT = "source/images";
+// Every place in the repository that holds pictures. Two trees, side by side in
+// one sidebar: an album's photographs are pictures the author owns exactly as
+// much as an article's, and a browser that could not see them meant the only way
+// to put one in a post was to type its path.
+const ROOTS = ["source/images", "source/masonry"];
+const isRoot = (path) => ROOTS.includes(path);
+
+/** Which root this path lives under, or "" when it is outside all of them. */
+function rootOf(path) {
+  const value = String(path || "");
+  return ROOTS.find((root) => value === root || value.startsWith(root + "/")) || "";
+}
+
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg|bmp)$/i;
 const MENU_MAX = 40;
 const SPLIT_KEY = "rdfx.picker.split";
@@ -128,7 +140,12 @@ async function walk(dir, out, depth, step) {
 /** @param {function} step called after each listing, with the count so far */
 export async function loadTree(force, step) {
   if (treeCache && !force) return treeCache;
-  treeCache = await walk(ROOT, [{ path: ROOT, type: "dir" }], 0, step);
+  const out = [];
+  for (const root of ROOTS) {
+    out.push({ path: root, type: "dir" });
+    await walk(root, out, 0, step);
+  }
+  treeCache = out;
   return treeCache;
 }
 
@@ -564,7 +581,7 @@ export function openPicker(ctx, opts = {}) {
      */
     function model() {
       const seen = new Map();
-      seen.set(ROOT, { path: ROOT, type: "dir" });
+      for (const root of ROOTS) seen.set(root, { path: root, type: "dir" });
       const here = [];
 
       for (const row of rows) {
@@ -582,7 +599,7 @@ export function openPicker(ctx, opts = {}) {
         here.push(path);
       }
       for (const row of rows) {
-        if (row.type !== "dir" || row.path === ROOT || seen.has(row.path)) continue;
+        if (row.type !== "dir" || isRoot(row.path) || seen.has(row.path)) continue;
         if (here.some((file) => file.startsWith(row.path + "/"))) seen.set(row.path, { path: row.path, type: "dir" });
       }
       for (const folder of ctx.stage.folders) {
@@ -609,7 +626,7 @@ export function openPicker(ctx, opts = {}) {
       el.className = "ed-pick-node";
       el.dataset.path = entry.path;
       el.dataset.type = entry.type;
-      el.dataset.open = isDir && entry.path === ROOT ? "1" : "0";
+      el.dataset.open = isDir && isRoot(entry.path) ? "1" : "0";
 
       el.innerHTML = `
         <div class="ed-pick-row" draggable="true" role="treeitem" data-on="0">
@@ -654,7 +671,7 @@ export function openPicker(ctx, opts = {}) {
 
     /** Create every folder on the way to `path` that is not there yet. */
     function ensureBranch(path) {
-      if (!path || path === ROOT || !path.startsWith(ROOT + "/") || nodes.has(path)) return;
+      if (!path || isRoot(path) || !rootOf(path) || nodes.has(path)) return;
       ensureBranch(parentOf(path));
       makeNode({ path, type: "dir" });
       place(path);
@@ -664,13 +681,14 @@ export function openPicker(ctx, opts = {}) {
       nodes.clear();
       side.innerHTML = "";
 
-      const root = makeNode({ path: ROOT, type: "dir" });
-      side.appendChild(root.el);
-      root.row.classList.add("is-root");
-      root.label.textContent = t("pick_root", "images");
+      for (const path of ROOTS) {
+        const root = makeNode({ path, type: "dir" });
+        side.appendChild(root.el);
+        root.row.classList.add("is-root");
+      }
 
       for (const entry of model().sort((a, b) => a.path.localeCompare(b.path))) {
-        if (entry.path === ROOT) continue;
+        if (isRoot(entry.path)) continue;
         ensureBranch(parentOf(entry.path));
         if (!nodes.has(entry.path)) {
           makeNode(entry);
@@ -688,7 +706,7 @@ export function openPicker(ctx, opts = {}) {
 
     function reveal(path) {
       let cur = parentOf(path);
-      while (cur && cur.startsWith(ROOT)) {
+      while (cur && rootOf(cur)) {
         open(cur, true);
         cur = parentOf(cur);
       }
@@ -709,8 +727,10 @@ export function openPicker(ctx, opts = {}) {
       );
     }
 
-    function metaRow(label, value) {
-      return value ? `<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd>` : "";
+    /** `key` keeps the row in place while its value is still being found out. */
+    function metaRow(label, value, key) {
+      if (!value && !key) return "";
+      return `<dt>${escapeHTML(label)}</dt><dd${key ? ` data-field="${key}"` : ""}>${escapeHTML(value || "")}</dd>`;
     }
 
     /**
@@ -766,8 +786,29 @@ export function openPicker(ctx, opts = {}) {
         shot.width = shotSize.width;
         shot.height = shotSize.height;
         stage.style.setProperty("--shot-w", shotSize.width + "px");
+      } else {
+        // The build never measured this one — a picture no page has referenced
+        // yet, or one it declined to transcode. Without a box the `<img>` is
+        // nothing until the bytes land and then snaps to full height, which on
+        // a slow fetch is the whole pane jumping under the pointer. A neutral
+        // 3:2 holds the space and the real shape is TRAVELLED to on load.
+        shot.dataset.guessed = "1";
+        shot.style.width = "100%";
+        shot.style.aspectRatio = "3 / 2";
       }
-      shot.addEventListener("load", () => (shot.dataset.ready = "1"), { once: true });
+      shot.addEventListener("load", () => {
+        shot.dataset.ready = "1";
+        if (shot.dataset.guessed !== "1" || !shot.naturalWidth) return;
+        const before = shot.offsetHeight;
+        shot.style.aspectRatio = `${shot.naturalWidth} / ${shot.naturalHeight}`;
+        stage.style.setProperty("--shot-w", shot.naturalWidth + "px");
+        const after = shot.offsetHeight;
+        if (before && after && before !== after) {
+          shot.animate([{ height: before + "px" }, { height: after + "px" }], { duration: MORPH_MS, easing: EASE });
+        }
+        const row = meta.querySelector('[data-field="dims"]');
+        if (row) row.textContent = `${shot.naturalWidth} × ${shot.naturalHeight}`;
+      }, { once: true });
       // A picture that cannot be fetched at all stops shimmering rather than
       // promising forever. `bindImage`'s repository retry re-points `src`, and a
       // retry that works fires `load` and puts it back.
@@ -778,7 +819,7 @@ export function openPicker(ctx, opts = {}) {
       meta.innerHTML =
         metaRow(t("pick_name", "Name"), nameOf(chosen)) +
         metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
-        metaRow(t("pick_dims", "Size"), shotSize ? `${shotSize.width} × ${shotSize.height}` : "") +
+        metaRow(t("pick_dims", "Size"), shotSize ? `${shotSize.width} × ${shotSize.height}` : "", "dims") +
         metaRow(t("pick_bytes", "File"), readableSize(node && node.size)) +
         (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
     }
@@ -854,7 +895,7 @@ export function openPicker(ctx, opts = {}) {
 
     function beginRename(path) {
       const node = nodes.get(path);
-      if (!node || path === ROOT || renaming) return;
+      if (!node || isRoot(path) || renaming) return;
       renaming = path;
 
       const was = nameOf(path);
@@ -944,9 +985,9 @@ export function openPicker(ctx, opts = {}) {
     /** Where a new picture or folder goes: the selected folder, or the default. */
     function currentDir() {
       const node = chosen && nodes.get(chosen);
-      if (node) return node.type === "dir" ? chosen : parentOf(chosen) || ROOT;
-      const posts = ROOT + "/posts";
-      return nodes.has(posts) ? posts : ROOT;
+      if (node) return node.type === "dir" ? chosen : parentOf(chosen) || ROOTS[0];
+      const posts = ROOTS[0] + "/posts";
+      return nodes.has(posts) ? posts : ROOTS[0];
     }
 
     function addNode(entry) {
@@ -986,7 +1027,7 @@ export function openPicker(ctx, opts = {}) {
       }
 
       if (act === "rename") {
-        if (chosen && chosen !== ROOT) beginRename(chosen);
+        if (chosen && !isRoot(chosen)) beginRename(chosen);
       }
     }
 
@@ -1119,10 +1160,10 @@ export function openPicker(ctx, opts = {}) {
     /** Which folder the pointer is over: a file means the folder holding it. */
     function dropFolder(e) {
       const row = e.target.closest(".ed-pick-row");
-      if (!row) return ROOT;
+      if (!row) return ROOTS[0];
       const path = row.parentElement.dataset.path;
       const node = nodes.get(path);
-      return node && node.type === "dir" ? path : parentOf(path) || ROOT;
+      return node && node.type === "dir" ? path : parentOf(path) || ROOTS[0];
     }
 
     function canDrop(target) {
@@ -1170,7 +1211,7 @@ export function openPicker(ctx, opts = {}) {
       const row = e.target.closest(".ed-pick-row");
       if (!row || row.dataset.editing) return;
       const path = row.parentElement.dataset.path;
-      if (path === ROOT) return;
+      if (isRoot(path)) return;
       dragging = path;
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", dragging);
@@ -1307,7 +1348,7 @@ export function openPicker(ctx, opts = {}) {
         select(chosen, false);
       } else {
         chosen = "";
-        open(ROOT, true);
+        for (const root of ROOTS) open(root, true);
         paintPath(false);
       }
     });

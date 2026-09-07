@@ -40,69 +40,118 @@ function nextFrame() {
 }
 
 /**
- * Change what is inside `el` while animating its height between the two
- * measurements.
+ * Change what is inside `el` while its height travels to whatever the new
+ * contents turn out to be.
  *
- * `mutate` may be async, and it may also RETURN a promise of the new content's
- * first paint — a tab pane and a folding both mount a canvas of their own, and
- * a canvas holds diagrams, equations and code listings that each render on
- * their own schedule. Without waiting for that, `to` was the height of a pane
- * whose blocks had not drawn yet: the animation arrived at the wrong number and
- * the real height landed a frame later, which is the jump at the end of every
- * tab switch and every folding opening.
+ * TURN OUT TO BE, not "measure once and go there". Measuring in the tick after
+ * the swap is measuring a guess: a tab pane and a folding each mount a canvas of
+ * their own, and a canvas holds pictures that are still being fetched, EXIF
+ * cards that have not laid out, equations that have not typeset and diagrams
+ * that have not drawn. Every one of those lands after the animation has already
+ * chosen its destination, so the box arrived at a height that was wrong and then
+ * snapped to the right one — which is the jump at the end of a tab switch, and
+ * the reason a pane holding a picture never looked right at all.
  *
- * The box is PINNED at its old height for the whole of that wait, and clipped
- * for the whole of the travel. Otherwise the new content is at full size before
- * the animation starts — the jump would simply happen at the beginning instead
- * — and anything taller than the box mid-travel spills out of it.
+ * So the target is not a number taken once. A ResizeObserver watches the content
+ * and the animation is RE-AIMED from wherever it currently is each time the
+ * content settles somewhere new. A picture arriving two seconds late does not
+ * jump the box; it bends the box's path.
+ *
+ * The box is pinned and clipped for the whole of that, so nothing is ever at
+ * full size before the travel — the jump would simply move to the front — and
+ * nothing spills while the box is smaller than what is in it. `WATCH_MS` is how
+ * long after the last change it keeps following; the pin comes off then.
+ *
+ * Resolves when the FIRST travel lands, so a caller that awaits it is not
+ * waiting on a slow network.
  */
-// What the element's own styles were before any of this started, and which pass
-// currently owns it. Two quick tab clicks used to have the SECOND pass save the
-// first one's pinned height as the value to put back, leaving the component
-// frozen at a height it never naturally had.
-const held = new WeakMap();
+const WATCH_MS = 900;
 let passes = 0;
 
-export async function morphHeight(el, mutate) {
-  if (reduced()) return void (await mutate());
+export function morphHeight(el, mutate) {
+  if (reduced() || !el || !el.firstElementChild) return Promise.resolve(mutate());
 
+  const inner = el.firstElementChild;
   const token = ++passes;
-  if (!held.has(el)) held.set(el, { height: el.style.height, overflow: el.style.overflow });
+  // Saved on the ELEMENT, so a pass that takes over mid-travel restores what
+  // was there before ANY of them started rather than its predecessor's pin.
+  if (!el.__morphBack) el.__morphBack = { height: el.style.height, overflow: el.style.overflow };
   el.__morph = token;
 
-  const from = el.offsetHeight;
-  el.style.height = from + "px";
+  el.style.height = el.offsetHeight + "px";
   el.style.overflow = "hidden";
 
-  // `await` unwraps whatever `mutate` hands back, so a paint function that
-  // returns its content's readiness is waited on by returning it.
-  await Promise.resolve(mutate()).catch(() => {});
-  await nextFrame();
-  if (el.__morph !== token) return;
+  /** What `el` would be if it were not pinned — the content, plus its own frame. */
+  const target = () => {
+    const box = getComputedStyle(el);
+    const own = getComputedStyle(inner);
+    return Math.round(
+      inner.offsetHeight +
+        parseFloat(own.marginTop) + parseFloat(own.marginBottom) +
+        parseFloat(box.paddingTop) + parseFloat(box.paddingBottom) +
+        parseFloat(box.borderTopWidth) + parseFloat(box.borderBottomWidth)
+    );
+  };
 
-  // Measured with the pin off and put straight back, in the same tick, so there
-  // is no frame in which the browser paints the open state.
-  el.style.height = "";
-  const to = el.offsetHeight;
+  let run = null;
+  let aimed = -1;
+  let quiet = 0;
+  let landed = null;
+  const first = new Promise((done) => (landed = done));
 
-  if (from !== to) {
-    el.style.height = from + "px";
-    const run = el.animate([{ height: from + "px" }, { height: to + "px" }], {
-      duration: MORPH_MS,
-      easing: EASE,
+  const release = () => {
+    if (el.__morph !== token) return;
+    watcher.disconnect();
+    clearTimeout(quiet);
+    el.style.height = el.__morphBack.height;
+    el.style.overflow = el.__morphBack.overflow;
+    el.__morphBack = null;
+    contentChanged();
+    landed();
+  };
+
+  const aim = () => {
+    if (el.__morph !== token) return;
+    const to = target();
+    if (to === aimed) return;
+    aimed = to;
+
+    // Read where it IS before cancelling: an animation owns `height` while it
+    // runs, and cancelling first would snap the reading back to the pin.
+    const now = el.offsetHeight;
+    if (run) run.cancel();
+    el.style.height = now + "px";
+
+    clearTimeout(quiet);
+    quiet = setTimeout(release, MORPH_MS + WATCH_MS);
+
+    if (now === to) return;
+    const mine = el.animate([{ height: now + "px" }, { height: to + "px" }], { duration: MORPH_MS, easing: EASE });
+    run = mine;
+    mine.finished.catch(() => {}).then(() => {
+      // `run !== mine` means this one was cancelled by a re-aim, and writing its
+      // stale destination would undo the pin the new one is travelling from.
+      if (el.__morph !== token || run !== mine) return;
+      el.style.height = to + "px";
+      contentChanged();
+      landed();
     });
-    // The animation owns `height` while it runs, so the pin can come off now
-    // and there is no frame where the two disagree.
-    el.style.height = held.get(el).height;
-    await settle(run);
-  }
+  };
 
-  if (el.__morph !== token) return;
-  const back = held.get(el);
-  held.delete(el);
-  el.style.height = back.height;
-  el.style.overflow = back.overflow;
-  contentChanged();
+  const watcher = new ResizeObserver(aim);
+
+  return Promise.resolve(mutate())
+    .catch(() => {})
+    .then(() => nextFrame())
+    .then(() => {
+      if (el.__morph !== token) return;
+      watcher.observe(inner);
+      aim();
+      // Nothing to travel: the caller is not made to wait, but the watch stays
+      // on — a picture in the new pane may still be seconds away.
+      if (!run) landed();
+      return first;
+    });
 }
 
 /**
