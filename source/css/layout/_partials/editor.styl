@@ -128,8 +128,16 @@ html.blog-editing .post-tools-container .tool-edit-post
 // without becoming a scroll container, so the bar pins on a phone too — and if
 // a browser does not know `clip`, the declaration is dropped and the behaviour
 // is the one that shipped.
+//
+// Scoped to the width that actually has an `overflow-x: hidden` to undo. Applied
+// at every width it CLIPPED rather than fixed: the article container's frame is
+// the `0 0 0 1px` ring in --redefine-box-shadow, painted one pixel OUTSIDE its
+// border box, and with the contents rail closed that box is the full width of
+// the container — so the ring was cut off down both sides and the card lost its
+// edge for as long as the post was being edited.
 html.blog-editing .post-page-container
-  overflow-x clip
+  +redefine-mobile()
+    overflow-x clip
 
 // A post with nothing in it yet is still a page you have to be able to aim at.
 .article-content-container.is-editing .article-content
@@ -178,7 +186,11 @@ html.blog-editing .post-page-container
   border 1px solid var(--border-color)
   border-radius 12px
   background var(--second-background-color)
-  box-shadow 0 6px 20px -16px var(--shadow-color-1)
+  // It pins over the article and has to look like it. The same three layers the
+  // floating toolbar wears — elevation ring, cast, top highlight — because the
+  // two are one object in two rows and a difference between them would be read
+  // as a difference in what they do.
+  box-shadow 0 0 0 1px var(--shadow-color-1), 0 16px 34px -20px var(--shadow-color-2), 0 4px 12px -8px var(--shadow-color-1), inset 0 1px 0 0 var(--background-color)
 
   @media (min-width 640px)
     margin 24px 24px 16px
@@ -679,7 +691,15 @@ textarea.ed-f-input
   +redefine-mobile()
     top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
 
+// `position: relative` is what the outgoing row is placed against while it
+// slides away; see `snapshot` in plugins/editor/toolbar.js.
+//
+// A floating surface over an article has to read as being IN FRONT of it, and a
+// hairline border on a translucent card does not carry that on its own. Three
+// layers: the site's own elevation ring so the card is bounded wherever it
+// lands, a soft cast underneath, and a tight inner highlight along the top edge.
 .ed-toolbar-card
+  position relative
   display flex
   flex-direction column
   gap 4px
@@ -689,15 +709,46 @@ textarea.ed-f-input
   background var(--third-background-color-transparent)
   backdrop-filter saturate(180%) blur(14px)
   -webkit-backdrop-filter saturate(180%) blur(14px)
-  box-shadow 0 10px 30px -14px var(--shadow-color-1)
+  box-shadow 0 0 0 1px var(--shadow-color-1), 0 18px 40px -18px var(--shadow-color-2), 0 4px 12px -8px var(--shadow-color-1), inset 0 1px 0 0 var(--third-background-color)
   pointer-events auto
   overflow hidden
 
+// The row on its way out, over the place it stood. Inert: the row underneath is
+// already the live one, and a ghost that could be clicked is a control that acts
+// on a tab you have left.
+.ed-toolbar-ghost
+  position absolute
+  z-index 1
+  overflow hidden
+  pointer-events none
+
 .ed-toolbar-tabs
+  position relative
   display flex
   gap 3px
 
+  // ONE lit shape that travels between the two tabs, rather than a background
+  // that appears on one as it vanishes from the other. Drawn by the strip, so
+  // repainting the buttons — which happens whenever Format takes Block's slot —
+  // cannot interrupt it mid-slide.
+  &::before
+    content ""
+    position absolute
+    top 0
+    bottom 0
+    left 0
+    width calc(50% - 1.5px)
+    border-radius 9px
+    background var(--primary-color)
+    transition transform $ed-morph
+    pointer-events none
+
+  &[data-at="1"]::before
+    transform translateX(calc(100% + 3px))
+
 .ed-tab
+  position relative
+  z-index 1
   display inline-flex
   align-items center
   justify-content center
@@ -712,7 +763,7 @@ textarea.ed-f-input
   font-size 0.7rem
   font-weight 600
   cursor pointer
-  transition background $ed-fade, color $ed-fade
+  transition color $ed-fade
 
   span
     overflow hidden
@@ -720,11 +771,13 @@ textarea.ed-f-input
     white-space nowrap
 
   &:hover
-    background var(--second-background-color)
     color var(--first-text-color)
 
-  &[data-on="1"]
-    background var(--primary-color)
+  // The lit tab keeps its colour under the pointer. Hovering it used to hand it
+  // back to the plain hover rule, which is one specificity class heavier — so
+  // the one control whose state mattered most lost that state on being aimed at.
+  &[data-on="1"],
+  &[data-on="1"]:hover
     color $ed-on-primary
 
 // A tab is a NAME. Hiding the labels on a phone left two unlabelled icons that
@@ -796,15 +849,34 @@ textarea.ed-f-input
     background var(--second-background-color)
     color var(--first-text-color)
 
-  &[data-on="1"]
+  // The hover rule above is one class heavier than a bare `[data-on="1"]`, so
+  // an ACTIVE tool handed its theme colour back the moment you aimed at it —
+  // every lit control in the toolbar dropped to plain grey under the pointer,
+  // which is the opposite of what pointing at it should say. Stated at the same
+  // weight, and lifted rather than repainted on hover.
+  &[data-on="1"],
+  &[data-on="1"]:hover:not(:disabled)
     background var(--primary-color)
     color $ed-on-primary
 
+  &[data-on="1"]:hover:not(:disabled)
+    filter brightness(1.12)
+
   // Half the selection carries the mark. Neither on nor off, and pressing it
   // fills in the rest rather than taking the half away.
-  &[data-on="2"]
+  &[data-on="2"],
+  &[data-on="2"]:hover:not(:disabled)
     background var(--second-background-color)
     box-shadow inset 0 0 0 1px var(--primary-color)
+
+  // Not a state of the document — a drawer you have open. A ring rather than a
+  // fill, so a paragraph whose Heading levels are showing does not also claim
+  // to BE a heading while Text sits lit beside it.
+  &[data-open="1"]:not([data-on="1"]),
+  &[data-open="1"]:not([data-on="1"]):hover:not(:disabled)
+    background var(--second-background-color)
+    box-shadow inset 0 0 0 1px var(--primary-color)
+    color var(--primary-color)
 
   &:disabled
     opacity 0.32
@@ -859,57 +931,39 @@ textarea.ed-f-input
 // line is drawn ON it rather than under the block before it: the `+` IS the
 // gap, and the block lands immediately above it.
 //
-// Quiet until it is wanted. A dashed outline that only fills in on hover, so a
-// document at rest reads as its own text and not as a column of controls.
+// A row the width of the box, holding one 26px square at its left. The square
+// is `.ed-gutter-btn` — the very button every block's gutter carries — because
+// this is that button standing in the one gap a gutter cannot reach, and a
+// second design of it would say it did something else. Always there: it is the
+// end of the document, and the end of a document is where writing continues.
 .ed-tail
   position relative
   display flex
   align-items center
-  justify-content center
+  justify-content flex-start
   width 100%
-  height 30px
-  margin 6px 0 0
+  margin 8px 0 0
   padding 0
-  border 1px dashed var(--border-color)
-  border-radius 9px
-  background transparent
-  color var(--third-text-color)
-  font-size 0.72rem
-  cursor pointer
-  opacity 0.42
-  transition opacity $ed-fade, border-color $ed-fade, background $ed-fade, color $ed-fade
 
-  &:hover,
-  &:focus-visible
-    opacity 1
+  &[data-drop="1"]::before
+    content ""
+    position absolute
+    left 0
+    right 0
+    top -5px
+    height 3px
+    border-radius 3px
+    background var(--primary-color)
+    box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+    animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+
+  &[data-drop="1"] .ed-tail-add
     border-color var(--primary-color)
-    background var(--second-background-color)
-    color var(--primary-color)
-    outline none
+    background var(--primary-color)
+    color $ed-on-primary
 
-  &[data-drop="1"]
-    opacity 1
-    border-style solid
-    border-color var(--primary-color)
-
-    &::before
-      content ""
-      position absolute
-      left 0
-      right 0
-      top -6px
-      height 3px
-      border-radius 3px
-      background var(--primary-color)
-      box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
-      animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
-
-// Inside a note or a tab pane it is smaller: the box is already framed, and a
-// second full-strength dashed rectangle inside that frame is two boxes.
 .ed-nest > .ed-tail
-  height 24px
-  margin-top 4px
-  opacity 0.3
+  margin-top 6px
 
 // The snapshot the browser drags. Clipped to the block's own border box, so the
 // gutter — which is positioned OUTSIDE that box — is not in the picture and the

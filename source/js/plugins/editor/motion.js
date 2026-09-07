@@ -41,24 +41,68 @@ function nextFrame() {
 
 /**
  * Change what is inside `el` while animating its height between the two
- * measurements. `mutate` may be async — a block that has to typeset before its
- * height is knowable is the normal case, not the exception.
+ * measurements.
+ *
+ * `mutate` may be async, and it may also RETURN a promise of the new content's
+ * first paint — a tab pane and a folding both mount a canvas of their own, and
+ * a canvas holds diagrams, equations and code listings that each render on
+ * their own schedule. Without waiting for that, `to` was the height of a pane
+ * whose blocks had not drawn yet: the animation arrived at the wrong number and
+ * the real height landed a frame later, which is the jump at the end of every
+ * tab switch and every folding opening.
+ *
+ * The box is PINNED at its old height for the whole of that wait, and clipped
+ * for the whole of the travel. Otherwise the new content is at full size before
+ * the animation starts — the jump would simply happen at the beginning instead
+ * — and anything taller than the box mid-travel spills out of it.
  */
+// What the element's own styles were before any of this started, and which pass
+// currently owns it. Two quick tab clicks used to have the SECOND pass save the
+// first one's pinned height as the value to put back, leaving the component
+// frozen at a height it never naturally had.
+const held = new WeakMap();
+let passes = 0;
+
 export async function morphHeight(el, mutate) {
   if (reduced()) return void (await mutate());
 
-  const from = el.offsetHeight;
-  await mutate();
-  await nextFrame();
-  const to = el.offsetHeight;
-  if (from === to) return;
+  const token = ++passes;
+  if (!held.has(el)) held.set(el, { height: el.style.height, overflow: el.style.overflow });
+  el.__morph = token;
 
-  await settle(
-    el.animate(
-      [{ height: from + "px" }, { height: to + "px" }],
-      { duration: MORPH_MS, easing: EASE }
-    )
-  );
+  const from = el.offsetHeight;
+  el.style.height = from + "px";
+  el.style.overflow = "hidden";
+
+  // `await` unwraps whatever `mutate` hands back, so a paint function that
+  // returns its content's readiness is waited on by returning it.
+  await Promise.resolve(mutate()).catch(() => {});
+  await nextFrame();
+  if (el.__morph !== token) return;
+
+  // Measured with the pin off and put straight back, in the same tick, so there
+  // is no frame in which the browser paints the open state.
+  el.style.height = "";
+  const to = el.offsetHeight;
+
+  if (from !== to) {
+    el.style.height = from + "px";
+    const run = el.animate([{ height: from + "px" }, { height: to + "px" }], {
+      duration: MORPH_MS,
+      easing: EASE,
+    });
+    // The animation owns `height` while it runs, so the pin can come off now
+    // and there is no frame where the two disagree.
+    el.style.height = held.get(el).height;
+    await settle(run);
+  }
+
+  if (el.__morph !== token) return;
+  const back = held.get(el);
+  held.delete(el);
+  el.style.height = back.height;
+  el.style.overflow = back.overflow;
+  contentChanged();
 }
 
 /**

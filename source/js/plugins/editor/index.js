@@ -68,14 +68,22 @@ const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
 const EDGE_SPEED = 18;  // px per frame at the very edge
 
-/* Everything downstream of the body: present when reading, away when writing. */
+/*
+ * Everything downstream of the body: present when reading, away when writing.
+ *
+ * The contents rail is NOT in this list, and its being here is what killed it in
+ * edit mode: `.ed-put-away` is `display: none !important`, so the rail was gone
+ * before anything could be written into it. Everything else here is downstream
+ * of the article and none of it is yours to edit; the rail is a way of MOVING
+ * AROUND the article, which is exactly what a long post being written needs.
+ * plugins/editor/toc.js keeps it fed.
+ */
 const FURNITURE = [
   ".post-copyright-info",
   ".post-tags-box",
   ".recommended-article",
   ".article-nav",
   ".comment-container",
-  ".toc-content-container",
 ];
 
 const state = {
@@ -790,7 +798,10 @@ function blockCtx(box) {
         write: opts.write,
         onEmpty: opts.onEmpty,
       });
-      fillBox(child, markdown);
+      // Carried on the box so the component that opened it can hand it to
+      // `morphHeight`, which otherwise measures a pane whose blocks have not
+      // drawn and animates to a height that is about to change.
+      child.ready = fillBox(child, markdown);
       return child;
     },
     unnest: dropBox,
@@ -977,18 +988,30 @@ function figureIndex(id) {
  * indicator goes when a dragged block is heading for the end (see `paintDrop`).
  */
 function makeTail(box) {
-  const tail = document.createElement("button");
-  tail.type = "button";
+  // A ROW holding the button, not a button spanning the row. The drop indicator
+  // has to be as wide as the gap it stands for, and the button has to be the
+  // same 26px square as every other `+` in the editor — one element cannot be
+  // both, and a full-width button is also a full-width hover target for a
+  // control that occupies one corner of it.
+  const tail = document.createElement("div");
   tail.className = "ed-tail";
   tail.contentEditable = "false";
-  tail.tabIndex = -1;
-  tail.title = t("insert_end", "Add a block at the end");
-  tail.innerHTML = `<i class="fa-solid fa-plus" aria-hidden="true"></i>`;
-  tail.addEventListener("mousedown", (e) => e.preventDefault());
-  tail.addEventListener("click", (e) => {
+
+  const add = document.createElement("button");
+  add.type = "button";
+  // The gutter's own class, deliberately: this is the same button in the one
+  // place a gutter cannot reach, and it should not be a second design of it.
+  add.className = "ed-gutter-btn ed-tail-add";
+  add.tabIndex = -1;
+  add.title = t("insert_end", "Add a block at the end");
+  add.innerHTML = `<i class="fa-solid fa-plus" aria-hidden="true"></i>`;
+  add.addEventListener("mousedown", (e) => e.preventDefault());
+  add.addEventListener("click", (e) => {
     e.preventDefault();
     insertBlock(makeBlock("paragraph"), null, true, box);
   });
+
+  tail.appendChild(add);
   return tail;
 }
 
@@ -1094,6 +1117,10 @@ function refreshTOC() {
  *
  * Called by a nesting component when it mounts, and again whenever the body it
  * holds is replaced from outside — switching tab panes, for instance.
+ *
+ * @returns {Promise} the box's first paint. A pane that holds a diagram, an
+ *   equation or a code listing is not its final height in the tick it is built,
+ *   and the component animating open around it has to know that.
  */
 function fillBox(box, markdown) {
   for (const view of box.views) {
@@ -1105,11 +1132,14 @@ function fillBox(box, markdown) {
 
   const parsed = parseBlocks(String(markdown == null ? "" : markdown));
   if (!parsed.length) parsed.push(makeBlock("paragraph"));
+  const painting = [];
   for (const block of parsed) {
     box.blocks.push(block);
-    mountBlock(block, box);
+    const view = mountBlock(block, box);
+    if (view.ready) painting.push(Promise.resolve(view.ready).catch(() => {}));
   }
   renumberFigures();
+  return painting.length ? Promise.all(painting) : null;
 }
 
 /**

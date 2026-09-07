@@ -99,8 +99,15 @@ export function createView(block, ctx) {
   // A press anywhere in the block is a press ON the block. Without this an
   // image or a button — neither of which holds a caret — never became the
   // focused one, and the toolbar had nothing to say about it.
+  //
+  // The NEAREST block owns the press. Blocks nest — a picture inside a tab pane
+  // is inside the tabs block as well — and the event passes through both on its
+  // way up, so the outer one claimed it last and won: clicking a picture in a
+  // note or a tab left the toolbar showing the note's own settings, with no way
+  // to reach the picture's at all.
   el.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".ed-gutter")) return;
+    if (e.target.closest(".ed-block") !== el) return;
     ctx.onFocus(view);
   });
 
@@ -427,8 +434,13 @@ function richKeydown(view, e) {
   const { block, ctx } = view;
   const host = view.editable;
 
-  if (e.key === "Enter" && !e.shiftKey) {
-    if (block.type === "list") return; // the browser makes the next <li>
+  // Shift-Enter is the soft break everywhere except a heading, which is ONE
+  // line: `#` runs to the end of it, so a second line was published as an
+  // ordinary paragraph regardless, and the contents rail then named a heading
+  // whose end nobody could see. In a heading it does what the writer meant by
+  // it — the text under this heading starts now, as a block of its own.
+  if (e.key === "Enter" && (!e.shiftKey || block.type === "heading")) {
+    if (block.type === "list" && !e.shiftKey) return; // the browser makes the next <li>
     e.preventDefault();
     view.read();
     const tail = caret.splitAtCaret(host);
@@ -1025,7 +1037,19 @@ function mountComponent(view) {
     }
     if (kind === "folding") {
       const details = host.querySelector("details");
-      if (details) details.open = true;
+      if (details) {
+        details.open = true;
+        // Open for as long as it is being written, and the click on the title
+        // does not close it. Its body is a canvas of real blocks, so collapsing
+        // takes what you are editing off the screen — and the click that did so
+        // was the same click that put the caret in the title, since `summary`
+        // is the editable. `<details>` toggles on click and the caret is placed
+        // on mousedown, so stopping the one leaves the other. The published
+        // post folds exactly as it is written; this is edit mode only.
+        details.addEventListener("click", (e) => {
+          if (e.target.closest("summary")) e.preventDefault();
+        });
+      }
       inPlace(host.querySelector("summary"), parsed.title || "", (text) => {
         parsed.title = text;
         writeArgs();
@@ -1050,6 +1074,8 @@ function mountComponent(view) {
   const nests = kind === "noteLarge" || kind === "folding";
   let nested = null;
 
+  // Returns the new content's first paint, where there is one, so `morphHeight`
+  // animates to the height this note actually ends up at.
   const paint = () => {
     if (nested) {
       ctx.unnest(nested);
@@ -1057,7 +1083,7 @@ function mountComponent(view) {
     }
     host.innerHTML = renderBlock(block);
     wireTitle();
-    if (kind === "btn") return;
+    if (kind === "btn") return null;
 
     const inner = host.querySelector(".markdown-body, .notel-content, .post-box, .content");
     if (nests && inner) {
@@ -1070,7 +1096,7 @@ function mountComponent(view) {
         },
         onEmpty: () => ctx.onDelete(block.id, "prev"),
       });
-      if (nested) return;
+      if (nested) return nested.ready;
       // No box came back, which means this note is already inside one. It falls
       // back to the flat body rather than opening a second level.
       inner.classList.remove("ed-nest");
@@ -1079,11 +1105,13 @@ function mountComponent(view) {
     }
 
     const body = host.querySelector(".markdown-body, .notel-content, .post-box, .content");
-    if (!body || parsed.bodyKind === "text") return mountComponentBody(view, host, parsed);
-    mountComponentBody(view, body, parsed);
+    mountComponentBody(view, !body || parsed.bodyKind === "text" ? host : body, parsed);
+    return null;
   };
 
-  paint();
+  // A note holding a diagram is not its final height in the tick it is built,
+  // and `enter` measures this when the block is inserted.
+  view.ready = paint();
   view.nests = nests;
 
   view.read = () => {
@@ -1272,6 +1300,9 @@ function mountTabs(view, wrap) {
     morphHeight(wrap, paintPane);
   };
 
+  // Returns the pane's first paint. A tab holding a diagram is not its final
+  // height in the tick it is built, and the box animating open around it has to
+  // wait for that or land on the wrong number and correct itself afterwards.
   const paintPane = () => {
     if (nested) {
       ctx.unnest(nested);
@@ -1291,6 +1322,7 @@ function mountTabs(view, wrap) {
       pane.innerHTML = renderMarkdown(panes[open] ? panes[open].body : "");
     }
     ctx.observeImages();
+    return nested ? nested.ready : null;
   };
 
   const show = (i) => {
@@ -1318,7 +1350,7 @@ function mountTabs(view, wrap) {
   });
 
   paintNav();
-  paintPane();
+  view.ready = paintPane();
 
   view.nests = true;
   view.read = readPane;

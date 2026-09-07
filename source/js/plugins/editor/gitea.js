@@ -170,6 +170,28 @@ export async function read(path) {
  *   `state` is Gitea's rollup — pending / success / failure / error / warning —
  *   or "" when no job has reported yet. null means the request itself failed.
  */
+/**
+ * A link Gitea wrote, re-hung on the host we are actually talking to.
+ *
+ * `target_url` is built from the server's own `ROOT_URL`, which is whatever that
+ * server was configured with rather than the address anybody reaches it at — so
+ * "View run" pointed somewhere the reader's browser cannot go. Only the ORIGIN
+ * is wrong; the path identifies the run. The API base is by definition
+ * reachable from here, because every request in this file just went through it.
+ */
+function reachable(api, url) {
+  if (!url) return "";
+  try {
+    const here = new URL(api);
+    const there = new URL(url, here);
+    there.protocol = here.protocol;
+    there.host = here.host;
+    return there.toString();
+  } catch (err) {
+    return url;
+  }
+}
+
 export async function commitStatus(sha) {
   const t = await getTicket();
   const ref = String(sha || "").trim();
@@ -188,7 +210,7 @@ export async function commitStatus(sha) {
   const withLink = rows.find((row) => row.target_url);
   return {
     state: String(body.state || "").toLowerCase(),
-    url: withLink ? withLink.target_url : "",
+    url: withLink ? reachable(t.api, withLink.target_url) : "",
     count: rows.length,
   };
 }

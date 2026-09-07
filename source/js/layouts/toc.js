@@ -149,7 +149,10 @@ function buildController() {
 }
 
 /** Show or hide the rail. Hidden, NEVER removed — see `refreshTOC`. */
+let wasEmpty = true;
+
 function setEmpty(empty) {
+  wasEmpty = empty;
   document
     .querySelectorAll(".toc-content-container, .toc-marker")
     .forEach((elem) => elem.classList.toggle("is-empty", empty));
@@ -187,8 +190,17 @@ export function initTOC() {
 export function refreshTOC() {
   const utils = buildController();
   const has = utils.navItems.length > 0;
+  const first = has && wasEmpty;
   controller = has ? utils : null;
   setEmpty(!has);
+  // The aside's OPEN state is decided once, when a post first has something to
+  // put in it. `.toc-content-container` is `opacity: 0; width: 0` until
+  // `.post-page-container` carries `show-toc`, so a post that loaded with no
+  // headings and grew its first one in the editor would have had a rail that
+  // was no longer `is-empty` and still invisible. Only on that transition:
+  // running it on every rebuild would fold the rail shut under somebody in the
+  // middle of using it.
+  if (first) utils.showTOCAside();
   if (has) utils.measureSections();
   invalidateMetrics();
   return controller;
