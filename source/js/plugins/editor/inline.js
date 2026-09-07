@@ -1,0 +1,595 @@
+/**
+ * Inline marks, applied to a RANGE rather than to an element.
+ *
+ * The old version asked "is there a <strong> around the selection?" and toggled
+ * that element. Three things follow from that question being the wrong one, and
+ * all three were reachable in a sentence of ordinary typing:
+ *
+ *   - Un-bolding two words inside a bold sentence un-bolded the sentence. The
+ *     unit of editing was the tag, never the selection.
+ *   - Bolding a range that was already half bold nested <strong> inside
+ *     <strong>, which markdown cannot express, so the emitted `****` collapsed.
+ *   - A range that began inside one mark and ended outside it could not be
+ *     expressed at all.
+ *
+ * So the unit here is the TEXT NODE. The range is carved at both ends, every
+ * text node it covers is collected, and the mark is added to or removed from
+ * each one independently; a mark that only half-covers the range is split. The
+ * usual editor convention decides the direction: a range that is ENTIRELY
+ * marked toggles off, anything less fills the gaps in. `tidy` then merges what
+ * ended up adjacent and drops what ended up nested, so the DOM stays in the
+ * shape `htmlToInline` can serialise.
+ *
+ * ── What may not nest ───────────────────────────────────────────────────────
+ * Inline code and inline math are LITERAL in markdown: `**x**` inside backticks
+ * is four asterisks, not bold. So they take no marks inside them (the toolbar
+ * disables the rest while the caret is in one) and flatten whatever they are
+ * applied over. A link cannot contain a link. Everything else nests freely, and
+ * a mark inside itself is not nesting — it is the same mark twice.
+ */
+
+import { selection } from "./caret.js";
+
+/**
+ * A highlight is the theme's own box, not an invented `<mark>`.
+ *
+ * The site already has fifteen box colours, a filter that accepts the
+ * `{$ box $}` shorthand as well as the `{% box %}` tag, and CSS for both — so
+ * highlighting with anything else would mean a second kind of highlight that
+ * only the editor understands. One tool, therefore, wearing the highlighter
+ * icon and opening the palette the posts already use.
+ */
+export const HIGHLIGHTS = [
+  "default", "blue", "cyan", "teal", "green", "lime", "yellow", "amber",
+  "orange", "red", "pink", "purple", "indigo", "gray", "slate",
+];
+
+export const MARKS = [
+  { key: "strong", tag: "strong", alias: ["B"], icon: "fa-bold", label: "Bold", shortcut: "b" },
+  { key: "em", tag: "em", alias: ["I"], icon: "fa-italic", label: "Italic", shortcut: "i" },
+  { key: "strike", tag: "del", alias: ["S"], icon: "fa-strikethrough", label: "Strikethrough" },
+  {
+    key: "box",
+    tag: "span",
+    icon: "fa-highlighter",
+    label: "Highlight",
+    colours: true,
+    test: (el) => el.getAttribute && el.getAttribute("data-md") === "box",
+  },
+  { key: "code", tag: "code", icon: "fa-code", label: "Inline code", literal: true },
+  { key: "link", tag: "a", icon: "fa-link", label: "Link", asks: "url" },
+  { key: "sup", tag: "sup", icon: "fa-superscript", label: "Superscript" },
+  { key: "sub", tag: "sub", icon: "fa-subscript", label: "Subscript" },
+];
+
+const BY_KEY = new Map(MARKS.map((m) => [m.key, m]));
+
+/** Every tag this module treats as a mark, whoever wrote it. */
+const MARK_TAGS = new Set(["STRONG", "B", "EM", "I", "DEL", "S", "MARK", "CODE", "A", "KBD", "SUP", "SUB", "U", "SMALL", "ABBR"]);
+
+/** Where a mark can never reach past. */
+const STRUCTURE = new Set([
+  "LI", "P", "DIV", "TD", "TH", "BLOCKQUOTE", "UL", "OL", "TABLE", "TBODY",
+  "THEAD", "TR", "H1", "H2", "H3", "H4", "H5", "H6", "PRE", "FIGURE", "FIGCAPTION",
+]);
+
+/** Nodes whose contents are literal text: nothing may be marked inside them. */
+function literalAround(node, root) {
+  let cur = node && node.nodeType === 3 ? node.parentNode : node;
+  while (cur && cur !== root && cur.nodeType === 1) {
+    if (cur.tagName === "CODE") return "code";
+    if (cur.dataset && (cur.dataset.md === "math" || cur.dataset.mdSrc != null)) return "literal";
+    if (STRUCTURE.has(cur.tagName)) return "";
+    cur = cur.parentNode;
+  }
+  return "";
+}
+
+function matches(el, spec) {
+  if (spec.test) return spec.test(el);
+  if (el.tagName === spec.tag.toUpperCase()) return true;
+  return !!(spec.alias && spec.alias.includes(el.tagName));
+}
+
+/** A box is a span, and most spans are not boxes, so the tag alone cannot say. */
+function isMarkNode(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.getAttribute && el.getAttribute("data-md") === "box") return true;
+  return MARK_TAGS.has(el.tagName);
+}
+
+function closestMark(node, spec, root) {
+  let cur = node && node.nodeType === 3 ? node.parentNode : node;
+  while (cur && cur !== root && cur.nodeType === 1) {
+    if (matches(cur, spec)) return cur;
+    if (STRUCTURE.has(cur.tagName)) return null;
+    cur = cur.parentNode;
+  }
+  return null;
+}
+
+/** The element a mark may not be split past — a list item, a cell, the block. */
+function stopFor(node, root) {
+  let cur = node.parentNode;
+  while (cur && cur !== root && !STRUCTURE.has(cur.tagName)) cur = cur.parentNode;
+  return cur || root;
+}
+
+/* ─── the four primitives ──────────────────────────────────────────────────── */
+
+/**
+ * Split every ancestor between `node` and `stop` so that the chain from `stop`
+ * down to `node` holds nothing else. Returns the top of that isolated chain —
+ * which, when `stop` is a mark's parent, IS that mark holding only this node.
+ */
+function isolate(node, stop) {
+  let cur = node;
+  while (cur.parentNode && cur.parentNode !== stop) {
+    const parent = cur.parentNode;
+    if (!parent.parentNode) break;
+
+    if (cur.previousSibling) {
+      const left = parent.cloneNode(false);
+      while (parent.firstChild !== cur) left.appendChild(parent.firstChild);
+      parent.parentNode.insertBefore(left, parent);
+    }
+    if (cur.nextSibling) {
+      const right = parent.cloneNode(false);
+      while (cur.nextSibling) right.appendChild(cur.nextSibling);
+      parent.parentNode.insertBefore(right, parent.nextSibling);
+    }
+    cur = parent;
+  }
+  return cur;
+}
+
+function unwrap(el) {
+  const parent = el.parentNode;
+  if (!parent) return;
+  while (el.firstChild) parent.insertBefore(el.firstChild, el);
+  parent.removeChild(el);
+}
+
+function dress(el, spec, opts) {
+  if (spec.key === "box") {
+    const colour = (opts && opts.colour) || "default";
+    el.className = "post-box post-box-" + colour;
+    el.setAttribute("data-md", "box");
+    el.setAttribute("data-box-color", colour);
+    // Anything new is written in the shorthand, which is the spelling that
+    // survives sitting against a math delimiter.
+    if (!el.getAttribute("data-box-syntax")) el.setAttribute("data-box-syntax", "$");
+    return;
+  }
+  if (spec.key === "link") el.setAttribute("href", (opts && opts.href) || "#");
+  el.setAttribute("data-md", spec.key);
+}
+
+function addMark(node, spec, root, opts) {
+  if (closestMark(node, spec, root)) return null;
+  const el = document.createElement(spec.tag);
+  dress(el, spec, opts);
+  node.parentNode.insertBefore(el, node);
+  el.appendChild(node);
+  return el;
+}
+
+function dropMark(node, spec, root) {
+  const el = closestMark(node, spec, root);
+  if (!el) return;
+  unwrap(isolate(node, el.parentNode));
+}
+
+function retarget(node, spec, root, opts) {
+  const el = closestMark(node, spec, root);
+  if (!el) return addMark(node, spec, root, opts);
+  dress(isolate(node, el.parentNode), spec, opts);
+  return null;
+}
+
+/* ─── range handling ───────────────────────────────────────────────────────── */
+
+/** Split both ends so the range begins and ends between whole text nodes. */
+function carve(range) {
+  const sc = range.startContainer;
+  const so = range.startOffset;
+  const ec = range.endContainer;
+  const eo = range.endOffset;
+  const same = sc === ec;
+
+  if (ec.nodeType === 3 && eo > 0 && eo < ec.nodeValue.length) ec.splitText(eo);
+
+  if (sc.nodeType === 3 && so > 0 && so < sc.nodeValue.length) {
+    const tail = sc.splitText(so);
+    // End first: moving the start past a stale end collapses the range.
+    if (same) range.setEnd(tail, tail.nodeValue.length);
+    range.setStart(tail, 0);
+  }
+}
+
+/**
+ * Every text node the range covers, in document order.
+ *
+ * Boundary anchors are skipped in both this and `touched`: they are the
+ * editor's own punctuation and marking them would wrap a zero-width space in a
+ * `<strong>`, or — worse — make a selection that merely touches one report
+ * itself as already bold and toggle the wrong way.
+ */
+function covered(range, root) {
+  const out = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!node.nodeValue.length || isZwsp(node)) continue;
+    const probe = document.createRange();
+    probe.selectNodeContents(node);
+    if (
+      range.compareBoundaryPoints(Range.START_TO_START, probe) <= 0 &&
+      range.compareBoundaryPoints(Range.END_TO_END, probe) >= 0
+    ) {
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+/** Every text node the range touches at all — read-only, splits nothing. */
+function touched(range, root) {
+  const out = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!node.nodeValue.trim() || isZwsp(node)) continue;
+    const probe = document.createRange();
+    probe.selectNodeContents(node);
+    if (
+      range.compareBoundaryPoints(Range.END_TO_START, probe) < 0 &&
+      range.compareBoundaryPoints(Range.START_TO_END, probe) > 0
+    ) {
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+/* ─── tidying ──────────────────────────────────────────────────────────────── */
+
+function signature(el) {
+  if (!isMarkNode(el)) return null;
+  const href = el.getAttribute("href") || "";
+  return el.tagName + "|" + (el.className || "") + "|" + href;
+}
+
+function insideSame(el, root) {
+  const sig = signature(el);
+  let cur = el.parentNode;
+  while (cur && cur !== root && cur.nodeType === 1) {
+    if (signature(cur) === sig) return true;
+    if (STRUCTURE.has(cur.tagName)) return false;
+    cur = cur.parentNode;
+  }
+  return false;
+}
+
+/**
+ * Put the tree back into a shape markdown can express: no empty marks, no mark
+ * inside the same mark, and no two identical marks side by side.
+ *
+ * Text nodes are never destroyed here — no `normalize()` — because the caller
+ * still holds references to them and puts the selection back with those.
+ */
+function tidy(root) {
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    if (!el.parentNode || !isMarkNode(el)) continue;
+
+    if (!el.firstChild || (isBlankText(el.textContent) && !el.querySelector("img, br"))) {
+      el.remove();
+      continue;
+    }
+    if (insideSame(el, root)) {
+      unwrap(el);
+      continue;
+    }
+    const prev = el.previousSibling;
+    if (prev && signature(prev) && signature(prev) === signature(el)) {
+      while (el.firstChild) prev.appendChild(el.firstChild);
+      el.remove();
+    }
+  }
+
+  dropStrayAnchors(root);
+  anchorMarks(root);
+}
+
+/* ─── what the toolbar reads ───────────────────────────────────────────────── */
+
+/**
+ * `active` is what covers the WHOLE selection, `partial` what covers part of
+ * it — the distinction the button's on/mixed state is drawn from. With the
+ * caret collapsed there is no partial: it is simply what the caret sits inside.
+ */
+export function markState(root) {
+  const sel = selection();
+  if (!sel || !sel.rangeCount || !root || !root.contains(sel.anchorNode)) return null;
+
+  const range = sel.getRangeAt(0);
+  const collapsed = sel.isCollapsed;
+  const nodes = collapsed ? [sel.anchorNode] : touched(range, root);
+  const live = nodes.filter((n) => n && root.contains(n));
+  if (!live.length) return { collapsed, active: new Set(), partial: new Set(), literal: "", colour: "", href: "" };
+
+  const active = new Set();
+  const partial = new Set();
+  for (const spec of MARKS) {
+    let on = 0;
+    for (const node of live) if (closestMark(node, spec, root)) on += 1;
+    if (on === live.length) active.add(spec.key);
+    else if (on) partial.add(spec.key);
+  }
+
+  const anchorBox = closestMark(live[0], BY_KEY.get("box"), root);
+  const anchorLink = closestMark(live[0], BY_KEY.get("link"), root);
+
+  return {
+    collapsed,
+    active,
+    partial,
+    literal: literalAround(live[0], root),
+    colour: anchorBox ? anchorBox.getAttribute("data-box-color") || "default" : "",
+    href: anchorLink ? anchorLink.getAttribute("href") || "" : "",
+  };
+}
+
+/* ─── the one entry point ──────────────────────────────────────────────────── */
+
+/**
+ * Toggle, or retarget, one mark over the live selection.
+ *
+ * `opts.colour` re-colours a highlight instead of removing it; `opts.href`
+ * re-points a link instead of removing it. Returns false when there was nothing
+ * to act on, so the caller can leave the document untouched.
+ */
+export function applyMark(root, key, opts = {}) {
+  const spec = BY_KEY.get(key);
+  const sel = selection();
+  if (!spec || !sel || !sel.rangeCount || sel.isCollapsed) return false;
+
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) return false;
+
+  carve(range);
+  const nodes = covered(range, root).filter((n) => n.nodeValue.length);
+  if (!nodes.length) return false;
+
+  const all = nodes.every((n) => closestMark(n, spec, root));
+  const wants = spec.key === "box" ? "colour" : spec.key === "link" ? "href" : "";
+  const given = wants && opts[wants] !== undefined && opts[wants] !== "";
+
+  if (all && given) {
+    const now = nodes.map((n) => {
+      const el = closestMark(n, spec, root);
+      return spec.key === "box"
+        ? el.getAttribute("data-box-color") || "default"
+        : el.getAttribute("href") || "";
+    });
+    // Asking for what it already is means "take it off"; asking for something
+    // else means "make it that" — never nest a second one inside the first.
+    if (now.every((value) => value === opts[wants])) nodes.forEach((n) => dropMark(n, spec, root));
+    else nodes.forEach((n) => retarget(n, spec, root, opts));
+  } else if (all) {
+    nodes.forEach((n) => dropMark(n, spec, root));
+  } else {
+    if (spec.literal) for (const node of nodes) stripAround(node, root);
+    const made = nodes.map((n) => addMark(n, spec, root, opts)).filter(Boolean);
+
+    // Flattening replaces the text nodes, so the selection is put back around
+    // the elements that now hold them.
+    if (spec.literal && made.length) {
+      for (const el of made) el.textContent = el.textContent;
+      tidy(root);
+      select(sel, made);
+      return true;
+    }
+  }
+
+  tidy(root);
+  select(sel, nodes);
+  return true;
+}
+
+/** Everything a literal mark is about to swallow has to come off first. */
+function stripAround(node, root) {
+  const stop = stopFor(node, root);
+  const top = isolate(node, stop);
+  let cur = top;
+  while (cur && cur !== node) {
+    const next = cur.firstChild;
+    if (isMarkNode(cur)) unwrap(cur);
+    cur = next;
+  }
+}
+
+/** Strip every mark off the selection, leaving the words where they are. */
+export function clearMarks(root) {
+  const sel = selection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return false;
+
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) return false;
+
+  carve(range);
+  const nodes = covered(range, root).filter((n) => n.nodeValue.length);
+  if (!nodes.length) return false;
+
+  for (const node of nodes) stripAround(node, root);
+  tidy(root);
+  select(sel, nodes);
+  return true;
+}
+
+/** Put the selection back around what was just operated on. */
+function select(sel, nodes) {
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (!first || !last || !first.parentNode || !last.parentNode) return;
+
+  const out = document.createRange();
+  if (first.nodeType === 3) out.setStart(first, 0);
+  else out.setStartBefore(first);
+  if (last.nodeType === 3) out.setEnd(last, last.nodeValue.length);
+  else out.setEndAfter(last);
+
+  sel.removeAllRanges();
+  sel.addRange(out);
+}
+
+/* ─── the caret at a boundary ──────────────────────────────────────────────── */
+
+const ZWSP = "​";
+const ONLY_ZWSP = /^​+$/;
+
+function isZwsp(node) {
+  return !!node && node.nodeType === 3 && ONLY_ZWSP.test(node.nodeValue);
+}
+
+/** Nothing but anchors: an empty mark, however many anchors it accumulated. */
+export function isBlankText(text) {
+  return !String(text || "").replace(/​/g, "").trim();
+}
+
+/**
+ * Give every side of every mark somewhere for the caret to stand.
+ *
+ * `Hello *World*, Jason` has ONE visual point between `World` and the comma and
+ * TWO meanings for it: keep typing inside the italics, or after them. A browser
+ * offers whichever it feels like, so the author types `!` and gets `*World!*`
+ * when they wanted `*World*!` — with no way to say which.
+ *
+ * Putting a zero-width space OUTSIDE the mark gives the outside meaning a real
+ * text node of its own. It does not give the inside meaning one, and that is
+ * why the closing end of a format could be controlled and the opening end could
+ * not: at a closing boundary the "inside" position is the end of the mark's own
+ * text, which browsers are willing to keep distinct, while at an opening
+ * boundary it is offset 0 of that text — visually identical to the position
+ * just before the tag, and collapsed into it by every caret-movement
+ * implementation there is. No amount of outside anchoring reaches it.
+ *
+ * So a mark is anchored on FOUR sides: one zero-width space immediately outside
+ * each end, and one immediately inside each end. The inside pair is the whole
+ * fix — it turns "offset 0 of the mark's text" into "a text node that is a
+ * child of the mark", which is a position the arrow keys stop at and typing
+ * lands inside.
+ *
+ * The outside anchors are shared between neighbours, so two touching marks get
+ * one between them rather than two:
+ *
+ *   *Hello***World**   →   ​<em>​Hello​</em>​<strong>​World​</strong>​
+ *                                        ↑    ↑    ↑
+ *                                   inside  between  inside
+ *                                    the em          the strong
+ *
+ * which is exactly the three things the author could mean there. Nested marks
+ * stack the same way, one position per level. The pass is idempotent: a side
+ * that already has an anchor is left alone. They are the editor's, never the
+ * author's, and every read path strips them.
+ */
+export function anchorMarks(root) {
+  if (!root) return;
+
+  const put = (parent, before) => parent.insertBefore(document.createTextNode(ZWSP), before);
+
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    if (!isMarkNode(el) || !el.parentNode) continue;
+    // An empty mark is about to be removed by `tidy`; anchoring it would keep
+    // it alive, because a mark holding two anchors is not an empty one.
+    if (!el.firstChild) continue;
+
+    if (!isZwsp(el.previousSibling)) put(el.parentNode, el);
+    if (!isZwsp(el.nextSibling)) put(el.parentNode, el.nextSibling);
+
+    // Inline code and inline math are LITERAL: their contents are characters,
+    // not markup, and a zero-width space inside them would be a character in
+    // the code span.
+    if (el.tagName === "CODE" || (el.dataset && el.dataset.md === "math")) continue;
+    if (!isZwsp(el.firstChild)) put(el, el.firstChild);
+    if (!isZwsp(el.lastChild)) put(el, null);
+  }
+}
+
+/** An anchor earns its place beside a mark, or just inside one's edge. */
+function anchorWanted(node) {
+  if (isMarkNode(node.previousSibling) || isMarkNode(node.nextSibling)) return true;
+  const parent = node.parentNode;
+  return !!(isMarkNode(parent) && (parent.firstChild === node || parent.lastChild === node));
+}
+
+/**
+ * Drop the anchors that no longer sit at a mark's edge, and collapse the ones
+ * that doubled up — a mark removed between two of them leaves both behind, and
+ * two zero-width spaces in a row are two caret stops that mean the same thing.
+ */
+export function dropStrayAnchors(root) {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const seen = [];
+  let node;
+  while ((node = walker.nextNode())) if (isZwsp(node)) seen.push(node);
+
+  for (const anchor of seen) {
+    if (!anchor.isConnected) continue;
+    if (!anchorWanted(anchor)) {
+      anchor.remove();
+      continue;
+    }
+    if (anchor.nodeValue !== ZWSP) anchor.nodeValue = ZWSP;
+    while (isZwsp(anchor.nextSibling)) anchor.nextSibling.remove();
+  }
+}
+
+/* ─── holding a selection across a prompt ──────────────────────────────────── */
+
+/**
+ * A prompt takes the focus, and taking the focus destroys the selection — so by
+ * the time an address has been typed there is nothing left to apply it to.
+ * That is the whole reason the link tool did nothing at all. The range is taken
+ * before the prompt opens and put back before the mark is applied.
+ */
+export function saveRange() {
+  const sel = selection();
+  if (!sel || !sel.rangeCount) return null;
+  return sel.getRangeAt(0).cloneRange();
+}
+
+export function restoreRange(range) {
+  if (!range || !range.startContainer || !range.startContainer.isConnected) return false;
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
+}
+
+/**
+ * Put `node` where the caret is, and leave the caret after it.
+ *
+ * The zero-width text node is load-bearing: without something to sit in, the
+ * caret stays INSIDE the element that was just inserted and the next keystroke
+ * lands inside the link, the code span or the image's alt text.
+ */
+export function insertInline(root, node) {
+  const sel = selection();
+  if (!sel || !sel.rangeCount || !root.contains(sel.anchorNode)) return false;
+
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  range.insertNode(node);
+
+  const tail = document.createTextNode("​");
+  node.parentNode.insertBefore(tail, node.nextSibling);
+
+  const after = document.createRange();
+  after.setStart(tail, 1);
+  after.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(after);
+  return true;
+}

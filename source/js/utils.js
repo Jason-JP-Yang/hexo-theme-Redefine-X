@@ -416,9 +416,10 @@ export default function initUtils() {
         post &&
           post.forEach((v) => {
             const nowDate = Date.now();
-            const postDate = new Date(
-              v.dataset.date.split(" GMT")[0],
-            ).getTime();
+            // `data-date` is ISO/UTC. It used to be a toString() whose offset
+            // was stripped here and reparsed as local, which drifted by the
+            // build machine's zone.
+            const postDate = new Date(v.dataset.date).getTime();
             // Plain text — innerHTML made the browser parse HTML once per
             // article card on every home-page navigation for no reason.
             v.textContent = this.getHowLongAgo(
@@ -429,9 +430,7 @@ export default function initUtils() {
         post &&
           post.forEach((v) => {
             const nowDate = Date.now();
-            const postDate = new Date(
-              v.dataset.date.split(" GMT")[0],
-            ).getTime();
+            const postDate = new Date(v.dataset.date).getTime();
             const finalDays = Math.floor(
               (nowDate - postDate) / (60 * 60 * 24 * 1000),
             );

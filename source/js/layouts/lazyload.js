@@ -17,8 +17,21 @@ import {
 } from "../tools/scrollScheduler.js";
 
 export const loadedPreloaders = new WeakSet();
+
+// Membership, not an attribute. `data-observed` used to mark an observed
+// preloader, and it survived being serialised into an innerHTML snapshot — a
+// restored node looked observed while no observer had ever seen it, and sat on
+// its skeleton forever. Identity cannot be serialised, so it cannot lie.
+const observedPreloaders = new WeakSet();
+const claimedImages = new WeakSet();
 const preloadedImages = new Map();
 const inflightLoads = new Map();
+
+/** Hand a preloader back to the observer: it never made it into the document. */
+function release(preloader) {
+  loadedPreloaders.delete(preloader);
+  observedPreloaders.delete(preloader);
+}
 let intersectionObserver = null;
 let preloadEnabled = false;
 let preloadQueue = [];
@@ -66,7 +79,13 @@ function flushSwaps() {
   // Mutate everything first…
   const swapped = [];
   for (const { preloader, img } of batch) {
-    if (!preloader.parentNode) continue;
+    // Detached mid-flight — the editor took the article apart while this was
+    // loading. Dropping it silently is what left a skeleton behind when the
+    // article came back, so it is released instead and loaded again then.
+    if (!preloader.parentNode) {
+      release(preloader);
+      continue;
+    }
     preloader.parentNode.replaceChild(img, preloader);
     swapped.push(img);
   }
@@ -142,7 +161,15 @@ async function ensureImageCached(src, alt) {
 }
 
 export async function requestImageBySrc(src, alt = "") {
-  const img = await ensureImageCached(src, alt);
+  let img = await ensureImageCached(src, alt);
+
+  // Two preloaders on the same picture share one in-flight load and would
+  // otherwise be handed the same element: inserting it twice MOVES it, and the
+  // first place it landed empties out. The second caller gets its own node —
+  // the bytes are cached by then, so it costs no request.
+  if (claimedImages.has(img)) img = await loadImage(src, alt);
+  claimedImages.add(img);
+
   if (alt) img.alt = alt;
   if (preloadedImages.get(src) === img) preloadedImages.delete(src);
   return img;
@@ -162,7 +189,12 @@ export function transformPreloaderToImage(preloader, img) {
   // Mark
   img.classList.add("img-preloader-loaded");
   img.dataset.originalSrc = preloader.dataset.src;
-  
+
+  // The editor marks its pictures so a click selects them instead of opening
+  // the lightbox. The mark has to survive the swap or it stops meaning anything
+  // the moment the image actually loads.
+  if (preloader.hasAttribute("data-no-viewer")) img.setAttribute("data-no-viewer", "");
+
   return img;
 }
 
@@ -228,6 +260,20 @@ export function registerSrcResolver(fn) {
   srcResolver = fn;
 }
 
+/**
+ * A second address to try when the first one 404s.
+ *
+ * The editor registers one: an image committed a minute ago is in the
+ * repository but not yet on the site, and the repository can be read directly.
+ * Nothing else registers one, so for a reader this stays exactly one request per
+ * picture and one error state when it fails.
+ */
+let srcFallback = null;
+
+export function registerSrcFallback(fn) {
+  srcFallback = fn;
+}
+
 async function srcFor(preloader) {
   const direct = preloader.dataset.src;
   if (direct) return direct;
@@ -253,11 +299,26 @@ async function processPreloader(preloader) {
 
   try {
     const img = await requestImageBySrc(src, alt);
-    replacePreloader(preloader, img);
+    return void replacePreloader(preloader, img);
   } catch (error) {
-    console.error("[lazyload]", error);
-    showError(preloader, src);
+    /* the fallback below is the second chance; the error state is the last */
   }
+
+  let spare = "";
+  try {
+    spare = srcFallback ? (await srcFallback(preloader, src)) || "" : "";
+  } catch (e) {
+    spare = "";
+  }
+
+  if (spare) {
+    try {
+      return void replacePreloader(preloader, await requestImageBySrc(spare, alt));
+    } catch (e) {
+      /* fall through */
+    }
+  }
+  showError(preloader, src);
 }
 
 /**
@@ -364,7 +425,7 @@ function getViewportPosition(element) {
  * Order: below(3) -> above(3) -> below(all) -> above(all)
  */
 function buildPreloadQueue() {
-  const allPreloaders = Array.from(document.querySelectorAll(".img-preloader"));
+  const allPreloaders = Array.from(document.querySelectorAll(".img-preloader:not([data-ghost])"));
   const unloaded = allPreloaders.filter(p => !loadedPreloaders.has(p));
   
   if (unloaded.length === 0) return [];
@@ -456,15 +517,16 @@ function startPreload() {
 export default function initLazyLoad(config = {}) {
   preloadEnabled = config.preload === true;
   
-  const preloaders = document.querySelectorAll(".img-preloader:not([data-observed])");
-  if (preloaders.length === 0) return;
-  
   const observer = getObserver();
-  preloaders.forEach((preloader) => {
-    preloader.dataset.observed = "true";
+  let added = 0;
+  for (const preloader of document.querySelectorAll(".img-preloader:not([data-ghost])")) {
+    if (observedPreloaders.has(preloader) || loadedPreloaders.has(preloader)) continue;
+    observedPreloaders.add(preloader);
     observer.observe(preloader);
-  });
-  
+    added += 1;
+  }
+  if (added === 0) return;
+
   // Start preloading if enabled
   if (preloadEnabled) {
     startPreload();
@@ -496,5 +558,5 @@ export default function initLazyLoad(config = {}) {
  * Force load all preloaders (for encrypted content)
  */
 export function forceLoadAllPreloaders() {
-  document.querySelectorAll(".img-preloader").forEach(processPreloader);
+  document.querySelectorAll(".img-preloader:not([data-ghost])").forEach(processPreloader);
 }

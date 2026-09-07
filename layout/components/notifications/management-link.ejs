@@ -10,4 +10,10 @@
     <i class="fa-solid fa-screwdriver-wrench icon-space"></i>
     <span class="link-name"><%= __('notifications.blog_management') %></span>
 </a>
+<% if (theme.backend && theme.backend.vault_enable) { %>
+<a class="links blog-admin-only" href="<%= url_for('/blog-management/write/') %>">
+    <i class="fa-solid fa-feather-pointed icon-space"></i>
+    <span class="link-name"><%= __('editor.new_post') %></span>
+</a>
+<% } %>
 <% } %>

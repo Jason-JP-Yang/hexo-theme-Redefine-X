@@ -256,7 +256,7 @@ plugins:
     enable: false
     type: fixed                 # fixed | mini
     audios: [ { name, artist, url, cover, lrc }, ... ]
-  mermaid: { enable: false, version: "11.4.1" }   # diagrams
+  mermaid: { enable: false }                     # diagrams (all types, vendored)
   mathjax:                      # server-side TeX → SVG (see 04 — mathjax-render)
     enable: true
     every_page: false           # true → all pages; false → only front-matter mathjax: true

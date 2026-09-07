@@ -94,6 +94,14 @@ const pageData = {
 		partial: "pages/management/blog-management",
 		layout: "default",
 	},
+	blogEditor: {
+		titles: [],
+		types: ["blog-editor"],
+		partial: "pages/management/editor",
+		// `raw`, exactly as `post` is: a new post is composed in the article
+		// layout, so it must reach the same container by the same route.
+		layout: "raw",
+	},
 	vault: {
 		titles: [],
 		types: ["vault"],

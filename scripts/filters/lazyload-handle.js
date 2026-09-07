@@ -332,13 +332,38 @@ async function processImgTag(imgTag, dataContext = null) {
     }
   }
 
+  recordSize(displaySrc, dims);
+
   const alt = extractAltText(imgTag);
   const originalClass = extractClass(imgTag);
-  
+
   // Replace <img> with <div class="img-preloader">
   // Use displaySrc (which may be AVIF) as the src for the preloader
   return buildPreloaderDiv(displaySrc, dims, alt, originalClass);
 }
+
+// Every size this build measured, by route. The editor mounts the same
+// preloader these produce, and without the size it cannot reserve the same box
+// — an image would land at the wrong shape and push the text under it around,
+// which is the one thing editing-on-the-article must not do.
+const measured = new Map();
+
+function recordSize(src, dims) {
+  let route = String(src).split(/[?#]/)[0];
+  // Decoded: a route in an attribute is percent-encoded, and every image whose
+  // name is not ASCII would otherwise never match the manifest's own key.
+  try {
+    route = decodeURI(route);
+  } catch (e) {
+    /* keep it as written */
+  }
+  route = route
+    .replace(new RegExp("^" + String(hexo.config.root || "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "")
+    .replace(/^\/+/, "");
+  if (route && !measured.has(route)) measured.set(route, dims);
+}
+
+hexo.extend.helper.register("lazyloadSizes", () => measured);
 
 hexo.extend.filter.register(
   "after_post_render",

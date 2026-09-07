@@ -5,7 +5,7 @@ How to build, develop, and release the theme. Commands here run **inside `themes
 ## Prerequisites
 - **Node ≥ 12** (theme), the site runs on **Hexo 8** / Node modern LTS.
 - For AVIF image optimization: `sharp` (bundled in the site deps) or **FFmpeg** with `libaom-av1`/`libsvtav1` on `PATH` if you pick those encoders.
-- Optional features pull optional deps (already in the site `package.json`): `exif-parser`, `@node-rs/jieba`, `hexo-generator-searchdb`, `hexo-wordcount`, `hexo-generator-feed`, `hexo-filter-mermaid-diagrams`.
+- Optional features pull optional deps (already in the site `package.json`): `exif-parser`, `@node-rs/jieba`, `hexo-generator-searchdb`, `hexo-wordcount`, `hexo-generator-feed`.
 
 ## Theme build commands (`package.json`)
 

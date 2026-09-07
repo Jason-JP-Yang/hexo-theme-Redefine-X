@@ -23,6 +23,8 @@
  * override any field of an auto-generated one (matched by `id`).
  */
 
+const clock = require("./lib/build-clock");
+
 const DEFAULT_LIMIT = 30;
 
 // ─── helpers ────────────────────────────────────────────────
@@ -48,10 +50,10 @@ function truncate(text, max) {
 }
 
 function toIso(value) {
-  if (!value) return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (!value) return clock.iso();
   const date = value.toDate ? value.toDate() : new Date(value);
-  if (isNaN(date.getTime())) return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (isNaN(date.getTime())) return clock.iso();
+  return clock.iso(date);
 }
 
 /**
@@ -198,7 +200,7 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
       data: JSON.stringify(
         {
           version: 1,
-          generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+          generated_at: clock.iso(),
           entries,
         },
         null,
@@ -258,7 +260,7 @@ hexo.extend.generator.register("redefine_blog_management", function () {
   const theme = hexo.theme.config || {};
   if (!theme.notifications || !theme.notifications.enable) return [];
 
-  return [
+  const pages = [
     {
       path: "blog-management/index.html",
       layout: "page",
@@ -272,4 +274,48 @@ hexo.extend.generator.register("redefine_blog_management", function () {
       },
     },
   ];
+
+  // A new post needs somewhere to be composed; an existing one is edited where
+  // it already is. This page is the article layout with nothing in it.
+  if (theme.backend && theme.backend.vault_enable) {
+    pages.push({
+      path: "blog-management/write/index.html",
+      layout: "page",
+      data: {
+        type: "blog-editor",
+        title: "Write",
+        layout: "page",
+        content: "",
+        comment: false,
+        robots: "noindex,nofollow",
+      },
+    });
+
+    // The editor's strings, as a route rather than as part of every page's
+    // config block. The editor can now open on ANY article, and this table is
+    // the largest in the theme — inlining it would put ~6 KB on every post for
+    // the one reader in a thousand who can use it.
+    pages.push({
+      path: "blog-management/editor-i18n.json",
+      data: JSON.stringify(editorStrings()),
+    });
+  }
+
+  return pages;
 });
+
+function editorStrings() {
+  const fs = require("fs");
+  const path = require("path");
+  const yaml = require("js-yaml");
+
+  const dir = path.join(__dirname, "../languages");
+  const lang = hexo.config.language || "en";
+  const file = fs.existsSync(path.join(dir, `${lang}.yml`)) ? `${lang}.yml` : "en.yml";
+
+  try {
+    return yaml.load(fs.readFileSync(path.join(dir, file), "utf8")).editor || {};
+  } catch (e) {
+    return {};
+  }
+}

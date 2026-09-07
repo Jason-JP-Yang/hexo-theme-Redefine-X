@@ -1,0 +1,144 @@
+# Build the site on a push to main and publish the artifact.
+#
+# Drop this in `.github/workflows/` of the repository holding your Hexo source.
+# GitHub Actions syntax, so it runs unchanged on Gitea Actions. Nothing site
+# specific is hard-coded — every address is an Actions variable.
+#
+# Variables (Settings -> Actions -> Variables):
+#   ARTIFACT_REPO_URL      https URL the built site is pushed to (required)
+#   ARTIFACT_BRANCH        branch there                        (default main)
+#   ARTIFACT_AUTHOR_NAME   commit identity for the artifact    (default CI bot)
+#   ARTIFACT_AUTHOR_EMAIL
+#   THEME_REPO_URL         where to fetch the theme submodule from, overriding
+#                          .gitmodules — set it to a mirror on this instance
+#   THEME_SUBMODULE_PATH   default themes/redefine-x
+#   BUILD_ACTOR            only build pushes from this user; empty = anyone
+#   NODE_VERSION           default 24
+#
+# Secrets:
+#   VAULT_MASTER    32-byte base64url key; opens .vault/keys.enc
+#   ARTIFACT_TOKEN  write token for ARTIFACT_REPO_URL
+#
+# ── This workflow builds the site the same way a laptop does ────────────────
+#
+# `npm run clean && npm run build`, and nothing else. There is no CI-only step:
+# the picture moves the editor staged, the album discussions, the build clock
+# and the transcode index are all inside `hexo generate` — see
+# themes/redefine-x/scripts/events/build-pipeline.js.
+#
+# The ONE difference is image encoding. AVIF bytes depend on the machine's
+# ffmpeg and libaom, so RDFX_SKIP_AVIF makes img-optimizer serve only what
+# source/build/ already holds; an image with no cached transcode is published
+# in its original format — heavier, never broken. Encode locally and commit
+# source/build/ when the weight matters. (The build detects a CI runner on its
+# own; `RDFX_SKIP_AVIF: "0"` would force encoding back on.)
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "source/**"
+      - "scaffolds/**"
+      - "themes/**"
+      - "_config*.yml"
+      - ".vault/keys.enc"
+      - "package*.json"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: ${{ vars.NODE_VERSION || '24' }}
+  RDFX_SKIP_AVIF: "1"
+  TZ: UTC
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      vars.BUILD_ACTOR == '' ||
+      github.actor == vars.BUILD_ACTOR
+    env:
+      VAULT_MASTER: ${{ secrets.VAULT_MASTER }}
+      THEME_PATH: ${{ vars.THEME_SUBMODULE_PATH || 'themes/redefine-x' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # Only the theme. `public` is a submodule too, and initialising it would
+      # pull the artifact into the tree Hexo is about to write over. Not
+      # shallow: a submodule pins a commit, which may not be on a branch tip.
+      - name: Check out the theme
+        env:
+          THEME_URL: ${{ vars.THEME_REPO_URL }}
+        run: |
+          git submodule init "$THEME_PATH"
+          [ -n "$THEME_URL" ] && git config "submodule.$THEME_PATH.url" "$THEME_URL"
+          git submodule update "$THEME_PATH"
+          echo "theme origin: $(git -C "$THEME_PATH" remote get-url origin)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - run: npm ci
+
+      # The keyring opens itself: `.vault/keys.json` is gitignored, so the build
+      # takes what it needs out of the committed `.vault/keys.enc` the first
+      # time it asks for a key.
+
+      # Cloned before the build so the artifact keeps its history; `hexo clean`
+      # wipes public/ but preserves public/.git.
+      - name: Fetch the artifact repository
+        env:
+          REPO: ${{ vars.ARTIFACT_REPO_URL }}
+          TOKEN: ${{ secrets.ARTIFACT_TOKEN }}
+          BRANCH: ${{ vars.ARTIFACT_BRANCH || 'main' }}
+        run: |
+          [ -n "$REPO" ] || { echo "ARTIFACT_REPO_URL is not set"; exit 1; }
+          AUTH="${REPO/https:\/\//https://$TOKEN@}"
+          rm -rf public
+          git clone --depth 1 --branch "$BRANCH" "$AUTH" public 2>/dev/null || {
+            mkdir -p public && git -C public init -q && git -C public checkout -q -b "$BRANCH"
+          }
+
+      # Exactly what a local deploy runs.
+      - name: Build
+        run: |
+          npm run clean
+          npm run build
+
+      - name: Publish
+        env:
+          REPO: ${{ vars.ARTIFACT_REPO_URL }}
+          TOKEN: ${{ secrets.ARTIFACT_TOKEN }}
+          BRANCH: ${{ vars.ARTIFACT_BRANCH || 'main' }}
+          NAME: ${{ vars.ARTIFACT_AUTHOR_NAME || 'blog-ci' }}
+          EMAIL: ${{ vars.ARTIFACT_AUTHOR_EMAIL || 'ci@localhost' }}
+        run: |
+          # The same clock the build pinned itself to, read where it is used
+          # rather than exported by a step of its own.
+          EPOCH=$(git log -1 --format=%ct)
+          cd public
+          git add -A
+          if git diff --cached --quiet; then
+            echo "artifact unchanged, nothing to publish"
+            exit 0
+          fi
+          STAMP=$(date -u -d "@$EPOCH" +'%Y-%m-%d %H:%M:%SZ')
+          # Commit dates come from the source commit too, so republishing the
+          # same source produces the same artifact commit.
+          export GIT_AUTHOR_DATE="@$EPOCH +0000"
+          export GIT_COMMITTER_DATE="@$EPOCH +0000"
+          git -c user.name="$NAME" -c user.email="$EMAIL" \
+            commit -q -m "Site updated: $STAMP (${GITHUB_SHA:0:7})"
+          AUTH="${REPO/https:\/\//https://$TOKEN@}"
+          git push "$AUTH" "HEAD:$BRANCH"
+          echo "published ${GITHUB_SHA:0:7} -> $BRANCH"

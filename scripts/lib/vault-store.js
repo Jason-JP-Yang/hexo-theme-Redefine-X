@@ -5,17 +5,21 @@
  *
  * A key is minted ONCE, the first time a post carries `vault:` front matter,
  * and never changes again: rebuilding must not invalidate what is already in
- * D1. The wrapped copy that the Worker needs is printed for the admin console
- * to take; nothing here talks to the network.
+ * D1. The wrapped copy the Worker needs is PUSHED at the end of every build
+ * (`push`), and only if that cannot be done is it printed for a human to paste.
  *
  * FAIL CLOSED. Every path that cannot produce a key throws, because the
  * alternative — carrying on and rendering the post — publishes it in the clear.
  */
 
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 const secrets = require("./secrets");
 const vc = require("./vault-crypto");
 
 const MASTER_ENV = "VAULT_MASTER";
+const ENC_FILE = path.join(secrets.ROOT, ".vault", "keys.enc");
 
 let state = null;
 
@@ -42,14 +46,53 @@ function loadMaster() {
   return key;
 }
 
+/**
+ * Take into `keys.json` every key `keys.enc` holds that it does not.
+ *
+ * `keys.json` is gitignored and `keys.enc` is committed, so a fresh clone — a
+ * CI runner, or your own machine after pulling what CI pushed — starts with no
+ * local keyring at all. Without this the build treats every encrypted post as
+ * new, mints a SECOND key for it, registers that with the backend, and the
+ * ciphertext already published stops opening. Opening is therefore part of
+ * loading rather than a command someone has to remember.
+ *
+ * Local entries win a conflict and are never overwritten: a key minted here and
+ * not yet sealed is the only copy of itself.
+ */
+function absorbSealed(master, keys) {
+  let sealed;
+  try {
+    sealed = fs.readFileSync(ENC_FILE, "utf8").trim();
+  } catch (e) {
+    return 0;
+  }
+  if (!sealed) return 0;
+
+  let opened;
+  try {
+    opened = JSON.parse(vc.open(master, vc.fromB64url(sealed)).toString("utf8"));
+  } catch (e) {
+    fail(".vault/keys.enc does not open under this VAULT_MASTER.");
+  }
+
+  let taken = 0;
+  for (const [id, entry] of Object.entries(opened)) {
+    if (keys[id]) continue;
+    keys[id] = entry;
+    taken++;
+  }
+  return taken;
+}
+
 function load() {
   if (state) return state;
-  state = {
-    master: loadMaster(),
-    keys: secrets.readKeyring() || {},
-    dirty: false,
-    minted: [],
-  };
+
+  const master = loadMaster();
+  const keys = secrets.readKeyring() || {};
+  const taken = absorbSealed(master, keys);
+  if (taken) secrets.writeKeyring(keys);
+
+  state = { master, keys, dirty: false, minted: [], opened: taken };
   return state;
 }
 
@@ -123,8 +166,58 @@ function pending() {
 }
 
 /**
- * What the admin pastes into Management → Encrypted Posts. One JSON line per
- * post so a copy that clips a newline is rejected rather than half-applied.
+ * Register every unactivated key with the Worker, and mark them done.
+ *
+ * The whole point of doing it here: a commit that carries a post's ciphertext
+ * must never be a commit whose key nobody has. Both build paths reach this —
+ * `hexo generate` on the machine and the Gitea Action — because both hold
+ * VAULT_MASTER, which is what signs the request. There is no session and no
+ * second secret; see `verifyBuildSignature` in the Worker.
+ *
+ * BEST EFFORT, always. A build with no network, or one run before the Worker
+ * was deployed, falls back to `report()` and prints the paste block instead.
+ * Refusing to build over an unreachable backend would make the offline case —
+ * the one that motivated the loopback CI — impossible.
+ *
+ * @returns {Promise<{pushed:number}|null>} null when nothing was pushed
+ */
+async function push(apiBase) {
+  const rows = pending();
+  if (!rows.length) return null;
+
+  const base = String(apiBase || "").replace(/\/+$/, "");
+  if (!base) return null;
+
+  const body = JSON.stringify({
+    posts: rows.map((r) => ({ id: r.id, slug: r.slug, wrapped: r.wrapped })),
+  });
+
+  const res = await fetch(`${base}/api/admin/vault/push`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Vault-Signature": pushMac(body) },
+    body,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${detail.slice(0, 200)}`);
+  }
+
+  // Only now. `acknowledge` is what stops the next build re-sending them, and
+  // marking them before the write landed would lose a key silently.
+  acknowledge();
+  return { pushed: rows.length };
+}
+
+/** HMAC over the request body, under an HKDF subkey of the master. */
+function pushMac(body) {
+  const key = vc.hkdf(load().master, "rdfx-vault-push");
+  return "sha256=" + crypto.createHmac("sha256", key).update(body, "utf8").digest("hex");
+}
+
+/**
+ * What the admin pastes into Management → Encrypted Posts, when and only when
+ * the push above could not be made. One JSON line per post so a copy that clips
+ * a newline is rejected rather than half-applied.
  */
 function report(log) {
   const rows = pending();
@@ -139,7 +232,7 @@ function report(log) {
       `not yet activated. Until each is registered in D1, nobody — not even you — can read it.\n\n` +
       `  Blog Management → Encrypted Posts → Add, paste ONE line per post:\n\n` +
       rows.map((r, i) => `    ${lines[i]}   # ${r.title || r.id}`).join("\n") +
-      `\n\n  Then run:  npm run vault:ack\n`
+      `\n\n  Then run:  node themes/redefine-x/bin/vault-ack.js\n`
   );
 }
 
@@ -196,6 +289,47 @@ function reportRetired(log, retired) {
   );
 }
 
+/** Sorted, so two machines sealing the same keyring produce the same bytes. */
+function canonical(map) {
+  const out = {};
+  for (const id of Object.keys(map).sort()) out[id] = map[id];
+  return JSON.stringify(out, null, 2) + "\n";
+}
+
+/**
+ * `.vault/keys.json` → `.vault/keys.enc`.
+ *
+ * Called at the end of every build. Only the sealed copy is committed, so the
+ * commit that carries a post's ciphertext has to carry the key for it in the
+ * same commit — which it cannot do if sealing is a separate command someone has
+ * to remember.
+ *
+ * The nonce is fresh on every seal, so an unchanged keyring is left alone: a
+ * rewrite would show up as a change in git on every build.
+ */
+function seal() {
+  const keys = secrets.readKeyring();
+  if (!keys) return null;
+
+  const master = load().master;
+  const text = canonical(keys);
+
+  let current = null;
+  try {
+    const sealed = fs.readFileSync(ENC_FILE, "utf8").trim();
+    current = JSON.parse(vc.open(master, vc.fromB64url(sealed)).toString("utf8"));
+  } catch (e) {
+    /* absent, or written under a different master — either way, write it */
+  }
+
+  const count = Object.keys(keys).length;
+  if (current && canonical(current) === text) return { changed: false, count };
+
+  fs.mkdirSync(path.dirname(ENC_FILE), { recursive: true });
+  fs.writeFileSync(ENC_FILE, vc.b64url(vc.seal(master, text)) + "\n", "utf8");
+  return { changed: true, count };
+}
+
 /** Marks everything registered. Run after the console has taken the block. */
 function acknowledge() {
   const s = load();
@@ -218,9 +352,11 @@ module.exports = {
   ensurePost,
   flush,
   pending,
+  push,
   report,
   prune,
   reportRetired,
+  seal,
   acknowledge,
   fail,
 };

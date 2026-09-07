@@ -3,7 +3,6 @@
 const fs = require("fs");
 const path = require("path");
 const yaml = require("js-yaml");
-const secrets = require("./lib/secrets");
 
 // Optional: exif-parser for auto-exif reading from image files
 let ExifParser = null;
@@ -480,12 +479,12 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   const giscusProxy = String(
     hexo.theme.config?.backend?.api_url || ""
   ).replace(/\/+$/, "");
+  // NOT gated on GISCUS_AUTHOR_PAT: nothing here calls GitHub, and keying the
+  // markup on a build-machine secret made the page depend on who built it.
+  // Creating the discussions is the sync pass in build-pipeline.js; the client
+  // already treats a missing one as "no reactions".
   const hasGiscusReactions =
-    commentEnabled &&
-    giscusConfig.repo &&
-    giscusConfig.category &&
-    giscusProxy &&
-    secrets.env("GISCUS_AUTHOR_PAT");
+    commentEnabled && giscusConfig.repo && giscusConfig.category && giscusProxy;
 
   categories.forEach(category => {
     category.list.forEach(item => {

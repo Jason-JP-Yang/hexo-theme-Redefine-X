@@ -3,7 +3,11 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const imageSize = require("image-size");
 const { spawn } = require("child_process");
+const { BuildIndex, skipAvif, skipReason } = require("../lib/build-index");
+
+const INDEX_FILE = ".images.json";
 
 // ----------------------------------------------------------------------------
 // Configuration Management
@@ -567,6 +571,47 @@ class PathManager {
 const successfulConversions = new Set();
 const queue = new TaskQueue(2);
 
+// Rebuilt per build. `indexedKeys` is what survives the prune; `uncompressed`
+// is every image this build will publish in its original format, whatever the
+// reason; `empty` is the ones with no bytes at all; `dims` is the intrinsic
+// size of EVERY source image this build saw, transcoded or not.
+let index = null;
+const indexedKeys = new Set();
+const uncompressed = [];
+const empty = [];
+const dims = new Map();
+
+/**
+ * The source image's own pixels, read from its header.
+ *
+ * Measured for every candidate rather than only for the ones a page referenced,
+ * because the editor's picture browser previews files nothing has used yet and
+ * has to reserve the right box for them. AVIF cannot be measured by this
+ * library and does not need to be: the transcode preserves the aspect ratio, so
+ * the source's size is the one the page lays out with.
+ */
+async function measure(relPath, absPath) {
+  if (dims.has(relPath)) return;
+  try {
+    const size = imageSize(absPath);
+    if (size && size.width && size.height) {
+      return void dims.set(relPath, { width: size.width, height: size.height });
+    }
+  } catch (e) {
+    /* fall through to the decoder, which reads more than the header */
+  }
+
+  // A file the header reader cannot parse — an unusual JPEG, a CMYK profile —
+  // is still an image the encoder can open. One process for the handful that
+  // get here is cheaper than a picture laid out at the wrong shape.
+  try {
+    const meta = await ImageMeta.probe(absPath);
+    if (meta && meta.width && meta.height) dims.set(relPath, { width: meta.width, height: meta.height });
+  } catch (e) {
+    /* genuinely unreadable: the size stays unknown */
+  }
+}
+
 async function scanAndProcessAllImages() {
   const config = ConfigManager.get();
   if (!config.ENABLE_AVIF && !config.ENABLE_SVG) {
@@ -574,8 +619,15 @@ async function scanAndProcessAllImages() {
     return;
   }
 
+  index = new BuildIndex(path.join(hexo.source_dir, "build"), INDEX_FILE);
+  indexedKeys.clear();
+  uncompressed.length = 0;
+  empty.length = 0;
+  dims.clear();
+
   queue.concurrency = config.MAX_CONCURRENCY;
-  hexo.log.info(`[img-optimizer] Encoder: ${config.encoder} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
+  const mode = skipAvif() ? `cache only (${skipReason()})` : config.encoder;
+  hexo.log.info(`[img-optimizer] Encoder: ${mode} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
   hexo.log.debug("[img-optimizer] Scanning images...");
 
   // Remove stale optimized files whose source images have been deleted
@@ -587,9 +639,109 @@ async function scanAndProcessAllImages() {
   const tasks = files.map(absPath => processFile(absPath, config));
   await Promise.all(tasks);
 
+  index.prune(indexedKeys);
+  index.flush();
+
+  // The report the CI step used to print before the build started, moved to the
+  // one place that actually knows the answer. Not fatal: an image with no
+  // product keeps its own route, so the page is whole — just heavier.
+  if (uncompressed.length) {
+    const shown = uncompressed.slice(0, 20).map((row) => `    ${row.rel}  (${row.why})`);
+    if (uncompressed.length > shown.length) shown.push(`    … and ${uncompressed.length - shown.length} more`);
+    hexo.log.warn(
+      `[img-optimizer] ${uncompressed.length} of ${dims.size} image(s) are published in their ` +
+        `original format:\n` + shown.join("\n") +
+        `\n  Encode them in a local build and commit source/build/ if the weight matters.`
+    );
+  }
+
+  // A source file with no bytes is not a heavy picture, it is a broken one, and
+  // it reaches the site looking exactly like a working reference. The way one
+  // gets here is a rename that carried the path and not the content.
+  if (empty.length) {
+    hexo.log.error(
+      `[img-optimizer] ${empty.length} image(s) are ZERO BYTES and will publish as broken ` +
+        `pictures:\n` + empty.map((p) => `    ${p}`).join("\n")
+    );
+  }
+
   hexo.log.info(`[img-optimizer] Processed ${tasks.length} images. ${successfulConversions.size} optimized.`);
 
   cleanupRoutes();
+}
+
+/** `relPath -> routePath` for everything this build transcoded. */
+function transcodeMap() {
+  const map = {};
+  for (const relPath of successfulConversions) {
+    const ext = path.extname(relPath);
+    const { routePath } = PathManager.buildOptimizedPath(relPath, PathManager.isSupportedBitmap(ext));
+    map[relPath] = routePath;
+  }
+  return map;
+}
+
+/**
+ * The manifest body: `source path -> [published route, width, height]`.
+ *
+ * EVERY source image is listed, not only the compressed ones. There are exactly
+ * two published states — transcoded, where the product's route is the only one
+ * served, and not transcoded, where the original's route is — and the editor
+ * cannot tell them apart by looking at a path. Listing only the transcoded half
+ * meant every other picture fell through to a guess, which is how an
+ * un-compressed image ended up pointing at an AVIF that was never written.
+ *
+ * Sizes are the source file's own, measured during the scan. The lazyload pass
+ * is consulted only as a second opinion for anything the scan could not read.
+ * `hidden` is the set of routes the vault withheld — passed in rather than
+ * consulted here, because this file must not know that encrypted posts exist.
+ */
+function manifestBody(hidden) {
+  const sizes = (hexo.extend.helper.get("lazyloadSizes") || (() => new Map()))();
+  const map = transcodeMap();
+  const out = {};
+
+  const keys = new Set([...dims.keys(), ...Object.keys(map)]);
+  for (const rel of keys) {
+    const route = map[rel] || rel;
+    if (hidden && hidden.has(route)) continue;
+    const wh = dims.get(rel) || sizes.get(route) || sizes.get(rel) || null;
+    out[rel] = [route, wh ? wh.width : 0, wh ? wh.height : 0];
+  }
+
+  const sorted = {};
+  for (const key of Object.keys(out).sort()) sorted[key] = out[key];
+  return JSON.stringify(sorted);
+}
+
+hexo.extend.helper.register("avifTranscodeMap", transcodeMap);
+hexo.extend.helper.register("avifManifestBody", manifestBody);
+
+/**
+ * `build/manifest.json` — which source images this build actually transcoded.
+ *
+ * The editor cannot guess. An image with a product is published ONLY at that
+ * product's path (the original route is withdrawn below), and an image without
+ * one is published ONLY at its original path — so pointing at the wrong one is
+ * a broken picture either way. This map is the answer.
+ *
+ * Written at `after_generate`, NOT beside the decision that produces it.
+ * `_routerRefresh` snapshots the route list, runs the generators, and then
+ * removes every route in the snapshot that no generator re-emitted — so a route
+ * set during `before_generate` is deleted before anything reaches disk. That is
+ * the same mechanism the AVIF routes work around with their own copy-to-public
+ * pass below; the manifest had no such fallback and was simply never published,
+ * which left the editor with an empty map and every picture pointing at a path
+ * whose route this file had withdrawn.
+ */
+function publishManifest() {
+  if (!hexo.theme.config.backend?.vault_enable) return;
+
+  const body = manifestBody(null);
+  hexo.route.set("build/manifest.json", () => body);
+  hexo.log.info(
+    `[img-optimizer] build/manifest.json lists ${dims.size} image(s), ${successfulConversions.size} of them transcoded.`
+  );
 }
 
 async function gatherFiles() {
@@ -722,11 +874,7 @@ async function processFile(absPath, config) {
   const isBitmap = PathManager.isSupportedBitmap(ext);
   const isSvg = PathManager.isSupportedSvg(ext);
 
-  if ((!isBitmap && !isSvg) ||
-    (isBitmap && !config.ENABLE_AVIF) ||
-    (isSvg && !config.ENABLE_SVG)) {
-    return;
-  }
+  if (!isBitmap && !isSvg) return;
 
   let relPath;
   if (absPath.startsWith(hexo.source_dir)) {
@@ -742,6 +890,21 @@ async function processFile(absPath, config) {
 
   if (relPath.startsWith("build/")) return;
 
+  // Before every exit below: an excluded image and an image the encoder is off
+  // for are both still published, and both still need a size in the manifest.
+  await measure(relPath, absPath);
+
+  try {
+    if (fs.statSync(absPath).size === 0) empty.push(relPath);
+  } catch (e) {
+    /* unreadable is the scan's problem, not this check's */
+  }
+
+  if ((isBitmap && !config.ENABLE_AVIF) || (isSvg && !config.ENABLE_SVG)) {
+    uncompressed.push({ rel: relPath, why: "encoder disabled" });
+    return;
+  }
+
   // Check EXCLUDE patterns
   const excludePatterns = config.EXCLUDE || [];
   const relPathWithSlash = "/" + relPath;
@@ -749,12 +912,14 @@ async function processFile(absPath, config) {
     try {
       if (new RegExp(pattern).test(relPathWithSlash)) {
         hexo.log.debug(`[img-optimizer] Excluded: ${relPath} (matched ${pattern})`);
+        uncompressed.push({ rel: relPath, why: "excluded" });
         return;
       }
     } catch {
       // If pattern is not valid regex, do simple string match
       if (relPathWithSlash.includes(pattern)) {
         hexo.log.debug(`[img-optimizer] Excluded: ${relPath} (matched ${pattern})`);
+        uncompressed.push({ rel: relPath, why: "excluded" });
         return;
       }
     }
@@ -765,18 +930,30 @@ async function processFile(absPath, config) {
     routePath
   } = PathManager.buildOptimizedPath(relPath, isBitmap);
 
+  indexedKeys.add(relPath);
+
   await queue.enqueue(async () => {
     try {
-      // Cache check
-      try {
-        const inStat = await fs.promises.stat(absPath);
-        const outStat = await fs.promises.stat(outputPath);
-        if (outStat.mtimeMs >= inStat.mtimeMs && outStat.size > 0) {
-          hexo.route.set(routePath, () => fs.createReadStream(outputPath));
-          successfulConversions.add(relPath);
-          return;
+      const cached = index.hit(relPath, absPath, (entry) => {
+        try {
+          return fs.statSync(outputPath).size === entry.outSize;
+        } catch (e) {
+          return false;
         }
-      } catch { }
+      });
+
+      if (cached) {
+        hexo.route.set(routePath, () => fs.createReadStream(outputPath));
+        successfulConversions.add(relPath);
+        return;
+      }
+
+      // SVGO is pure JS and lockfile-pinned, so it keeps running; only the AVIF
+      // transcode needs a native encoder whose version would decide the bytes.
+      if (isBitmap && skipAvif()) {
+        uncompressed.push({ rel: relPath, why: "no cached transcode" });
+        return;
+      }
 
       const res = await ImageProcessor.process({
         absPath,
@@ -787,10 +964,12 @@ async function processFile(absPath, config) {
 
       hexo.log.info(`[img-optimizer] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
 
+      index.record(relPath, absPath, { out: routePath, outSize: res.size });
       hexo.route.set(routePath, () => fs.createReadStream(outputPath));
       successfulConversions.add(relPath);
     } catch (err) {
       hexo.log.warn(`[img-optimizer] Failed: ${relPath} -> ${err.message}`);
+      uncompressed.push({ rel: relPath, why: "encode failed" });
     }
   });
 }
@@ -811,10 +990,22 @@ function cleanupRoutes() {
 // HTML Replacement
 // ----------------------------------------------------------------------------
 
+/**
+ * Point every local image at the path it is actually published under.
+ *
+ * The decision is `successfulConversions` — what this build TRANSCODED — and
+ * nothing else. It used to be the config alone: "AVIF is on, so this must be an
+ * AVIF", written before the scan's answer was consulted. Every image the build
+ * declined, failed to encode, or was told to skip (the CI runner, which never
+ * starts an encoder) therefore had its `src` rewritten to a `build/…​.avif` that
+ * was never written, while its ORIGINAL route was left in place and served —
+ * the picture was on the site, at a path no page pointed to.
+ *
+ * The scan runs at `before_generate` and is awaited, so by the time any post
+ * renders the set is complete and this is a lookup rather than a guess.
+ */
 function replaceImagesInHtml(str) {
   if (!str || typeof str !== "string" || str.length === 0) return str;
-
-  const config = ConfigManager.get();
 
   const processTag = (tagContent, attrName) => {
     if (/\bdata-no-avif\b/i.test(tagContent)) return null;
@@ -829,18 +1020,12 @@ function replaceImagesInHtml(str) {
     const local = PathManager.resolveSourceImagePath(originalSrc.split("#")[0].split("?")[0]);
     if (!local) return null;
 
-    // Optimistic check: based on config only, independent of processing state
+    // The only question worth asking: does a product exist? An image without one
+    // keeps the route it already has, and rewriting it would break it.
+    if (!successfulConversions.has(local.rel)) return null;
+
     const ext = path.extname(local.rel).toLowerCase();
-    const isBitmap = PathManager.isSupportedBitmap(ext);
-    const isSvg = PathManager.isSupportedSvg(ext);
-
-    if ((!isBitmap && !isSvg) ||
-      (isBitmap && !config.ENABLE_AVIF) ||
-      (isSvg && !config.ENABLE_SVG)) {
-      return null;
-    }
-
-    const { routePath } = PathManager.buildOptimizedPath(local.rel, isBitmap);
+    const { routePath } = PathManager.buildOptimizedPath(local.rel, PathManager.isSupportedBitmap(ext));
     const url = encodeURI(path.posix.join(hexo.config.root || "/", routePath));
 
     // Inject data-original-src to preserve the link to the original image
@@ -879,6 +1064,10 @@ hexo.extend.helper.register("avifRewriteHtml", replaceImagesInHtml);
 hexo.extend.filter.register("before_generate", scanAndProcessAllImages);
 
 hexo.extend.filter.register("after_generate", function () {
+  // Late enough to survive _routerRefresh, early enough that the generate
+  // console still writes it: that console reads route.list() after this hook.
+  publishManifest();
+
   // Safety Cleanup & Public Sync
   const toDelete = [];
   for (const relPath of successfulConversions) {

@@ -251,6 +251,13 @@ $gap = 30px
             -webkit-line-clamp 1
             overflow hidden
 
+  // A post with no headings hides its contents rail rather than deleting it.
+  // The editor can add a heading to such a post, and a node that was removed
+  // from the document cannot be filled back in — see layouts/toc.js.
+  .toc-content-container.is-empty,
+  .toc-marker.is-empty
+    display none
+
   .toc-content-container
     white-space nowrap
     opacity 0

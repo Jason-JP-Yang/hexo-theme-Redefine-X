@@ -13,5 +13,15 @@
 			<i class="fa-regular fa-comments"></i>
 		</li>
 		<% } %>
+
+		<%# Edit this post. Rendered for everyone and hidden by CSS until
+			`html.blog-admin` is set — the same mechanism the management link
+			uses, and tidiness rather than access control: pressing it only
+			opens a shell, and the Worker decides whether a ticket comes back. %>
+		<% if (theme.backend && theme.backend.vault_enable) { %>
+		<li class="right-bottom-tools tool-edit-post blog-admin-only" title="<%= __('editor.edit_post') %>">
+			<i class="fa-regular fa-pen-to-square"></i>
+		</li>
+		<% } %>
 	</ul>
 </div>

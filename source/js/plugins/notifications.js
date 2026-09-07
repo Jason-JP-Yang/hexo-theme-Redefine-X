@@ -878,6 +878,17 @@ export function initNotifications() {
   if (document.getElementById("blog-management")) {
     import("./blog-management.js").then((module) => module.initBlogManagement()).catch(() => {});
   }
+
+  // Same bargain, but the editor now opens on any article, so the trigger is
+  // the pencil rather than a page. `blog-admin` is written before the first
+  // paint from the cached session, so a reader never fetches it at all.
+  const writable =
+    document.querySelector('.article-content-container[data-post-new="1"]') ||
+    (document.documentElement.classList.contains("blog-admin") && document.querySelector(".tool-edit-post"));
+
+  if (writable) {
+    import("./editor/index.js").then((module) => module.initEditor()).catch(() => {});
+  }
 }
 
 document.addEventListener("DOMContentLoaded", initNotifications);

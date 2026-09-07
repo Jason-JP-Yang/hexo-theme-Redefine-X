@@ -570,9 +570,11 @@ async function purgeSealed(pat, sealed, discs, log) {
 /**
  * Reconcile every masonry album's discussion structure with GitHub.
  *
- * NOT a build filter. It makes network mutations against a real repository,
- * which has no business happening every time `hexo generate` or `hexo server`
- * runs — it is asked for on purpose: `npm run masonry:sync`.
+ * Called from scripts/events/build-pipeline.js at `before_generate`, and ONLY
+ * for `hexo generate`: this makes network mutations against a real repository,
+ * which has no business happening on every keystroke under `hexo server`. It is
+ * also a no-op without GISCUS_AUTHOR_PAT in `.env`, which is what makes it free
+ * on a CI runner.
  *
  * @param {object} ctx  { theme, config, masonry, log }
  */

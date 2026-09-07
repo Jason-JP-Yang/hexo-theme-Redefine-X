@@ -330,3 +330,208 @@ vault:
   no_comments_hint: A public thread under a post only some readers can open would put its title and its substance back in the open.
   no_comments_album: Comments and likes are closed on encrypted albums
   no_comments_album_hint: A public thread would carry the album's title and every photograph's file name, and the like counts live in that same thread - so neither is offered here.
+  draft: Draft
+
+editor:
+  checking: Checking your session...
+  denied: This page is for the blog's administrator.
+  unreachable: Could not reach the backend.
+  no_document: This post is not in the repository you can write to.
+  edit_post: Edit this post
+  new_post: New post
+  close: Stop editing
+  untitled: Untitled
+  draft: Draft
+  encrypted: Encrypted
+  opening: Opening
+  saving: Saving
+  saved: Saved
+  saved_clean: Everything is committed
+  unsaved: Unsaved changes
+  unsaved_file: not saved yet
+  need_title: Give the post a title before saving it.
+  save: Save draft
+  publish: Publish
+  publish_draft: Publish this draft over the post it replaces?
+  publish_direct: Commit this straight to the published post?
+  publish_over: Publish over the post
+  cancel: Cancel
+  quit: Leave without saving
+  discard: This post has changes that are not committed yet.
+  recover_title: Unsaved local copy
+  recover: There is a copy of this post that was never committed.
+  recover_use: Restore it
+  recover_drop: Open what is committed
+  editing_draft: You are editing the draft that supersedes this post.
+  stale: The published copy is behind the repository - a build is probably still running.
+  conflict_hint: This file changed in the repository. Your text is safe here - open the post in a new tab to see what landed, then re-apply.
+  build_failed: The build failed. The post is committed; nothing published has changed.
+  view_run: View run
+  s_committed: Committed
+  s_building: Building
+  s_pushed: Artifact pushed
+  s_deployed: Deployed
+  cover_pick: Change cover
+  cover_drop: Remove cover
+  placeholder: Write, or press / for a block
+  insert: Insert block
+  insert_above: Insert a block above
+  insert_end: Add a block at the end
+  drag: Drag to reorder
+  toggle_source: Show source
+  language: language
+  arguments: arguments
+  remove_block: Remove
+  replace: Replace
+  caption: Caption
+  icon: Icon
+  title: Title
+  more: More
+  no_match: Nothing matches
+  link_url: Link URL
+  row: Row
+  column: Column
+  align_default: Default
+  g_look: Appearance
+  g_tax: Taxonomy
+  g_flags: Behaviour
+  g_vault: Vault
+  g_more: Metadata & SEO
+  extra_key: not a theme key
+  f_title: Title
+  f_date: Date
+  f_updated: Updated
+  f_cover: Cover
+  f_thumbnail: Thumbnail
+  f_banner: Banner
+  f_excerpt: Excerpt
+  f_description: Description
+  f_categories: Categories
+  f_tags: Tags
+  f_sticky: Pin weight
+  f_mathjax: MathJax
+  f_comment: Comments
+  f_copyright: Copyright notice
+  f_notify: Notify followers
+  f_published: Published
+  f_hidden: Hide from listings
+  f_vault: Encrypted
+  f_draft: Draft
+  f_supersedes: Supersedes
+  f_author: Author
+  f_avatar: Avatar
+  f_license: License
+  f_expires: Expires
+  f_keywords: Keywords
+  f_robots: Robots
+  f_canonical_path: Canonical path
+  f_og_image: OG image
+  f_og_description: OG description
+  t_code: Code
+  t_mermaid: Diagram
+  t_math: Equation
+  t_raw: HTML
+  t_table: Table
+  b_paragraph: Text
+  b_heading2: Heading 2
+  b_heading3: Heading 3
+  b_list: Bullet list
+  b_olist: Numbered list
+  b_quote: Quote
+  b_code: Code
+  b_table: Table
+  b_image: Image
+  b_math: Equation
+  b_mermaid: Diagram
+  b_note: Note
+  b_notel: Large note
+  b_box: Highlight box
+  b_folding: Folding
+  b_tabs: Tabs
+  b_btn: Button
+  b_hr: Divider
+  m_strong: Bold
+  m_em: Italic
+  m_strike: Strikethrough
+  m_code: Inline code
+  m_mark: Highlight
+  m_link: Link
+  m_clear: Clear formatting
+  m_colour: Highlight colour
+  m_nohl: No highlight
+  m_unlink: Remove link
+  m_kbd: Key
+  m_sup: Superscript
+  m_sub: Subscript
+  m_u: Underline
+  tab_format: Format
+  tab_block: Block
+  tab_insert: Insert
+  tab_source: Source
+  b_heading: Heading
+  b_heading1: Heading 1
+  b_heading4: Heading 4
+  b_heading5: Heading 5
+  b_heading6: Heading 6
+  b_raw: Raw HTML
+  b_icode: Inline code
+  b_imath: Inline equation
+  b_link: Link
+  src_on: Edit this block's markdown
+  src_off: Back to the rendered block
+  src_hint: Every marker this block is written with.
+  move_up: Move up
+  move_down: Move down
+  duplicate: Duplicate
+  address: Address
+  plain: Plain text
+  other: Other
+  row_add: Row below
+  row_del: Remove row
+  col_add: Column after
+  col_del: Remove column
+  align_left: Align left
+  align_center: Align centre
+  align_right: Align right
+  tab_add: Add tab
+  tab_del: Remove tab
+  tab_left: Move left
+  tab_right: Move right
+  tab_first: Open this one first
+  tab_name: Group name
+  ask_url: Address
+  ask_lang: Language
+  ask_name: Name
+  ask_args: Arguments
+  ask_tex: LaTeX
+  apply: Apply
+  properties: Picture properties
+  open_folder: Open folder
+  open_viewer: Open viewer
+  auto_exif: Read EXIF at build time
+  no_deeper: A note, folding or tab group cannot go inside another one.
+  sheet_hint: Leave everything empty for a plain picture.
+  g_caption: Caption
+  g_camera: Camera
+  g_lens: Lens
+  g_exposure: Exposure
+  g_other: Other
+  pick_title: Pictures
+  pick_root: images
+  pick_upload: Add a picture
+  pick_mkdir: New folder
+  pick_rename: Rename
+  pick_folder: New folder
+  pick_search: Search every folder
+  pick_use: Use this picture
+  pick_new: new
+  pick_unsaved: unsaved
+  pick_none: Nothing here yet
+  pick_hint: Choose a picture, or drag one onto a folder to move it.
+  pick_loading: Reading the repository
+  pick_walking: Reading the file tree
+  pick_name: Name
+  pick_where: Folder
+  pick_dims: Size
+  pick_bytes: File
+  pick_moved: Moving from

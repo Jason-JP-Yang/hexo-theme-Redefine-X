@@ -21,7 +21,9 @@ hexo.extend.filter.register("template_locals", function (localVariables) {
 });
 
 function fetchData(s, cfg) {
-  s.each(function (p) {
+  // Newest first. A Warehouse collection has no order of its own, and this one
+  // breaks similarity ties AND is the fallback list an encrypted post gets.
+  s.sort("-date").each(function (p) {
     if (["post", "docs"].includes(p.layout)) {
       articleLibrary.push({
         path: p.path,

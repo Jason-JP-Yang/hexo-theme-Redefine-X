@@ -17,6 +17,12 @@
             <%= __('management.title') %>
         </h1>
         <p class="bm-lede"><%= __('management.lede') %></p>
+        <% if (theme.backend && theme.backend.vault_enable) { %>
+        <a class="bm-write blog-admin-only" href="<%= url_for('/blog-management/write/') %>">
+            <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
+            <span><%= __('editor.new_post') %></span>
+        </a>
+        <% } %>
     </header>
 
     <%# The same card the encrypted-post gate waits behind: both are one Worker

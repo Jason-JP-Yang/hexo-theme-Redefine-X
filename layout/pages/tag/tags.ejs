@@ -11,7 +11,9 @@
 	<% } else {%>
 	<div class="tagcloud-content">
 		<ul class="tag-list" data-show-value="true">
-			<% site.tags.forEach(function(tag){ %>
+			<%# Sorted: `site.tags` has no order of its own, so it came out a different
+			    permutation per machine. tagcloud() above is already name-ordered. %>
+			<% site.tags.sort('name').forEach(function(tag){ %>
 				<li>
 					<a data-weight="<%- tag.posts.length %>" href="<%- url_for("/" + tag.path) %>">
 						<i class="fa-solid fa-hashtag"></i><%- tag.name %>

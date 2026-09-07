@@ -65,6 +65,10 @@ hexo.extend.helper.register("export_config", function () {
   if (languageContent && languageContent["management"]) {
     theme_config.management_i18n = languageContent["management"];
   }
+  // The editor's own strings do NOT travel here. It opens on any article now,
+  // and its table is the largest in the theme — it is fetched from
+  // /blog-management/editor-i18n.json the first time an admin opens it.
+  //
   // The encrypted-post gate, its admin audience field and every listing an
   // authorized reader is shown are painted after the Worker answers, so their
   // strings travel the same way.

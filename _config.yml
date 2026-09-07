@@ -484,10 +484,9 @@ plugins:
 #        cover: # audio cover url
 #        lrc: # audio cover lrc
       # .... you can add more audios here
-  # Mermaid JS. Requires hexo-filter-mermaid-diagrams (npm i hexo-filter-mermaid-diagrams). See https://mermaid.js.org/
+  # Mermaid JS — every diagram type, rendered from ```mermaid fences. See https://mermaid.js.org/
   mermaid:
     enable: false # enable mermaid or not
-    version: "11.4.1" # default v11.4.1
   # MathJax - Server-side TeX to SVG rendering
   mathjax:
     enable: true # Whether to enable MathJax support

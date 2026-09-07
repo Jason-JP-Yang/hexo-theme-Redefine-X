@@ -120,6 +120,52 @@ function readRoute(routePath) {
 
 const ASSET_ATTR = /\b(src|data-src)\s*=\s*("|')([^"']+)\2/gi;
 
+let routeToSource = null;
+
+/** `build/images/x.avif` → `images/x.png`, from img-optimizer's own record. */
+function sourceOfRoute(routePath) {
+  if (!routeToSource) {
+    routeToSource = new Map();
+    const transcodes = hexo.extend.helper.get("avifTranscodeMap");
+    const map = transcodes ? transcodes() : {};
+    for (const [rel, route] of Object.entries(map)) routeToSource.set(route, rel);
+  }
+  return routeToSource.get(routePath) || routePath;
+}
+
+/**
+ * Record one sealed image, every way it can be named.
+ *
+ * The Set drives withholding — which plaintext routes must stop being published.
+ * The map goes into the post's sealed metadata and is the only way the editor
+ * can ever find these bytes: it opens the MARKDOWN, so all it has is a source
+ * path, while a sealed image is named by the hash of what it contains.
+ *
+ * Keyed by BOTH the published route and that source path, so the editor never
+ * has to consult `build/manifest.json` for an encrypted post — which is what
+ * lets the withheld images be pruned out of that public file entirely.
+ */
+function noteAsset(entry, routePath, hash) {
+  const source = sourceOfRoute(routePath);
+
+  entry.assets = entry.assets || new Set();
+  entry.assets.add(routePath);
+  entry.assetMap = entry.assetMap || {};
+  entry.assetMap[routePath] = hash;
+  entry.assetMap[source] = hash;
+
+  // The size too, from the pass that measured it. A withheld image is kept out
+  // of the public manifest on purpose, so this is the only place the editor can
+  // learn the box to reserve for it.
+  const lookup = hexo.extend.helper.get("lazyloadSizes");
+  const sizes = lookup ? lookup() : null;
+  const dims = sizes && (sizes.get(routePath) || sizes.get(source));
+  if (!dims) return;
+  entry.assetSizes = entry.assetSizes || {};
+  entry.assetSizes[routePath] = [dims.width, dims.height];
+  entry.assetSizes[source] = [dims.width, dims.height];
+}
+
 /**
  * Seal every local image the body points at and rewrite the reference to the
  * sealed blob. `data-original-src` is stripped on the way through: img-optimizer
@@ -161,8 +207,7 @@ async function sealAssets(entry, html, routes) {
     // The reference carries the hash only. `src` is emptied so nothing is
     // requested before the blob has been fetched and decrypted.
     out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="" data-vault-asset="${hash}"`);
-    entry.assets = entry.assets || new Set();
-    entry.assets.add(job.routePath);
+    noteAsset(entry, job.routePath, hash);
   }
 
   return out;
@@ -220,8 +265,7 @@ async function sealCover(entry, routes) {
   );
   // The route that was actually read, not the front-matter path: withholding
   // the wrong one would leave the real derivative published.
-  entry.assets = entry.assets || new Set();
-  entry.assets.add(matched);
+  noteAsset(entry, matched, hash);
   return hash;
 }
 
@@ -403,6 +447,21 @@ function metaFor(entry, href, coverAsset, body) {
     date: entry.post.date ? entry.post.date.toISOString() : null,
     updated: entry.post.updated ? entry.post.updated.toISOString() : null,
     href,
+    // The editor's two extra facts. `source` is Hexo's own source-relative path
+    // (`_posts/x.md`), NOT a repository path — the editor normalises it, and
+    // must, because blobs sealed before it did are still out there. `supersedes`
+    // is the permalink of the published post this draft stands in for, and the
+    // reader uses it to take that post's card out of every listing before
+    // putting this one in its place.
+    source: entry.post.source || "",
+    // Published route -> content hash, and the same keys -> [w, h], for every
+    // image this post sealed. The editor walks source path -> route
+    // (build/manifest.json) -> hash, and takes the size from here because a
+    // withheld image is deliberately absent from that public file.
+    assets: entry.assetMap || {},
+    sizes: entry.assetSizes || {},
+    draft: entry.post.draft === true,
+    supersedes: entry.post.supersedes || "",
     cover: coverAsset || "",
     excerpt: plainExcerpt(entry.post, body),
     tags: (entry.tags || []).map((tag) => ({
@@ -571,6 +630,11 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     const meta = metaFor(entry, href, coverAsset, body);
     routes.set(`${p}/${entry.slug}/b.bin`, vc.seal(entry.key, retargetTaxonomy(article, meta)));
 
+    // The MARKDOWN, front matter and all, sealed under the same key as the body.
+    // The rendered blob is what a reader gets; this is what the editor opens,
+    // and it is the only copy of the source that exists outside the repository.
+    routes.set(`${p}/${entry.slug}/s.bin`, vc.seal(entry.key, entry.post.raw || ""));
+
     const card = await cardView.render(
       cardLocals({
         page: {},
@@ -719,7 +783,15 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
 
   if (bentoOn && bentoPlan) {
     const pages = publicPages();
-    const buckets = assignToPages(pages, entries);
+    // A draft that supersedes a published post is NOT a new tile: it takes the
+    // one that post already holds, on a grid the build already solved. Leaving
+    // it in would double the arrangement count for a subset the reader can
+    // never ask for — it derives the variant path from the keys of the posts
+    // that actually change the grid, and a superseding draft is not one.
+    const buckets = assignToPages(
+      pages,
+      entries.filter((entry) => !entry.post.supersedes)
+    );
     const withFeatures = hexo.theme.config?.home?.sidebar?.enable === true;
 
     for (let i = 0; i < pages.length; i++) {

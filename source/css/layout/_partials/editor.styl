@@ -1,0 +1,2260 @@
+// ========================================================================================
+//                                        EDITOR
+// ========================================================================================
+// Editing happens ON the article, not on a page of its own.
+//
+// So there is no editor layout here, and there must never be one: the cover,
+// the title, the measure and the body are the post's, and the only thing this
+// file styles is what is ADDED to it — a bar naming the file, a card holding
+// the front matter, a floating toolbar and the per-block gutter. If a rule
+// here changes how the article itself looks, the editor has stopped showing
+// what will be published, which is the one thing it exists to do.
+//
+// Material: BASE tier throughout, except the three surfaces that genuinely float
+// over live content — the toolbar, the slash menu and the two popovers. Those
+// earn a backdrop-filter; nothing else does.
+//
+// Motion: 130ms fade / 280ms morph / cubic-bezier(0.32, 0.72, 0, 1), the
+// console's own constants. Anything longer belongs in JS, where it can measure.
+//
+// Ink: --third-text-color is the dimmest thing allowed to carry a word here.
+// --fourth-text-color is `darken(--default, 70%)`, which in dark mode lands at
+// roughly 1.6:1 against the surfaces in this file — a field label written in it
+// is not faint, it is gone. It stays available for borders and rules only.
+//
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+$ed-radius = 14px
+$ed-morph = 0.28s cubic-bezier(0.32, 0.72, 0, 1)
+$ed-fade = 0.13s ease
+// Ink for anything sitting ON --primary-color, which is a dark cardinal red.
+// --background-color inverts with the theme, so pairing the two puts near-black
+// on red the moment the site is dark. White, the way the notification centre,
+// the console and the error book already do it.
+$ed-on-primary = #fff
+// Where the document bar pins, and the anchor the floating toolbar is placed
+// under. One value per width, so the two cannot drift back onto the same band —
+// and the narrow ones track the navbar, which shrinks at both breakpoints the
+// way page.styl already says it does.
+$ed-docbar-top = ($navbar-height + 12px)
+$ed-docbar-top-tablet = ($navbar-height * 0.9 + 10px)
+$ed-docbar-top-mobile = ($navbar-height * 0.8 + 8px)
+$ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
+
+// The theme's own thin scrollbar, from the instant-notes field: 6px, a rounded
+// thumb on a transparent track, no arrows, and the Firefox pair beside it. Every
+// scrolling surface the editor adds uses this one — a browser default scrollbar
+// inside a card that has been styled to the pixel is the loudest thing in it.
+ed-scroll()
+  scrollbar-width thin
+  scrollbar-color var(--fourth-text-color) transparent
+
+  &::-webkit-scrollbar
+    width 6px
+    height 6px
+
+  &::-webkit-scrollbar-track
+    background transparent
+
+  &::-webkit-scrollbar-thumb
+    border-radius 3px
+    background var(--fourth-text-color)
+    transition background $ed-fade
+
+  &:hover::-webkit-scrollbar-thumb
+    background var(--third-text-color)
+
+// Stylus owns `min()` and `max()` as its OWN functions and folds them at
+// compile time. `min(1040px, 100%)` came out of the compiler as `100%`, which
+// is why the picture browser was always exactly the size of the window with a
+// 20px border — the cap it was given never reached the browser. `s()` hands the
+// CSS function through untouched.
+css-min(a, b)
+  s("min(%s, %s)", a, b)
+
+@keyframes ed-breathe
+  0%, 100%
+    opacity 0.35
+  50%
+    opacity 1
+
+@keyframes ed-drop-in
+  from
+    opacity 0
+    transform scaleX(0.82)
+  to
+    opacity 1
+    transform none
+
+// ─── the pencil ─────────────────────────────────────────────
+// One more tool in the article's own rail; `.blog-admin-only` already decides
+// whether it exists at all.
+.tool-edit-post
+  cursor pointer
+
+  &:hover i
+    color var(--primary-color)
+
+// The article's tools rail is `display: none` below 640px — every one of its
+// buttons has a home in the corner rail on a phone — so the pencil is rendered
+// in BOTH and each width shows one of them. Two nodes, one behaviour: the
+// editor wires every `.tool-edit-post` it finds.
+//
+// Three selector parts and `!important`, because the thing being overridden is
+// `html.blog-admin .blog-admin-only { display: flex !important }` in
+// notifications.styl. A two-part selector ties with it on specificity and loses
+// on source order, which is why BOTH pencils showed on a desktop.
+html.blog-admin .side-tools-container .tool-edit-post
+  display none !important
+
+  +redefine-mobile()
+    display flex !important
+
+html.blog-admin .post-tools-container .tool-edit-post
+  +redefine-mobile()
+    display none !important
+
+// While editing, the way out is the bar's own ×. A second entrance to a room
+// you are already in is just a thing to press by mistake. Written last and at
+// the same weight as the rules above, so it wins over both of them.
+html.blog-editing .side-tools-container .tool-edit-post,
+html.blog-editing .post-tools-container .tool-edit-post
+  display none !important
+
+// `position: sticky` needs a scrolling ancestor, and `overflow-x: hidden`
+// creates one: article-content.styl clips the post container horizontally below
+// 640px, which silently turned the document bar from pinned into static on
+// exactly the width where pinning matters most. `clip` does the same clipping
+// without becoming a scroll container, so the bar pins on a phone too — and if
+// a browser does not know `clip`, the declaration is dropped and the behaviour
+// is the one that shipped.
+//
+// Scoped to the width that actually has an `overflow-x: hidden` to undo. Applied
+// at every width it CLIPPED rather than fixed: the article container's frame is
+// the `0 0 0 1px` ring in --redefine-box-shadow, painted one pixel OUTSIDE its
+// border box, and with the contents rail closed that box is the full width of
+// the container — so the ring was cut off down both sides and the card lost its
+// edge for as long as the post was being edited.
+html.blog-editing .post-page-container
+  +redefine-mobile()
+    overflow-x clip
+
+// A post with nothing in it yet is still a page you have to be able to aim at.
+.article-content-container.is-editing .article-content
+  min-height 40vh
+
+// ─── what editing puts away ─────────────────────────────────
+// Copyright, tags, recommendations, navigation and comments are all downstream
+// of the body and none of them is yours to edit here. They leave rather than
+// grey out: an inert control is still a control.
+.ed-put-away
+  display none !important
+
+// ─── gate ───────────────────────────────────────────────────
+.ed-gate
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 12px
+  padding 72px 24px
+  color var(--third-text-color)
+  text-align center
+
+// ─── document bar ───────────────────────────────────────────
+// Sticky, because publish has to stay reachable from the bottom of a long post.
+//
+// It pins ABOVE the floating toolbar, in both senses: a higher stacking order,
+// and the toolbar offset below it by `--ed-docbar-h` (set from JS, since the
+// bar's height changes as it wraps and as notices and the progress row appear).
+// The two used to be given the same band under the navbar and the toolbar won,
+// so the file you were editing and the way to save it were both behind it.
+.ed-docbar
+  position sticky
+  top $ed-docbar-top
+  // Above the toolbar ($z-index-4); the transient popovers stay above both.
+  z-index $z-index-5
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 8px 10px
+  // Top margin clears the author banner directly above. Sides are the article's
+  // own px-2 / sm:px-6 / md:px-8, or the bar sits a few pixels off the column it
+  // belongs to — the kind of thing you see without being able to say what it is.
+  margin 22px 8px 14px
+  padding 9px 12px
+  border 1px solid var(--border-color)
+  border-radius 12px
+  background var(--second-background-color)
+  // It pins over the article and has to look like it. The same three layers the
+  // floating toolbar wears — elevation ring, cast, top highlight — because the
+  // two are one object in two rows and a difference between them would be read
+  // as a difference in what they do.
+  box-shadow 0 0 0 1px var(--shadow-color-1), 0 16px 34px -20px var(--shadow-color-2), 0 4px 12px -8px var(--shadow-color-1), inset 0 1px 0 0 var(--background-color)
+
+  @media (min-width 640px)
+    margin 24px 24px 16px
+
+  @media (min-width 768px)
+    margin 26px 32px 16px
+
+  // Pinned at every width. It used to go `static` on a tablet and a phone,
+  // which is where the file you are editing, the save button and the publish
+  // button all scrolled away — the three controls least able to afford it.
+  +redefine-tablet()
+    top $ed-docbar-top-tablet
+    margin 18px 10px 12px
+
+  // Two halves, one above the other. `margin-left: auto` on the actions only
+  // pushes them right while there is room to push into; below this width there
+  // is not, so the two halves were competing for the same line and the file
+  // path ran under the buttons.
+  +redefine-mobile()
+    top $ed-docbar-top-mobile
+    gap 6px
+    margin 14px 8px 12px
+    padding 8px 10px
+
+    .ed-docbar-id
+      flex 1 1 100%
+
+    .ed-docbar-actions
+      width 100%
+      margin-left 0
+      justify-content flex-end
+
+// Both halves wrap, and either may take a whole row of its own. A file path is
+// the one thing here that can be any length, so it is what gives way first —
+// but it gives way by wrapping to its own line, never by being squeezed to the
+// two or three characters that used to be left of it.
+.ed-docbar-id
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 6px 8px
+  flex 1 1 210px
+  min-width 0
+
+  > i
+    flex-shrink 0
+    color var(--third-text-color)
+    font-size 0.8rem
+
+.ed-docbar-path
+  // A floor, not a preference: without one the path is the only item here that
+  // shrinks, so the tags kept their full width and the filename was ground down
+  // to a character and a half. Below this the tags wrap to a line of their own.
+  flex 1 1 12rem
+  min-width 8rem
+  overflow hidden
+  color var(--second-text-color)
+  font-family $ed-mono
+  font-size 0.74rem
+  text-overflow ellipsis
+  white-space nowrap
+
+.ed-tag
+  display inline-flex
+  align-items center
+  gap 5px
+  flex-shrink 0
+  padding 2px 8px
+  border-radius 999px
+  font-size 0.66rem
+  font-weight 650
+
+  &.ed-tag-vault
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
+
+  &.ed-tag-draft
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
+
+.ed-docbar-actions
+  display flex
+  flex-wrap wrap
+  justify-content flex-end
+  align-items center
+  gap 8px
+  margin-left auto
+
+// The whole change indicator: one amber dot, and nothing when there is nothing
+// to say.
+.ed-dot
+  flex-shrink 0
+  width 8px
+  height 8px
+  border-radius 50%
+  background transparent
+  transition background $ed-fade
+
+  &[data-state="dirty"]
+    background var(--box-amber-text)
+
+  &[data-state="busy"]
+    background var(--box-blue-text)
+    animation ed-breathe 1.4s ease-in-out infinite
+
+.ed-act
+  display inline-flex
+  align-items center
+  gap 7px
+  padding 6px 12px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  color var(--second-text-color)
+  font-size 0.78rem
+  font-weight 550
+  cursor pointer
+  transition background $ed-fade, border-color $ed-fade, transform $ed-morph, opacity $ed-fade
+
+  &:hover:not(:disabled)
+    background var(--third-background-color)
+    transform translateY(-1px)
+
+  &:disabled
+    opacity 0.4
+    cursor default
+
+.ed-act-primary
+  border-color transparent
+  background var(--primary-color)
+  color $ed-on-primary
+
+  i
+    color $ed-on-primary
+
+  &:hover:not(:disabled)
+    background var(--primary-color)
+    filter brightness(1.08)
+
+.ed-close
+  padding 6px 9px
+
+// ─── the title, in its own place ────────────────────────────
+.ed-title
+  outline none
+  cursor text
+
+  &:empty::before
+    content attr(data-placeholder)
+    color var(--third-text-color)
+    opacity 0.6
+
+.ed-cover-tools
+  position absolute
+  top 12px
+  right 12px
+  z-index 2
+  display flex
+  gap 6px
+
+  &.is-bare
+    position static
+    margin 0 8px 4px
+
+    @media (min-width 640px)
+      margin 0 24px 4px
+
+    @media (min-width 768px)
+      margin 0 32px 4px
+
+.ed-cover-act
+  display grid
+  place-items center
+  width 32px
+  height 32px
+  border 1px solid var(--border-color)
+  border-radius 9px
+  background var(--third-background-color-transparent)
+  backdrop-filter blur(10px)
+  -webkit-backdrop-filter blur(10px)
+  color var(--second-text-color)
+  font-size 0.8rem
+  cursor pointer
+  transition background $ed-fade, transform $ed-morph
+
+  &:hover
+    background var(--second-background-color)
+    transform translateY(-1px)
+
+// ─── front matter ───────────────────────────────────────────
+// ONE card. Every field is a row inside it, and nothing inside it is a card —
+// a panel of panels is how a form stops being readable.
+.ed-front
+  margin 0 8px 20px
+  padding 14px 16px
+  border 1px solid var(--border-color)
+  border-radius $ed-radius
+  background var(--second-background-color)
+
+  @media (min-width 640px)
+    margin 0 24px 22px
+
+  @media (min-width 768px)
+    margin 0 32px 22px
+
+.ed-front-group + .ed-front-group
+  margin-top 12px
+  padding-top 12px
+  border-top 1px solid var(--border-color)
+
+.ed-front-legend
+  margin 0 0 8px
+  font-size 0.66rem
+  font-weight 700
+  letter-spacing 0.06em
+  text-transform uppercase
+  color var(--third-text-color)
+
+.ed-front-grid
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(210px, 1fr))
+  gap 8px 14px
+  align-items start
+
+.ed-f
+  display flex
+  flex-direction column
+  gap 3px
+  min-width 0
+
+  &.is-wide
+    grid-column 1 / -1
+
+.ed-f-label
+  display flex
+  align-items center
+  gap 5px
+  font-size 0.68rem
+  font-weight 600
+  letter-spacing 0.02em
+  color var(--third-text-color)
+
+.ed-f-extra
+  font-size 0.5rem
+  color var(--box-amber-text)
+
+.ed-f-input
+  width 100%
+  padding 5px 9px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-size 0.78rem
+  line-height 1.5
+  outline none
+  resize vertical
+  transition border-color $ed-fade
+
+  &:focus
+    border-color var(--primary-color)
+
+  // Shown, not offered: a date the build owns.
+  &:disabled
+    background var(--second-background-color)
+    color var(--third-text-color)
+    cursor default
+
+textarea.ed-f-input
+  font-family inherit
+
+.ed-f-assetrow
+  display flex
+  align-items center
+  gap 6px
+
+.ed-f-thumb
+  display grid
+  place-items center
+  flex-shrink 0
+  width 30px
+  height 30px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  overflow hidden
+  color var(--third-text-color)
+  font-size 0.7rem
+
+  img
+    width 100%
+    height 100%
+    object-fit cover
+
+.ed-f-pick
+  display grid
+  place-items center
+  flex-shrink 0
+  width 30px
+  height 30px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  color var(--second-text-color)
+  font-size 0.74rem
+  cursor pointer
+  transition background $ed-fade
+
+  &:hover
+    background var(--third-background-color)
+
+// Chips, because a category is a thing you add and remove, not a string you
+// punctuate correctly.
+.ed-f-chips
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 4px
+  min-height 30px
+  padding 3px 5px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+
+  &:focus-within
+    border-color var(--primary-color)
+
+.ed-chipv
+  display inline-flex
+  align-items center
+  gap 4px
+  padding 2px 4px 2px 8px
+  border-radius 999px
+  background var(--third-background-color)
+  color var(--second-text-color)
+  font-size 0.72rem
+
+.ed-chipv-x
+  display grid
+  place-items center
+  width 15px
+  height 15px
+  border none
+  border-radius 50%
+  background transparent
+  color var(--third-text-color)
+  font-size 0.58rem
+  cursor pointer
+
+  &:hover
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+.ed-f-chipadd
+  flex 1
+  min-width 52px
+  padding 2px 4px
+  border none
+  background transparent
+  color var(--first-text-color)
+  font-size 0.74rem
+  outline none
+
+// The toggle is `.np-switch`, the notification centre's own. Only the row
+// spacing is local — the control itself must not fork.
+.ed-f-toggle
+  gap 8px
+  padding 4px 0
+
+  .np-row-label
+    font-size 0.78rem
+
+// ─── notice ─────────────────────────────────────────────────
+// A row of the bar rather than a banner over the article: nothing the editor
+// has to say is worth pushing the post down the page for.
+.ed-notice
+  display flex
+  align-items center
+  gap 8px
+  flex-basis 100%
+  padding 8px 11px
+  border-radius 10px
+  font-size 0.76rem
+  line-height 1.5
+
+  &[data-kind="info"]
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
+
+  &[data-kind="warn"]
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
+
+  &[data-kind="error"]
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+// ─── publish progress ───────────────────────────────────────
+.ed-progress
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 8px
+  flex-basis 100%
+  padding 7px 10px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  font-size 0.72rem
+
+.ed-stage
+  position relative
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 4px 10px
+  border-radius 999px
+  color var(--third-text-color)
+  transition color $ed-morph, background $ed-morph
+
+  & + .ed-stage::before
+    content ""
+    position absolute
+    left -8px
+    width 8px
+    height 1px
+    background var(--border-color)
+
+  &[data-state="live"]
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
+
+    i
+      animation ed-breathe 1.4s ease-in-out infinite
+
+  &[data-state="done"]
+    background var(--box-green-bg)
+    color var(--box-green-text)
+
+  &[data-state="fail"]
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+.ed-stage-link
+  margin-left auto
+  color var(--link-color)
+  font-size 0.72rem
+
+// ─── toolbar ────────────────────────────────────────────────
+// Genuinely floating over live content, so one of the three surfaces that earns
+// a compositor layer. Fixed rather than sticky: it belongs to the session, not
+// to a scroll container, and the article no longer has one to stick inside.
+//
+// A rounded RECTANGLE, not a pill. It carries a tab strip over one or two rows
+// of controls that WRAP rather than scroll — a control past the end of a row is
+// a control the author cannot see — and a 999px radius on a box that tall bows
+// its ends into half-circles that match nothing else on the site.
+.ed-toolbar
+  position fixed
+  // Below the document bar's pinned band. `--ed-docbar-h` is that bar's measured
+  // height, republished by a ResizeObserver, so this clears it however it wraps.
+  // `--ed-docbar-h` is 0 unless the document bar is PINNED. Unpinned it
+  // is still down in the article clearing nothing, and reserving its height
+  // left a band of empty page under the navbar. The switch is animated by the
+  // transition below, so the toolbar slides rather than jumps.
+  top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top + 12px))
+  // The document bar's own box, measured and republished from JS. Centring on
+  // the VIEWPORT is what put the toolbar across the table of contents: an
+  // article with a contents rail is not centred on the viewport, and a card
+  // 760px wide because the viewport allowed it is not the width of the column
+  // it belongs to. Copying the bar makes the two the same object in two rows.
+  left var(--ed-docbar-x, 10px)
+  width var(--ed-docbar-w, calc(100vw - 20px))
+  right auto
+  z-index $z-index-4
+  max-width 100%
+  pointer-events none
+  transition top $ed-morph, opacity 0.14s ease-out, transform 0.14s ease-out
+
+  // At the very top of the page the document bar is not pinned — it is still
+  // down in the article where it was written — and a toolbar hanging under the
+  // navbar with nothing above it reads as chrome that has come loose. It gets
+  // out of the way there and comes back the moment the page is scrolled. Fast,
+  // because it answers a scroll: anything slower lags behind the gesture.
+  &[data-perch="hide"]
+    opacity 0
+    transform translateY(-8px)
+
+    .ed-toolbar-card
+      pointer-events none
+
+  // At the top at every width, under the document bar, exactly as on a desktop.
+  // Parked at the bottom of a phone it sat on the keyboard, and the tab you
+  // needed was the one the keyboard had covered.
+  +redefine-tablet()
+    top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-tablet + 10px))
+
+  +redefine-mobile()
+    top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
+
+// `position: relative` is what the outgoing row is placed against while it
+// slides away; see `snapshot` in plugins/editor/toolbar.js.
+//
+// A floating surface over an article has to read as being IN FRONT of it, and a
+// hairline border on a translucent card does not carry that on its own. Three
+// layers: the site's own elevation ring so the card is bounded wherever it
+// lands, a soft cast underneath, and a tight inner highlight along the top edge.
+.ed-toolbar-card
+  position relative
+  display flex
+  flex-direction column
+  gap 4px
+  padding 6px
+  border 1px solid var(--border-color)
+  border-radius $ed-radius
+  background var(--third-background-color-transparent)
+  backdrop-filter saturate(180%) blur(14px)
+  -webkit-backdrop-filter saturate(180%) blur(14px)
+  box-shadow 0 0 0 1px var(--shadow-color-1), 0 18px 40px -18px var(--shadow-color-2), 0 4px 12px -8px var(--shadow-color-1), inset 0 1px 0 0 var(--third-background-color)
+  pointer-events auto
+  overflow hidden
+
+// The row on its way out, over the place it stood. Inert: the row underneath is
+// already the live one, and a ghost that could be clicked is a control that acts
+// on a tab you have left.
+.ed-toolbar-ghost
+  position absolute
+  z-index 1
+  overflow hidden
+  pointer-events none
+
+.ed-toolbar-tabs
+  position relative
+  display flex
+  gap 3px
+
+  // ONE lit shape that travels between the two tabs, rather than a background
+  // that appears on one as it vanishes from the other. Drawn by the strip, so
+  // repainting the buttons — which happens whenever Format takes Block's slot —
+  // cannot interrupt it mid-slide.
+  &::before
+    content ""
+    position absolute
+    top 0
+    bottom 0
+    left 0
+    width calc(50% - 1.5px)
+    border-radius 9px
+    background var(--primary-color)
+    transition transform $ed-morph
+    pointer-events none
+
+  &[data-at="1"]::before
+    transform translateX(calc(100% + 3px))
+
+.ed-tab
+  position relative
+  z-index 1
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 6px
+  flex 1 1 0
+  min-width 0
+  padding 5px 10px
+  border none
+  border-radius 9px
+  background transparent
+  color var(--third-text-color)
+  font-size 0.7rem
+  font-weight 600
+  cursor pointer
+  transition color $ed-fade
+
+  span
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+  &:hover
+    color var(--first-text-color)
+
+  // The lit tab keeps its colour under the pointer. Hovering it used to hand it
+  // back to the plain hover rule, which is one specificity class heavier — so
+  // the one control whose state mattered most lost that state on being aimed at.
+  &[data-on="1"],
+  &[data-on="1"]:hover
+    color $ed-on-primary
+
+// A tab is a NAME. Hiding the labels on a phone left two unlabelled icons that
+// change what the whole toolbar is about — a cube and a plus, side by side,
+// with nothing to say which mode you were in.
+.ed-toolbar-row
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 2px
+  padding 2px
+  // A row of twenty-two languages must not become a card taller than the phone.
+  max-height 34svh
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+
+  &[hidden]
+    display none
+
+// A card MID-TRAVEL between two heights is briefly shorter than the row inside
+// it, so switching from Block to Insert flashed a scrollbar down the toolbar's
+// right edge for the length of the animation. Clipped while it moves, scrollable
+// again the moment it arrives.
+.ed-toolbar-card[data-morph="1"] .ed-toolbar-row
+  overflow hidden
+
+.ed-toolbar-sub
+  padding-top 6px
+  border-top 1px solid var(--border-color)
+
+.ed-tool-label
+  padding 0 8px 0 3px
+  color var(--third-text-color)
+  font-size 0.64rem
+  font-weight 600
+  letter-spacing 0.03em
+  text-transform uppercase
+
+.ed-tool
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 6px
+  width 30px
+  height 30px
+  padding 0
+  border none
+  border-radius 8px
+  background transparent
+  color var(--second-text-color)
+  font-size 0.82rem
+  cursor pointer
+  transition background $ed-fade, color $ed-fade
+
+  &.is-wide
+    width auto
+    max-width 100%
+    min-width 0
+    padding 0 10px
+    font-size 0.72rem
+
+    span
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+
+  &:hover:not(:disabled)
+    background var(--second-background-color)
+    color var(--first-text-color)
+
+  // The hover rule above is one class heavier than a bare `[data-on="1"]`, so
+  // an ACTIVE tool handed its theme colour back the moment you aimed at it —
+  // every lit control in the toolbar dropped to plain grey under the pointer,
+  // which is the opposite of what pointing at it should say. Stated at the same
+  // weight, and lifted rather than repainted on hover.
+  &[data-on="1"],
+  &[data-on="1"]:hover:not(:disabled)
+    background var(--primary-color)
+    color $ed-on-primary
+
+  &[data-on="1"]:hover:not(:disabled)
+    filter brightness(1.12)
+
+  // Half the selection carries the mark. Neither on nor off, and pressing it
+  // fills in the rest rather than taking the half away.
+  &[data-on="2"],
+  &[data-on="2"]:hover:not(:disabled)
+    background var(--second-background-color)
+    box-shadow inset 0 0 0 1px var(--primary-color)
+
+  // Not a state of the document — a drawer you have open. A ring rather than a
+  // fill, so a paragraph whose Heading levels are showing does not also claim
+  // to BE a heading while Text sits lit beside it.
+  &[data-open="1"]:not([data-on="1"]),
+  &[data-open="1"]:not([data-on="1"]):hover:not(:disabled)
+    background var(--second-background-color)
+    box-shadow inset 0 0 0 1px var(--primary-color)
+    color var(--primary-color)
+
+  &:disabled
+    opacity 0.32
+    cursor default
+
+.ed-tool-sep
+  width 1px
+  height 18px
+  margin 0 5px
+  background var(--border-color)
+// ─── block shell ────────────────────────────────────────────
+// No padding, no margin, no background: the wrapper must be dimensionally
+// invisible, or every line in the editor breaks somewhere the published post
+// does not.
+.ed-block
+  position relative
+  transition background $ed-fade, opacity $ed-fade
+
+  &:hover > .ed-gutter,
+  &[data-on="1"] > .ed-gutter
+    opacity 1
+    transform none
+
+  // The block being carried. It stays legible — you are aiming it at a gap, and
+  // a ghost you cannot read is a gap you cannot aim at.
+  &.is-dragging
+    opacity 0.45
+
+  &[data-drop="before"]::before,
+  &[data-drop="after"]::after
+    content ""
+    position absolute
+    left 0
+    right 0
+    height 3px
+    border-radius 3px
+    background var(--primary-color)
+    box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+    animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+
+  &[data-drop="before"]::before
+    top -4px
+
+  &[data-drop="after"]::after
+    bottom -4px
+
+// ─── the gap after the last block ───────────────────────────
+// Every block's gutter `+` inserts ABOVE it, which leaves exactly one place in
+// a box no button can reach: the end. So each box — the article, a tab pane, a
+// large note, a folding — ends with one of these. It is also where the drop
+// indicator goes when a dragged block is heading for that gap, which is why the
+// line is drawn ON it rather than under the block before it: the `+` IS the
+// gap, and the block lands immediately above it.
+//
+// A row the width of the box, holding one 26px square at its left. The square
+// is `.ed-gutter-btn` — the very button every block's gutter carries — because
+// this is that button standing in the one gap a gutter cannot reach, and a
+// second design of it would say it did something else. Always there: it is the
+// end of the document, and the end of a document is where writing continues.
+.ed-tail
+  position relative
+  display flex
+  align-items center
+  justify-content flex-start
+  width 100%
+  margin 8px 0 0
+  padding 0
+
+  &[data-drop="1"]::before
+    content ""
+    position absolute
+    left 0
+    right 0
+    top -5px
+    height 3px
+    border-radius 3px
+    background var(--primary-color)
+    box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+    animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+
+  &[data-drop="1"] .ed-tail-add
+    border-color var(--primary-color)
+    background var(--primary-color)
+    color $ed-on-primary
+
+.ed-nest > .ed-tail
+  margin-top 6px
+
+// The snapshot the browser drags. Clipped to the block's own border box, so the
+// gutter — which is positioned OUTSIDE that box — is not in the picture and the
+// grab point lands where it was measured. Off-screen but rendered:
+// `setDragImage` photographs it during dragstart and it is dropped next tick.
+.ed-dragshot
+  position fixed
+  top 0
+  left -10000px
+  overflow hidden
+  border-radius 10px
+  background var(--background-color)
+  pointer-events none
+// The article zeroes the top margin of its first child. With blocks that child
+// is a wrapper, so the rule has to reach one level further in — otherwise the
+// body starts a line lower here than it will once published.
+.article-content > .ed-block:first-child .ed-body > *
+  margin-top 0 !important
+
+// The carried block keeps its own handle lit — hover is not a thing you can do
+// with a button already held down. Every OTHER gutter stays hidden: they are not
+// targets, and a column of buttons lighting up as you pass is noise over the one
+// line you are actually aiming at.
+.ed-block.is-dragging > .ed-gutter
+  opacity 1
+  transform none
+
+// The gutter rides in the article's own left padding, never in the measure:
+// pushing the text across would mean the line breaks you are editing are not
+// the line breaks you will publish.
+// Anchored off the block's own left edge rather than a hardcoded offset, so the
+// column stays in the padding whatever the buttons measure.
+.ed-gutter
+  position absolute
+  top 1px
+  right 100%
+  margin-right 3px
+  display flex
+  flex-direction column
+  gap 3px
+  opacity 0
+  transform translateX(4px)
+  transition opacity $ed-fade, transform $ed-morph
+
+  +redefine-tablet()
+    position static
+    flex-direction row
+    margin 0 0 5px
+    opacity 1
+    transform none
+
+// A control you cannot find is a control you do not have. These sit on the
+// article's own surface with the site's flat elevation ring under them, rather
+// than on --second-background-color, which is two per cent off the card they
+// were drawn on and read as nothing at all.
+.ed-gutter-btn
+  display grid
+  place-items center
+  width 26px
+  height 26px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  box-shadow var(--redefine-box-shadow-flat)
+  color var(--second-text-color)
+  font-size 0.74rem
+  cursor pointer
+  transition background $ed-fade, color $ed-fade, border-color $ed-fade, transform 0.18s ease
+
+  &:hover
+    border-color var(--primary-color)
+    background var(--primary-color)
+    color $ed-on-primary
+    transform translateY(-1px)
+
+.ed-handle
+  cursor grab
+
+  // Held down, the handle stays lit for the whole drag — the pointer has left
+  // the button by then, so :hover is gone exactly when the feedback matters.
+  &:active,
+  .ed-block.is-dragging &
+    border-color var(--primary-color)
+    background var(--primary-color)
+    color $ed-on-primary
+    cursor grabbing
+
+// ─── rich text ──────────────────────────────────────────────
+.ed-rich
+  outline none
+  border-radius 6px
+  transition box-shadow $ed-fade
+
+  &:focus
+    box-shadow 0 0 0 2px var(--third-background-color)
+
+  &:empty::before,
+  &[data-placeholder]:empty::before
+    content attr(data-placeholder)
+    color var(--third-text-color)
+    pointer-events none
+
+  mark
+    padding 0 2px
+    border-radius 3px
+
+// `<mark>` is written as inline HTML rather than as invented markdown, so it has
+// to look right in the PUBLISHED article too. The colours are the box palette's:
+// one set of highlight colours for the site, not a second set for the editor.
+.markdown-body mark,
+.ed-rich mark
+  padding 0 2px
+  border-radius 3px
+  background var(--box-amber-bg)
+  color var(--box-amber-text)
+
+// A highlight is a box, so the swatch IS a box: it wears the very classes the
+// published span wears and needs no palette of its own.
+.ed-swatch-dot.post-box
+  padding 0
+
+// Something with no words in it still has to be clickable, or the only way to
+// put words in it is gone. An empty caption, an empty button, an empty quote
+// and an empty cell all used to collapse to nothing at all.
+.ed-inplace:empty
+  display inline-block
+  min-width 3.5em
+  min-height 1.2em
+  border-bottom 1px dashed var(--border-color)
+
+.ed-rich blockquote p:empty,
+.ed-rich > p:empty
+  min-height 1.4em
+
+.ed-block[data-type="quote"] .ed-rich
+  min-height 1.8em
+
+.ed-component[data-kind="btn"] a.button
+  display inline-flex
+  align-items center
+  justify-content center
+  min-width 5em
+  min-height 2.6em
+
+.ed-table-block th:empty,
+.ed-table-block td:empty
+  min-width 4em
+
+  &::before
+    content ""
+    display inline-block
+    min-height 1.2em
+// ─── source blocks ──────────────────────────────────────────
+.ed-source-block
+  position relative
+  margin 1rem 0
+  border 1px solid var(--border-color)
+  border-radius 12px
+  overflow hidden
+  transition border-color $ed-fade
+
+  &:hover
+    border-color var(--primary-color)
+
+  &[data-mode="preview"] .ed-source
+    display none
+
+  &[data-mode="source"] .ed-preview
+    display none
+
+// ─── a canvas inside a component ────────────────────────────
+// A large note, a folding and a tab pane hold real blocks, so what is inside
+// one has to look like what is outside one — same measure, same spacing, its
+// own gutter. The gutter goes INSIDE here rather than out in the article's
+// padding, because there is no padding to ride in this far in.
+.ed-nest
+  min-height 2.2em
+
+  > .ed-block > .ed-gutter
+    position static
+    flex-direction row
+    margin 0 0 4px
+    opacity 0
+    transform none
+
+  > .ed-block:hover > .ed-gutter,
+  > .ed-block[data-on="1"] > .ed-gutter
+    opacity 1
+
+  > .ed-block:first-child .ed-body > *
+    margin-top 0
+
+  // `:last-of-type`, not `:last-child`: every box now ends with its own `+`
+  // button, so the last BLOCK is no longer the last child of anything.
+  > .ed-block:last-of-type .ed-body > *
+    margin-bottom 0
+
+// ─── an equation in a sentence ──────────────────────────────
+// Rendered it is an SVG and holds no caret, so it is inert until it is clicked
+// and then it shows the LaTeX it came from.
+.ed-math
+  border-radius 4px
+  cursor pointer
+  transition background $ed-fade
+
+  &:hover
+    background var(--second-background-color)
+
+  &[data-editing="1"]
+    background var(--second-background-color)
+    cursor text
+
+    .ed-math-src
+      font-family $ed-mono
+      font-size 0.86em
+      outline none
+
+.ed-math[data-editing="1"] .ed-math-src
+  padding 0 3px
+
+.ed-math-error
+  color var(--box-red-text)
+
+// ─── the dialogue family ────────────────────────────────────
+// Three sizes, one frame. The picture browser and the property sheet are
+// LARGE, the question the editor asks before it lets go of unsaved work is
+// SMALL, and all three share the bar, the footer and the material — a second
+// shape for the same job reads as a second application.
+//
+// The gutter scales with the viewport rather than sitting at a flat 20px: on a
+// laptop that flat number put a 660px-tall panel within a hair of the window
+// edge, so the dialogue WAS the screen. A phone lands on the floor of the
+// clamp, which is what it had before.
+$ed-pop-gap = "clamp(18px, 5vmin, 60px)"
+$ed-pop-w = 960px
+$ed-pop-h = 620px
+
+.ed-picker-mask
+  position fixed
+  inset 0
+  z-index ($z-index-5 + 3)
+  display grid
+  place-items center
+  padding unquote($ed-pop-gap)
+  background var(--shadow-color-1)
+  backdrop-filter blur(4px)
+  -webkit-backdrop-filter blur(4px)
+
+.ed-picker,
+.ed-sheet,
+.ed-prompt
+  display flex
+  flex-direction column
+  border 1px solid var(--border-color)
+  border-radius $ed-radius
+  background var(--background-color)
+  box-shadow 0 24px 60px -24px var(--shadow-color-1)
+  overflow hidden
+
+// A FIXED box. The two things inside it that vary most — a tree that can be
+// six levels deep and a picture that can be any shape — are exactly the two
+// that would resize it under the pointer between one click and the next, so it
+// is given its size once and everything inside it scrolls.
+.ed-picker
+  width css-min($ed-pop-w, 100%)
+  height css-min($ed-pop-h, 100%)
+
+.ed-sheet
+  width css-min(820px, 100%)
+  height auto
+  max-height css-min($ed-pop-h, 100%)
+
+// One question and its answers. Tall enough for the message, never taller.
+.ed-prompt
+  width css-min(440px, 100%)
+  height auto
+  max-height 100%
+
+.ed-picker-bar
+  display flex
+  align-items center
+  gap 10px
+  padding 10px 12px
+  border-bottom 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-picker-name
+  display inline-flex
+  align-items center
+  gap 8px
+  font-size 0.82rem
+  font-weight 650
+
+.ed-picker-acts
+  display flex
+  gap 4px
+  margin-left auto
+
+  button
+    display grid
+    place-items center
+    width 28px
+    height 28px
+    border none
+    border-radius 8px
+    background transparent
+    color var(--second-text-color)
+    font-size 0.78rem
+    cursor pointer
+    transition background $ed-fade
+
+    &:hover
+      background var(--third-background-color)
+
+.ed-picker-foot
+  display flex
+  align-items center
+  gap 12px
+  padding 10px 12px
+  border-top 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-picker-hint
+  flex 1 1 auto
+  color var(--third-text-color)
+  font-size 0.72rem
+
+// ─── the small dialogue ─────────────────────────────────────
+.ed-prompt-body
+  flex 0 1 auto
+  min-height 0
+  padding 16px 16px 4px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+  color var(--second-text-color)
+  font-size 0.82rem
+  line-height 1.6
+
+.ed-prompt-note
+  display block
+  margin-top 8px
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.7rem
+  overflow-wrap anywhere
+
+// Answers wrap rather than squeeze: three of them at a phone's width is two
+// rows, not three buttons with their labels cut off.
+.ed-prompt-foot
+  flex-wrap wrap
+  justify-content flex-end
+  gap 8px
+  padding 12px 16px 16px
+  border-top-color transparent
+  background transparent
+
+  .ed-act
+    flex 0 1 auto
+
+// ─── the picture browser ────────────────────────────────────
+// Two panes and a grip between them. The share is a custom property so the
+// splitter can write one number and the grid can do the arithmetic.
+.ed-pick-body
+  display grid
+  grid-template-columns calc(var(--ed-pick-split, 0.42) * 100%) 7px minmax(0, 1fr)
+  min-height 0
+  flex 1 1 auto
+
+  // Stacked, the same grip resizes the other axis — a phone has the same
+  // question about how much tree and how much picture, just turned ninety
+  // degrees. `touch-action: none` on the grip is what lets a finger drag it
+  // without the panel scrolling underneath.
+  +redefine-tablet()
+    grid-template-columns minmax(0, 1fr)
+    grid-template-rows calc(var(--ed-pick-vsplit, 0.42) * 100%) 11px minmax(0, 1fr)
+
+.ed-pick-side
+  min-height 0
+  min-width 0
+  padding 8px 0 12px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+
+  // The theme's waiting card, at a size that fits a pane rather than a page —
+  // the same override the management console makes for the same reason.
+  .access-probe
+    min-height 100%
+    padding 24px 16px
+
+
+// A column of its own rather than a border: it IS the border, and it is what
+// you take hold of. The rule stays hairline until it is worth noticing.
+.ed-pick-grip
+  position relative
+  cursor col-resize
+  background var(--border-color)
+  background-clip content-box
+  padding 0 3px
+  outline none
+  touch-action none
+  transition background $ed-fade
+
+  &:hover,
+  &:focus-visible,
+  &[data-on="1"]
+    background var(--primary-color)
+
+  // A finger needs something to find: a short pill drawn across the rule.
+  &::after
+    content ""
+    position absolute
+    top 50%
+    left 50%
+    width 3px
+    height 34px
+    border-radius 3px
+    background var(--fourth-text-color)
+    transform translate(-50%, -50%)
+    transition background $ed-fade
+
+  &:hover::after,
+  &[data-on="1"]::after
+    background $ed-on-primary
+
+  +redefine-tablet()
+    cursor row-resize
+    padding 5px 0
+
+    &::after
+      width 42px
+      height 3px
+
+// Open and closed, with nothing measured. `0fr → 1fr` on a grid row is the one
+// height transition that needs no scrollHeight, so it stays exact however deep
+// it nests and however much the branch under it changes while it is open.
+.ed-pick-kids
+  display grid
+  grid-template-rows 0fr
+  opacity 0
+  transition grid-template-rows $ed-morph, opacity $ed-fade
+
+  > .ed-pick-kids-in
+    min-height 0
+    overflow hidden
+
+.ed-pick-node[data-open="1"] > .ed-pick-kids
+  grid-template-rows 1fr
+  opacity 1
+
+.ed-pick-node[data-open="1"] > .ed-pick-row .ed-pick-twist i
+  transform rotate(90deg)
+
+.ed-pick-node[data-type="dir"][data-open="1"] > .ed-pick-row:not([data-on="1"]) .ed-pick-icon
+  color var(--primary-color)
+
+// One indent per level, drawn by nesting rather than by a padding the row has
+// to be told about — so a subtree that is dragged somewhere else is correctly
+// indented the moment it lands.
+.ed-pick-kids-in
+  padding-left 14px
+  border-left 1px solid var(--border-color)
+  margin-left 15px
+
+// The top level is the panel's own left edge; it needs no rail of its own.
+.ed-pick-side > .ed-pick-node > .ed-pick-kids > .ed-pick-kids-in
+  padding-left 6px
+  margin-left 0
+  border-left none
+
+.ed-pick-row.is-root
+  font-weight 600
+  color var(--first-text-color)
+
+.ed-pick-row
+  position relative
+  display flex
+  align-items center
+  gap 7px
+  padding 5px 10px 5px 4px
+  border-radius 8px
+  margin 1px 8px 1px 0
+  color var(--second-text-color)
+  font-size 0.78rem
+  cursor pointer
+  user-select none
+  transition background $ed-fade, color $ed-fade, box-shadow $ed-fade
+
+  &:hover
+    background var(--second-background-color)
+
+  // --primary-color is a dark cardinal red, so EVERYTHING on it is white: the
+  // chevron, the folder, the name and the flag. Leaving any of them on their
+  // own token puts near-black ink on dark red, which is the row you can no
+  // longer read being the row you just selected.
+  &[data-on="1"]
+    background var(--primary-color)
+    color $ed-on-primary
+
+    i,
+    .ed-pick-icon,
+    .ed-pick-twist,
+    .ed-pick-name
+      color $ed-on-primary
+
+    .ed-pick-flag
+      background rgba(255, 255, 255, 0.22)
+      color $ed-on-primary
+
+  // The folder a dragged row will land in.
+  &[data-into="1"]
+    box-shadow inset 0 0 0 2px var(--primary-color)
+
+  &[data-carry="1"]
+    opacity 0.45
+
+  &[data-editing="1"]
+    background var(--second-background-color)
+    box-shadow inset 0 0 0 1px var(--primary-color)
+    cursor text
+
+// The insertion line, the article canvas's own: same bar, same halo, same
+// entrance. One gesture, one visual language.
+.ed-pick-node
+  position relative
+
+.ed-pick-node[data-drop="before"]::before,
+.ed-pick-node[data-drop="after"]::after,
+.ed-pick-row[data-drop="empty"]::after
+  content ""
+  position absolute
+  left 0
+  right 8px
+  height 3px
+  border-radius 3px
+  background var(--primary-color)
+  box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+  animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+  pointer-events none
+
+.ed-pick-node[data-drop="before"]::before
+  top -2px
+
+.ed-pick-node[data-drop="after"]::after
+  bottom -2px
+
+.ed-pick-row[data-drop="empty"]::after
+  bottom -3px
+  right 0
+
+.ed-pick-twist
+  display grid
+  place-items center
+  flex-shrink 0
+  width 18px
+  height 18px
+  padding 0
+  border none
+  background transparent
+  color var(--third-text-color)
+  font-size 0.62rem
+  cursor pointer
+
+  i
+    transition transform $ed-morph
+
+  &.is-leaf
+    pointer-events none
+
+.ed-pick-icon
+  flex-shrink 0
+  width 15px
+  color var(--third-text-color)
+  font-size 0.78rem
+  text-align center
+
+.ed-pick-name
+  flex 1 1 auto
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  outline none
+
+  &[contenteditable="true"]
+    text-overflow clip
+
+.ed-pick-flag
+  flex-shrink 0
+  padding 1px 6px
+  border-radius 999px
+  background var(--box-amber-bg)
+  color var(--box-amber-text)
+  font-size 0.6rem
+  font-style normal
+
+.ed-pick-view
+  display flex
+  flex-direction column
+  align-items stretch
+  justify-content flex-start
+  gap 10px
+  min-height 0
+  min-width 0
+  padding 14px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+
+// One picture, at its own shape and its own size, with the facts under it.
+//
+// The picture is the ONLY thing here: no frame, no plate, no panel behind it.
+// It sits at the top of the pane and is centred horizontally, and the moment it
+// ends the file's details begin — a box that centred it vertically put the
+// details somewhere else entirely and made a small picture look like a mistake.
+//
+// ── Why this is a flex column and not a grid ────────────────────────────────
+//
+// `flex: 0 1 auto` + `min-height: 0` is what caps the height, and it is the
+// ONLY arrangement here that does. The box's natural height is the picture's;
+// when that does not fit, flex shrinks the box, and a flex item's post-flexing
+// main size is definite — so `max-height: 100%` on the picture inside resolves
+// against it and the picture comes down with it. When it does fit, nothing
+// shrinks and the box is exactly the picture, so the details sit right beneath.
+//
+// Two earlier versions got this wrong in the same way. A `.img-preloader`
+// wrapper handed to the article's lazyload observer put the caps on the wrapper
+// while the picture inside sized itself; replacing it with `display: grid;
+// place-items: center` moved the picture into an auto-sized row, and a
+// percentage against a track sized by its own content is circular — so the cap
+// quietly became `none`, the row took the picture's full 925px, and `overflow:
+// hidden` cropped it. Both times the picture stood taller than the pane.
+//
+// `width`/`height` attributes carry the intrinsic ratio, so the box is the
+// right shape before the bytes arrive; `--shot-w` stops a 200px thumbnail being
+// blown up across a 600px pane.
+.ed-pick-stage
+  display flex
+  justify-content center
+  align-items flex-start
+  flex 0 1 auto
+  min-height 0
+  min-width 0
+  overflow hidden
+
+  > img
+    display block
+    width auto
+    height auto
+    max-width css-min(100%, var(--shot-w, 100%))
+    max-height 100%
+    border-radius 10px
+    transition opacity $ed-fade
+
+  // Until it decodes, the box it already occupies IS the skeleton — the theme's
+  // own shimmer, on the element that is about to hold the picture.
+  > img[data-ready="0"]
+    background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
+    animation ed-shot-wait 1.5s ease-in-out infinite
+
+// Nothing chosen: the hint is the whole pane rather than one line pinned to
+// the top of it.
+.ed-pick-stage[data-empty]
+  flex 1 1 auto
+  align-items center
+
+@keyframes ed-shot-wait
+  from
+    background-position 100% 0
+  to
+    background-position -100% 0
+
+.ed-pick-blank
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 10px
+  padding 24px 16px
+  color var(--third-text-color)
+  font-size 0.76rem
+  text-align center
+
+  i
+    font-size 1.5rem
+    opacity 0.5
+
+.ed-pick-meta
+  display grid
+  grid-template-columns auto minmax(0, 1fr)
+  gap 3px 12px
+  flex-shrink 0
+  margin 0
+  font-size 0.72rem
+
+  dt
+    color var(--third-text-color)
+
+  dd
+    margin 0
+    color var(--second-text-color)
+    font-family $ed-mono
+    overflow-wrap anywhere
+
+// The one field along the bottom: what is chosen, and the way to look for
+// something else. It is the same control because they are the same question.
+.ed-pick-foot
+  display flex
+  align-items center
+  gap 10px
+  padding 10px 12px
+  border-top 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-pick-field
+  position relative
+  display flex
+  align-items center
+  gap 8px
+  flex 1 1 auto
+  min-width 0
+  padding 6px 11px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  color var(--third-text-color)
+  transition border-color $ed-fade
+
+  &:focus-within
+    border-color var(--primary-color)
+
+.ed-pick-input
+  flex 1 1 auto
+  min-width 0
+  border none
+  background transparent
+  color var(--first-text-color)
+  font-family $ed-mono
+  font-size 0.76rem
+  outline none
+
+.ed-pick-menu
+  position absolute
+  left -1px
+  right -1px
+  bottom calc(100% + 8px)
+  z-index 2
+  max-height 300px
+  padding 5px
+  border 1px solid var(--border-color)
+  border-radius 12px
+  background var(--third-background-color-transparent)
+  backdrop-filter saturate(180%) blur(16px)
+  -webkit-backdrop-filter saturate(180%) blur(16px)
+  box-shadow 0 14px 38px -18px var(--shadow-color-1)
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+
+  &[hidden]
+    display none
+
+.ed-pick-hit
+  display flex
+  align-items center
+  gap 8px
+  width 100%
+  padding 6px 9px
+  border none
+  border-radius 8px
+  background transparent
+  color var(--second-text-color)
+  font-size 0.76rem
+  text-align left
+  cursor pointer
+  transition background $ed-fade
+
+  i
+    flex-shrink 0
+    width 14px
+    color var(--third-text-color)
+    font-size 0.74rem
+
+  &:hover,
+  &[data-on="1"]
+    background var(--second-background-color)
+
+.ed-pick-hit-name
+  flex-shrink 0
+  max-width 55%
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  color var(--first-text-color)
+
+.ed-pick-hit-dir
+  flex 1 1 auto
+  min-width 0
+  overflow hidden
+  text-align right
+  text-overflow ellipsis
+  white-space nowrap
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.68rem
+
+.ed-pick-ok
+  flex-shrink 0
+
+.ed-sheet-body
+  flex 1 1 auto
+  min-height 0
+  padding 14px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+
+.ed-sheet-group + .ed-sheet-group
+  margin-top 16px
+  padding-top 14px
+  border-top 1px solid var(--border-color)
+
+.ed-chip
+  display inline-flex
+  align-items center
+  gap 5px
+  font-size 0.68rem
+  font-weight 600
+  letter-spacing 0.03em
+  text-transform uppercase
+  color var(--third-text-color)
+
+.ed-source
+  display block
+  width 100%
+  min-height 4.5em
+  padding 12px 14px
+  border none
+  background var(--background-color)
+  color var(--first-text-color)
+  font-family $ed-mono
+  font-size 0.82rem
+  line-height 1.6
+  resize none
+  outline none
+
+.ed-preview
+  padding 12px 14px
+  cursor text
+  min-height 2.4em
+
+  > *:first-child
+    margin-top 0
+
+  > *:last-child
+    margin-bottom 0
+
+  figure.highlight
+    margin 0
+
+.ed-math-block
+  display flex
+  justify-content center
+  min-height 1.6em
+
+.ed-math-error
+  color var(--box-red-text)
+  font-family $ed-mono
+  font-size 0.8rem
+
+.ed-mermaid-error
+  color var(--box-red-text)
+  font-family $ed-mono
+  font-size 0.78rem
+  white-space pre-wrap
+
+.ed-math-inline
+  padding 0 1px
+  border-bottom 1px dotted var(--fourth-text-color)
+
+// ─── image ──────────────────────────────────────────────────
+// The figure IS the article's own `figure.image-caption`, carrying the article's
+// own `.img-preloader` and caption. Nothing here may restyle either: the only
+// addition is a control overlay and an editable caption, so what is on screen is
+// the picture as published, at the size it will be published at.
+.ed-figure
+  position relative
+
+  figcaption
+    outline none
+    cursor text
+
+    &:empty::before
+      content attr(data-placeholder)
+      color var(--third-text-color)
+      opacity 0.7
+
+// ─── table ──────────────────────────────────────────────────
+// The table draws its own frame — markdown.styl gives `.table-container > table`
+// the header band, the radius and the zebra the published one has. A second
+// frame here would box it twice, so this wrapper only holds the margin.
+.ed-table-block
+  margin 1.2rem 0
+
+  table
+    margin 0
+
+  // Zebra and a rule between columns is enough to read a table that has content
+  // in it. An EMPTY one being filled in has neither, and a grid of invisible
+  // cells is not editable — so every cell gets the rule the columns already use,
+  // in the colour they already use, while the caret is in this block's article.
+  th, td
+    outline none
+    border-bottom 1px solid var(--shadow-color-1)
+
+  tbody tr:last-child td
+    border-bottom none
+
+  th:focus,
+  td:focus
+    box-shadow inset 0 0 0 2px var(--primary-color)
+
+// Wide tables scroll inside the block instead of pushing the article sideways.
+.table-container
+  max-width 100%
+  overflow-x auto
+  ed-scroll()
+
+// ─── components ─────────────────────────────────────────────
+// Nothing is drawn ON a component any more. Its colour, its icon, its title and
+// its panes are reached from the toolbar's Block tab or typed in place, so what
+// is on the canvas is the component as it will be published — which is the only
+// reason this editor works on the article rather than beside it.
+.ed-component
+  position relative
+  margin 1.2rem 0
+  border 1px dashed transparent
+  border-radius 12px
+  transition border-color $ed-fade
+
+  &:hover,
+  .ed-block[data-on="1"] &
+    border-color var(--border-color)
+
+  &[data-mode="preview"] .ed-source
+    display none
+
+  &[data-mode="source"] .ed-preview
+    display none
+.ed-component-render
+  padding 4px
+
+  > *:first-child
+    margin-top 0
+
+  > *:last-child
+    margin-bottom 0
+
+.ed-swatch
+  display grid
+  place-items center
+  width 20px
+  height 20px
+  padding 0
+  border 1px solid transparent
+  border-radius 6px
+  background transparent
+  cursor pointer
+  transition border-color $ed-fade, transform 0.18s ease
+
+  &:hover
+    transform translateY(-1px)
+
+  &[data-on="1"]
+    border-color var(--primary-color)
+
+.ed-swatch-dot
+  display block
+  width 11px
+  height 11px
+  border-radius 4px
+
+.ed-unknown
+  border 1px solid var(--border-color)
+  border-radius 10px
+  overflow hidden
+
+  pre
+    margin 0
+    padding 10px 12px
+    background var(--second-background-color)
+    font-size 0.76rem
+    white-space pre-wrap
+
+.ed-unknown-tag
+  display flex
+  align-items center
+  gap 6px
+  padding 5px 10px
+  background var(--third-background-color)
+  font-size 0.68rem
+  font-weight 600
+  text-transform uppercase
+  letter-spacing 0.03em
+  color var(--third-text-color)
+
+.ed-raw-render
+  font-size 0.9em
+
+// A `<style>` or `<script>` block is shown, never injected: rendering one would
+// apply the post's own rules to the workspace around it.
+.ed-raw-source
+  margin 0
+  padding 10px 12px
+  border-left 3px solid var(--box-amber-text)
+  border-radius 0 8px 8px 0
+  background var(--second-background-color)
+  color var(--third-text-color)
+  font-family $ed-mono
+  font-size 0.76rem
+  line-height 1.55
+  white-space pre-wrap
+  overflow-x auto
+
+.ed-rule
+  padding 8px 0
+
+// ─── editing in place ───────────────────────────────────────
+// A component's title is typed where the reader will read it. The span is the
+// only editable thing inside the component, so it says so under the pointer and
+// stays invisible otherwise.
+.ed-inplace
+  outline none
+  border-radius 4px
+  cursor text
+  transition box-shadow $ed-fade
+
+  &:hover
+    box-shadow 0 0 0 2px var(--third-background-color)
+
+  &:focus
+    box-shadow 0 0 0 2px var(--primary-color)
+
+// ─── tabs ───────────────────────────────────────────────────
+// One pane at a time, which is what a tab IS. The nav is the nav: each chip is
+// its own caption, edited where it is read.
+.ed-tabs
+  margin 0
+  border 1px solid var(--border-color)
+  border-radius 12px
+  overflow hidden
+
+.ed-tabs-nav
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 4px
+  padding 6px
+  border-bottom 1px solid var(--border-color)
+  background var(--second-background-color)
+
+.ed-tab-chip
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 4px 10px
+  border 1px solid transparent
+  border-radius 8px
+  background var(--background-color)
+  color var(--second-text-color)
+  font-size 0.74rem
+  cursor pointer
+  transition border-color $ed-fade, color $ed-fade
+
+  &[data-on="1"]
+    border-color var(--primary-color)
+    color var(--first-text-color)
+
+.ed-tab-add
+  display grid
+  place-items center
+  width 26px
+  height 26px
+  border 1px dashed var(--border-color)
+  border-radius 8px
+  background transparent
+  color var(--third-text-color)
+  font-size 0.7rem
+  cursor pointer
+  transition border-color $ed-fade, color $ed-fade
+
+  &:hover
+    border-color var(--primary-color)
+    color var(--primary-color)
+
+.ed-tabs-pane
+  padding 10px 14px
+  outline none
+
+  > *:first-child
+    margin-top 0
+
+  > *:last-child
+    margin-bottom 0
+
+// The dot the toolbar draws for a folding block's style.
+.ed-fold-dot
+  background var(--second-background-color)
+  box-shadow inset 0 0 0 1px var(--border-color)
+
+for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
+  .ed-fold-dot.{$fc}
+    background unquote('var(--box-' + $fc + '-bg)')
+
+.ed-fold-dot.white
+  background #fff
+
+.ed-fold-dot.black
+  background #222
+
+// ─── the block's own markdown ───────────────────────────────
+.ed-raw
+  display block
+  width 100%
+  min-height 4.5em
+  padding 12px 14px
+  border 1px solid var(--primary-color)
+  border-radius 10px
+  background var(--second-background-color)
+  color var(--first-text-color)
+  font-family $ed-mono
+  font-size 0.8rem
+  line-height 1.6
+  tab-size 2
+  outline none
+  resize none
+  white-space pre
+  overflow-x auto
+  ed-scroll()
+
+  &[hidden]
+    display none
+
+// ─── slash menu & the one prompt ────────────────────────────
+.ed-slash,
+.ed-ask
+  position absolute
+  z-index ($z-index-5 + 1)
+  padding 6px
+  border 1px solid var(--border-color)
+  border-radius 12px
+  background var(--third-background-color-transparent)
+  backdrop-filter saturate(180%) blur(16px)
+  -webkit-backdrop-filter saturate(180%) blur(16px)
+  box-shadow 0 12px 34px -16px var(--shadow-color-1)
+
+.ed-slash
+  width 232px
+  max-height 302px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+
+.ed-slash-row
+  display flex
+  align-items center
+  gap 9px
+  width 100%
+  padding 7px 9px
+  border none
+  border-radius 8px
+  background transparent
+  color var(--second-text-color)
+  font-size 0.8rem
+  text-align left
+  cursor pointer
+  transition background $ed-fade
+
+  i
+    width 15px
+    color var(--third-text-color)
+    font-size 0.78rem
+    text-align center
+
+  &:hover,
+  &[data-on="1"]
+    background var(--second-background-color)
+
+  &[data-on="1"] i
+    color var(--primary-color)
+
+.ed-slash-empty
+  padding 14px 10px
+  color var(--third-text-color)
+  font-size 0.78rem
+  text-align center
+
+// The toolbar holds no fields, so the values that genuinely have to be typed —
+// an address, a name, a language — are asked for here, and the toolbar goes
+// back to being buttons.
+.ed-ask
+  display flex
+  align-items center
+  gap 6px
+  width 340px
+  max-width calc(100vw - 32px)
+
+.ed-ask-label
+  flex-shrink 0
+  padding-left 4px
+  color var(--third-text-color)
+  font-size 0.64rem
+  font-weight 600
+  letter-spacing 0.03em
+  text-transform uppercase
+
+.ed-ask-input
+  flex 1 1 auto
+  min-width 0
+  padding 5px 8px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-size 0.76rem
+  outline none
+
+  &:focus
+    border-color var(--primary-color)
+
+.ed-ask-ok
+  display grid
+  place-items center
+  flex-shrink 0
+  width 28px
+  height 28px
+  border none
+  border-radius 8px
+  background var(--primary-color)
+  color $ed-on-primary
+  font-size 0.72rem
+  cursor pointer
+// ─── the console's link into here ───────────────────────────
+.bm-write
+  display inline-flex
+  align-items center
+  gap 7px
+  margin-top 12px
+  padding 7px 13px
+  border 1px solid transparent
+  border-radius 10px
+  background var(--primary-color)
+  color $ed-on-primary
+  font-size 0.8rem
+  font-weight 550
+  transition transform $ed-morph, filter $ed-fade
+
+  &:hover
+    transform translateY(-1px)
+    filter brightness(1.08)
+
+// ─── the draft ribbon on a superseded tile ──────────────────
+.vault-draft
+  position relative
+
+.vault-draft-ribbon
+  position absolute
+  top 10px
+  left 10px
+  z-index 2
+  display inline-flex
+  align-items center
+  gap 5px
+  padding 3px 9px
+  border-radius 999px
+  background var(--box-amber-bg)
+  color var(--box-amber-text)
+  font-size 0.66rem
+  font-weight 650
+  letter-spacing 0.02em
+  pointer-events none
+
+.vault-archive-draft .vault-archive-lock
+  color var(--box-amber-text)
+
+@media (prefers-reduced-motion: reduce)
+  .ed-block,
+  .ed-act,
+  .ed-tool,
+  .ed-gutter,
+  .ed-stage,
+  .ed-swatch
+    transition none !important
