@@ -435,8 +435,8 @@ async function activate(host) {
             message: t("recover", "There is a copy of this post that was never committed."),
             note: new Date(cached.at).toLocaleString(),
             actions: [
-              { key: "yes", label: t("recover_use", "Restore it"), icon: "fa-rotate-left", kind: "primary" },
               { key: "no", label: t("recover_drop", "Open what is committed") },
+              { key: "yes", label: t("recover_use", "Restore it"), icon: "fa-rotate-left", kind: "primary" },
             ],
           }
         );
@@ -555,6 +555,11 @@ async function confirmLeave() {
 
   try {
     const draft = (state.entry || {}).draft;
+    // Left to right in the order the decision is actually weighed: leave, keep
+    // it as a draft, put it live. One filled button, and it is the one that
+    // publishes — the same button that publishes everywhere else in the editor,
+    // wearing the same icon. Enter answers "save draft" rather than the filled
+    // button: a key pressed to dismiss something must not publish a post.
     const answer = await openAsk(
       { t },
       {
@@ -562,14 +567,16 @@ async function confirmLeave() {
         title: t("unsaved", "Unsaved changes"),
         message: t("discard", "This post has changes that are not committed yet."),
         note: state.doc ? state.doc.path : "",
+        enter: "draft",
         actions: [
-          { key: "draft", label: t("save", "Save draft"), icon: "fa-floppy-disk", kind: "primary" },
+          { key: "quit", label: t("quit", "Leave without saving"), icon: "fa-arrow-right-from-bracket" },
+          { key: "draft", label: t("save", "Save draft"), icon: "fa-cloud-arrow-up" },
           {
             key: "publish",
             label: draft ? t("publish_over", "Publish over the post") : t("publish", "Publish"),
             icon: "fa-paper-plane",
+            kind: "primary",
           },
-          { key: "quit", label: t("quit", "Leave without saving"), icon: "fa-arrow-right-from-bracket", kind: "danger" },
         ],
       }
     );
@@ -1553,7 +1560,11 @@ async function onCanvasDrop(e) {
  */
 function liveAddress(src) {
   const value = String(src || "");
-  if (!state.stage || !state.stage.dirty || !value.startsWith("/")) return value;
+  // Every staged move, not only the uncommitted ones: a save commits the note
+  // and the BUILD does the renaming, so the repository answers to the old name
+  // for minutes afterwards. Dropping the mapping at save time is what would
+  // break every renamed picture on the canvas the moment it was saved.
+  if (!state.stage || !state.stage.moves.length || !value.startsWith("/")) return value;
   return siteAddress(state.stage.origin("source" + value));
 }
 
@@ -1562,14 +1573,18 @@ function liveAddress(src) {
  *
  * Only this one. Finding every other post that used the old name would mean
  * pulling the whole site into the browser, so that job is left to the build,
- * which already has every post open — see scripts/events/image-moves.js.
+ * which already has every post open — see scripts/events/build-pipeline.js.
  */
 function applyStagedMoves() {
   if (!state.stage || !state.stage.dirty) return;
 
+  // Only what has not been noted yet. A noted move was written into this
+  // document by the save that noted it, and applying it a second time would
+  // hunt for an address the document no longer contains.
+  const fresh = state.stage.moves.filter((move) => !move.noted);
   const swap = (text) => {
     let out = String(text == null ? "" : text);
-    for (const move of state.stage.moves) {
+    for (const move of fresh) {
       const from = siteAddress(move.from);
       const to = siteAddress(move.to);
       out = out.split(from).join(to);
@@ -1616,6 +1631,10 @@ async function pickImage(current) {
     },
     { current }
   );
+  // Tidying is a change to the post even when nothing was chosen: the renames
+  // travel in this document's commit, and leaving the save button disabled is
+  // how a folder someone had just reorganised was thrown away on close.
+  if (state.stage.dirty) markDirty();
   if (!picked) return null;
   const staged = state.pending.find((a) => state.stage.resolve(a.path) === picked.path);
   return staged || { path: picked.path, site: picked.site };
@@ -1695,7 +1714,10 @@ async function doSave(mode) {
 
     for (const asset of state.pending) URL.revokeObjectURL(asset.url);
     state.pending = [];
-    state.stage.clear();
+    // Settled, not cleared. The commit carried the note; the picture itself is
+    // moved by the build, so the mapping is still the only thing that knows
+    // where the bytes are until that build lands.
+    state.stage.settle();
     forgetTree();
     state.dirty = false;
 
@@ -1767,6 +1789,19 @@ const STAGES = [
 
 let progressTimer = null;
 
+/**
+ * Where the build for the commit just made has got to.
+ *
+ * Driven by the COMMIT STATUS Gitea Actions writes for the sha we pushed, not
+ * by the Actions run list: that list is an administrative endpoint, this token
+ * is a content-repository token, and every poll came back 403 — which is why
+ * the rail used to stop at "Committed" and sit there. `gitea.commitStatus`
+ * carries the reasoning.
+ *
+ * A null answer is "ask again"; a run that has not started yet reports no
+ * statuses at all, and that is also just waiting. Only a state the workflow
+ * itself put there ends the poll.
+ */
 function startProgress(result) {
   clearInterval(progressTimer);
   ui.progress.hidden = false;
@@ -1792,23 +1827,17 @@ function startProgress(result) {
   progressTimer = setInterval(async () => {
     if ((ticks += 1) > 100) return clearInterval(progressTimer);
 
-    let runs = [];
-    try {
-      runs = await gitea.runs(5);
-    } catch (err) {
-      return;
-    }
+    const status = await gitea.commitStatus(result.sha);
+    if (!status || !status.count) return;
 
-    const run = runs.find((r) => r.sha && result.sha && r.sha.startsWith(result.sha.slice(0, 7))) || runs[0];
-    if (!run) return;
-
-    if (run.url) {
-      link.href = run.url;
+    if (status.url) {
+      link.href = status.url;
       link.hidden = false;
     }
 
-    if (run.status === "running" || run.status === "in_progress") mark("building", "live");
-    if (run.conclusion === "success") {
+    if (status.state === "pending") return void mark("building", "live");
+
+    if (status.state === "success") {
       mark("building", "done");
       mark("pushed", "done");
       mark("deployed", "live");
@@ -1816,7 +1845,7 @@ function startProgress(result) {
       // Vercel is downstream of a push nothing here sees, so the last stage is
       // optimistic by design: the artifact is out of our hands.
       setTimeout(() => mark("deployed", "done"), 20000);
-    } else if (run.conclusion === "failure" || run.conclusion === "cancelled") {
+    } else if (status.state === "failure" || status.state === "error") {
       mark("building", "fail");
       clearInterval(progressTimer);
       notice("error", t("build_failed", "The build failed. The post is committed; nothing published has changed."));
@@ -1840,8 +1869,8 @@ function wire() {
           : t("publish_direct", "Commit this straight to the published post?"),
         note: state.doc ? state.doc.path : "",
         actions: [
-          { key: "go", label: t("publish", "Publish"), icon: "fa-paper-plane", kind: "primary" },
           { key: "no", label: t("cancel", "Cancel") },
+          { key: "go", label: t("publish", "Publish"), icon: "fa-paper-plane", kind: "primary" },
         ],
       }
     );

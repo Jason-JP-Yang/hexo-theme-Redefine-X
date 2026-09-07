@@ -524,7 +524,8 @@ editor:
   pick_unsaved: unsaved
   pick_none: Nothing here yet
   pick_hint: Choose a picture, or drag one onto a folder to move it.
-  pick_loading: Reading the repository...
+  pick_loading: Reading the repository
+  pick_walking: Reading the file tree
   pick_name: Name
   pick_where: Folder
   pick_dims: Size

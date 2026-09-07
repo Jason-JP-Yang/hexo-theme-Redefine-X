@@ -31,11 +31,13 @@
  * local until a picture lands in it — which is also the only moment it could
  * have been committed.
  *
- * A rename rewrites the addresses in the post being edited. Every OTHER post
- * that referenced the old path is rewritten by the build: `save` leaves a note
- * in `source/_data/image-moves.json` and scripts/events/image-moves.js reads it
- * on the next generate, rewrites what it names and deletes it. Doing it here
- * would mean pulling every post in the site into the browser to find out.
+ * A rename rewrites the addresses in the post being edited, and nothing else.
+ * The file itself is not moved by the commit and no other post is touched by
+ * it: `save` writes `source/_data/image-moves.json`, and the build moves the
+ * pictures and rewrites the rest of the site from it. Both halves of that are
+ * about size — finding every post that used the old name would mean pulling the
+ * whole site into the browser, and moving the files here would mean pushing
+ * every one of them back up as base64.
  *
  * Nothing here is a browser prompt. A name is typed where the name is read.
  */
@@ -99,7 +101,7 @@ function readableSize(bytes) {
 
 let treeCache = null;
 
-async function walk(dir, out, depth) {
+async function walk(dir, out, depth, step) {
   if (depth > 6) return out;
   let rows = [];
   try {
@@ -116,15 +118,17 @@ async function walk(dir, out, depth) {
       out.push({ path: row.path, type: "file", size: row.size || 0, sha: row.sha });
     }
   }
+  if (step) step(out.length);
   // Serial rather than parallel: a browser-held token is one token, and forty
   // simultaneous listings is how it gets rate-limited.
-  for (const child of dirs) await walk(child, out, depth + 1);
+  for (const child of dirs) await walk(child, out, depth + 1, step);
   return out;
 }
 
-export async function loadTree(force) {
+/** @param {function} step called after each listing, with the count so far */
+export async function loadTree(force, step) {
   if (treeCache && !force) return treeCache;
-  treeCache = await walk(ROOT, [{ path: ROOT, type: "dir" }], 0);
+  treeCache = await walk(ROOT, [{ path: ROOT, type: "dir" }], 0, step);
   return treeCache;
 }
 
@@ -139,7 +143,14 @@ export function forgetTree() {
  *
  * `moves` is ordered and each entry is `{ from, to }`; applying them in order to
  * a repository path gives where that file will be. A file moved twice collapses
- * to one move, because what the commit needs is a from and a to.
+ * to one move, because what the note needs is a from and a to.
+ *
+ * A saved move is NOT forgotten — it is marked `noted`. The commit carried the
+ * request, not the file; the build is what renames it, and until that build has
+ * run the repository still answers to the old name. So the mapping has to
+ * outlive the save: it is what keeps the tree showing the names the author gave
+ * and what lets `liveAddress` fetch a picture from where its bytes still are.
+ * `dirty` therefore counts only what has not been noted yet.
  */
 export function createStage() {
   const moves = [];
@@ -149,7 +160,11 @@ export function createStage() {
     moves,
     folders,
     get dirty() {
-      return moves.length > 0;
+      return moves.some((move) => !move.noted);
+    },
+    /** Everything staged is now in the build's note. Kept, never committed twice. */
+    settle() {
+      for (const move of moves) move.noted = true;
     },
     /** Where `path` ends up once everything staged has been applied. */
     resolve(path) {
@@ -174,8 +189,11 @@ export function createStage() {
       if (!from || !to || from === to) return;
       const start = this.origin(from);
       const existing = moves.find((m) => m.from === start);
-      if (existing) existing.to = to;
-      else moves.push({ from: start, to });
+      // A noted move has already been asked for and cannot be edited after the
+      // fact — the build will carry it out from where it left off. Moving the
+      // same picture again is a SECOND leg, from where the first one put it.
+      if (existing && !existing.noted) existing.to = to;
+      else moves.push({ from: existing ? existing.to : start, to });
       folders.delete(to.replace(/\/[^/]+$/, ""));
     },
     /** A folder that exists only here. Renaming one re-keys it in place. */
@@ -211,14 +229,22 @@ export function createStage() {
  * matter of taste: a native confirm has exactly two answers, and "you have
  * unsaved work" has three. Save it as a draft, publish it, or leave it behind.
  *
- * @param {object} opts { icon, title, message, note, actions }
- *   `actions` is `[{ key, label, icon, kind }]`, `kind` being "primary",
- *   "danger" or nothing. The first primary answers Enter.
+ * ONE filled button per question, always the last one, always the affirmative.
+ * The others are plain. A dialogue with two coloured answers is a dialogue that
+ * has not decided what it is recommending, and the editor was showing three.
+ *
+ * @param {object} opts { icon, title, message, note, actions, enter }
+ *   `actions` is `[{ key, label, icon, kind }]`, `kind` being "primary" or
+ *   nothing. `enter` names the key Enter answers with, defaulting to the
+ *   primary — pass one explicitly wherever the primary is not safe to trigger
+ *   with a keystroke.
  * @returns {Promise<string|null>} the chosen key, or null for dismissed
  */
 export function openAsk(ctx, opts) {
   const t = ctx.t;
   const actions = opts.actions || [];
+  const main = actions.find((a) => a.kind === "primary");
+  const enter = opts.enter !== undefined ? opts.enter : main ? main.key : null;
 
   return new Promise((resolve) => {
     const mask = document.createElement("div");
@@ -238,7 +264,7 @@ export function openAsk(ctx, opts) {
         <footer class="ed-picker-foot ed-prompt-foot">
           ${actions
             .map(
-              (act) => `<button type="button" class="ed-act${act.kind === "primary" ? " ed-act-primary" : act.kind === "danger" ? " ed-act-danger" : ""}" data-key="${escapeHTML(act.key)}">
+              (act) => `<button type="button" class="ed-act${act.kind === "primary" ? " ed-act-primary" : ""}" data-key="${escapeHTML(act.key)}">
                 ${act.icon ? `<i class="fa-solid ${escapeHTML(act.icon)}" aria-hidden="true"></i>` : ""}<span>${escapeHTML(act.label)}</span>
               </button>`
             )
@@ -260,12 +286,9 @@ export function openAsk(ctx, opts) {
         e.preventDefault();
         return finish(null);
       }
-      if (e.key === "Enter") {
-        const main = actions.find((a) => a.kind === "primary");
-        if (main) {
-          e.preventDefault();
-          finish(main.key);
-        }
+      if (e.key === "Enter" && enter) {
+        e.preventDefault();
+        finish(enter);
       }
     };
 
@@ -279,9 +302,31 @@ export function openAsk(ctx, opts) {
     document.body.appendChild(mask);
     lockPage();
     pop(mask.querySelector(".ed-prompt"));
-    const main = mask.querySelector(".ed-act-primary") || mask.querySelector("[data-key]");
-    if (main) main.focus();
+    const focus = (enter && mask.querySelector(`[data-key="${enter}"]`)) || mask.querySelector("[data-key]");
+    if (focus) focus.focus();
   });
+}
+
+/* ─── waiting ──────────────────────────────────────────────────────────────── */
+
+/**
+ * The theme's own waiting card, `layout/components/access-probe.ejs`.
+ *
+ * The same object the encrypted post, the taxonomy gate and the management
+ * console put up while a Worker decides what an identity may see — a breathing
+ * badge, a line of text and a sweeping bar. Reading a repository over the
+ * network is the same kind of wait, and it was showing a bare grey sentence
+ * instead. The markup is repeated rather than imported because this dialogue is
+ * built in the browser and that partial is rendered by the build; the styling
+ * is shared, so the two cannot drift apart visually.
+ */
+function probeCard(icon, text) {
+  return `
+    <div class="access-probe" role="status">
+      <div class="access-probe-lock"><i class="fa-solid ${escapeHTML(icon)}" aria-hidden="true"></i></div>
+      <p class="access-probe-text">${escapeHTML(text)}</p>
+      <div class="access-probe-bar"><span></span></div>
+    </div>`;
 }
 
 /** Close anything this module has open, and release the page with it. */
@@ -669,22 +714,27 @@ export function openPicker(ctx, opts = {}) {
     }
 
     /**
-     * The preview: one `<img>`, sized by CSS.
+     * The preview: one `<img>`, and nothing wrapped around it.
      *
      * It used to mount the article's `.img-preloader` and hand it to the
      * article's lazyload observer, which built an `<img>` inside it — three
      * layers and an IntersectionObserver for a picture the author has just
-     * clicked on, with nothing to defer and nothing to be lazy about. Worse,
-     * the nesting is what made the size uncontrollable: the caps applied to the
-     * wrapper while the picture inside sized itself, so the preview could stand
-     * taller than the pane.
+     * clicked on, with nothing to defer and nothing to be lazy about. The
+     * nesting is also what made the size uncontrollable: the caps landed on the
+     * wrapper while the picture inside sized itself.
      *
-     * What survives is what was actually needed. `naturalSize` gives the
-     * intrinsic pixels, which go on as `width`/`height` attributes so the box is
-     * the picture's shape before a byte arrives and as `--shot-w` so nothing is
-     * upscaled; `bindImage` keeps the resolution rules — a staged upload's blob,
-     * a sealed image's decrypted bytes, and the repository fallback for a
-     * picture committed minutes ago that the site has not published yet.
+     * Then the wrapper became a grid with a centred item, which is the same bug
+     * wearing different clothes — a grid item in an auto-sized row IS the row,
+     * so `max-height: 100%` was a percentage of the picture's own height and
+     * silently meant nothing. The picture stood full height inside a box that
+     * cropped it. It is a flex column now: see `.ed-pick-stage`.
+     *
+     * `naturalSize` gives the intrinsic pixels, which go on as `width`/`height`
+     * attributes so the box is the picture's shape before a byte arrives and as
+     * `--shot-w` so a small picture is never blown up; `bindImage` keeps the
+     * resolution rules — a staged upload's blob, a sealed image's decrypted
+     * bytes, and the repository fallback for a picture committed minutes ago
+     * that the site has not published yet.
      */
     let shotSize = null;
 
@@ -696,11 +746,13 @@ export function openPicker(ctx, opts = {}) {
       meta.innerHTML = "";
 
       if (!chosen || !IMAGE.test(chosen)) {
+        stage.dataset.empty = "1";
         stage.innerHTML = `<p class="ed-pick-blank"><i class="fa-solid fa-images" aria-hidden="true"></i>${escapeHTML(
           t("pick_hint", "Choose a picture, or drag one onto a folder to move it.")
         )}</p>`;
         return;
       }
+      delete stage.dataset.empty;
 
       const node = nodes.get(chosen);
       const origin = ctx.stage.origin(chosen);
@@ -1234,10 +1286,20 @@ export function openPicker(ctx, opts = {}) {
     lockPage();
     pop(card);
 
-    side.innerHTML = `<p class="ed-pick-blank">${escapeHTML(t("pick_loading", "Reading the repository…"))}</p>`;
+    // Two phases, because they fail differently and take different amounts of
+    // time: reaching the repository at all, then walking it folder by folder.
+    side.innerHTML = probeCard("fa-folder-tree", t("pick_loading", "Reading the repository"));
     paintPreview();
 
-    loadTree().then((loaded) => {
+    let walked = false;
+    const step = () => {
+      if (walked) return;
+      walked = true;
+      const text = side.querySelector(".access-probe-text");
+      if (text) text.textContent = t("pick_walking", "Reading the file tree");
+    };
+
+    loadTree(false, step).then((loaded) => {
       rows = loaded;
       mount();
       if (chosen && nodes.has(chosen)) {

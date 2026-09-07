@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const imageSize = require("image-size");
 const { spawn } = require("child_process");
-const { BuildIndex, skipAvif } = require("../lib/build-index");
+const { BuildIndex, skipAvif, skipReason } = require("../lib/build-index");
 
 const INDEX_FILE = ".images.json";
 
@@ -571,12 +571,14 @@ class PathManager {
 const successfulConversions = new Set();
 const queue = new TaskQueue(2);
 
-// Rebuilt per build. `indexedKeys` is what survives the prune; `skippedEncodes`
-// is what was asked for while encoding was off; `dims` is the intrinsic size of
-// EVERY source image this build saw, transcoded or not.
+// Rebuilt per build. `indexedKeys` is what survives the prune; `uncompressed`
+// is every image this build will publish in its original format, whatever the
+// reason; `empty` is the ones with no bytes at all; `dims` is the intrinsic
+// size of EVERY source image this build saw, transcoded or not.
 let index = null;
 const indexedKeys = new Set();
-const skippedEncodes = [];
+const uncompressed = [];
+const empty = [];
 const dims = new Map();
 
 /**
@@ -619,11 +621,12 @@ async function scanAndProcessAllImages() {
 
   index = new BuildIndex(path.join(hexo.source_dir, "build"), INDEX_FILE);
   indexedKeys.clear();
-  skippedEncodes.length = 0;
+  uncompressed.length = 0;
+  empty.length = 0;
   dims.clear();
 
   queue.concurrency = config.MAX_CONCURRENCY;
-  const mode = skipAvif() ? "cache only (RDFX_SKIP_AVIF)" : config.encoder;
+  const mode = skipAvif() ? `cache only (${skipReason()})` : config.encoder;
   hexo.log.info(`[img-optimizer] Encoder: ${mode} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
   hexo.log.debug("[img-optimizer] Scanning images...");
 
@@ -639,14 +642,26 @@ async function scanAndProcessAllImages() {
   index.prune(indexedKeys);
   index.flush();
 
-  // Not fatal: an uncached image keeps its original path, so the page is whole,
-  // just heavier. `npm run images:index -- --check` is what refuses to build.
-  if (skippedEncodes.length) {
+  // The report the CI step used to print before the build started, moved to the
+  // one place that actually knows the answer. Not fatal: an image with no
+  // product keeps its own route, so the page is whole — just heavier.
+  if (uncompressed.length) {
+    const shown = uncompressed.slice(0, 20).map((row) => `    ${row.rel}  (${row.why})`);
+    if (uncompressed.length > shown.length) shown.push(`    … and ${uncompressed.length - shown.length} more`);
     hexo.log.warn(
-      `[img-optimizer] RDFX_SKIP_AVIF is set and ${skippedEncodes.length} image(s) have no cached ` +
-        `transcode. They are published in their original format:\n` +
-        skippedEncodes.map((p) => `    ${p}`).join("\n") +
-        `\n  Run a local build to encode them, then commit source/build/.`
+      `[img-optimizer] ${uncompressed.length} of ${dims.size} image(s) are published in their ` +
+        `original format:\n` + shown.join("\n") +
+        `\n  Encode them in a local build and commit source/build/ if the weight matters.`
+    );
+  }
+
+  // A source file with no bytes is not a heavy picture, it is a broken one, and
+  // it reaches the site looking exactly like a working reference. The way one
+  // gets here is a rename that carried the path and not the content.
+  if (empty.length) {
+    hexo.log.error(
+      `[img-optimizer] ${empty.length} image(s) are ZERO BYTES and will publish as broken ` +
+        `pictures:\n` + empty.map((p) => `    ${p}`).join("\n")
     );
   }
 
@@ -879,7 +894,16 @@ async function processFile(absPath, config) {
   // for are both still published, and both still need a size in the manifest.
   await measure(relPath, absPath);
 
-  if ((isBitmap && !config.ENABLE_AVIF) || (isSvg && !config.ENABLE_SVG)) return;
+  try {
+    if (fs.statSync(absPath).size === 0) empty.push(relPath);
+  } catch (e) {
+    /* unreadable is the scan's problem, not this check's */
+  }
+
+  if ((isBitmap && !config.ENABLE_AVIF) || (isSvg && !config.ENABLE_SVG)) {
+    uncompressed.push({ rel: relPath, why: "encoder disabled" });
+    return;
+  }
 
   // Check EXCLUDE patterns
   const excludePatterns = config.EXCLUDE || [];
@@ -888,12 +912,14 @@ async function processFile(absPath, config) {
     try {
       if (new RegExp(pattern).test(relPathWithSlash)) {
         hexo.log.debug(`[img-optimizer] Excluded: ${relPath} (matched ${pattern})`);
+        uncompressed.push({ rel: relPath, why: "excluded" });
         return;
       }
     } catch {
       // If pattern is not valid regex, do simple string match
       if (relPathWithSlash.includes(pattern)) {
         hexo.log.debug(`[img-optimizer] Excluded: ${relPath} (matched ${pattern})`);
+        uncompressed.push({ rel: relPath, why: "excluded" });
         return;
       }
     }
@@ -925,7 +951,7 @@ async function processFile(absPath, config) {
       // SVGO is pure JS and lockfile-pinned, so it keeps running; only the AVIF
       // transcode needs a native encoder whose version would decide the bytes.
       if (isBitmap && skipAvif()) {
-        skippedEncodes.push(relPath);
+        uncompressed.push({ rel: relPath, why: "no cached transcode" });
         return;
       }
 
@@ -943,6 +969,7 @@ async function processFile(absPath, config) {
       successfulConversions.add(relPath);
     } catch (err) {
       hexo.log.warn(`[img-optimizer] Failed: ${relPath} -> ${err.message}`);
+      uncompressed.push({ rel: relPath, why: "encode failed" });
     }
   });
 }

@@ -135,9 +135,56 @@ function relKey(absPath, sourceDir, themeDir) {
   return null;
 }
 
-/** AVIF transcoding is skipped entirely — the CI contract. */
-function skipAvif() {
-  return /^(1|true|yes)$/i.test(String(process.env.RDFX_SKIP_AVIF || "").trim());
+/* ─── how this build was started ───────────────────────────────────────────── */
+
+/**
+ * Encoding is the ONE thing a local build and a CI build may disagree about.
+ *
+ * AVIF bytes depend on the machine's ffmpeg and libaom, so a runner that
+ * encoded would publish different bytes for the same picture every time its
+ * image changed. It therefore serves only what `source/build/` already holds,
+ * and an image with no cached transcode is published in its original format —
+ * heavier, never broken.
+ *
+ * Three ways to say so, in order of authority. The env var is explicit and
+ * wins both ways, so `RDFX_SKIP_AVIF=0` forces encoding on even in CI; the
+ * `--action` flag is what a workflow that wants to be obvious about it passes;
+ * and CI is detected on its own, so `npm run build` alone is correct on a
+ * runner without anything having to remember to set anything.
+ */
+const BOOL = /^(1|true|yes|on)$/i;
+const OFF = /^(0|false|no|off)$/i;
+
+let flagged = false;
+
+/** Called once by scripts/events/build-pipeline.js with the generator's args. */
+function setRunMode(args) {
+  flagged = !!(args && (args.action || args.ci));
 }
 
-module.exports = { BuildIndex, hashFile, relKey, skipAvif, VERSION };
+function inCI() {
+  for (const key of ["GITHUB_ACTIONS", "GITEA_ACTIONS", "CI"]) {
+    const value = String(process.env[key] || "").trim();
+    if (value && !OFF.test(value)) return true;
+  }
+  return false;
+}
+
+/** AVIF transcoding is skipped entirely — the CI contract. */
+function skipAvif() {
+  const raw = String(process.env.RDFX_SKIP_AVIF || "").trim();
+  if (BOOL.test(raw)) return true;
+  if (OFF.test(raw)) return false;
+  return flagged || inCI();
+}
+
+/** Why, for the one line the build prints about it. */
+function skipReason() {
+  const raw = String(process.env.RDFX_SKIP_AVIF || "").trim();
+  if (BOOL.test(raw)) return "RDFX_SKIP_AVIF";
+  if (flagged) return "--action";
+  if (inCI()) return "CI";
+  return "";
+}
+
+module.exports = { BuildIndex, hashFile, relKey, skipAvif, skipReason, setRunMode, VERSION };

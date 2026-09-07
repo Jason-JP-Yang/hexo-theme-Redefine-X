@@ -1,35 +1,45 @@
 "use strict";
 
 /**
- * Catch the site up with a picture the editor moved.
+ * Move the pictures the editor asked to move, and catch the site up.
  *
- * The browser editor can rename and move files under `source/images`, and it
- * rewrites the addresses in the post it had open — but not in the other forty,
- * because finding them would mean pulling the whole site into a browser tab. So
- * it leaves a note instead: `source/_data/image-moves.json`, a list of
- * `{ from, to }` committed alongside the move itself.
+ * The browser can rename and move files under `source/images`. What it CANNOT
+ * do is carry them: Gitea's contents API takes a file as base64 in a JSON body,
+ * so moving a folder of two hundred photographs would mean downloading and
+ * re-uploading every one of them through the tab — hundreds of megabytes, each
+ * a third larger for being base64, for a commit that changes no bytes at all.
+ * Git already stores one blob however many paths point at it.
  *
- * ── A note is a REQUEST, not a fact ─────────────────────────────────────────
+ * So a save commits the REQUEST and nothing else: `source/_data/image-moves.json`,
+ * a list of `{ from, to }`, a few hundred bytes however large the move is. The
+ * build is where the files actually move — it has the whole tree on disk, where
+ * a rename costs nothing — and the deploy commits the result back. That commit
+ * is the one git records as R100.
  *
- * This is the whole of what was wrong before. The sweep trusted the note: it
- * rewrote every reference to the new path and re-keyed the AVIF cache without
- * ever asking whether the file had actually arrived there. When the rename did
- * not land — a Gitea that would not take a `from_path` rename, a commit that
- * was rejected after the note had already been written — the build produced a
- * site whose posts all pointed at a path with no file, no route and no cached
- * transcode, while the picture sat untouched at its old address. Renaming one
- * picture broke it everywhere.
+ * The editor rewrites the addresses in the post it had open, because that post
+ * is in front of it. The other forty are rewritten here.
  *
- * So every pair is now classified against what is ON DISK:
+ * ── What is on disk decides, every time ─────────────────────────────────────
  *
- *   settled   the file is at `to` and gone from `from` — apply everything.
- *   copied    it is at BOTH — rewrite to `to`, but leave `from` its cache.
- *   pending   it is still at `from` — the move never happened. Touch nothing
- *             and KEEP the note, so the build that does carry the rename is
- *             the build that sweeps for it.
- *   vanished  it is at neither — deleted after the move was staged. Rewrite to
- *             the author's intent and drop the note; the orphan pass in
+ * The note says what should be true, so each pair is checked against what IS:
+ *
+ *   waiting   at `from`, nothing at `to` — the ordinary case. Move it, then
+ *             apply everything.
+ *   settled   already at `to` and gone from `from` — a previous build did it,
+ *             or somebody moved it by hand. Apply everything.
+ *   doubled   at BOTH. Identical bytes is a move that was interrupted after the
+ *             copy: drop `from` and carry on. DIFFERENT bytes is a collision,
+ *             and overwriting would destroy a picture — nothing is touched, the
+ *             note is kept, and the build says so on every run until it is
+ *             fixed by hand.
+ *   vanished  at neither — deleted after the move was staged. Rewrite to the
+ *             author's intent and drop the note; the orphan pass in
  *             img-optimizer clears the cache.
+ *
+ * An earlier version simply trusted the note, rewrote every reference and
+ * re-keyed the AVIF cache without asking whether the file had arrived. When it
+ * had not, the site pointed at a path with no file, no route and no transcode,
+ * while the picture sat untouched at its old address.
  *
  * ── Why the AVIF cache travels with the file ────────────────────────────────
  *
@@ -39,21 +49,22 @@
  * product is renamed alongside its source and its index entry re-keyed, so a
  * rename costs nothing and changes nothing about what gets published.
  *
- * ── Why this runs BEFORE Hexo, not inside it ────────────────────────────────
+ * ── When this runs, and why it is early ─────────────────────────────────────
  *
- * `_config.yml`, `_config.<theme>.yml` and everything in `source/_data` are
- * parsed while Hexo initialises and loads — long before any filter can run. A
- * sweep inside the build therefore rewrote those files on disk and then
- * rendered the site from the copies already in memory, so a cover, an avatar or
- * an album named in one of them stayed at the old address for exactly one
- * build: the build that had just deleted the file it named.
+ * At `after_init`, from scripts/events/build-pipeline.js — the first moment a
+ * theme script can act, and still before `hexo.load()` walks `source/`. So the
+ * posts and everything in `source/_data` are read off disk AFTER the sweep and
+ * are simply correct.
  *
- * `bin/image-moves.js` runs this before `hexo generate` is started at all, and
- * `scripts/events/image-moves.js` keeps a copy of the call at `before_generate`
- * for anyone who runs the generator directly. Whichever gets there first, the
- * other finds no note and costs one `existsSync`.
+ * `_config.yml` and `_config.<theme>.yml` are the exception: Hexo parses those
+ * while it initialises, before any filter exists. Rewriting them on disk is
+ * therefore not enough — the copy in `hexo.config` is already stale — so
+ * `rewriteDeep` catches that one up in memory as well. A cover, an avatar or an
+ * album named in a config file used to stay at its old address for exactly one
+ * build: the build that had just moved the file it named.
  */
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { BuildIndex } = require("./build-index");
@@ -63,6 +74,12 @@ const INDEX_FILE = ".images.json";
 const SCAN = [".md", ".yml", ".yaml", ".json"];
 const CONFIG = /^_config([.-][^/\\]+)?\.ya?ml$/i;
 const BITMAP = /\.(png|jpe?g|gif|webp)$/i;
+
+/** A directory path with no trailing separator, whoever handed it over. */
+function trim(dir) {
+  const value = String(dir || "");
+  return value.length > 1 ? value.replace(/[\\/]+$/, "") : value;
+}
 
 /** `source/images/a/b.png` → `images/a/b.png`, which is what the cache keys on. */
 function cacheKey(repoPath) {
@@ -128,6 +145,34 @@ function rewriteWith(pairs, text) {
   return out;
 }
 
+/**
+ * The same rewriting, applied to a live object graph — `hexo.config`, whose
+ * `theme_config` branch is `_config.<theme>.yml` and is deep-merged into
+ * `hexo.theme.config` a moment later. Mutated in place: everything downstream
+ * already holds a reference to it.
+ */
+function rewriteDeep(pairs, value, seen) {
+  if (!pairs.length || !value || typeof value !== "object") return 0;
+  const visited = seen || new Set();
+  if (visited.has(value)) return 0;
+  visited.add(value);
+
+  let changed = 0;
+  for (const key of Object.keys(value)) {
+    const held = value[key];
+    if (typeof held === "string") {
+      const next = rewriteWith(pairs, held);
+      if (next !== held) {
+        value[key] = next;
+        changed += 1;
+      }
+    } else if (held && typeof held === "object") {
+      changed += rewriteDeep(pairs, held, visited);
+    }
+  }
+  return changed;
+}
+
 function walk(dir, out) {
   let entries;
   try {
@@ -161,12 +206,68 @@ function configs(baseDir) {
     .map((entry) => path.join(baseDir, entry.name));
 }
 
+/* ─── moving the file itself ───────────────────────────────────────────────── */
+
+function digest(file) {
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Same bytes at both ends: a move that was interrupted, not a collision. */
+function identical(a, b) {
+  try {
+    if (fs.statSync(a).size !== fs.statSync(b).size) return false;
+  } catch (e) {
+    return false;
+  }
+  const one = digest(a);
+  return !!one && one === digest(b);
+}
+
+function carry(from, to) {
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+    return true;
+  } catch (e) {
+    // Across devices `rename` refuses; a copy-then-unlink is the same result.
+    try {
+      fs.copyFileSync(from, to);
+      fs.unlinkSync(from);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+}
+
+/** A folder a move emptied is a folder git does not have either. */
+function pruneEmpty(dirs, sourceDir) {
+  for (const start of dirs) {
+    let dir = start;
+    while (dir.startsWith(sourceDir + path.sep)) {
+      let rest;
+      try {
+        rest = fs.readdirSync(dir);
+      } catch (e) {
+        break;
+      }
+      if (rest.length) break;
+      try {
+        fs.rmdirSync(dir);
+      } catch (e) {
+        break;
+      }
+      dir = path.dirname(dir);
+    }
+  }
+}
+
 /**
  * Carry each applied move's cached product across, and re-key its index entry.
- *
- * `copy` is the pair whose source is still at both ends: its product is copied
- * rather than renamed and the old key kept, because an image that is still
- * there still needs the transcode the index promises for it.
  */
 function moveCache(sourceDir, applied) {
   const buildDir = path.join(sourceDir, "build");
@@ -186,14 +287,8 @@ function moveCache(sourceDir, applied) {
 
     if (!fs.existsSync(toFile)) {
       if (!fs.existsSync(fromFile)) continue;
-      try {
-        fs.mkdirSync(path.dirname(toFile), { recursive: true });
-        if (move.copy) fs.copyFileSync(fromFile, toFile);
-        else fs.renameSync(fromFile, toFile);
-        carried += 1;
-      } catch (e) {
-        continue;
-      }
+      if (!carry(fromFile, toFile)) continue;
+      carried += 1;
     }
 
     // Only now, with a product sitting at the new key, is it safe to say the
@@ -201,7 +296,7 @@ function moveCache(sourceDir, applied) {
     // that the very next orphan pass deleted.
     if (!entry) continue;
     index.entries[toKey] = Object.assign({}, entry, { out: productOf(toKey) });
-    if (!move.copy) delete index.entries[fromKey];
+    delete index.entries[fromKey];
     index.dirty = true;
   }
 
@@ -221,17 +316,21 @@ function readJournal(file) {
 }
 
 /**
- * Apply `source/_data/image-moves.json`, as far as the working tree allows.
+ * Apply `source/_data/image-moves.json`: move the files, then the references.
  *
  * @param {object} opts { baseDir, sourceDir, log }
  * @returns {object|null} null when there was no note at all; otherwise
- *   `{ applied, held, touched, carried }` where `applied` is the pairs whose
- *   references were rewritten — which is what the in-build copy needs to catch
- *   up the posts it has already read.
+ *   `{ applied, held, moved, touched, carried }` where `applied` is the pairs
+ *   whose references were rewritten.
  */
 function applyMoves(opts) {
-  const baseDir = opts.baseDir;
-  const sourceDir = opts.sourceDir;
+  // Hexo's `base_dir` and `source_dir` end in a separator and nobody else's do.
+  // The containment test below compares assembled paths, and one trailing
+  // backslash made every pair look like it pointed outside the source tree — so
+  // the note was cleared having applied nothing, which is silently the worst
+  // possible outcome: the file has moved and the site still names the old path.
+  const baseDir = trim(opts.baseDir);
+  const sourceDir = trim(opts.sourceDir);
   const log = opts.log || { info() {}, warn() {} };
 
   const journal = path.join(sourceDir, JOURNAL);
@@ -244,7 +343,7 @@ function applyMoves(opts) {
   }
   if (!pairs.length) {
     fs.unlinkSync(journal);
-    return { applied: [], held: [], touched: 0, carried: 0 };
+    return { applied: [], held: [], moved: 0, touched: 0, carried: 0 };
   }
 
   // `from`/`to` are repository paths. Anything that resolves outside the source
@@ -256,21 +355,54 @@ function applyMoves(opts) {
 
   const applied = [];
   const held = [];
+  const clashes = [];
+  const emptied = new Set();
+  let moved = 0;
 
   for (const move of pairs) {
     const from = inside(move.from);
     const to = inside(move.to);
     if (!from || !to) continue;
 
+    const pair = { from: move.from, to: move.to };
     const left = fs.existsSync(from);
     const landed = fs.existsSync(to);
 
-    if (landed && !left) applied.push({ from: move.from, to: move.to });
-    else if (landed && left) applied.push({ from: move.from, to: move.to, copy: true });
-    else if (left) held.push(move);
-    else applied.push({ from: move.from, to: move.to, gone: true });
+    if (!left && !landed) {
+      applied.push(Object.assign(pair, { gone: true }));
+      continue;
+    }
+    if (!left) {
+      applied.push(pair);
+      continue;
+    }
+    if (landed) {
+      // Both ends exist. Same bytes is an interrupted move; anything else is a
+      // picture that would be destroyed by finishing this one.
+      if (!identical(from, to)) {
+        held.push(move);
+        clashes.push(move);
+        continue;
+      }
+      try {
+        fs.unlinkSync(from);
+        emptied.add(path.dirname(from));
+      } catch (e) {
+        /* the duplicate stays; the reference is still correct */
+      }
+      applied.push(pair);
+      continue;
+    }
+    if (!carry(from, to)) {
+      held.push(move);
+      continue;
+    }
+    emptied.add(path.dirname(from));
+    moved += 1;
+    applied.push(pair);
   }
 
+  pruneEmpty(emptied, sourceDir);
   const carried = moveCache(sourceDir, applied.filter((m) => !m.gone));
 
   let touched = 0;
@@ -289,26 +421,30 @@ function applyMoves(opts) {
     }
   }
 
-  // What is still waiting on a rename that never landed stays in the note, so
-  // the build that finally carries it is the build that sweeps for it.
+  // What could not be done stays in the note, so the build that can do it is
+  // the build that does.
   if (held.length) fs.writeFileSync(journal, JSON.stringify(held, null, 2) + "\n");
   else fs.unlinkSync(journal);
 
   if (applied.length) {
     log.info(
-      `[image-moves] applied ${applied.length} move(s) to ${touched} file(s), ` +
+      `[image-moves] moved ${moved} picture(s), rewrote ${touched} file(s), ` +
         `carried ${carried} cached transcode(s).`
     );
   }
-  if (held.length) {
+  if (clashes.length) {
     log.warn(
-      `[image-moves] ${held.length} move(s) are still at their old path — the rename was not ` +
-        `committed. Nothing was rewritten for them; the note is kept for the next build:\n` +
-        held.map((m) => `    ${m.from} -> ${m.to}`).join("\n")
+      `[image-moves] ${clashes.length} move(s) would overwrite a DIFFERENT picture and were ` +
+        `refused. Nothing was moved or rewritten for them; rename one side by hand:\n` +
+        clashes.map((m) => `    ${m.from} -> ${m.to}`).join("\n")
     );
   }
+  const stuck = held.length - clashes.length;
+  if (stuck > 0) {
+    log.warn(`[image-moves] ${stuck} move(s) could not be written to disk; the note is kept.`);
+  }
 
-  return { applied, held, touched, carried };
+  return { applied, held, moved, touched, carried };
 }
 
-module.exports = { applyMoves, rewriteWith, JOURNAL };
+module.exports = { applyMoves, rewriteWith, rewriteDeep, JOURNAL };

@@ -334,60 +334,72 @@ function publishEncrypted(doc, entry, choice) {
 }
 
 /**
- * The picker's renames and moves, as git operations, plus the note that tells
- * the build to catch up the rest of the site.
+ * The picker's renames and moves — as a NOTE, never as file operations.
  *
- * The editor rewrote the addresses in the post it had open, because that one is
- * in front of it. Every OTHER post that used the old name is rewritten on the
- * next generate from `source/_data/image-moves.json` — see
- * scripts/events/image-moves.js — which then deletes the note, so the sweep
- * happens once and never again.
+ * Gitea's contents API takes a file as base64 inside a JSON body. Moving a
+ * folder of two hundred photographs by committing them at their new paths would
+ * mean pulling every one of them down through the tab and pushing every one
+ * back up a third larger, hundreds of megabytes, for a commit that changes no
+ * bytes at all — and git already stores one blob however many paths point at
+ * it. So the save commits the REQUEST: a few hundred bytes of
+ * `source/_data/image-moves.json` however large the move is.
+ *
+ * The build is where the files move. It has the whole tree on disk, where a
+ * rename costs nothing; it rewrites the other forty posts at the same time; and
+ * the deploy commits the result back, which is the commit git records as a
+ * rename. See scripts/lib/image-moves.js.
+ *
+ * (What this must never go back to is `{ operation: "update", path: to,
+ * from_path: from, sha }` with no content. That reads like a rename and is not
+ * one: Gitea takes missing content as EMPTY content, drops the old path from
+ * the index and writes a zero-byte blob at the new one — the picture destroyed
+ * by the commit meant to move it, and every check downstream agreeing the move
+ * went fine because a file did arrive.)
+ *
+ * A picture the repository has never seen needs no note: it was added in this
+ * same session and rides in on the pending upload under its final name.
  */
 async function movedFiles(stage) {
   if (!stage || !stage.dirty) return [];
-  const files = [];
-  const notes = [];
 
+  // One listing per folder, not one per file: a folder move is hundreds of
+  // pairs that all share a parent.
+  const listings = new Map();
+  const known = async (repoPath) => {
+    const dir = repoPath.replace(/\/[^/]+$/, "");
+    if (!listings.has(dir)) listings.set(dir, gitea.list(dir).catch(() => []));
+    return (await listings.get(dir)).some((row) => row.path === repoPath);
+  };
+
+  const notes = [];
   for (const move of stage.moves) {
-    let sha = "";
-    try {
-      const dir = move.from.replace(/\/[^/]+$/, "");
-      const row = (await gitea.list(dir)).find((f) => f.path === move.from);
-      sha = row ? row.sha : "";
-    } catch (err) {
-      sha = "";
+    if (move.noted) continue;
+    if (await known(move.from)) notes.push({ from: move.from, to: move.to });
+  }
+  if (!notes.length) return [];
+
+  const JOURNAL = "source/_data/image-moves.json";
+  let held = [];
+  let sha = "";
+  try {
+    const current = await gitea.read(JOURNAL);
+    if (current) {
+      sha = current.sha;
+      held = JSON.parse(current.text) || [];
     }
-    // No sha means the repository has never seen it — a picture added in this
-    // same session and renamed before it was ever committed. It rides in on the
-    // pending upload under its final name, so there is nothing to move.
-    if (!sha) continue;
-    files.push({ operation: "update", path: move.to, from: move.from, sha });
-    notes.push({ from: move.from, to: move.to });
+  } catch (err) {
+    held = [];
   }
 
-  if (notes.length) {
-    const JOURNAL = "source/_data/image-moves.json";
-    let held = [];
-    let sha = "";
-    try {
-      const current = await gitea.read(JOURNAL);
-      if (current) {
-        sha = current.sha;
-        held = JSON.parse(current.text) || [];
-      }
-    } catch (err) {
-      held = [];
-    }
-    const body = JSON.stringify(held.concat(notes), null, 2) + "\n";
-    files.push({
+  const body = JSON.stringify(held.concat(notes), null, 2) + "\n";
+  return [
+    {
       operation: sha ? "update" : "create",
       path: JOURNAL,
       content: gitea.toBase64(body),
       ...(sha ? { sha } : {}),
-    });
-  }
-
-  return files;
+    },
+  ];
 }
 
 export async function save(doc, mode, pending, choice, stage) {

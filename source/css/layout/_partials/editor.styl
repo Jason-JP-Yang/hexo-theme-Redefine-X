@@ -1189,18 +1189,6 @@ $ed-pop-h = 620px
   .ed-act
     flex 0 1 auto
 
-.ed-act-danger
-  border-color transparent
-  background var(--box-red-text)
-  color $ed-on-primary
-
-  i
-    color $ed-on-primary
-
-  &:hover:not(:disabled)
-    background var(--box-red-text)
-    filter brightness(1.08)
-
 // ─── the picture browser ────────────────────────────────────
 // Two panes and a grip between them. The share is a custom property so the
 // splitter can write one number and the grid can do the arithmetic.
@@ -1225,6 +1213,12 @@ $ed-pop-h = 620px
   overflow-y auto
   overscroll-behavior contain
   ed-scroll()
+
+  // The theme's waiting card, at a size that fits a pane rather than a page —
+  // the same override the management console makes for the same reason.
+  .access-probe
+    min-height 100%
+    padding 24px 16px
 
 
 // A column of its own rather than a border: it IS the border, and it is what
@@ -1435,36 +1429,53 @@ $ed-pop-h = 620px
 .ed-pick-view
   display flex
   flex-direction column
-  gap 12px
+  align-items stretch
+  justify-content flex-start
+  gap 10px
   min-height 0
   min-width 0
   padding 14px
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
 
-// One picture, at its own shape and its own size.
+// One picture, at its own shape and its own size, with the facts under it.
 //
-// This used to mount the article's `.img-preloader` and hand it to the article's
-// lazyload observer, which then built an `<img>` inside it — a skeleton, an
-// IntersectionObserver and a swap, wrapped around one picture the author has
-// just clicked on. There is nothing to defer here and nothing to be lazy about,
-// and the nesting is what made the size un-constrainable: the caps landed on
-// the wrapper while the picture inside it sized itself.
+// The picture is the ONLY thing here: no frame, no plate, no panel behind it.
+// It sits at the top of the pane and is centred horizontally, and the moment it
+// ends the file's details begin — a box that centred it vertically put the
+// details somewhere else entirely and made a small picture look like a mistake.
 //
-// So it is an `<img>`, and the three lines below are the whole sizing rule.
-// `width`/`height` attributes carry the intrinsic ratio, so the box is right
-// before the bytes arrive; `--shot-w` stops a 200px thumbnail being blown up
-// across a 600px pane; `max-height` is the height limit.
+// ── Why this is a flex column and not a grid ────────────────────────────────
+//
+// `flex: 0 1 auto` + `min-height: 0` is what caps the height, and it is the
+// ONLY arrangement here that does. The box's natural height is the picture's;
+// when that does not fit, flex shrinks the box, and a flex item's post-flexing
+// main size is definite — so `max-height: 100%` on the picture inside resolves
+// against it and the picture comes down with it. When it does fit, nothing
+// shrinks and the box is exactly the picture, so the details sit right beneath.
+//
+// Two earlier versions got this wrong in the same way. A `.img-preloader`
+// wrapper handed to the article's lazyload observer put the caps on the wrapper
+// while the picture inside sized itself; replacing it with `display: grid;
+// place-items: center` moved the picture into an auto-sized row, and a
+// percentage against a track sized by its own content is circular — so the cap
+// quietly became `none`, the row took the picture's full 925px, and `overflow:
+// hidden` cropped it. Both times the picture stood taller than the pane.
+//
+// `width`/`height` attributes carry the intrinsic ratio, so the box is the
+// right shape before the bytes arrive; `--shot-w` stops a 200px thumbnail being
+// blown up across a 600px pane.
 .ed-pick-stage
-  display grid
-  place-items center
-  flex 1 1 auto
+  display flex
+  justify-content center
+  align-items flex-start
+  flex 0 1 auto
   min-height 0
   min-width 0
-  border-radius 12px
-  background var(--second-background-color)
   overflow hidden
 
   > img
-    grid-area 1 / 1
     display block
     width auto
     height auto
@@ -1478,6 +1489,12 @@ $ed-pop-h = 620px
   > img[data-ready="0"]
     background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
     animation ed-shot-wait 1.5s ease-in-out infinite
+
+// Nothing chosen: the hint is the whole pane rather than one line pinned to
+// the top of it.
+.ed-pick-stage[data-empty]
+  flex 1 1 auto
+  align-items center
 
 @keyframes ed-shot-wait
   from

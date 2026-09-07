@@ -481,8 +481,8 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
   ).replace(/\/+$/, "");
   // NOT gated on GISCUS_AUTHOR_PAT: nothing here calls GitHub, and keying the
   // markup on a build-machine secret made the page depend on who built it.
-  // Creating the discussions is `npm run masonry:sync`; the client already
-  // treats a missing one as "no reactions".
+  // Creating the discussions is the sync pass in build-pipeline.js; the client
+  // already treats a missing one as "no reactions".
   const hasGiscusReactions =
     commentEnabled && giscusConfig.repo && giscusConfig.category && giscusProxy;
 

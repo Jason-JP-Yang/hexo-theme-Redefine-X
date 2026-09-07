@@ -106,9 +106,16 @@ async function call(path, init) {
     },
   });
 
-  if (res.status === 401 || res.status === 403) {
+  // 401 is "this ticket is no longer good"; 403 is "this token may not do THAT",
+  // which a fresh ticket cannot fix. Throwing the ticket away on a 403 turned
+  // one unauthorized endpoint into a request to the Worker every few seconds,
+  // for as long as whatever was polling kept polling.
+  if (res.status === 401) {
     forgetTicket();
-    throw Object.assign(new Error("gitea rejected the token"), { status: res.status });
+    throw Object.assign(new Error("gitea rejected the token"), { status: 401 });
+  }
+  if (res.status === 403) {
+    throw Object.assign(new Error("gitea refused: the token may not do that"), { status: 403 });
   }
   return res;
 }
@@ -145,20 +152,45 @@ export async function read(path) {
   return { text: decodeText(row.content || ""), sha: row.sha, path: row.path };
 }
 
-/** Recent Actions runs, so the editor can show where a publish got to. */
-export async function runs(limit) {
-  const res = await call(`/actions/runs?limit=${Number(limit) || 5}`);
-  if (!res.ok) return [];
+/**
+ * Where the build for one commit has got to.
+ *
+ * NOT `/actions/runs`. Gitea's Actions endpoints are administrative — the
+ * runners, the secrets, the variables and the task list all sit behind owner or
+ * admin, and this token belongs to a dedicated account with `write:repository`
+ * on the content repository and nothing else. Every poll came back 403, so the
+ * rail stopped at "Committed" and never moved again.
+ *
+ * Commit statuses are the same information asked for the right way: Gitea
+ * Actions writes one per job as the run starts and finishes, they are indexed
+ * by the sha we just pushed rather than by "the last five runs", and the
+ * endpoint is plain repository read. `target_url` is the run page.
+ *
+ * @returns {Promise<{state: string, url: string, count: number}|null>}
+ *   `state` is Gitea's rollup — pending / success / failure / error / warning —
+ *   or "" when no job has reported yet. null means the request itself failed.
+ */
+export async function commitStatus(sha) {
+  const t = await getTicket();
+  const ref = String(sha || "").trim();
+  if (!ref) return null;
+
+  let res;
+  try {
+    res = await call(`/commits/${encodeURIComponent(ref)}/status?ref=${encodeURIComponent(t.branch)}`);
+  } catch (err) {
+    return null;
+  }
+  if (!res.ok) return null;
+
   const body = await res.json().catch(() => ({}));
-  const rows = body.workflow_runs || body.runs || [];
-  return rows.map((run) => ({
-    id: run.id,
-    status: run.status,
-    conclusion: run.conclusion,
-    sha: run.head_sha || run.commit_sha || "",
-    started: run.started_at || run.created_at || "",
-    url: run.html_url || run.url || "",
-  }));
+  const rows = Array.isArray(body.statuses) ? body.statuses : [];
+  const withLink = rows.find((row) => row.target_url);
+  return {
+    state: String(body.state || "").toLowerCase(),
+    url: withLink ? withLink.target_url : "",
+    count: rows.length,
+  };
 }
 
 /* ─── the commit ───────────────────────────────────────────────────────────── */
@@ -174,6 +206,23 @@ export async function runs(limit) {
  * Gitea's ChangeFiles endpoint (1.20+) is what makes that one commit rather
  * than N. `sha` on an update is the blob sha the editor loaded, so a file that
  * moved underneath us is a rejection here rather than a silent overwrite.
+ *
+ * ── Every operation carries its own content ─────────────────────────────────
+ *
+ * A file only ever appears here as bytes the editor holds — a post it wrote, an
+ * image somebody dropped on it. Nothing is ever committed by reference.
+ *
+ * That rules out `from_path`, which is the one thing that looks like it would
+ * make a rename cheap. It does not: Gitea's `update` takes `from_path` and an
+ * empty `content` together, removes the old path from the index and hashes the
+ * bytes it was given — which for an absent `content` is a ZERO-BYTE BLOB. The
+ * picture is destroyed by the commit that was supposed to move it, and every
+ * check downstream then agrees the move went fine because a file did arrive.
+ * Sending the bytes instead is correct and unusable: base64 in a JSON body, for
+ * a folder of photographs, through a browser tab.
+ *
+ * So a move is not committed here at all. `movedFiles` in session.js writes a
+ * note, and the build does the renaming where a rename is free.
  */
 export async function commit(files, message) {
   const t = await getTicket();
