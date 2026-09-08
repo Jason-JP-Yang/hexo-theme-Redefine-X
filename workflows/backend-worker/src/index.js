@@ -1689,6 +1689,20 @@ app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
 // `.github/workflows/`. It must not be the CI's token, which needs `Workflows:
 // write` to mirror and therefore could rewrite the very job that holds
 // VAULT_MASTER.
+// Who a commit is BY. One identity for both backends and for CI, because the
+// author of a post is a person and not the machinery that carried it — a
+// history split between `blog-updater`, `blog-ci` and a name attaches the work
+// to whichever route it happened to take that day.
+//
+// GITEA_AUTHOR_* is the old spelling, read as a fallback so a Worker deploy and
+// a variable edit need not be the same instant.
+function commitAuthor(env) {
+  return {
+    name: env.COMMIT_AUTHOR_NAME || env.GITEA_AUTHOR_NAME || "blog-editor",
+    email: env.COMMIT_AUTHOR_EMAIL || env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
+  };
+}
+
 function giteaTicket(env) {
   const api = String(env.GITEA_API_URL || "").replace(/\/+$/, "");
   const [owner, name] = String(env.GITEA_REPO || "").split("/");
@@ -1703,10 +1717,7 @@ function giteaTicket(env) {
     repo: name,
     branch: env.GITEA_BRANCH || "main",
     token: env.GITEA_TOKEN,
-    author: {
-      name: env.GITEA_AUTHOR_NAME || "blog-editor",
-      email: env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
-    },
+    author: commitAuthor(env),
   };
 }
 
@@ -1727,10 +1738,7 @@ function githubTicket(env) {
     // Which workflow's runs answer "where has the build got to". GitHub Actions
     // writes no commit status, so there is nothing else to read.
     workflow: env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml",
-    author: {
-      name: env.GITEA_AUTHOR_NAME || "blog-editor",
-      email: env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
-    },
+    author: commitAuthor(env),
   };
 }
 
