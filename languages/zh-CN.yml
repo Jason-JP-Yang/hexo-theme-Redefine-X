@@ -368,6 +368,11 @@ editor:
   stale: 已发布的版本落后于仓库 — 构建可能还在进行中。
   conflict_hint: 仓库中的这个文件已经改变。你的文字仍在这里 — 请在新标签页打开这篇文章查看已落地的内容，然后重新应用改动。
   build_failed: 构建失败。文章已提交，已发布的内容没有变化。
+  backend_switch: 构建于
+  backend_catchup: 正在让首选仓库追上进度...
+  backend_caught_up: 已同步。
+  backend_behind: 首选仓库仍然落后，本次会话提交到另一侧。
+  backend_diverged: 两个仓库已分叉 —— 各自都有对方没有的提交。本次会话提交到所显示的一侧。
   view_run: 查看构建
   s_committed: 已提交
   s_building: 构建中

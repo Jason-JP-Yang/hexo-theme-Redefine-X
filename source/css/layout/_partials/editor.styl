@@ -333,6 +333,25 @@ html.blog-editing .post-page-container
 .ed-close
   padding 6px 9px
 
+// Which repository this session commits to. Quieter than the two verbs beside
+// it — it reports a fact, and is only a button because occasionally the fact
+// needs overriding.
+.ed-backend
+  padding 5px 10px
+  border-style dashed
+  color var(--third-text-color)
+  font-weight 500
+  font-size 0.72rem
+
+  i
+    font-size 0.78rem
+
+  &[data-backend="gitea"] i
+    color var(--box-green-text)
+
+  &[data-backend="github"] i
+    color var(--second-text-color)
+
 // ─── the title, in its own place ────────────────────────────
 .ed-title
   outline none

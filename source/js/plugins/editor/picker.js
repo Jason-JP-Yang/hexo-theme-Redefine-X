@@ -43,7 +43,7 @@
  */
 
 import { escapeHTML } from "./markdown.js";
-import * as gitea from "./gitea.js";
+import * as repo from "./repo.js";
 import { EASE, MORPH_MS, createEdgeScroll, pop, setDragImage } from "./motion.js";
 
 // Every place in the repository that holds pictures. Two trees, side by side in
@@ -117,7 +117,7 @@ async function walk(dir, out, depth, step) {
   if (depth > 6) return out;
   let rows = [];
   try {
-    rows = await gitea.list(dir);
+    rows = await repo.list(dir);
   } catch (err) {
     return out;
   }

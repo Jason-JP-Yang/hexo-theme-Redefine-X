@@ -24,7 +24,7 @@
  * the draft in the same commit, so the two can never both be live.
  */
 
-import * as gitea from "./gitea.js";
+import * as repo from "./repo.js";
 import { docToMarkdown, markdownToDoc, parseFrontMatter, setFrontMatterKey } from "./markdown.js";
 import {
   b64urlToBytes,
@@ -109,7 +109,7 @@ async function metaOf(grant) {
  * two entries for one article is a way to edit the wrong one.
  */
 export async function listDocuments() {
-  const [files, granted] = await Promise.all([gitea.list(POSTS_DIR), loadGrants(true)]);
+  const [files, granted] = await Promise.all([repo.list(POSTS_DIR), loadGrants(true)]);
 
   const metas = await Promise.all(granted.map(metaOf));
   const vaultBySource = new Map();
@@ -232,7 +232,7 @@ export async function openDocument(entry) {
     // what the last BUILD sealed, so the two differing means a build is still
     // in flight. A post built before `s.bin` existed simply skips that check.
     const [file, sealed] = await Promise.all([
-      entry.path ? gitea.read(entry.path) : Promise.resolve(null),
+      entry.path ? repo.read(entry.path) : Promise.resolve(null),
       fetchSealed(`${vaultPrefix()}/${entry.slug}/s.bin`).catch(() => null),
     ]);
 
@@ -248,7 +248,7 @@ export async function openDocument(entry) {
     };
   }
 
-  const file = await gitea.read(entry.path);
+  const file = await repo.read(entry.path);
   if (!file) throw new Error(`${entry.path} is not in the repository`);
   return { ...markdownToDoc(file.text), path: entry.path, sha: file.sha, entry, stale: false };
 }
@@ -367,7 +367,7 @@ async function movedFiles(stage) {
   const listings = new Map();
   const known = async (repoPath) => {
     const dir = repoPath.replace(/\/[^/]+$/, "");
-    if (!listings.has(dir)) listings.set(dir, gitea.list(dir).catch(() => []));
+    if (!listings.has(dir)) listings.set(dir, repo.list(dir).catch(() => []));
     return (await listings.get(dir)).some((row) => row.path === repoPath);
   };
 
@@ -382,7 +382,7 @@ async function movedFiles(stage) {
   let held = [];
   let sha = "";
   try {
-    const current = await gitea.read(JOURNAL);
+    const current = await repo.read(JOURNAL);
     if (current) {
       sha = current.sha;
       held = JSON.parse(current.text) || [];
@@ -396,7 +396,7 @@ async function movedFiles(stage) {
     {
       operation: sha ? "update" : "create",
       path: JOURNAL,
-      content: gitea.toBase64(body),
+      content: repo.toBase64(body),
       ...(sha ? { sha } : {}),
     },
   ];
@@ -418,7 +418,7 @@ export async function save(doc, mode, pending, choice, stage) {
   // to move, so the rename can only happen by committing it under the new name.
   for (const asset of pending || []) {
     const at = stage ? stage.resolve(asset.path) : asset.path;
-    files.push({ operation: "create", path: at, content: gitea.toBase64(asset.bytes) });
+    files.push({ operation: "create", path: at, content: repo.toBase64(asset.bytes) });
   }
   files.push(...(await movedFiles(stage)));
 
@@ -437,16 +437,16 @@ export async function save(doc, mode, pending, choice, stage) {
       supersedes: null,
     });
 
-    const current = await gitea.read(target);
+    const current = await repo.read(target);
     files.push({
       operation: current ? "update" : "create",
       path: target,
-      content: gitea.toBase64(clean),
+      content: repo.toBase64(clean),
       ...(current ? { sha: current.sha } : {}),
     });
 
     if (entry.draft && doc.path && doc.path !== target) {
-      const draftFile = await gitea.read(doc.path);
+      const draftFile = await repo.read(doc.path);
       if (draftFile) files.push({ operation: "delete", path: doc.path, sha: draftFile.sha });
       // The draft's key goes; the published post gets its own from the build,
       // which is what puts it on the console's Encrypted Posts list.
@@ -458,7 +458,7 @@ export async function save(doc, mode, pending, choice, stage) {
       files.push(await keyringFile(keysEnc));
     }
 
-    const result = await gitea.commit(files, `Publish: ${titleOf(doc)}`);
+    const result = await repo.commit(files, `Publish: ${titleOf(doc)}`);
     return { ...result, path: target, published: true, encrypted };
   }
 
@@ -470,7 +470,7 @@ export async function save(doc, mode, pending, choice, stage) {
   if (doc.isNew) {
     path = pathForTitle(frontOf(doc).title);
     sha = "";
-    if (await gitea.read(path)) {
+    if (await repo.read(path)) {
       throw new Error(`${path} already exists — give this post a different title`);
     }
     minted = await mintVaultKey(path, titleOf(doc));
@@ -492,20 +492,20 @@ export async function save(doc, mode, pending, choice, stage) {
     keysEnc = minted.keysEnc;
     body = withFront(source, { vault: "true", draft: "true" });
   } else {
-    const existing = await gitea.read(path);
+    const existing = await repo.read(path);
     sha = existing ? existing.sha : "";
   }
 
   files.push({
     operation: sha ? "update" : "create",
     path,
-    content: gitea.toBase64(body),
+    content: repo.toBase64(body),
     ...(sha ? { sha } : {}),
   });
 
   if (keysEnc) files.push(await keyringFile(keysEnc));
 
-  const result = await gitea.commit(files, `Draft: ${titleOf(doc)}`);
+  const result = await repo.commit(files, `Draft: ${titleOf(doc)}`);
   return { ...result, path, minted, published: false };
 }
 
@@ -557,7 +557,7 @@ function pathForTitle(title) {
 
 export async function remove(entry) {
   const files = [];
-  const file = await gitea.read(entry.path);
+  const file = await repo.read(entry.path);
   if (file) files.push({ operation: "delete", path: entry.path, sha: file.sha });
 
   if (entry.encrypted && entry.id) {
@@ -565,15 +565,15 @@ export async function remove(entry) {
     if (revoked.keysEnc) files.push(await keyringFile(revoked.keysEnc));
   }
   if (!files.length) return null;
-  return gitea.commit(files, `Remove: ${entry.title || entry.path}`);
+  return repo.commit(files, `Remove: ${entry.title || entry.path}`);
 }
 
 async function keyringFile(keysEnc) {
-  const current = await gitea.read(".vault/keys.enc");
+  const current = await repo.read(".vault/keys.enc");
   return {
     operation: current ? "update" : "create",
     path: ".vault/keys.enc",
-    content: gitea.toBase64(keysEnc),
+    content: repo.toBase64(keysEnc),
     ...(current ? { sha: current.sha } : {}),
   };
 }

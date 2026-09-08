@@ -1666,37 +1666,138 @@ app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
 
 // ─── EDITOR: the repository ticket ──────────────────────────
 //
-// After this the Worker is OUT of the commit path: the browser talks to Gitea
-// directly, so a save carrying twenty megabytes of images costs this Worker
-// nothing at all. One request per editing session.
+// After this the Worker is OUT of the commit path: the browser talks to the
+// repository host directly, so a save carrying twenty megabytes of images costs
+// this Worker nothing at all. One request per editing session.
 //
-// The token is contained where it is SPENT, not where it is handed out — a
-// dedicated Gitea account with write on the content repository only, scope
-// `write:repository`, and branch protection with Protected File Patterns
-// covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`, `package.json` and
-// `_config.yml`. Without that last control an admin session is code execution on
-// a runner that holds VAULT_MASTER.
-app.get("/api/admin/gitea/ticket", authMiddleware, (c) => {
-  const api = String(c.env.GITEA_API_URL || "").replace(/\/+$/, "");
-  const repo = String(c.env.GITEA_REPO || "");
-  const [owner, name] = repo.split("/");
+// The source lives in two places — a Gitea instance on the author's machine and
+// a private GitHub mirror — and either can build. Both tickets are handed over
+// at once and the browser picks; deciding here would mean this Worker probing
+// two hosts on a 10 ms budget to answer a question the browser can answer for
+// itself, about reachability from where it is actually standing.
+//
+// ── Each token is contained where it is SPENT ───────────────
+//
+// Gitea: a dedicated account with write on the content repository only, scope
+// `write:repository`, plus branch protection with Protected File Patterns
+// covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`, `.gitmodules`,
+// `package.json` and `_config.yml`.
+//
+// GitHub: a fine-grained PAT scoped to that one repository with `Contents:
+// write`, `Metadata: read` and `Actions: read` — and NO `Workflows` permission,
+// which is what makes GitHub itself refuse every write under
+// `.github/workflows/`. It must not be the CI's token, which needs `Workflows:
+// write` to mirror and therefore could rewrite the very job that holds
+// VAULT_MASTER.
+function giteaTicket(env) {
+  const api = String(env.GITEA_API_URL || "").replace(/\/+$/, "");
+  const [owner, name] = String(env.GITEA_REPO || "").split("/");
+  if (!api || !owner || !name || !env.GITEA_TOKEN) return null;
 
-  if (!api || !owner || !name || !c.env.GITEA_TOKEN) {
+  return {
+    id: "gitea",
+    kind: "gitea",
+    label: env.GITEA_LABEL || "Gitea",
+    api,
+    owner,
+    repo: name,
+    branch: env.GITEA_BRANCH || "main",
+    token: env.GITEA_TOKEN,
+    author: {
+      name: env.GITEA_AUTHOR_NAME || "blog-editor",
+      email: env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
+    },
+  };
+}
+
+function githubTicket(env) {
+  const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+  const [owner, name] = String(env.GITHUB_REPO || "").split("/");
+  if (!api || !owner || !name || !env.GITHUB_EDITOR_TOKEN) return null;
+
+  return {
+    id: "github",
+    kind: "github",
+    label: env.GITHUB_LABEL || "GitHub",
+    api,
+    owner,
+    repo: name,
+    branch: env.GITHUB_BRANCH || "main",
+    token: env.GITHUB_EDITOR_TOKEN,
+    // Which workflow's runs answer "where has the build got to". GitHub Actions
+    // writes no commit status, so there is nothing else to read.
+    workflow: env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml",
+    author: {
+      name: env.GITEA_AUTHOR_NAME || "blog-editor",
+      email: env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
+    },
+  };
+}
+
+app.get("/api/admin/repo/ticket", authMiddleware, (c) => {
+  const backends = [giteaTicket(c.env), githubTicket(c.env)].filter(Boolean);
+  if (!backends.length) {
     return c.json({ error: "Repository access is not configured" }, 503);
   }
 
   c.header("Cache-Control", "no-store");
-  return c.json({
-    api,
-    owner,
-    repo: name,
-    branch: c.env.GITEA_BRANCH || "main",
-    token: c.env.GITEA_TOKEN,
-    author: {
-      name: c.env.GITEA_AUTHOR_NAME || "blog-editor",
-      email: c.env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
-    },
-  });
+  return c.json({ prefer: c.env.REPO_PREFER || "gitea", backends });
+});
+
+// The shape the editor asked for before there were two of them. Kept because a
+// Worker deploy and a site deploy are not the same event: between them, the
+// published bundle is the previous one.
+app.get("/api/admin/gitea/ticket", authMiddleware, (c) => {
+  const ticket = giteaTicket(c.env);
+  if (!ticket) return c.json({ error: "Repository access is not configured" }, 503);
+
+  c.header("Cache-Control", "no-store");
+  const { id, kind, label, ...rest } = ticket;
+  return c.json(rest);
+});
+
+// ─── EDITOR: fast-forward the backend that fell behind ──────
+//
+// Gitea goes down, a post is committed to GitHub, Gitea comes back one commit
+// behind. Only a runner can settle that — the browser holds a content token,
+// not a git client — so this fires the GitHub workflow that pushes to Gitea and
+// does NOT build. The editor polls Gitea afterwards; nothing is reported here
+// beyond "the run was accepted", because a dispatch is asynchronous and this
+// Worker has 10 ms.
+app.post("/api/admin/repo/sync", authMiddleware, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (String(body.to || "") !== "gitea") {
+    return c.json({ error: "Only the Gitea side can be caught up from here" }, 400);
+  }
+
+  const [owner, name] = String(c.env.GITHUB_REPO || "").split("/");
+  if (!owner || !name || !c.env.GITHUB_SYNC_TOKEN) {
+    return c.json({ error: "Sync is not configured" }, 503);
+  }
+
+  const file = c.env.GITHUB_SYNC_WORKFLOW || "sync-to-gitea.yml";
+  const api = String(c.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+  const res = await fetch(
+    `${api}/repos/${owner}/${name}/actions/workflows/${file}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${c.env.GITHUB_SYNC_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "backend-blog",
+      },
+      body: JSON.stringify({ ref: c.env.GITHUB_BRANCH || "main" }),
+    }
+  );
+
+  c.header("Cache-Control", "no-store");
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return c.json({ error: "Could not start the sync", status: res.status, detail: text.slice(0, 200) }, 502);
+  }
+  return c.json({ ok: true });
 });
 
 // ─── WEBHOOK: the deploy repo finished deploying ────────────

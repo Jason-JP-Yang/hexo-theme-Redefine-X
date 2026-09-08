@@ -61,7 +61,7 @@ import initLazyLoad, {
 import { assetURL } from "../../tools/vaultCrypto.js";
 import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
-import * as gitea from "./gitea.js";
+import * as repo from "./repo.js";
 import { contentChanged, crossFade, enter, exit, flip, pop, toolbarIn, toolbarOut } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
@@ -239,6 +239,7 @@ function buildDocbar() {
       <span class="ed-tag ed-tag-draft" hidden><i class="fa-solid fa-pen-nib"></i>${escapeHTML(t("draft", "Draft"))}</span>
     </div>
     <div class="ed-docbar-actions">
+      <button type="button" class="ed-act ed-backend" hidden></button>
       <span class="ed-dot" data-state="clean" title=""></span>
       <button type="button" class="ed-act ed-save" disabled>
         <i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i><span>${escapeHTML(t("save", "Save draft"))}</span>
@@ -367,6 +368,7 @@ async function activate(host) {
     vaultTag: ui.bar.querySelector(".ed-tag-vault"),
     draftTag: ui.bar.querySelector(".ed-tag-draft"),
     dot: ui.bar.querySelector(".ed-dot"),
+    backend: ui.bar.querySelector(".ed-backend"),
     save: ui.bar.querySelector(".ed-save"),
     publish: ui.bar.querySelector(".ed-publish"),
     close: ui.bar.querySelector(".ed-close"),
@@ -399,8 +401,9 @@ async function activate(host) {
   }
 
   let ticketError = null;
+  let opened = null;
   try {
-    await gitea.getTicket(true);
+    opened = await repo.open(true);
   } catch (err) {
     ticketError = err;
   }
@@ -415,6 +418,8 @@ async function activate(host) {
     ui.path.textContent = "";
     return;
   }
+
+  settleBackend(opened);
 
   const identity = pageIdentity(host);
 
@@ -691,7 +696,7 @@ async function deactivate() {
   document.documentElement.classList.remove("blog-editing");
 
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
-  gitea.forgetBlobs();
+  repo.forgetBlobs();
   forgetTree();
   registerRewind(null);
   state.boxes.clear();
@@ -1801,7 +1806,7 @@ async function pickImage(current) {
 /** Read a file off disk, hold it as a blob, and queue it for the next commit. */
 async function stageImage(file, dir) {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let path = await gitea.assetPath(file.name, bytes);
+  let path = await repo.assetPath(file.name, bytes);
   // The picker says which folder is open; a paste or a drop has no opinion and
   // goes where every pasted picture has always gone.
   if (dir) path = String(dir).replace(/\/+$/, "") + "/" + path.split("/").pop();
@@ -1918,7 +1923,7 @@ async function doSave(mode) {
     }
     state.doc.entry = state.entry;
 
-    const fresh = await gitea.read(result.path);
+    const fresh = await repo.read(result.path);
     state.doc.sha = fresh ? fresh.sha : "";
     ui.front.paint(); // `updated` was stamped by the save
 
@@ -1942,6 +1947,96 @@ async function doSave(mode) {
   }
 }
 
+/* ─── which backend takes the commits ──────────────────────────────────────── */
+
+const BACKEND_ICON = { gitea: "fa-solid fa-server", github: "fa-brands fa-github" };
+
+/**
+ * The chip is the only place the choice is visible, and it is only worth
+ * showing when there is a choice to make: with one backend configured it stays
+ * hidden rather than labelling the obvious.
+ */
+function paintBackend() {
+  if (!ui || !ui.backend) return;
+
+  const rows = repo.backends();
+  const id = repo.activeId();
+  if (!id || rows.length < 2) {
+    ui.backend.hidden = true;
+    return;
+  }
+
+  const now = rows.find((row) => row.id === id);
+  const other = rows.find((row) => row.id !== id);
+  ui.backend.hidden = false;
+  ui.backend.dataset.backend = id;
+  ui.backend.innerHTML =
+    `<i class="${BACKEND_ICON[id] || BACKEND_ICON.gitea}" aria-hidden="true"></i>` +
+    `<span>${escapeHTML((now && now.label) || id)}</span>`;
+  ui.backend.title = other
+    ? `${t("backend_switch", "Build on")} ${(other.label || other.id)}`
+    : "";
+}
+
+/**
+ * What to do about the result of selection.
+ *
+ * The editor is already on a working backend by the time this runs, so nothing
+ * here is awaited: catching the preferred repository up takes a runner up to
+ * two minutes, and holding the post at "Opening" for that would be paying the
+ * whole cost of an outage for a convenience.
+ *
+ * It runs in the background instead, and the session only MOVES to the
+ * repository it caught up if the author has not started work in the meantime —
+ * changing where a save goes underneath a half-typed post is not worth the
+ * tidiness. Left alone, the next session picks Gitea anyway.
+ */
+function settleBackend(opened) {
+  paintBackend();
+  if (!opened) return;
+
+  if (opened.diverged) {
+    notice("warn", t("backend_diverged", "The two repositories have diverged — each has commits the other does not. This session commits to the one shown."));
+    return;
+  }
+  if (!opened.behind) return;
+
+  const target = opened.behind;
+  notice("info", t("backend_catchup", "Bringing the preferred repository up to date…"));
+
+  repo.catchUp(target).then((caught) => {
+    if (!state.on) return;
+    if (!caught) {
+      notice("warn", t("backend_behind", "The preferred repository is still behind; this session commits to the other one."));
+      return;
+    }
+    if (state.dirty || state.saving) return;
+    repo.adopt(target.id);
+    paintBackend();
+    notice("info", t("backend_caught_up", "Up to date."));
+  });
+}
+
+/** Force the other backend for the rest of the session. */
+async function switchBackend() {
+  const rows = repo.backends();
+  const other = rows.find((row) => row.id !== repo.activeId());
+  if (!other) return;
+
+  ui.backend.disabled = true;
+  try {
+    // Blob shas are content hashes, so an open document's `sha` is still the
+    // right one on the other host whenever the two agree — and where they do
+    // not, the save is refused rather than silently overwriting.
+    await repo.use(other.id);
+    paintBackend();
+  } catch (err) {
+    notice("error", t("unreachable", "Could not reach the backend."));
+  } finally {
+    ui.backend.disabled = false;
+  }
+}
+
 /* ─── the publish rail ─────────────────────────────────────────────────────── */
 
 const STAGES = [
@@ -1959,7 +2054,7 @@ let progressTimer = null;
  * Driven by the COMMIT STATUS Gitea Actions writes for the sha we pushed, not
  * by the Actions run list: that list is an administrative endpoint, this token
  * is a content-repository token, and every poll came back 403 — which is why
- * the rail used to stop at "Committed" and sit there. `gitea.commitStatus`
+ * the rail used to stop at "Committed" and sit there. `repo.commitStatus`
  * carries the reasoning.
  *
  * A null answer is "ask again"; a run that has not started yet reports no
@@ -1991,7 +2086,7 @@ function startProgress(result) {
   progressTimer = setInterval(async () => {
     if ((ticks += 1) > 100) return clearInterval(progressTimer);
 
-    const status = await gitea.commitStatus(result.sha);
+    const status = await repo.commitStatus(result.sha);
     if (!status || !status.count) return;
 
     if (status.url) {
@@ -2020,6 +2115,7 @@ function startProgress(result) {
 /* ─── wiring ───────────────────────────────────────────────────────────────── */
 
 function wire() {
+  ui.backend.addEventListener("click", () => switchBackend());
   ui.save.addEventListener("click", () => doSave("draft"));
 
   ui.publish.addEventListener("click", async () => {
@@ -2264,7 +2360,7 @@ export function teardownEditor() {
   closeDialogs();
   document.documentElement.classList.remove("blog-editing");
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
-  gitea.forgetBlobs();
+  repo.forgetBlobs();
   registerRewind(null);
   state.boxes.clear();
   Object.assign(state, {

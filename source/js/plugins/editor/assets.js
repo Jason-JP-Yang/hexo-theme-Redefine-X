@@ -27,7 +27,7 @@
  */
 
 import { assetURL, registerAssetKey } from "../../tools/vaultCrypto.js";
-import { blobURL } from "./gitea.js";
+import { blobURL } from "./repo.js";
 
 let manifest = null;
 let sealed = null;

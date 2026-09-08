@@ -366,6 +366,11 @@ editor:
   stale: The published copy is behind the repository - a build is probably still running.
   conflict_hint: This file changed in the repository. Your text is safe here - open the post in a new tab to see what landed, then re-apply.
   build_failed: The build failed. The post is committed; nothing published has changed.
+  backend_switch: Build on
+  backend_catchup: Bringing the preferred repository up to date...
+  backend_caught_up: Up to date.
+  backend_behind: The preferred repository is still behind; this session commits to the other one.
+  backend_diverged: The two repositories have diverged - each has commits the other does not. This session commits to the one shown.
   view_run: View run
   s_committed: Committed
   s_building: Building
