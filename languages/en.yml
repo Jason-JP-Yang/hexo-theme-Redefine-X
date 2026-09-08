@@ -371,6 +371,7 @@ editor:
   backend_caught_up: Up to date.
   backend_behind: The preferred repository is still behind; this session commits to the other one.
   backend_diverged: The two repositories have diverged - each has commits the other does not. This session commits to the one shown.
+  deployed_reload: Published. Loading the page as readers see it...
   view_run: View run
   s_committed: Committed
   s_building: Building

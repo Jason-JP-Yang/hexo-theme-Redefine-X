@@ -373,6 +373,7 @@ editor:
   backend_caught_up: 已同步。
   backend_behind: 首选仓库仍然落后，本次会话提交到另一侧。
   backend_diverged: 两个仓库已分叉 —— 各自都有对方没有的提交。本次会话提交到所显示的一侧。
+  deployed_reload: 已发布。正在载入读者看到的页面...
   view_run: 查看构建
   s_committed: 已提交
   s_building: 构建中

@@ -1834,6 +1834,11 @@ async function stageImage(file, dir) {
 /* ─── dirty / save ─────────────────────────────────────────────────────────── */
 
 function markDirty() {
+  // A repaint is not an edit. `ui.front.paint()` rebuilds the front-matter
+  // fields from the values just committed, and the input events that rebuild
+  // fires are indistinguishable here from typing — so a post went back to
+  // "unsaved" the instant it finished saving, and leaving asked to save again.
+  if (state.painting) return;
   state.dirty = true;
   syncHeader();
 
@@ -1925,7 +1930,21 @@ async function doSave(mode) {
 
     const fresh = await repo.read(result.path);
     state.doc.sha = fresh ? fresh.sha : "";
-    ui.front.paint(); // `updated` was stamped by the save
+    // `updated` was stamped by the save. Guarded, because repainting a field
+    // fires the same input event typing into it does.
+    state.painting = true;
+    try {
+      ui.front.paint();
+    } finally {
+      state.painting = false;
+    }
+
+    // The commit has landed, so nothing is at stake in leaving any more — said
+    // once, here, rather than relying on every path above having left `dirty`
+    // alone. The build that follows needs no editor to finish.
+    state.dirty = false;
+    clearTimeout(state.stashTimer);
+    syncHeader();
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);
     startProgress(result);
@@ -2103,13 +2122,53 @@ function startProgress(result) {
       clearInterval(progressTimer);
       // Vercel is downstream of a push nothing here sees, so the last stage is
       // optimistic by design: the artifact is out of our hands.
-      setTimeout(() => mark("deployed", "done"), 20000);
+      setTimeout(() => {
+        mark("deployed", "done");
+        land(result);
+      }, 20000);
     } else if (status.state === "failure" || status.state === "error") {
       mark("building", "fail");
       clearInterval(progressTimer);
       notice("error", t("build_failed", "The build failed. The post is committed; nothing published has changed."));
     }
   }, 6000);
+}
+
+/**
+ * Show the reader what was just published.
+ *
+ * The whole point of the rail reaching "Deployed" is that the page under the
+ * editor is now stale — it is the copy that was rendered before the commit. So
+ * the editor stands down and the page is fetched again.
+ *
+ * A publish usually also MOVES: a draft becomes the post it supersedes, and a
+ * new post is written from `/blog-management/write/`, which has no article of
+ * its own to come back to. Reloading either of those returns to the wrong page,
+ * so a published post is navigated to instead.
+ *
+ * Nothing happens if the author started editing again while the build ran —
+ * their work outranks the refresh, and the page is still there to reload later.
+ */
+function land(result) {
+  if (!state.on || state.dirty || state.saving) return;
+
+  let to = "";
+  if (result.published) {
+    const date = parseFrontMatter(state.doc.front).date;
+    const link = session.permalinkOf({ date, path: result.path });
+    const here = location.pathname.replace(/\/*$/, "/");
+    if (link && link.replace(/\/*$/, "/") !== here) to = siteRoot() + link;
+  }
+
+  notice("info", t("deployed_reload", "Published. Loading the page as readers see it…"));
+  // `dirty` is already false, so neither the unload prompt nor the swup guard
+  // has anything to say — but the editor is still mounted on a DOM this is
+  // about to throw away, so it comes down first.
+  state.dirty = false;
+  setTimeout(() => {
+    if (to) window.location.href = to;
+    else window.location.reload();
+  }, 1200);
 }
 
 /* ─── wiring ───────────────────────────────────────────────────────────────── */
