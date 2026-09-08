@@ -98,7 +98,7 @@ function findClosing(str, start, delim) {
 
 /**
  * Scan raw Markdown `text` and return { replaced, expressions[] }.
- * Each math span is replaced with <!--mathjax:N:display|inline-->.
+ * Each math span is replaced with <!--mathjax:N:display|inline[:sp]-->.
  * Code fences (``` and ~~~) and inline code (`) are skipped.
  */
 function extractMath(text, singleDollars) {
@@ -106,11 +106,25 @@ function extractMath(text, singleDollars) {
   let result = '';
   let i = 0;
 
-  const emit = (tex, display) => {
+  /**
+   * The Markdown renderer discards whitespace sitting immediately after an HTML
+   * comment, so `$W$ orld` would come out as `$W$orld`. Swallow that whitespace
+   * here, flag it as `:sp`, and let phase 2 put a real space back after the SVG.
+   * Trailing whitespace at end of line is left alone — two spaces mean <br>.
+   */
+  const emit = (tex, display, next) => {
     const id = expressions.length;
     const mode = display ? 'display' : 'inline';
     expressions.push({ tex: tex.trim(), display });
-    result += `<!--mathjax:${id}:${mode}-->`;
+
+    let pad = 0;
+    if (!display) {
+      while (text[next + pad] === ' ' || text[next + pad] === '\t') pad++;
+      if (pad && (next + pad >= text.length || text[next + pad] === '\n')) pad = 0;
+    }
+
+    result += `<!--mathjax:${id}:${mode}${pad ? ':sp' : ''}-->`;
+    return next + pad;
   };
 
   while (i < text.length) {
@@ -148,8 +162,7 @@ function extractMath(text, singleDollars) {
     if (text[i] === '\\' && text[i + 1] === '[') {
       const end = findClosing(text, i + 2, '\\]');
       if (end !== -1) {
-        emit(text.slice(i + 2, end), true);
-        i = end + 2;
+        i = emit(text.slice(i + 2, end), true, end + 2);
         continue;
       }
     }
@@ -158,8 +171,7 @@ function extractMath(text, singleDollars) {
     if (text[i] === '\\' && text[i + 1] === '(') {
       const end = findClosing(text, i + 2, '\\)');
       if (end !== -1) {
-        emit(text.slice(i + 2, end), false);
-        i = end + 2;
+        i = emit(text.slice(i + 2, end), false, end + 2);
         continue;
       }
     }
@@ -169,8 +181,7 @@ function extractMath(text, singleDollars) {
         (i === 0 || text[i - 1] !== '\\')) {
       const end = findClosing(text, i + 2, '$$');
       if (end !== -1) {
-        emit(text.slice(i + 2, end), true);
-        i = end + 2;
+        i = emit(text.slice(i + 2, end), true, end + 2);
         continue;
       }
     }
@@ -183,8 +194,7 @@ function extractMath(text, singleDollars) {
         const raw = text.slice(i + 1, end);
         // inline $ must not span multiple lines
         if (!raw.includes('\n')) {
-          emit(raw, false);
-          i = end + 1;
+          i = emit(raw, false, end + 1);
           continue;
         }
       }
@@ -201,7 +211,7 @@ function extractMath(text, singleDollars) {
 /*  Phase 2 — Render SVG and inject into HTML                        */
 /* ================================================================== */
 
-const PLACEHOLDER_RE = /<!--mathjax:(\d+):(display|inline)-->/g;
+const PLACEHOLDER_RE = /<!--mathjax:(\d+):(display|inline)(:sp)?-->/g;
 
 async function renderAndInject(html, expressions, mjRuntime, log) {
   const { MathJax, adaptor } = mjRuntime;
@@ -221,7 +231,7 @@ async function renderAndInject(html, expressions, mjRuntime, log) {
   }
 
   // Replace placeholders in HTML
-  return html.replace(PLACEHOLDER_RE, (match, idStr, mode) => {
+  return html.replace(PLACEHOLDER_RE, (match, idStr, mode, sp) => {
     const id = parseInt(idStr, 10);
     const svg = rendered[id];
     if (svg == null) return match;   // keep placeholder if render failed
@@ -256,7 +266,10 @@ async function renderAndInject(html, expressions, mjRuntime, log) {
       return '<div class="' + cls + '" data-mathjax="display"' + style + '>' +
              '<div class="mathjax-scroll-wrapper">' + svg + '</div></div>';
     }
-    return '<span class="mathjax-inline" data-mathjax="inline">' + svg + '</span>';
+    // &#32; not a literal space: html-minifier's collapseWhitespace treats the
+    // unknown <mjx-container> as block-level and trims the run that follows it.
+    return '<span class="mathjax-inline" data-mathjax="inline">' + svg + '</span>' +
+           (sp ? '&#32;' : '');
   });
 }
 
