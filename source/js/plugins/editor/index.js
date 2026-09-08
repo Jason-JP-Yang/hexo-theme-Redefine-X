@@ -2124,7 +2124,7 @@ function startProgress(result) {
       // optimistic by design: the artifact is out of our hands.
       setTimeout(() => {
         mark("deployed", "done");
-        land(result);
+        land();
       }, 20000);
     } else if (status.state === "failure" || status.state === "error") {
       mark("building", "fail");
@@ -2137,38 +2137,22 @@ function startProgress(result) {
 /**
  * Show the reader what was just published.
  *
- * The whole point of the rail reaching "Deployed" is that the page under the
- * editor is now stale — it is the copy that was rendered before the commit. So
- * the editor stands down and the page is fetched again.
+ * The rail reaching "Deployed" is exactly the moment the page under the editor
+ * became stale — it is the copy that was rendered before the commit. So the
+ * page is fetched again, at the SAME address: where the author is standing is
+ * their decision, not something a finished build gets to change.
  *
- * A publish usually also MOVES: a draft becomes the post it supersedes, and a
- * new post is written from `/blog-management/write/`, which has no article of
- * its own to come back to. Reloading either of those returns to the wrong page,
- * so a published post is navigated to instead.
- *
- * Nothing happens if the author started editing again while the build ran —
- * their work outranks the refresh, and the page is still there to reload later.
+ * Nothing happens if they started editing again while the build ran — their
+ * work outranks the refresh, and the page is still there to reload later.
  */
-function land(result) {
+function land() {
   if (!state.on || state.dirty || state.saving) return;
-
-  let to = "";
-  if (result.published) {
-    const date = parseFrontMatter(state.doc.front).date;
-    const link = session.permalinkOf({ date, path: result.path });
-    const here = location.pathname.replace(/\/*$/, "/");
-    if (link && link.replace(/\/*$/, "/") !== here) to = siteRoot() + link;
-  }
 
   notice("info", t("deployed_reload", "Published. Loading the page as readers see it…"));
   // `dirty` is already false, so neither the unload prompt nor the swup guard
-  // has anything to say — but the editor is still mounted on a DOM this is
-  // about to throw away, so it comes down first.
+  // has anything left to protect.
   state.dirty = false;
-  setTimeout(() => {
-    if (to) window.location.href = to;
-    else window.location.reload();
-  }, 1200);
+  setTimeout(() => window.location.reload(), 1200);
 }
 
 /* ─── wiring ───────────────────────────────────────────────────────────────── */
