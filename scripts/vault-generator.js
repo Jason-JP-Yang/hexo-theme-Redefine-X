@@ -462,7 +462,7 @@ function metaFor(entry, href, coverAsset, body) {
     assets: entry.assetMap || {},
     sizes: entry.assetSizes || {},
     draft: entry.post.draft === true,
-    supersedes: entry.post.supersedes || "",
+    supersedes: entry.supersedes || "",
     cover: coverAsset || "",
     excerpt: plainExcerpt(entry.post, body),
     tags: (entry.tags || []).map((tag) => ({
@@ -598,6 +598,10 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     page.__post = true;
     page.comment = false; // encrypted posts carry no comment thread
     page.content = body;
+    // Resolved by filters/vault from the draft's file name, and shadowed onto
+    // the derived object rather than written back onto the model. The article's
+    // version control and the card's badge both read it from here.
+    page.supersedes = entry.supersedes || "";
     Object.assign(page, neighbours(entry.post));
     // The taxonomy getters are backed by the relation index this build has
     // already emptied for this post (filters/vault.js). Hand back the snapshot
@@ -824,7 +828,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     // that actually change the grid, and a superseding draft is not one.
     const buckets = assignToPages(
       pages,
-      entries.filter((entry) => !entry.post.supersedes)
+      entries.filter((entry) => !entry.supersedes)
     );
     const withFeatures = hexo.theme.config?.home?.sidebar?.enable === true;
 

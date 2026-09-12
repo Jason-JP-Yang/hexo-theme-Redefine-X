@@ -12,6 +12,11 @@
     //   draft, nothing else  Unpublished  never published at all
     //   otherwise            Encrypted
     //
+    // A fourth state, Pinned, is passed in as `badgeKind` rather than derived:
+    // it is not a fact about encryption and can be worn ALONGSIDE any of the
+    // three. It is here and not in a badge of its own so the home tile and Posts
+    // Management make that statement in the same object as every other one.
+    //
     // `extra` carries only the host card's layout classes. `is-inline` takes the
     // badge out of absolute positioning for a card with no picture to sit on,
     // where an overlay would land on the text instead.
@@ -19,10 +24,17 @@
     const draft = typeof isDraft !== "undefined" && isDraft;
     const shadows = typeof supersedes !== "undefined" && supersedes;
 
-    const kind = draft ? (shadows ? "draft" : "unpublished") : "encrypted";
-    const icon = { draft: "fa-pen-nib", unpublished: "fa-eye-slash", encrypted: "fa-lock-keyhole" }[kind];
-    const label = __("vault." + (kind === "encrypted" ? "badge" : kind));
-    const title = __("vault." + (kind === "encrypted" ? "authorized" : kind + "_hint"));
+    const kind = typeof badgeKind !== "undefined" && badgeKind
+        ? badgeKind
+        : draft ? (shadows ? "draft" : "unpublished") : "encrypted";
+    const icon = {
+        draft: "fa-pen-nib",
+        unpublished: "fa-eye-slash",
+        encrypted: "fa-lock-keyhole",
+        sticky: "fa-thumbtack",
+    }[kind];
+    const label = kind === "sticky" ? __("sticky") : __("vault." + (kind === "encrypted" ? "badge" : kind));
+    const title = kind === "sticky" ? __("sticky") : __("vault." + (kind === "encrypted" ? "authorized" : kind + "_hint"));
 %>
 <div class="vault-badge is-<%= kind %><%= cls %>" title="<%- title %>">
     <i class="fa-regular <%= icon %>"></i><%- label %>

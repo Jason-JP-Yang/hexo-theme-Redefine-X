@@ -18,10 +18,11 @@
         a.extend:hover {
             background-color: var(--primary-color) !important;
         }
-        /* The card is already translucent over the banner here, so the sticky
-           chip drops to an outline instead of stacking a second panel on top. */
-        .site-info,
-        .home-article-sticky-badge {
+        /* The card is already translucent over the banner here, so this drops to
+           an outline instead of stacking a second panel on top. A tile's badges
+           are exempt: each carries a solid fill precisely so it stays legible on
+           whatever is behind it. */
+        .site-info {
             background-color: var(--background-color-transparent-15) !important;
         }
     </style>

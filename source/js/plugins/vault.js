@@ -600,7 +600,7 @@ function postsForThisPage(map, cards, page, isLastPage) {
   if (!cards.length) return all;
 
   const dates = cards
-    .filter((card) => !card.querySelector(".home-article-sticky-badge"))
+    .filter((card) => !card.querySelector(".vault-badge.is-sticky"))
     .map(dateOf)
     .filter((d) => !isNaN(d));
   if (!dates.length) return [];

@@ -20,6 +20,7 @@ const path = require("path");
 const store = require("../lib/vault-store");
 const state = require("../lib/vault-state");
 const vc = require("../lib/vault-crypto");
+const inventory = require("../lib/post-inventory");
 
 function vaultEnabled() {
   return hexo.theme.config?.backend?.vault_enable === true;
@@ -143,6 +144,40 @@ function markedAlbums() {
   return out;
 }
 
+/**
+ * What a draft stands in front of — resolved from the FILE NAME, not only from
+ * `supersedes:` front matter.
+ *
+ * A draft lives at `<stem>.draft.md` beside the `<stem>.md` it shadows, and that
+ * pairing is the whole convention: the editor writes it, the archive de-dupes on
+ * it, and the reader swaps tiles on it. Front matter said the same thing a second
+ * time, so a draft created any other way than by the editor — by hand, or by an
+ * older version of it — had no `supersedes` at all and the build read it as an
+ * article that had never been published: the wrong badge on the home tile, and
+ * the wrong row in Posts Management.
+ *
+ * Explicit front matter still wins, for a draft that shadows something its file
+ * name does not name.
+ *
+ * @param {Query} posts  the UNMASKED post list, so an encrypted published post
+ *                       is as findable as a public one
+ */
+function supersedesResolver(posts) {
+  const live = new Map();
+  for (const post of posts.toArray()) {
+    if (post.draft === true) continue;
+    live.set(String(post.source || ""), post);
+  }
+
+  return function (post) {
+    if (post.supersedes) return String(post.supersedes);
+    const source = String(post.source || "");
+    if (!/\.draft\.md$/i.test(source)) return "";
+    const target = live.get(source.replace(/\.draft\.md$/i, ".md"));
+    return target ? inventory.permalinkOf(target) : "";
+  };
+}
+
 /** The masonry data with every encrypted album — and any category left empty by
  *  their removal — taken out of it. */
 function maskMasonry(data) {
@@ -191,6 +226,7 @@ hexo.extend.filter.register(
 
     const hidden = new Set();
     const live = new Set();
+    const supersedes = supersedesResolver(posts);
     for (const post of marked) {
       const id = vc.postId(post.source);
       const { key, slug, rekeyed } = store.ensurePost(id);
@@ -200,7 +236,17 @@ hexo.extend.filter.register(
             `the slug (${slug}) kept. Everything sealed under the old key is now unreadable.`
         );
       }
-      state.put(id, { kind: "post", id, key, slug, post, plain: post.content || "" });
+      state.put(id, {
+        kind: "post",
+        id,
+        key,
+        slug,
+        post,
+        plain: post.content || "",
+        // On the ENTRY, never on the post: `post` is a Warehouse document and a
+        // property written onto it would be persisted into db.json.
+        supersedes: post.draft === true ? supersedes(post) : "",
+      });
       hidden.add(post.source);
       live.add(id);
     }

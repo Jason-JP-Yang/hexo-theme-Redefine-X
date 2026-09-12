@@ -369,29 +369,6 @@ $bento-split-text  = 'minmax(0, 1fr)'
         > * + *
           margin-top unquote('1lh')
 
-      // ── Sticky badge ─────────────────────────────────────────────────────
-      // Base material tier: a translucent colour, no backdrop pass.
-      .home-article-sticky-badge
-        position absolute
-        top 12px
-        right 12px
-        z-index 2
-        display inline-flex
-        align-items center
-        gap 5px
-        padding 3px 10px
-        font-size 0.7rem
-        line-height 1.6
-        color var(--third-text-color)
-        background var(--background-color-transparent-80)
-        border 1px solid var(--border-color)
-        border-radius $redefine-border-radius-medium
-        pointer-events none
-        user-select none
-
-        i
-          font-size 0.65rem
-
       // ── Meta row ─────────────────────────────────────────────────────────
       // Every entry is one inline-flex unit, so there is no collapsed whitespace
       // between an icon and its text for a line break to land on. Wrapping

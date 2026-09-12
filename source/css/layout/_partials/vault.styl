@@ -54,6 +54,13 @@ $vault-radius = 14px
 // invert, so neither may what sits on it.
 $vault-badge-ink = #fff
 
+// Pinned, for the same reason and by the same rule: gold does not invert either,
+// because the picture under it does not. Dark ink on this gold clears 9:1 in
+// both modes, which a theme token pair — light gold in one, dark gold in the
+// other — could not promise over a photograph.
+$vault-badge-gold = #F5B721
+$vault-badge-gold-ink = #3D2900
+
 .vault-badge
   position absolute
   top 10px
@@ -100,6 +107,44 @@ $vault-badge-ink = #fff
   i, span
     color var(--box-slate-text)
 
+.vault-badge.is-sticky,
+.vault-badge.is-sticky.vault-badge
+  background $vault-badge-gold
+  color $vault-badge-gold-ink
+
+  i, span
+    color $vault-badge-gold-ink
+
+// The stack a tile's badges sit in. Pinned and encrypted are independent facts,
+// so a tile may wear two — and two badges each absolutely positioned at the same
+// corner are one badge as far as the reader is concerned. The BOX is placed and
+// the badges inside it are laid out in flow.
+//
+// It wraps and is bounded by the tile: two long translated labels on a narrow
+// phone tile would otherwise run off the picture.
+.home-article-badges
+  position absolute
+  top 10px
+  left 10px
+  z-index 3
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 6px
+  max-width "calc(100% - %s)" % 20px
+
+  .vault-badge
+    position static
+
+  // No cover to sit on: the stack joins the head's flow instead, where an
+  // overlay would land on the running numeral and the title. The head is a flex
+  // COLUMN, so its cross axis is the width — left alone the stack stretches the
+  // whole text column.
+  &.is-inline
+    position static
+    align-self flex-start
+    max-width 100%
+
 // In flow, for a card with no picture to sit on: the home tile with no cover,
 // where the body starts at the tile's top edge, and the album card with no
 // thumbnail, which is one 64px row of avatar and text. An overlay there lands on
@@ -107,12 +152,6 @@ $vault-badge-ink = #fff
 .vault-badge.is-inline
   position static
   flex-shrink 0
-
-  // The tile's head is a flex COLUMN, so the cross axis is the width: left
-  // alone the badge stretches the whole text column. The album row is a flex
-  // ROW and centres it, which is what that one wants.
-  .home-article-head > &
-    align-self flex-start
 
 .home-article-item.is-vault
   position relative
@@ -316,9 +355,16 @@ $vault-badge-ink = #fff
   i
     font-size 0.66rem
 
+  // The four states a card can also be in wear EXACTLY what `.vault-badge`
+  // wears on the home tile, down to the literal inks: the console and the front
+  // page are two views of one library, and a reader who learns that red means
+  // encrypted on one should not have to learn indigo on the other.
   &.is-encrypted
-    background var(--box-indigo-bg)
-    color var(--box-indigo-text)
+    background var(--primary-color)
+    color $vault-badge-ink
+
+    i
+      color $vault-badge-ink
 
   &.is-draft
     background var(--box-amber-bg)
@@ -328,13 +374,18 @@ $vault-badge-ink = #fff
     background var(--box-slate-bg)
     color var(--box-slate-text)
 
+  &.is-sticky
+    background $vault-badge-gold
+    color $vault-badge-gold-ink
+
+    i
+      color $vault-badge-gold-ink
+
+  // No home tile makes this statement — an album is a kind of item, not a state
+  // an article can be in — so it is the one chip here with nothing to match.
   &.is-album
     background var(--box-teal-bg)
     color var(--box-teal-text)
-
-  &.is-sticky
-    background var(--box-blue-bg)
-    color var(--box-blue-text)
 
   // The readers count, alongside the state chips rather than below them: how
   // many people can open a post is part of what state it is in.

@@ -309,7 +309,7 @@ management:
   p_album: Album
   p_draft: Draft
   p_unpublished_tag: Unpublished
-  p_sticky: Pinned
+  p_sticky: Sticky
   p_untitled: Untitled
   p_empty: Nothing matches this filter.
   p_unpublish: Unpublish

@@ -157,7 +157,7 @@ function build(hexo, sealed, albums, prefix) {
       updated: post.updated ? post.updated.toISOString() : null,
     };
 
-    const target = post.supersedes ? byPermalink.get(normalize(post.supersedes)) : null;
+    const target = entry.supersedes ? byPermalink.get(normalize(entry.supersedes)) : null;
     if (target) {
       target.draft = draft;
       continue;

@@ -19,6 +19,13 @@
     const hasCover = !!(cover || asset);
     const accent = coverAccent(post);
     const tier = t ? t.tier : "standard";
+    // Every statement a tile makes about itself, in one stack. Pinned and
+    // encrypted are independent facts and a post can carry both, so they are a
+    // list rather than a branch — two absolutely-positioned badges would print
+    // on top of each other, which is what a single `else if` was hiding.
+    const badges = [];
+    if (post.sticky) badges.push({ badgeKind: "sticky" });
+    if (vault) badges.push({ isDraft: post.draft === true, supersedes: post.supersedes });
     const style = [
         bento && t ? bentoStyle(t) : "",
         accent ? "--tile-accent:" + accent : "",
@@ -32,11 +39,9 @@
         cover puts it in the flow of the head instead (below): the body starts at
         the tile's own top edge there, so an overlay lands on the running numeral
         and the title. %>
-    <% if (vault && hasCover) { %>
-        <%- partial('components/vault-badge', { isDraft: post.draft === true, supersedes: post.supersedes }) %>
-    <% } else if (!vault && post.sticky) { %>
-        <div class="home-article-sticky-badge">
-            <i class="fa-regular fa-thumbtack"></i><%- __('sticky') %>
+    <% if (badges.length && hasCover) { %>
+        <div class="home-article-badges">
+            <% badges.forEach((badge) => { %><%- partial('components/vault-badge', badge) %><% }); %>
         </div>
     <% } %>
 
@@ -63,8 +68,10 @@
             excerpt is sized from what is left over, so a phantom 0.9rem is a
             line of summary that silently disappears. %>
         <div class="home-article-head">
-            <% if (vault && !hasCover) { %>
-                <%- partial('components/vault-badge', { extra: 'is-inline', isDraft: post.draft === true, supersedes: post.supersedes }) %>
+            <% if (badges.length && !hasCover) { %>
+                <div class="home-article-badges is-inline">
+                    <% badges.forEach((badge) => { %><%- partial('components/vault-badge', Object.assign({ extra: 'is-inline' }, badge)) %><% }); %>
+                </div>
             <% } %>
 
             <% if (post.categories.length && theme.home.categories.enable === true) { %>

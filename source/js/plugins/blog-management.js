@@ -735,14 +735,20 @@ function renderPostsShell(section) {
     <ul class="bm-post-list"></ul>`;
 }
 
-/** Which chips a row wears. Order is fixed so a column of rows reads down. */
+/**
+ * Which chips a row wears — the same icons, the same words and the same order
+ * the home tile's badge stack uses (layout/components/vault-badge), so the two
+ * surfaces are one vocabulary rather than two that happen to overlap. A row can
+ * say more than a tile can: a published encrypted post with a draft in front of
+ * it wears both, where the tile shows only the version being read.
+ */
 function postFlags(row) {
   const flags = [];
+  if (row.sticky) flags.push(["sticky", "fa-thumbtack", t("p_sticky", "Sticky")]);
   if (row.kind === "album") flags.push(["album", "fa-images", t("p_album", "Album")]);
   if (row.encrypted) flags.push(["encrypted", "fa-lock-keyhole", t("v_badge", "Encrypted")]);
   if (row.draft) flags.push(["draft", "fa-pen-nib", t("p_draft", "Draft")]);
   if (!row.published) flags.push(["unpublished", "fa-eye-slash", t("p_unpublished_tag", "Unpublished")]);
-  if (row.sticky) flags.push(["sticky", "fa-thumbtack", t("p_sticky", "Pinned")]);
   return flags;
 }
 
@@ -803,7 +809,7 @@ function postRowHTML(row) {
   const bubbles = postFlags(row)
     .map(
       ([kind, icon, label]) =>
-        `<span class="bm-bubble is-${kind}"><i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHTML(
+        `<span class="bm-bubble is-${kind}"><i class="fa-regular ${icon}" aria-hidden="true"></i>${escapeHTML(
           label
         )}</span>`
     )
@@ -814,7 +820,7 @@ function postRowHTML(row) {
   // zero that would read as "nobody can open this".
   const readerBubble = grant
     ? `<span class="bm-bubble is-readers" data-empty="${readers ? "0" : "1"}">
-         <i class="fa-solid fa-user-lock" aria-hidden="true"></i>
+         <i class="fa-regular fa-user-lock" aria-hidden="true"></i>
          ${
            state.posts.loading
              ? `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`
