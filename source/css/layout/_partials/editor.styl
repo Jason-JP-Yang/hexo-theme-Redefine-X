@@ -1628,6 +1628,20 @@ $ed-pop-h = 620px
 // `width`/`height` attributes carry the intrinsic ratio, so the box is the
 // right shape before the bytes arrive; `--shot-w` stops a 200px thumbnail being
 // blown up across a 600px pane.
+//
+// ── Why the attributes are NOT overridden with `auto` ───────────────────────
+//
+// They used to be, and that is what made every click look like a fresh
+// skeleton being inserted: `width: auto` on an element with no `src` yet is
+// ZERO, so the box the attributes describe did not exist while the picture was
+// being fetched — and for a sealed one, which cannot even be requested until
+// its bytes are decrypted, that was the whole wait. The pane stood collapsed
+// and then the picture arrived all at once.
+//
+// Left alone, the attributes give the element a definite box in every state,
+// decoded or not, and CSS 2.1 §10.4 shrinks a replaced element's width and
+// height TOGETHER against the two caps below — so the box the skeleton holds is
+// the box the picture lands in, to the pixel.
 .ed-pick-stage
   display flex
   justify-content center
@@ -1639,18 +1653,31 @@ $ed-pop-h = 620px
 
   > img
     display block
-    width auto
-    height auto
     max-width css-min(100%, var(--shot-w, 100%))
     max-height 100%
     border-radius 10px
     transition opacity $ed-fade
 
   // Until it decodes, the box it already occupies IS the skeleton — the theme's
-  // own shimmer, on the element that is about to hold the picture.
+  // own shimmer, on the element that is about to hold the picture. The element
+  // is never rebuilt between selections, so the shimmer is already standing
+  // when the next picture is chosen; assets.js owns `data-ready` precisely so a
+  // failed first route keeps it here while the repository is asked.
   > img[data-ready="0"]
     background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
     animation ed-shot-wait 1.5s ease-in-out infinite
+
+  // Every route has been tried. `src` is cleared rather than left pointing at a
+  // 404, so what stands in the box is the file's name, not the browser's
+  // broken-picture glyph.
+  > img[data-ready="err"]
+    padding 0 12px
+    background var(--third-background-color)
+    color var(--third-text-color)
+    font-size 0.72rem
+    line-height 1.6
+    text-align center
+    overflow-wrap anywhere
 
 // Nothing chosen: the hint is the whole pane rather than one line pinned to
 // the top of it.

@@ -38,7 +38,7 @@ import {
   parseFrontMatter,
   setFrontMatterKey,
 } from "./markdown.js";
-import { closeDialogs, createStage, forgetTree, openAsk, openPicker, openSheet, siteAddress } from "./picker.js";
+import { closeDialogs, createStage, forgetTree, noteCommitted, openAsk, openPicker, openSheet, siteAddress } from "./picker.js";
 import { holdTOC, releaseTOC, scheduleTOC } from "./toc.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
@@ -1930,13 +1930,16 @@ async function doSave(mode) {
 
     const result = await session.save(state.doc, mode, state.pending, state.vaultChoice, state.stage);
 
+    // The picture browser's tree is the BUILD's, and the build that will name
+    // these has not run yet. Handing them over rebuilds the tree AND keeps them
+    // in it until it has. Before `pending` is emptied, which is where they are.
+    noteCommitted(state.pending, state.stage);
     for (const asset of state.pending) URL.revokeObjectURL(asset.url);
     state.pending = [];
     // Settled, not cleared. The commit carried the note; the picture itself is
     // moved by the build, so the mapping is still the only thing that knows
     // where the bytes are until that build lands.
     state.stage.settle();
-    forgetTree();
     state.dirty = false;
 
     // Edited blocks STAY dirty. Their `src` is the text they were parsed from

@@ -49,14 +49,27 @@
  */
 
 import * as repo from "./repo.js";
+import { forgetAssets } from "./assets.js";
+import { forgetGrants } from "./session.js";
+import { forgetTree } from "./picker.js";
 
 let holders = 0;
 let wired = false;
 
-/** Erase now, whatever anybody is holding. */
+/**
+ * Erase now, whatever anybody is holding.
+ *
+ * The repository tokens are not the only thing this page was lent. The post
+ * keys came from the same session, and the picture browser holds a listing of
+ * every file in the repository — including the names of the ones an encrypted
+ * post withheld. All of it goes at the same moment and for the same reason.
+ */
 export function drop() {
   holders = 0;
   repo.forget();
+  forgetGrants();
+  forgetAssets();
+  forgetTree();
 }
 
 /** This surface needs the credentials. */

@@ -574,12 +574,18 @@ const queue = new TaskQueue(2);
 // Rebuilt per build. `indexedKeys` is what survives the prune; `uncompressed`
 // is every image this build will publish in its original format, whatever the
 // reason; `empty` is the ones with no bytes at all; `dims` is the intrinsic
-// size of EVERY source image this build saw, transcoded or not.
+// size of EVERY source image this build saw, transcoded or not, and `weights`
+// is what each of those weighs on disk.
 let index = null;
 const indexedKeys = new Set();
 const uncompressed = [];
 const empty = [];
 const dims = new Map();
+const weights = new Map();
+// The theme ships pictures of its own, and they land under the same `images/`
+// key as the site's. They are published and usable, but they are not in the
+// content repository, so the editor's browser must not offer to rename them.
+const themeOwned = new Set();
 
 /**
  * The source image's own pixels, read from its header.
@@ -624,6 +630,8 @@ async function scanAndProcessAllImages() {
   uncompressed.length = 0;
   empty.length = 0;
   dims.clear();
+  weights.clear();
+  themeOwned.clear();
 
   queue.concurrency = config.MAX_CONCURRENCY;
   const mode = skipAvif() ? `cache only (${skipReason()})` : config.encoder;
@@ -682,7 +690,7 @@ function transcodeMap() {
 }
 
 /**
- * The manifest body: `source path -> [published route, width, height]`.
+ * The manifest body: `source path -> [published route, width, height, bytes]`.
  *
  * EVERY source image is listed, not only the compressed ones. There are exactly
  * two published states — transcoded, where the product's route is the only one
@@ -690,6 +698,13 @@ function transcodeMap() {
  * cannot tell them apart by looking at a path. Listing only the transcoded half
  * meant every other picture fell through to a guess, which is how an
  * un-compressed image ended up pointing at an AVIF that was never written.
+ *
+ * Because it names every one of them, this file is also the picture browser's
+ * FILE TREE. The editor used to walk the repository folder by folder over the
+ * Gitea API — ten listings, each behind its own CORS preflight, half a minute
+ * before the dialogue had anything in it. The fourth element is what let that
+ * go: a file manager has to show what a file weighs, and the browser has no
+ * other way to learn it without fetching the picture itself.
  *
  * Sizes are the source file's own, measured during the scan. The lazyload pass
  * is consulted only as a second opinion for anything the scan could not read.
@@ -701,12 +716,19 @@ function manifestBody(hidden) {
   const map = transcodeMap();
   const out = {};
 
-  const keys = new Set([...dims.keys(), ...Object.keys(map)]);
+  // `weights` too, so an image the measurement could not read is still named:
+  // the picture browser is built from this list, and a file missing from it is
+  // a file the author cannot reach.
+  const keys = new Set([...dims.keys(), ...weights.keys(), ...Object.keys(map)]);
   for (const rel of keys) {
     const route = map[rel] || rel;
     if (hidden && hidden.has(route)) continue;
     const wh = dims.get(rel) || sizes.get(route) || sizes.get(rel) || null;
-    out[rel] = [route, wh ? wh.width : 0, wh ? wh.height : 0];
+    const row = [route, wh ? wh.width : 0, wh ? wh.height : 0, weights.get(rel) || 0];
+    // A fifth element only where it is true: shipped by the theme, so the
+    // editor lists it nowhere and the file stays the same length everywhere else.
+    if (themeOwned.has(rel)) row.push(1);
+    out[rel] = row;
   }
 
   const sorted = {};
@@ -735,7 +757,11 @@ hexo.extend.helper.register("avifManifestBody", manifestBody);
  * whose route this file had withdrawn.
  */
 function publishManifest() {
-  if (!hexo.theme.config.backend?.vault_enable) return;
+  // The vault is not the only thing that reads it: the editor's picture browser
+  // is built from this file whether or not any post is encrypted, so the gate is
+  // "there is a backend" rather than "there are sealed posts".
+  const backend = hexo.theme.config.backend || {};
+  if (!backend.vault_enable && !backend.api_url) return;
 
   const body = manifestBody(null);
   hexo.route.set("build/manifest.json", () => body);
@@ -877,10 +903,12 @@ async function processFile(absPath, config) {
   if (!isBitmap && !isSvg) return;
 
   let relPath;
+  let fromTheme = false;
   if (absPath.startsWith(hexo.source_dir)) {
     relPath = absPath.slice(hexo.source_dir.length);
   } else if (hexo.theme_dir && absPath.startsWith(path.join(hexo.theme_dir, "source"))) {
     relPath = absPath.slice(path.join(hexo.theme_dir, "source").length);
+    fromTheme = true;
   } else {
     return;
   }
@@ -889,13 +917,16 @@ async function processFile(absPath, config) {
   relPath = relPath.replace(/\\/g, "/");
 
   if (relPath.startsWith("build/")) return;
+  if (fromTheme) themeOwned.add(relPath);
 
   // Before every exit below: an excluded image and an image the encoder is off
   // for are both still published, and both still need a size in the manifest.
   await measure(relPath, absPath);
 
   try {
-    if (fs.statSync(absPath).size === 0) empty.push(relPath);
+    const stat = fs.statSync(absPath);
+    weights.set(relPath, stat.size);
+    if (stat.size === 0) empty.push(relPath);
   } catch (e) {
     /* unreadable is the scan's problem, not this check's */
   }

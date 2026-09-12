@@ -32,6 +32,7 @@ import {
   openText,
   openJSON,
   fetchSealed,
+  registerAssetKey,
   vaultPrefix,
   siteRoot,
 } from "../../tools/vaultCrypto.js";
@@ -56,11 +57,15 @@ function repoPath(p) {
 }
 
 let grants = null;
+let sealedAll = null;
 
 /* ─── grants ───────────────────────────────────────────────────────────────── */
 
 async function loadGrants(force) {
   if (grants && !force) return grants;
+  // A re-fetch replaces the grant objects, and the sealed index is built out of
+  // the metadata cached on them.
+  sealedAll = null;
   if (!window.blogAuth) return (grants = []);
 
   const session = await window.blogAuth.getSession();
@@ -97,6 +102,61 @@ async function metaOf(grant) {
     grant.meta = null;
   }
   return grant.meta;
+}
+
+/**
+ * Every sealed picture in the vault, under both of the names it answers to.
+ *
+ * The public manifest deliberately omits them — a withheld image's FILE NAME is
+ * the one piece of plaintext encryption would otherwise leave behind — so
+ * without this the picture browser simply could not see a third of the library,
+ * and previewing one meant asking the site for a route the build withdrew: a
+ * 404, the browser's broken-picture glyph, and only then the slow fall back to
+ * the repository. That is the flash this removes.
+ *
+ * It costs NO requests. `listDocuments` has already fetched every grant and
+ * opened every `c.bin`, and both are cached on the grant objects; this walks
+ * what is already in hand. Registering the key for each hash is what lets
+ * `assetURL` open a picture belonging to a post other than the open one, which
+ * is the whole point of a browser over the whole library.
+ *
+ * Keyed by published route AND source path, the two spellings `noteAsset`
+ * writes, so a caller with either one finds it.
+ *
+ * @returns {Promise<Object<string, {hash: string, width: number, height: number}>>}
+ */
+export async function sealedIndex() {
+  if (sealedAll) return sealedAll;
+
+  const granted = await loadGrants(false);
+  const metas = await Promise.all(granted.map(metaOf));
+  const out = {};
+
+  granted.forEach((grant, i) => {
+    const meta = metas[i];
+    if (!meta || !meta.assets) return;
+    const sizes = meta.sizes || {};
+    for (const [name, hash] of Object.entries(meta.assets)) {
+      if (!hash) continue;
+      const wh = sizes[name] || [];
+      out[name] = { hash, width: wh[0] || 0, height: wh[1] || 0 };
+      registerAssetKey(hash, grant.raw);
+    }
+  });
+
+  return (sealedAll = out);
+}
+
+/**
+ * Drop the post keys.
+ *
+ * Same bargain as the repository tokens: they live in this module's closure and
+ * nowhere else, and they go the moment the editor does. credentials.js is the
+ * complete list of events that reach here.
+ */
+export function forgetGrants() {
+  grants = null;
+  sealedAll = null;
 }
 
 /* ─── the document list ────────────────────────────────────────────────────── */

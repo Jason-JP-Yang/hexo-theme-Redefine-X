@@ -26,27 +26,53 @@
  * question, because a picture on the canvas is loaded from the site.
  */
 
-import { assetURL, registerAssetKey } from "../../tools/vaultCrypto.js";
+import { assetURL, dropAssetKeys, registerAssetKey } from "../../tools/vaultCrypto.js";
 import { blobURL } from "./repo.js";
 
 let manifest = null;
 let sealed = null;
 let sealedSizes = null;
+let vaultIndex = null;
 
 export function siteRoot() {
   return String((window.config && window.config.root) || "/").replace(/\/+$/, "");
 }
 
 /** Fetched once per editing session; a miss simply means nothing is rewritten. */
-export async function loadManifest() {
-  if (manifest) return manifest;
+export async function loadManifest(force) {
+  if (manifest && !force) return manifest;
   try {
-    const res = await fetch(`${siteRoot()}/build/manifest.json`, { cache: "no-cache" });
+    const res = await fetch(`${siteRoot()}/build/manifest.json`, {
+      cache: force ? "reload" : "no-cache",
+    });
     manifest = res.ok ? await res.json() : {};
   } catch (err) {
     manifest = {};
   }
   return manifest;
+}
+
+/** `source path -> [route, width, height, bytes]`, for callers that want it all. */
+export function manifestRows() {
+  return manifest || {};
+}
+
+/**
+ * Erase what this module learned, down to the decryption keys.
+ *
+ * The manifest is public and the sealed maps are not: the vault-wide index
+ * carries a key for every withheld picture on the site, and it was registered
+ * for the browser's benefit. It goes with the session. The OPEN DOCUMENT's own
+ * hashes are left alone — the page behind the editor is still showing that
+ * article, and plugins/vault.js registered the same keys for it.
+ */
+export function forgetAssets() {
+  if (vaultIndex) {
+    const mine = new Set(sealed ? Object.values(sealed) : []);
+    dropAssetKeys(Object.values(vaultIndex).map((row) => row.hash).filter((hash) => !mine.has(hash)));
+  }
+  manifest = null;
+  vaultIndex = null;
 }
 
 /**
@@ -58,6 +84,29 @@ export function setVaultAssets(grant, assets, sizes) {
   sealedSizes = sealed ? sizes || null : null;
   if (!sealed) return;
   for (const hash of Object.values(sealed)) registerAssetKey(hash, grant.raw);
+}
+
+/**
+ * Every sealed image in the vault, not just this document's.
+ *
+ * The picture browser is a browser over the whole library, so it previews
+ * pictures belonging to posts other than the open one — and a withheld image is
+ * published at NO plaintext route, so asking the site for one is a guaranteed
+ * 404 followed by the browser's broken-picture glyph. This is what stops that
+ * request being made: consulted only when the public manifest does not list the
+ * image, which is exactly the withheld case. See session.js `sealedIndex`.
+ */
+export function setVaultIndex(rows) {
+  vaultIndex = rows && Object.keys(rows).length ? rows : null;
+}
+
+/**
+ * The vault-wide record for an image the public manifest does not carry.
+ * `at` is already where the bytes ARE — see `here`, which must not run twice.
+ */
+function withheld(at) {
+  if (!vaultIndex || record(at)) return null;
+  return vaultIndex[routeFor(at)] || vaultIndex[manifestKey(at)] || null;
 }
 
 /** `/source/images/a.png`, `images/a.png`, `/images/a.png` → `images/a.png`. */
@@ -104,7 +153,7 @@ function here(src) {
   }
 }
 
-/** `[route, width, height]`, or null when the build never touched this image. */
+/** `[route, width, height, bytes]`, or null when the build never touched this image. */
 function record(src) {
   const row = manifest && manifest[manifestKey(src)];
   return Array.isArray(row) ? row : null;
@@ -127,15 +176,14 @@ export function imageSize(src) {
   if (row && row[1] && row[2]) return { width: row[1], height: row[2] };
 
   // A withheld image is not in the public manifest at all; its size travels in
-  // the post's own sealed metadata instead.
+  // the post's own sealed metadata instead — or, for one belonging to another
+  // post, in the vault-wide index the browser builds from every grant.
   const key = manifestKey(at);
   const wh = sealedSizes && (sealedSizes[routeFor(at)] || sealedSizes[key]);
-  return wh && wh[0] ? { width: wh[0], height: wh[1] } : null;
-}
+  if (wh && wh[0]) return { width: wh[0], height: wh[1] };
 
-/** True once the build has an AVIF (or optimised SVG) for this source image. */
-export function isTranscoded(src) {
-  return !!record(src);
+  const row2 = withheld(at);
+  return row2 && row2.width ? { width: row2.width, height: row2.height } : null;
 }
 
 /** `/images/a.png` → `source/images/a.png`, which is what the repository calls it. */
@@ -186,8 +234,11 @@ export function resolveAsset(src, list) {
  */
 function sealedHash(src, list) {
   const at = here(src);
-  if (!sealed || staged(at, list) || /^(blob:|data:|https?:|\/\/)/i.test(at)) return null;
-  return sealed[routeFor(at)] || sealed[manifestKey(at)] || null;
+  if (staged(at, list) || /^(blob:|data:|https?:|\/\/)/i.test(at)) return null;
+  const mine = sealed && (sealed[routeFor(at)] || sealed[manifestKey(at)]);
+  if (mine) return mine;
+  const other = withheld(at);
+  return (other && other.hash) || null;
 }
 
 // What the build reserves for an image it could not measure.
@@ -242,13 +293,28 @@ export function buildPreloader(src, alt, list) {
  * what the reader would be left looking at. So `src` is cleared and filled in
  * when the bytes arrive; `assetURL` fetches and decrypts each blob once however
  * many callers ask.
+ *
+ * `data-ready` is set here and nowhere else — "0" while there is nothing to
+ * show, "1" once it decodes, "err" when every route has been tried. It belongs
+ * here because only this function knows a failure is not final: the repository
+ * retry below clears `src` and asks again, and a caller watching `error` called
+ * that the end and dropped its skeleton onto a picture that was about to
+ * arrive. Clearing `src` first is what takes the browser's broken-picture glyph
+ * out of the box while that second question is being asked.
  */
 export function bindImage(img, src, list) {
   if (!img) return;
   const value = String(src || "");
 
+  img.dataset.ready = "0";
+  img.onload = () => (img.dataset.ready = "1");
+  delete img.dataset.edSealed;
+  delete img.dataset.edSrc;
+
   if (!value) {
+    img.onerror = null;
     img.removeAttribute("src");
+    img.dataset.ready = "err";
     return;
   }
 
@@ -258,19 +324,25 @@ export function bindImage(img, src, list) {
     img.dataset.edSrc = value;
     img.onerror = () => {
       img.onerror = null;
+      img.removeAttribute("src");
       repoURL(value, list).then((url) => {
-        if (url && img.dataset.edSrc === value) img.src = url;
+        if (img.dataset.edSrc !== value) return;
+        if (url) img.src = url;
+        else img.dataset.ready = "err";
       });
     };
     img.src = resolveAsset(value, list);
     return;
   }
 
+  img.onerror = null;
   img.removeAttribute("src");
   img.dataset.edSealed = hash;
   assetURL(hash).then((url) => {
     // The element may have been re-pointed at something else while we waited.
-    if (url && img.dataset.edSealed === hash) img.src = url;
+    if (img.dataset.edSealed !== hash) return;
+    if (url) img.src = url;
+    else img.dataset.ready = "err";
   });
 }
 

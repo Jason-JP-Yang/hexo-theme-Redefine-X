@@ -554,10 +554,10 @@ editor:
   pick_unsaved: 未提交
   pick_none: 这里还没有内容
   pick_hint: 选择一张图片，或把它拖到文件夹里移动。
-  pick_loading: 正在读取仓库
-  pick_walking: 正在读取文件树
+  pick_loading: 正在读取文件树
   pick_name: 文件名
   pick_where: 所在文件夹
   pick_dims: 尺寸
   pick_bytes: 大小
+  pick_served: 实际路径
   pick_moved: 移动自

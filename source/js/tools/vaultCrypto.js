@@ -210,6 +210,23 @@ export async function revealAssets(root, rawPostKey) {
   );
 }
 
+/**
+ * Forget the key for these sealed images, and any blob already opened with it.
+ *
+ * Scoped rather than wholesale, because two parties register keys here: the
+ * page, for the article a reader has unlocked, and the editor, for the whole
+ * library. The editor leaving must not take the reader's article down with it.
+ */
+export function dropAssetKeys(hashes) {
+  for (const hash of hashes || []) {
+    assetKeys.delete(hash);
+    const url = assetCache.get(hash);
+    if (url) URL.revokeObjectURL(url);
+    assetCache.delete(hash);
+    assetInflight.delete(hash);
+  }
+}
+
 export function dropAssetCache() {
   assetCache.forEach((url) => URL.revokeObjectURL(url));
   assetCache.clear();
