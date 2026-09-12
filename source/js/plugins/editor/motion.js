@@ -174,10 +174,10 @@ export async function crossFade(el, mutate) {
     )
   );
 
-  const from = el.offsetHeight;
+  const from = measureFlow(el);
   await mutate();
   await nextFrame();
-  const to = el.offsetHeight;
+  const to = measureFlow(el);
 
   el.getAnimations().forEach((a) => a.cancel());
 
@@ -187,10 +187,164 @@ export async function crossFade(el, mutate) {
       { duration: FADE_MS, easing: "ease-out" }
     ),
   ];
-  if (from !== to) {
-    runs.push(el.animate([{ height: from + "px" }, { height: to + "px" }], { duration: MORPH_MS, easing: EASE }));
+  // The margins travel with the height for the same reason they do in `enter`:
+  // an explicit height stops the contents' own margins collapsing out of the
+  // box, so animating the height alone moved everything below by that difference
+  // for the length of the swap and put it back at the end of it.
+  const moved = from.height !== to.height || from.mt1 !== to.mt1 || from.mb1 !== to.mb1;
+  if (moved) {
+    el.style.overflow = "clip";
+    runs.push(
+      el.animate(
+        [
+          { height: from.height + "px", marginTop: from.mt1 + "px", marginBottom: from.mb1 + "px" },
+          { height: to.height + "px", marginTop: to.mt1 + "px", marginBottom: to.mb1 + "px" },
+        ],
+        { duration: MORPH_MS, easing: EASE }
+      )
+    );
   }
   await Promise.all(runs.map(settle));
+  if (moved) el.style.overflow = "";
+}
+
+/**
+ * What a box COSTS the page, and the two margins that hand that cost back.
+ *
+ * A height animation alone cannot open or close a gap, because a box's height
+ * is not what it occupies. Three things sit outside it:
+ *
+ *   · its own margins, which on the document bar are 22px and 14px of real
+ *     space that the height animation never touched — they landed whole, in one
+ *     frame, the instant the bar was inserted;
+ *   · the flex `gap` on either side of it, another 26px each in the console's
+ *     column, which landed the same way;
+ *   · the margins of what is INSIDE it. `.ed-block` is a bare wrapper with no
+ *     padding and no border, so a paragraph's 1rem margins collapse straight
+ *     through it — they are the block's outer margins, and its `offsetHeight`
+ *     does not include them.
+ *
+ * That last one is also why the old animation ended with a jolt. `overflow:
+ * hidden` makes a box a block formatting context, and a formatting context does
+ * not let its children's margins collapse out — so pinning the block for the
+ * animation moved roughly 2rem of margin from OUTSIDE the box to INSIDE it, and
+ * releasing the pin at the end moved it back, in one frame, under the reader's
+ * cursor. How much depended entirely on what the block's neighbours were: a full
+ * 32px between two paragraphs, 24px against the tail's smaller gap, something
+ * else again inside a note — which is why no two insertions jumped alike.
+ * `overflow: clip` does the same clipping and establishes no formatting context,
+ * so the box keeps the shape it will keep.
+ *
+ * So the cost is MEASURED, by asking the page what moves, and then given back
+ * through the margins — which are the only properties that can cancel space the
+ * box does not contain. Four readings, each correcting the last:
+ *
+ *   `mt1`/`mb1`  pinned at full height, the box costs exactly what it costs at
+ *                rest — so the animation's final frame IS the resting layout and
+ *                clearing the inline styles changes nothing.
+ *   `mt0`/`mb0`  collapsed, the box costs NOTHING — its top edge sits exactly
+ *                where the following content was, and that content has not
+ *                moved a pixel.
+ *
+ * Between those two the travel is continuous, and the gap under the box stays
+ * the gap it will end up being for the whole of it.
+ */
+function flowProbe(el) {
+  let next = el.nextElementSibling;
+  while (next) {
+    // `offsetTop` is 0 on a box that is not rendered, says nothing about what is
+    // above it when the box is out of the flow, and reports where a sticky box
+    // is STUCK rather than where it belongs. The article is followed by nothing
+    // but `.ed-put-away`, so this is the ordinary case, not the exotic one.
+    const style = getComputedStyle(next);
+    if (style.display !== "none" && (style.position === "static" || style.position === "relative")) return next;
+    next = next.nextElementSibling;
+  }
+  return null;
+}
+
+/**
+ * What the box below an insertion point measures right now.
+ *
+ * Taken by the caller BEFORE the new block is in the tree, because that is the
+ * one reading the measurement below cannot take for itself: a block pulled out
+ * of the flow is still a SIBLING, so `:first-child` and `:last-of-type` have
+ * already moved to it — and those three rules in editor.styl are worth a whole
+ * paragraph margin on the block that used to hold them. `before` is whatever
+ * the new block will be inserted in front of.
+ */
+export function flowCost(parent, before) {
+  return before ? before.offsetTop : parent.offsetHeight;
+}
+
+function measureFlow(el, gone) {
+  const parent = el.parentElement;
+  const probe = flowProbe(el);
+  // What the box costs, in one number: where the next thing starts, or failing
+  // that how tall the parent is.
+  const cost = probe ? () => probe.offsetTop : () => (parent ? parent.offsetHeight : 0);
+
+  const own = getComputedStyle(el);
+  const natMT = parseFloat(own.marginTop) || 0;
+  const natMB = parseFloat(own.marginBottom) || 0;
+  const back = {
+    height: el.style.height,
+    overflow: el.style.overflow,
+    marginTop: el.style.marginTop,
+    marginBottom: el.style.marginBottom,
+    position: el.style.position,
+  };
+
+  // Every reading below is a FLOW reading, and a stuck sticky box — the document
+  // bar, on a console that is already scrolled — reports where it is stuck
+  // instead. `relative` with no offsets is the same box in the same place minus
+  // the stickiness, so the flow is legible again; `back` puts it back.
+  const inFlow = own.position === "sticky" ? "relative" : back.position;
+  el.style.position = inFlow;
+
+  const height = el.offsetHeight;
+  const topAtRest = el.offsetTop;
+  const costAtRest = cost();
+
+  // Taken out of the flow rather than hidden. `display: none` blurs whatever is
+  // focused inside the box, and a block is very often deleted from the caret
+  // that is still sitting in it.
+  el.style.position = "absolute";
+  const loose = cost();
+  el.style.position = inFlow;
+  const zero = gone == null ? loose : gone;
+
+  el.style.overflow = "clip";
+  el.style.height = height + "px";
+  el.style.marginTop = natMT + "px";
+  el.style.marginBottom = natMB + "px";
+  const mt1 = natMT + (topAtRest - el.offsetTop);
+  const mb1 = natMB + (costAtRest - cost());
+
+  el.style.height = "0px";
+  el.style.marginTop = mt1 + "px";
+  el.style.marginBottom = mb1 + "px";
+  // Without a probe there is nothing below to be overlapped, so the whole of the
+  // compensation goes on the bottom margin.
+  const mt0 = probe ? mt1 + (zero - el.offsetTop) : mt1;
+  el.style.marginTop = mt0 + "px";
+  const mb0 = mb1 + (zero - cost());
+
+  Object.assign(el.style, back);
+  return { height, mt0, mb0, mt1, mb1, loose };
+}
+
+function frames(flow) {
+  return [
+    { height: "0px", marginTop: flow.mt0 + "px", marginBottom: flow.mb0 + "px", opacity: 0, filter: BLUR },
+    {
+      height: flow.height + "px",
+      marginTop: flow.mt1 + "px",
+      marginBottom: flow.mb1 + "px",
+      opacity: 1,
+      filter: "none",
+    },
+  ];
 }
 
 /**
@@ -200,56 +354,57 @@ export async function crossFade(el, mutate) {
  * equation and a code block all render asynchronously, and a height measured
  * before that finished is a height the block then jumps away from the instant
  * the animation ends. The block is held collapsed until it can be measured
- * truthfully, which is also why it never flashes at full size first: the inline
- * height goes back to `0` in the same tick it was cleared to measure, so the
- * browser has no frame in which to paint the open state.
+ * truthfully, and held at NO COST while it waits, so a diagram taking a second
+ * to draw does not hold the page open around an empty box. It never flashes at
+ * full size first either: everything between clearing the pin to measure and
+ * putting it back happens inside one task, so the browser has no frame in which
+ * to paint the open state.
  */
-export async function enter(el, ready) {
+export async function enter(el, ready, gone) {
   if (reduced()) return;
-  el.style.overflow = "hidden";
 
-  let height;
+  let flow = measureFlow(el, gone);
   if (ready) {
-    // Held shut while it renders, so it never flashes at full size first: the
-    // inline height goes back to `0` in the same tick it was cleared to
-    // measure, and the browser has no frame in which to paint the open state.
+    el.style.overflow = "clip";
     el.style.height = "0px";
+    el.style.marginTop = flow.mt0 + "px";
+    el.style.marginBottom = flow.mb0 + "px";
     await Promise.resolve(ready).catch(() => {});
     await nextFrame();
     el.style.height = "";
-    height = el.offsetHeight;
-    el.style.height = "0px";
-  } else {
-    // A paragraph knows its height the moment it exists, and waiting a frame
-    // for it would mean the caret landing in a box that has not opened yet.
-    height = el.offsetHeight;
+    el.style.marginTop = "";
+    el.style.marginBottom = "";
+    el.style.overflow = "";
+
+    // The caller's reading was absolute, and a block that took a second to draw
+    // itself has let the page move under it. What carries over is the DIFFERENCE
+    // that reading revealed — what the first/last selectors are worth — rather
+    // than the number, re-anchored to where the page is now.
+    const selectors = gone == null ? 0 : gone - flow.loose;
+    flow = measureFlow(el);
+    if (selectors) flow = measureFlow(el, flow.loose + selectors);
   }
 
-  const run = el.animate(
-    [
-      { height: 0, opacity: 0, filter: BLUR, marginBottom: 0 },
-      { height: height + "px", opacity: 1, filter: "none" },
-    ],
-    { duration: MORPH_MS, easing: EASE }
-  );
-  // Cleared while the animation owns the property, so there is no frame in
-  // which the inline `0` and the animation disagree.
+  el.style.overflow = "clip";
+  const run = el.animate(frames(flow), { duration: MORPH_MS, easing: EASE });
+  // Cleared while the animation owns them, so there is no frame in which the
+  // inline values and the animation disagree — and none left behind at the end,
+  // where the animation's last frame is already the resting layout.
   el.style.height = "";
+  el.style.marginTop = "";
+  el.style.marginBottom = "";
   await settle(run);
   el.style.overflow = "";
 }
 
-/** A block leaving. Resolves once it is safe to remove from the DOM. */
+/** A block leaving. Resolves once it is safe to remove from the DOM — by then it
+ *  costs the page nothing, so removing it moves nothing. */
 export async function exit(el) {
   if (reduced()) return;
+  const flow = measureFlow(el);
+  el.style.overflow = "clip";
   await settle(
-    el.animate(
-      [
-        { height: el.offsetHeight + "px", opacity: 1, filter: "none" },
-        { height: 0, opacity: 0, filter: BLUR, marginBottom: 0 },
-      ],
-      { duration: MORPH_MS, easing: EASE, fill: "forwards" }
-    )
+    el.animate(frames(flow).reverse(), { duration: MORPH_MS, easing: EASE, fill: "forwards" })
   );
 }
 

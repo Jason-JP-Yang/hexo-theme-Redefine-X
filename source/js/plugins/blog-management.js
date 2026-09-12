@@ -1094,8 +1094,9 @@ function barNotice(kind, text) {
  */
 function openBar() {
   const box = state.posts;
+  const opening = !box.bar;
 
-  if (!box.bar) {
+  if (opening) {
     const bar = document.createElement("div");
     bar.className = "ed-docbar bm-unpub";
     bar.innerHTML = `
@@ -1123,13 +1124,19 @@ function openBar() {
     bar.querySelector(".bm-unpub-x").addEventListener("click", () => closeBar());
     bar.querySelector(".bm-unpub-go").addEventListener("click", () => runUnpublish());
     bar.querySelector(".bm-unpub-backend").addEventListener("click", () => switchBackend());
-    enter(bar);
-    paintBackend();
   }
 
   const n = box.queue.length;
   box.bar.querySelector(".bm-unpub-count").textContent =
     `${n} ${t(n === 1 ? "p_unpub_one" : "p_unpub_many", n === 1 ? "post to withdraw" : "posts to withdraw")}`;
+
+  // Counted and labelled BEFORE it travels. `enter` measures the bar it is
+  // handed, and a bar that gains its line of text afterwards finishes its
+  // travel at a height it then has to correct in a single frame.
+  if (opening) {
+    enter(box.bar);
+    paintBackend();
+  }
   contentChanged();
 }
 

@@ -64,7 +64,7 @@ import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
-import { contentChanged, crossFade, enter, exit, flip, pop, toolbarIn, toolbarOut } from "./motion.js";
+import { contentChanged, crossFade, enter, exit, flip, flowCost, pop, toolbarIn, toolbarOut } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -451,7 +451,11 @@ async function activate(host) {
       // recovery stash and the page you would reload after a save all belonged
       // to the published copy while the text on screen was the draft's, and
       // which one a later save landed on depended on how you had arrived.
-      if (entry.draft && identity.source && entry.slug) {
+      //
+      // The test is the SLUG, not how the page named itself: an encrypted
+      // published post carries a slug of its own, so `identity.source` is empty
+      // and the redirect used to be skipped on exactly the page that needed it.
+      if (entry.draft && entry.slug && entry.slug !== identity.slug) {
         state.dirty = false;
         location.href = `${siteRoot()}${vaultPrefix()}/${entry.slug}/#edit`;
         return;
@@ -1204,22 +1208,32 @@ function insertBlock(block, anchorId, focus, box, where) {
   view.box = home;
 
   const next = home.views[index];
-  if (next) next.el.before(view.el);
-  else home.el.insertBefore(view.el, home.tail || null);
+  const anchor = next ? next.el : home.tail || null;
+  // Read while the box is still the box it was. `:first-child` and
+  // `:last-of-type` move to the new block the instant it is in the tree, and the
+  // margin they take off whichever block used to hold them is space that would
+  // otherwise arrive in one frame rather than over the length of the animation.
+  const gone = flowCost(home.el, anchor);
+
+  if (anchor) anchor.before(view.el);
+  else home.el.appendChild(view.el);
   home.views.splice(index, 0, view);
+
+  // Numbered and written back BEFORE it travels: a caption that gains a number
+  // afterwards is a height the animation has already finished arriving at.
+  renumberFigures();
+  writeBox(home);
+  markDirty();
 
   // `view.ready` is the block's own first paint where it has one — a diagram or
   // an equation renders asynchronously, and measuring before that finished is
   // what made a new block at the end of an article stutter and then snap to a
   // different height.
-  enter(view.el, view.ready).then(() => {
+  enter(view.el, view.ready, gone).then(() => {
     if (focus && view.focus) view.focus("start");
     contentChanged();
     refreshTOC();
   });
-  renumberFigures();
-  writeBox(home);
-  markDirty();
   return view;
 }
 

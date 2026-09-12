@@ -139,7 +139,13 @@ export async function listDocuments() {
     if (entry.path) vaultBySource.set(entry.path, entry);
   });
 
-  const shadowed = new Set(drafts.map((d) => d.supersedes).filter(Boolean));
+  // Keyed by the PUBLISHED FILE the draft stands in front of, not by permalink.
+  // A permalink needs a date, and a plain published post has none here — its
+  // front matter is never fetched — so every public row's permalink came out
+  // empty, matched nothing, and no published post was ever marked shadowed.
+  // Opening one then edited the published copy while the reader was being shown
+  // the draft, and saving forked a SECOND draft of the same article.
+  const shadowed = new Set(drafts.map(publishedPathOf).filter(Boolean));
   const out = [];
 
   for (const file of files) {
@@ -172,8 +178,7 @@ export async function listDocuments() {
   // A public post whose draft exists is marked rather than hidden: the admin
   // still needs to see that the published version is there and unchanged.
   for (const row of out) {
-    if (row.permalink === undefined) row.permalink = "";
-    if (!row.draft && shadowed.has(permalinkOf(row))) row.shadowed = true;
+    if (!row.draft && shadowed.has(row.path)) row.shadowed = true;
   }
 
   return out.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.path.localeCompare(b.path));
@@ -181,6 +186,21 @@ export async function listDocuments() {
 
 function titleFromName(name) {
   return name.replace(/\.md$/i, "");
+}
+
+/**
+ * The published post a draft stands in front of — as a FILE.
+ *
+ * `supersedes` is a permalink, and its last segment is the published post's
+ * filename stem: `permalinkOf` builds it from that very path. Matching on the
+ * whole permalink needs a date the public listing does not have; matching on
+ * the file needs nothing. This is also where a draft's body goes when it is
+ * published, which is why there is one function and not two.
+ */
+function publishedPathOf(entry) {
+  const stem = String(entry.supersedes || "").replace(/\/+$/, "").split("/").pop();
+  if (stem) return `${POSTS_DIR}/${stem}.md`;
+  return String(entry.path || "").replace(/\.draft\.md$/i, ".md");
 }
 
 /** Hexo's `:year/:month/:day/:title/`, read off the file rather than computed
@@ -200,21 +220,24 @@ export function permalinkOf(entry) {
  * page carries nothing else. A published post that already HAS a draft resolves
  * to the draft — editing the published copy instead would fork a second one,
  * and the reader is already being shown the draft's text.
+ *
+ * BOTH spellings resolve. The slug branch used to return whatever grant the page
+ * named and stop there, so an ENCRYPTED published post with a draft in front of
+ * it opened the published copy — the same confusion the path branch was written
+ * to prevent, reached by the other door.
  */
 export async function entryForPage({ source, slug }) {
+  const path = slug ? "" : repoPath(source);
+  if (!slug && !path) return null;
+
   const entries = await listDocuments();
+  const row = slug
+    ? entries.find((e) => e.slug === slug)
+    : entries.find((e) => e.path === path);
 
-  if (slug) return entries.find((e) => e.slug === slug) || null;
-
-  const path = repoPath(source);
-  if (!path) return null;
-
-  const row = entries.find((e) => e.path === path);
   if (!row) return null;
-  if (!row.shadowed) return row;
-
-  const link = permalinkOf(row);
-  return entries.find((e) => e.draft && e.supersedes === link) || row;
+  if (row.draft || !row.shadowed) return row;
+  return entries.find((e) => e.draft && publishedPathOf(e) === row.path) || row;
 }
 
 /** The post key for an id, after a mint has put it in D1. */
@@ -662,11 +685,7 @@ function titleOf(doc) {
 
 /** Where a draft's body belongs when it is published. */
 function findPublishTarget(doc, entry) {
-  if (entry.supersedes) {
-    const stem = String(entry.supersedes).replace(/\/+$/, "").split("/").pop();
-    if (stem) return `${POSTS_DIR}/${stem}.md`;
-  }
-  return doc.path.replace(/\.draft\.md$/i, ".md");
+  return publishedPathOf({ supersedes: entry.supersedes, path: doc.path });
 }
 
 function localStamp() {
