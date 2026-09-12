@@ -29,8 +29,16 @@
  * `done` is the third value and it is not decoration: CI's own reseal commit is
  * pushed to main and re-evaluated by the very workflow that made it.
  *
- * The ticket lives in this module's closure. Never storage, for the same reason
- * post keys never touch storage.
+ * ── Where the tokens live, and for how long ─────────────────────────────────
+ *
+ * Both backends hand over a standing credential — Gitea's tokens carry no
+ * expiry and the GitHub PAT is fine-grained but permanent — so nothing about
+ * the token itself bounds it. What bounds it is this module's closure and
+ * nothing else: never localStorage, never sessionStorage, never IndexedDB,
+ * never a cookie, for the same reason post keys never touch storage.
+ *
+ * `forget()` is the erase, and credentials.js is the complete list of events
+ * that call it.
  */
 
 import * as giteaDriver from "./repo-gitea.js";
@@ -57,14 +65,23 @@ const FORBIDDEN = [
 
 const PROBE_MS = 6000;
 const TICKET_MS = 90 * 60 * 1000;
-// A minted credential is re-asked for this long before it lapses, so a commit
-// is never started on a token that dies while it is in flight.
-const EXPIRY_SLACK_MS = 3 * 60 * 1000;
 
 let ticket = null;
 let ticketAt = 0;
 let chosen = null;
 let forced = "";
+let idleTimer = 0;
+
+/**
+ * A ticket nobody has touched for the session bound is ERASED, not merely
+ * refused. The bound already existed; this is what makes reaching it mean the
+ * credential is gone rather than stale — a page left open overnight holds no
+ * repository token in the morning.
+ */
+function touch() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(forget, TICKET_MS);
+}
 
 /* ─── paths ────────────────────────────────────────────────────────────────── */
 
@@ -105,39 +122,10 @@ async function fetchTicket() {
   const rows = (body.backends || []).filter((b) => b && b.id && DRIVERS[b.kind || b.id]);
   if (!rows.length) throw new Error("ticket unavailable");
 
-  // The EARLIEST expiry across the backends, because one lapsed credential is a
-  // stale ticket however fresh the other one is. A backend that reports none has
-  // a standing token and contributes nothing here.
-  const stamps = rows.map((b) => Date.parse(b.expires || "")).filter((n) => !isNaN(n));
-
   return {
     prefer: body.prefer || rows[0].id,
     backends: rows.map((b) => ({ ...b, driver: DRIVERS[b.kind || b.id] })),
-    expiresAt: stamps.length ? Math.min(...stamps) : 0,
   };
-}
-
-/** Whether the ticket in hand is still worth using. */
-function ticketFresh() {
-  if (!ticket || !chosen) return false;
-  if (Date.now() - ticketAt >= TICKET_MS) return false;
-  return !(ticket.expiresAt && Date.now() > ticket.expiresAt - EXPIRY_SLACK_MS);
-}
-
-/**
- * A new ticket for the backend already chosen — no probe, no re-selection.
- *
- * Which repository this session commits to was decided once and must not change
- * because a credential rolled over: the open document's blob shas were read from
- * that host, and moving hosts mid-session is a decision with consequences, not a
- * side effect of a token's age.
- */
-async function refreshTicket(id) {
-  ticket = await fetchTicket();
-  ticketAt = Date.now();
-  const row = ticket.backends.find((backend) => backend.id === id);
-  if (row) chosen = row;
-  return row || null;
 }
 
 /* ─── selection ────────────────────────────────────────────────────────────── */
@@ -189,13 +177,14 @@ async function order(a, b) {
  * @returns {Promise<{active: object, rows: Array, behind: object|null, diverged: boolean}>}
  */
 export async function open(force) {
-  if (!force && ticketFresh()) {
+  if (!force && ticket && chosen && Date.now() - ticketAt < TICKET_MS) {
     return { active: chosen, rows: ticket.backends, behind: null, diverged: false };
   }
 
   ticket = await fetchTicket();
   ticketAt = Date.now();
   chosen = null;
+  touch();
 
   const probed = await probe(ticket.backends);
   for (const row of probed) row.backend.up = row.up;
@@ -266,11 +255,29 @@ export function adopt(id) {
   return true;
 }
 
+/**
+ * Erase the credentials.
+ *
+ * The token strings are blanked ON THE ROWS before the ticket is released,
+ * because a driver call already in flight holds its `backend` object by
+ * reference rather than by lookup — dropping the ticket alone would leave that
+ * one live. A string cannot be zeroed in JavaScript; dropping every reference to
+ * it is the whole of what can be done, and keeping one in a closure is the thing
+ * that undoes it.
+ *
+ * The blob cache goes too. Those are the contents of files from a private
+ * repository, held as object URLs that outlive the page that made them unless
+ * they are revoked.
+ */
 export function forget() {
+  for (const backend of (ticket && ticket.backends) || []) backend.token = "";
   ticket = null;
   ticketAt = 0;
   chosen = null;
   forced = "";
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = 0;
+  forgetBlobs();
 }
 
 /* ─── catching the preferred backend up ────────────────────────────────────── */
@@ -321,40 +328,23 @@ export async function catchUp(target, timeoutMs = 120000) {
 /* ─── reads ────────────────────────────────────────────────────────────────── */
 
 /**
- * A 401 is the expected end of a short-lived credential, not a failure.
- *
- * The GitHub side is a one-hour installation token, so a session left open over
- * lunch WILL meet this — and the author meeting it on the save that mattered is
- * exactly what makes short-lived tokens feel like a downgrade. So the first
- * rejection is answered by minting a new ticket and trying once more, on the
- * same backend.
- *
- * Once, and once only: a second rejection is a real authorisation failure — the
- * session has gone, or the grant has — and retrying it would spend the session
- * on a credential nothing will accept.
- *
- * Safe for a commit as well as a read. A 401 means the request was refused
- * before it changed anything, and every step a commit takes before the ref
- * update is content-addressed and idempotent: a replayed blob is the same blob.
+ * A backend rejecting the ticket means the whole selection is stale — the
+ * token is gone, not this one request — so the next call re-opens rather than
+ * spending the session on a credential nothing will accept.
  */
 async function guard(fn) {
+  // Erased — by the idle timer, by a 401, by anything. The credential is meant
+  // to be short-lived in the page, so getting one back has to be ordinary rather
+  // than an error the author has to work around.
+  if (!chosen) await open(false);
+
   const backend = active();
+  touch();
   try {
     return await fn(backend);
   } catch (err) {
-    if (!err || err.status !== 401) throw err;
-
-    let again = null;
-    try {
-      again = await refreshTicket(backend.id);
-    } catch (fail) {
-      /* the session itself is gone — report the original refusal */
-    }
-    if (!again) {
-      forget();
-      throw err;
-    }
-    return fn(again);
+    if (err && err.status === 401) forget();
+    throw err;
   }
 }
 
@@ -383,10 +373,8 @@ export function read(path) {
  *   null means the request itself failed — ask again.
  */
 export function commitStatus(sha) {
-  // Through `guard`, because a build outlasts a one-hour token more often than
-  // not — and never rejecting, because the callers are polling loops and "ask
-  // again" is already this function's answer for a request that did not land.
-  return guard((backend) => backend.driver.runStatus(backend, sha)).catch(() => null);
+  const backend = active();
+  return backend.driver.runStatus(backend, sha);
 }
 
 /* ─── the commit ───────────────────────────────────────────────────────────── */

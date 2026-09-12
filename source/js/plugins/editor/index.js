@@ -63,6 +63,7 @@ import { assetURL } from "../../tools/vaultCrypto.js";
 import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
+import * as credentials from "./credentials.js";
 import { contentChanged, crossFade, enter, exit, flip, pop, toolbarIn, toolbarOut } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
@@ -405,6 +406,11 @@ async function activate(host) {
     }
   }
 
+  // Claimed BEFORE the ticket is asked for, so every exit below — including the
+  // ones that fail — has something to release. See credentials.js for the list
+  // of events that take it away again.
+  credentials.hold();
+
   let ticketError = null;
   let opened = null;
   try {
@@ -721,6 +727,10 @@ async function deactivate() {
 
   for (const asset of state.pending) URL.revokeObjectURL(asset.url);
   repo.forgetBlobs();
+  // Edit mode is over, so the repository tokens have no further business in this
+  // page. `release` erases them unless the console is still holding them for a
+  // commit of its own.
+  credentials.release();
   forgetTree();
   registerRewind(null);
   state.boxes.clear();

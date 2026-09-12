@@ -1006,11 +1006,24 @@ const DEPLOY_MS = 20000;
 const POLL_MS = 6000;
 
 let repoMod = null;
+let credMod = null;
 let buildTimer = null;
 
 function loadRepo() {
   if (!repoMod) repoMod = import("./editor/repo.js");
   return repoMod;
+}
+
+/**
+ * The repository tokens are held only while the bar is armed. Every event that
+ * takes them away — signing out, navigating off, closing the tab — is enumerated
+ * in editor/credentials.js; this is the console's claim on them.
+ */
+async function holdCredentials(on) {
+  if (!credMod) credMod = import("./editor/credentials.js");
+  const mod = await credMod;
+  if (on) mod.hold();
+  else mod.release();
 }
 
 function rowEl(key) {
@@ -1106,6 +1119,7 @@ function openBar() {
 
     root.insertBefore(bar, root.querySelector(".bm-console"));
     box.bar = bar;
+    holdCredentials(true);
     bar.querySelector(".bm-unpub-x").addEventListener("click", () => closeBar());
     bar.querySelector(".bm-unpub-go").addEventListener("click", () => runUnpublish());
     bar.querySelector(".bm-unpub-backend").addEventListener("click", () => switchBackend());
@@ -1131,6 +1145,7 @@ async function closeBar() {
   paintPosts();
 
   if (!bar) return;
+  holdCredentials(false);
   await exit(bar);
   bar.remove();
   contentChanged();

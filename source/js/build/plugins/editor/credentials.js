@@ -1,0 +1,2 @@
+import*as t from"./repo.js";let e=0,o=!1;export function drop(){e=0,t.forget()}export function hold(){!function wire(){if(o)return;o=!0,window.addEventListener("blog:auth-change",(async()=>{let t=null;try{t=window.blogAuth?await window.blogAuth.getSession():null}catch(t){}t&&t.token||drop()})),window.addEventListener("pagehide",drop),document.addEventListener("freeze",drop);try{swup.hooks.on("visit:start",drop)}catch(t){}}(),e+=1}export function release(){e=Math.max(0,e-1),e||drop()}
+//# sourceMappingURL=credentials.js.map
