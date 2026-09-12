@@ -872,21 +872,21 @@ export function initNotifications() {
   syncControls();
   refresh({ quiet: true });
 
-  // The admin console is a page of its own and several times the size of this
-  // file. Fetched only when its markup is actually on screen, so no reader ever
-  // downloads a console they cannot open.
-  if (document.getElementById("blog-management")) {
-    import("./blog-management.js").then((module) => module.initBlogManagement()).catch(() => {});
+  // The admin surface — the console and the composer — is sealed, so the page
+  // in front of us is a probe and nothing more. The gate decides whether there
+  // is anything to mount, and pulls in the console or the editor only once it
+  // holds a key that opens one: no reader ever downloads either.
+  if (document.querySelector("[data-admin-gate]")) {
+    import("./admin-gate.js").then((module) => module.default()).catch(() => {});
   }
 
-  // Same bargain, but the editor now opens on any article, so the trigger is
-  // the pencil rather than a page. `blog-admin` is written before the first
-  // paint from the cached session, so a reader never fetches it at all.
-  const writable =
-    document.querySelector('.article-content-container[data-post-new="1"]') ||
-    (document.documentElement.classList.contains("blog-admin") && document.querySelector(".tool-edit-post"));
-
-  if (writable) {
+  // The editor also opens on any article, where the trigger is the pencil
+  // rather than a page. `blog-admin` is written before the first paint from the
+  // cached session, so a reader never fetches it at all.
+  if (
+    document.documentElement.classList.contains("blog-admin") &&
+    document.querySelector(".tool-edit-post")
+  ) {
     import("./editor/index.js").then((module) => module.initEditor()).catch(() => {});
   }
 }

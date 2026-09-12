@@ -26,6 +26,29 @@ function vaultEnabled() {
 }
 
 /**
+ * The admin surface — Blog Management and the composer — is sealed like any
+ * other item, under ONE key with a fixed identity.
+ *
+ * Both pages are for exactly one reader, and until now the only thing standing
+ * between a visitor and their markup was a panel that painted nothing. Sealing
+ * them makes the wait real: the Worker has to release the key (authorization)
+ * AND the blob has to open under it (decryption), and neither alone is enough.
+ * The key is only ever granted to an admin — `grantedPosts` hands an admin
+ * every row and everyone else only what their own grant names, and nothing in
+ * Posts Management offers this one to anybody.
+ */
+function adminPageId() {
+  const theme = hexo.theme.config || {};
+  if (!vaultEnabled() || !theme.notifications || theme.notifications.enable !== true) return null;
+  return vc.pageId("admin");
+}
+
+// Whether this build owes the backend a reconcile. Set while the keyring is
+// being decided, acted on once public/ is written: a build that sealed nothing
+// but retired something still has to say so.
+let syncOwed = false;
+
+/**
  * Withhold the post's TAXONOMY as well as the post.
  *
  * Dropping the post from `locals.posts` is not enough. `Tag.length` and
@@ -146,13 +169,16 @@ hexo.extend.filter.register(
     // Rebuilt every pass: `hexo server` regenerates on each change, and a stale
     // stash would seal a body that is no longer the one on disk.
     state.clear();
+    syncOwed = false;
 
     const albums = markedAlbums();
-    if (!marked.length && !albums.length) {
+    const adminId = adminPageId();
+
+    if (!marked.length && !albums.length && !adminId) {
       // The last `vault:` flag on the site has just been removed. The keyring
       // still names every post that ever carried one, so it is reconciled here
       // too — this is the one build that would otherwise never look at it.
-      if (vaultEnabled()) store.reportRetired(hexo.log, store.prune(new Set()));
+      if (vaultEnabled() && store.prune(new Set()).length) syncOwed = true;
       return;
     }
 
@@ -167,12 +193,11 @@ hexo.extend.filter.register(
     const live = new Set();
     for (const post of marked) {
       const id = vc.postId(post.source);
-      const { key, slug, rekeyed } = store.ensurePost(id, post.title || "");
+      const { key, slug, rekeyed } = store.ensurePost(id);
       if (rekeyed) {
         hexo.log.warn(
           `[vault] "${post.title || id}" was flagged for regeneration: a NEW key was minted and ` +
-            `the slug (${slug}) kept. Nobody can open it until the line below is pasted into ` +
-            `Blog Management -> Encrypted Posts.`
+            `the slug (${slug}) kept. Everything sealed under the old key is now unreadable.`
         );
       }
       state.put(id, { kind: "post", id, key, slug, post, plain: post.content || "" });
@@ -183,11 +208,11 @@ hexo.extend.filter.register(
     for (const { category, item, index, pos, catIndex, catPos } of albums) {
       const title = item["page-title"] || item.name;
       const id = vc.albumId(title);
-      const { key, slug, rekeyed } = store.ensurePost(id, item.name || title);
+      const { key, slug, rekeyed } = store.ensurePost(id);
       if (rekeyed) {
         hexo.log.warn(
           `[vault] album "${item.name || title}" was flagged for regeneration: a NEW key was ` +
-            `minted and the slug (${slug}) kept. Paste the line below into Blog Management.`
+            `minted and the slug (${slug}) kept. The old ciphertext opens for nobody.`
         );
       }
       state.put(id, {
@@ -206,9 +231,17 @@ hexo.extend.filter.register(
       live.add(id);
     }
 
+    if (adminId) {
+      const { key, slug } = store.ensurePost(adminId);
+      state.put(adminId, { kind: "page", id: adminId, key, slug });
+      live.add(adminId);
+    }
+
     // A key whose post has since dropped the flag is a key for content that is
-    // no longer sealed. It goes now, before the keyring is written.
-    store.reportRetired(hexo.log, store.prune(live));
+    // no longer sealed. It goes now, before the keyring is written; `sync` is
+    // what takes the wrapped copy out of D1 at the end of the same build.
+    store.prune(live);
+    syncOwed = true;
 
     // Before anything is sealed: a key that reached public/ but not the keyring
     // would leave the post encrypted under a key that exists nowhere.
@@ -376,32 +409,47 @@ function pruneEmptyDirs(from) {
 hexo.extend.filter.register(
   "after_generate",
   async function () {
-    if (!state.all().length) return;
-    const { unrouted, removed } = withholdPlaintextImages();
-    const pages = withholdAlbumPages();
-    hexo.log.info(
-      `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)` +
-        (pages ? ` and ${pages} previously published album page(s)` : "")
-    );
+    if (state.all().length) {
+      const { unrouted, removed } = withholdPlaintextImages();
+      const pages = withholdAlbumPages();
+      hexo.log.info(
+        `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)` +
+          (pages ? ` and ${pages} previously published album page(s)` : "")
+      );
+    }
 
-    // Activation, then sealing — both part of building rather than commands to
+    if (!syncOwed || !vaultEnabled()) return;
+
+    // Reconciling, then sealing — both part of building rather than commands to
     // remember. A commit must never carry a post's ciphertext without the key
     // that opens it, and a key nobody has registered opens nothing.
     //
-    // The push runs first because it MARKS the entries it registered, and the
-    // seal has to capture that state; the fallback print runs only for whatever
-    // is still unregistered afterwards.
+    // The sync runs first because it MARKS the entries it registered, and the
+    // seal has to capture that state.
     const opened = store.load().opened;
     if (opened) hexo.log.info(`[vault] opened ${opened} key(s) from .vault/keys.enc`);
 
+    // Which ids are drafts, so the Worker can refuse to grant one an audience.
+    // A draft is the author's unfinished copy and has exactly one reader.
+    const drafts = new Set(
+      state.sorted().filter((entry) => entry.post.draft === true).map((entry) => entry.id)
+    );
+
     const api = String(hexo.theme.config.backend?.api_url || "");
     try {
-      const sent = await store.push(api);
-      if (sent) hexo.log.info(`[vault] registered ${sent.pushed} key(s) with the backend`);
+      const done = await store.sync(api, drafts);
+      if (done) {
+        hexo.log.info(
+          `[vault] backend reconciled: ${done.registered} key(s) registered` +
+            (done.revoked ? `, ${done.revoked} revoked` : "")
+        );
+      }
     } catch (err) {
-      hexo.log.warn(`[vault] could not reach ${api} to register new keys — ${err.message}`);
+      hexo.log.warn(
+        `[vault] could not reach ${api} to reconcile the keyring — ${err.message}. ` +
+          `The next build that can reach it will put D1 right; nothing has to be done by hand.`
+      );
     }
-    store.report(hexo.log);
 
     const sealed = store.seal();
     if (sealed && sealed.changed) {

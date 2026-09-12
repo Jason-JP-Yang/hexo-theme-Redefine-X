@@ -299,25 +299,24 @@ management:
   confirm: Press again
   orphans: Unowned devices
   orphans_hint: Subscriptions whose owner unfollowed. Only banned ones are kept - the daily sweep removes the rest.
-  v_title: Encrypted posts
-  v_lede: Every encrypted post the site has published, and who may open it. The posts themselves are never stored here - only their keys.
-  v_empty: No encrypted post has been activated yet.
-  v_add: Activate a post
-  v_add_hint: Paste one line from the build output. Re-pasting the same line updates it.
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: Activate
-  v_added: Activated
-  v_bad: That is not an activation line.
-  v_revoke: Revoke
-  v_revoke_hint: Nobody will be able to open it again, including you.
+  p_title: Posts management
+  p_lede: Every article and album on the site, and what can be done with each. Nothing here is fetched - it was sealed into this page by the build.
+  p_all: All
+  p_encrypted: Encrypted
+  p_drafts: Drafts
+  p_unpublished: Unpublished
+  p_new: New post
+  p_album: Album
+  p_draft: Draft
+  p_unpublished_tag: Unpublished
+  p_sticky: Pinned
+  p_untitled: Untitled
+  p_empty: Nothing matches this filter.
+  p_unpublish: Unpublish
+  v_badge: Encrypted
   v_audience: Who can read this
-  v_save: Save readers
-  v_saved: Saved
-  v_slug: Path
   v_reader: reader
   v_readers: readers
-  v_none: nobody yet
-  v_unreadable: Unreadable - the key does not match this build
 
 vault:
   unlocking: Checking your access
@@ -331,6 +330,12 @@ vault:
   no_comments_album: Comments and likes are closed on encrypted albums
   no_comments_album_hint: A public thread would carry the album's title and every photograph's file name, and the like counts live in that same thread - so neither is offered here.
   draft: Draft
+  draft_hint: An unfinished copy of a published post. Only you can read it.
+  unpublished: Unpublished
+  unpublished_hint: This post has never been published. Only you can read it.
+  published: Published
+  view_published: View published
+  view_draft: View draft
 
 editor:
   checking: Checking your session...

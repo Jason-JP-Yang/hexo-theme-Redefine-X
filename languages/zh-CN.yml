@@ -301,25 +301,24 @@ management:
   confirm: 再按一次
   orphans: 无归属设备
   orphans_hint: 原主人已取消关注的订阅。只有被封禁的会被保留 —— 其余的由每日清理任务移除。
-  v_title: 加密文章
-  v_lede: 站点已发布的全部加密文章，以及谁可以打开它们。这里从不存储文章本身，只存储密钥。
-  v_empty: 还没有激活任何加密文章。
-  v_add: 激活一篇文章
-  v_add_hint: 粘贴构建输出里的一行。重复粘贴同一行等同于更新。
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: 激活
-  v_added: 已激活
-  v_bad: 这不是一行激活信息。
-  v_revoke: 吊销
-  v_revoke_hint: 之后没有人能再打开它，包括你自己。
+  p_title: 文章管理
+  p_lede: 站点上的全部文章与相册，以及每一项可以做的操作。这里的内容都不需要请求，构建时已经封装进这个页面。
+  p_all: 全部
+  p_encrypted: 加密
+  p_drafts: 草稿
+  p_unpublished: 未发布
+  p_new: 写新文章
+  p_album: 相册
+  p_draft: 草稿
+  p_unpublished_tag: 未发布
+  p_sticky: 置顶
+  p_untitled: 无标题
+  p_empty: 没有符合该筛选条件的内容。
+  p_unpublish: 取消发布
+  v_badge: 加密
   v_audience: 可以阅读的人
-  v_save: 保存名单
-  v_saved: 已保存
-  v_slug: 路径
   v_reader: 人
   v_readers: 人
-  v_none: 暂无
-  v_unreadable: 无法读取 —— 密钥与本次构建不匹配
 
 vault:
   unlocking: 正在校验访问权限
@@ -333,6 +332,12 @@ vault:
   no_comments_album: 加密相册不开放评论与点赞
   no_comments_album_hint: 公开讨论串会连同相册标题与每张照片的文件名一并暴露，公开点赞系统也依赖同一个讨论串，因此两者都不会开启。
   draft: 草稿
+  draft_hint: 已发布文章的未完成副本，只有你能阅读。
+  unpublished: 未发布
+  unpublished_hint: 这篇文章从未发布，只有你能阅读。
+  published: 已发布
+  view_published: 查看已发布版本
+  view_draft: 查看草稿
 
 editor:
   checking: 正在确认你的身份…

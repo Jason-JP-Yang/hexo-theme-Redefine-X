@@ -17,8 +17,11 @@
 		<%# Edit this post. Rendered for everyone and hidden by CSS until
 			`html.blog-admin` is set — the same mechanism the management link
 			uses, and tidiness rather than access control: pressing it only
-			opens a shell, and the Worker decides whether a ticket comes back. %>
-		<% if (theme.backend && theme.backend.vault_enable) { %>
+			opens a shell, and the Worker decides whether a ticket comes back.
+
+			Never on the console, which shares this rail for its contents toggle
+			and has no article under it to open. %>
+		<% if (theme.backend && theme.backend.vault_enable && page.type !== "admin-gate") { %>
 		<li class="right-bottom-tools tool-edit-post blog-admin-only" title="<%= __('editor.edit_post') %>">
 			<i class="fa-regular fa-pen-to-square"></i>
 		</li>

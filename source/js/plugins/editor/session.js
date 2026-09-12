@@ -263,14 +263,14 @@ export async function openDocument(entry) {
  * SAME commit that creates the file also updates `.vault/keys.enc`. A key and
  * the content it protects can never be one commit apart.
  */
-export async function mintVaultKey(sourcePath, title) {
+export async function mintVaultKey(sourcePath) {
   const session = await window.blogAuth.getSession();
   const base = window.blogAuth.resolveApiBase();
 
   const res = await fetch(base + "/api/admin/vault/mint", {
     method: "POST",
     headers: { Authorization: "Bearer " + session.token, "Content-Type": "application/json" },
-    body: JSON.stringify({ source: sourcePath, title: title || "" }),
+    body: JSON.stringify({ source: sourcePath }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -473,14 +473,14 @@ export async function save(doc, mode, pending, choice, stage) {
     if (await repo.read(path)) {
       throw new Error(`${path} already exists — give this post a different title`);
     }
-    minted = await mintVaultKey(path, titleOf(doc));
+    minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, { vault: "true", draft: "true" });
   } else if (!entry.draft && !entry.encrypted) {
     // First edit of a published post: fork it.
     path = draftPathFor(doc.path);
     sha = "";
-    minted = await mintVaultKey(path, titleOf(doc));
+    minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, {
       vault: "true",
@@ -488,7 +488,7 @@ export async function save(doc, mode, pending, choice, stage) {
       supersedes: permalinkOf({ date: frontOf(doc).date, path: doc.path }),
     });
   } else if (!entry.encrypted) {
-    minted = await mintVaultKey(path, titleOf(doc));
+    minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, { vault: "true", draft: "true" });
   } else {
@@ -553,6 +553,71 @@ function pathForTitle(title) {
     String(title || "").trim().replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").slice(0, 80) ||
     "untitled-" + Date.now().toString(36);
   return `${POSTS_DIR}/${stem}.md`;
+}
+
+/**
+ * Take a published article down without losing it.
+ *
+ * Its markdown becomes a draft — encrypted, and readable by nobody but its
+ * author — and the published file is deleted. ONE commit, so the article is
+ * never both live and withdrawn, and never neither.
+ *
+ * `supersedes` is dropped on the way: it names the published post a draft
+ * stands in front of, and after this there is no such post. A draft that kept
+ * it would be folded back into a row whose published half no longer exists,
+ * both in the console's inventory and in the reader's listings.
+ *
+ * @param {object} row  one item of the console's sealed inventory
+ */
+export async function unpublish(row) {
+  const files = [];
+  let keysEnc = null;
+
+  const source = repoPath(row.source);
+  const published = source ? await repo.read(source) : null;
+  const draftSource = row.draft && row.draft.source ? repoPath(row.draft.source) : "";
+
+  if (draftSource) {
+    // A draft already stands in front of it. It simply stops standing in for
+    // anything — its path and its key are unchanged, so no key moves here.
+    const current = await repo.read(draftSource);
+    if (current) {
+      files.push({
+        operation: "update",
+        path: draftSource,
+        sha: current.sha,
+        content: repo.toBase64(
+          withFront(current.text, { vault: "true", draft: "true", supersedes: null })
+        ),
+      });
+    }
+  } else {
+    if (!published) throw new Error(`${source || row.title} is not in the repository`);
+    const path = draftPathFor(source);
+    if (await repo.read(path)) throw new Error(`${path} already exists`);
+    const minted = await mintVaultKey(path);
+    keysEnc = minted.keysEnc;
+    files.push({
+      operation: "create",
+      path,
+      content: repo.toBase64(
+        withFront(published.text, { vault: "true", draft: "true", supersedes: null })
+      ),
+    });
+  }
+
+  if (published) files.push({ operation: "delete", path: source, sha: published.sha });
+
+  // The published post's own key goes with its ciphertext. Revoked AFTER any
+  // mint above, because each call hands back the whole keyring rebuilt from the
+  // database and only the last answer is current.
+  if (row.encrypted && row.vaultId) {
+    const revoked = await revokeVaultKey(row.vaultId);
+    keysEnc = revoked.keysEnc;
+  }
+  if (keysEnc) files.push(await keyringFile(keysEnc));
+
+  return repo.commit(files, `Unpublish: ${row.title || source}`);
 }
 
 export async function remove(entry) {

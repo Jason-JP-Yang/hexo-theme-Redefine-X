@@ -66,11 +66,28 @@ function randomSlug() {
   return out;
 }
 
-/** Stable across a retitle, a redate and a move between categories. */
+/**
+ * The one spelling a post's identity is ever computed from.
+ *
+ * Hexo's `post.source` is relative to `source/` (`_posts/x.md`); the editor and
+ * the Worker only ever see repository paths (`source/_posts/x.md`). Hashing
+ * whichever one happened to be in hand minted a SECOND key for every post the
+ * editor created — the build then minted its own, pruned the editor's from the
+ * local keyring, and left an orphan row in D1 that the console could only
+ * describe as unreadable. Both spellings normalise to the Hexo one here, which
+ * is the spelling every id already in D1 was built from.
+ */
 function postId(sourcePath) {
+  const rel = String(sourcePath || "").replace(/^\/+/, "").replace(/^source\//, "");
+  return crypto.createHash("sha256").update(rel, "utf8").digest("hex").slice(0, 16);
+}
+
+/** A generated page with no source file — the admin console and the composer.
+ *  Its identity is the name the build gives it, and never changes. */
+function pageId(name) {
   return crypto
     .createHash("sha256")
-    .update(String(sourcePath), "utf8")
+    .update("page|" + String(name), "utf8")
     .digest("hex")
     .slice(0, 16);
 }
@@ -197,6 +214,7 @@ module.exports = {
   randomSlug,
   postId,
   albumId,
+  pageId,
   seal,
   open,
   wrapKey,

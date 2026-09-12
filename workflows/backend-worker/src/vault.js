@@ -137,35 +137,27 @@ async function unwrapAll(master, rows) {
   return out;
 }
 
-/** Admin listing: ids and slugs only, plus who each is granted to. */
-export async function listPosts(db, limit, offset) {
-  const [posts, grants] = await Promise.all([
-    db
-      .prepare("SELECT id, slug, created_at FROM vault_posts ORDER BY created_at DESC LIMIT ?1 OFFSET ?2")
-      .bind(limit + 1, offset)
-      .all(),
-    db.prepare("SELECT github_id, login, vault FROM moderation WHERE vault != ''").all(),
-  ]);
+/**
+ * Who may read what, keyed by post id.
+ *
+ * The ONLY thing about an encrypted post the console cannot know before it asks:
+ * its title, date, taxonomy and status all travel in the sealed inventory the
+ * build writes, and this table deliberately stores none of them. One row per
+ * reader who has been granted anything at all — which at blog scale is a handful
+ * — so it is one unpaginated read rather than a page at a time.
+ */
+export async function listAudiences(db) {
+  const { results } = await db
+    .prepare("SELECT github_id, login, vault FROM moderation WHERE vault != ''")
+    .all();
 
-  const byPost = new Map();
-  for (const row of grants.results || []) {
+  const byPost = {};
+  for (const row of results || []) {
     for (const id of splitList(row.vault)) {
-      if (!byPost.has(id)) byPost.set(id, []);
-      byPost.get(id).push({ id: row.github_id, login: row.login || "" });
+      (byPost[id] = byPost[id] || []).push({ id: row.github_id, login: row.login || "" });
     }
   }
-
-  const rows = posts.results || [];
-  const more = rows.length > limit;
-  return {
-    posts: rows.slice(0, limit).map((r) => ({
-      id: r.id,
-      slug: r.slug,
-      created_at: r.created_at,
-      audience: byPost.get(r.id) || [],
-    })),
-    more,
-  };
+  return byPost;
 }
 
 /* ─── minting, for the online editor ───────────────────────────────────────── */
@@ -174,9 +166,18 @@ export async function listPosts(db, limit, offset) {
 // a slug gets read aloud and typed by hand.
 const SLUG_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 
-/** sha256(source path), first 16 hex. The same identity the build computes. */
+/**
+ * sha256(source path), first 16 hex — the same identity the build computes.
+ *
+ * The build hashes Hexo's `post.source`, which is relative to `source/`; the
+ * editor only ever holds repository paths, which are not. Hashing what arrived
+ * minted a SECOND key for every post the editor created, and the build then
+ * orphaned it. Both spellings normalise to the Hexo one, which is what every id
+ * already in this table was built from. Mirrors scripts/lib/vault-crypto.js.
+ */
 async function postId(sourcePath) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(sourcePath)));
+  const rel = String(sourcePath || "").replace(/^\/+/, "").replace(/^source\//, "");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rel));
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("")
@@ -203,7 +204,7 @@ function randomSlug() {
  * rather than a second one, because a post's key is stable forever and minting
  * a new one would orphan everything already sealed under the old.
  */
-export async function mintPost(db, env, { source, titles }) {
+export async function mintPost(db, env, { source }) {
   const master = await importMaster(env.VAULT_MASTER);
   const id = await postId(source);
 
@@ -217,7 +218,7 @@ export async function mintPost(db, env, { source, titles }) {
       id,
       slug: existing.slug,
       key: await unwrap(master, existing.wrapped),
-      keysEnc: await keyringBlob(db, env, titles),
+      keysEnc: await keyringBlob(db, env),
       fresh: false,
     };
   }
@@ -229,8 +230,10 @@ export async function mintPost(db, env, { source, titles }) {
 
   const postKey = crypto.getRandomValues(new Uint8Array(32));
 
+  // Always a draft: the editor mints only on the draft branch of a save, and a
+  // published post's key comes from the build. The next build confirms it.
   await db
-    .prepare("INSERT INTO vault_posts (id, slug, wrapped) VALUES (?1, ?2, ?3)")
+    .prepare("INSERT INTO vault_posts (id, slug, wrapped, draft) VALUES (?1, ?2, ?3, 1)")
     .bind(id, slug, await seal(master, postKey))
     .run();
 
@@ -238,39 +241,34 @@ export async function mintPost(db, env, { source, titles }) {
     id,
     slug,
     key: bytesToB64url(postKey),
-    keysEnc: await keyringBlob(db, env, titles),
+    keysEnc: await keyringBlob(db, env),
     fresh: true,
   };
 }
 
 /**
- * `.vault/keys.enc`, byte-compatible with `npm run vault:seal`.
+ * `.vault/keys.enc`, byte for byte what the build seals.
  *
  * Rebuilt from D1 every time rather than patched, so the file in the repository
- * and the rows in the database cannot drift. `titles` is supplied by the admin
- * browser — which reads them out of each post's own sealed record — because the
- * database deliberately stores none: a dump of it says how many encrypted posts
- * exist and who may read them, never what any of them is called.
+ * and the rows in the database cannot drift. An entry is `{key, slug,
+ * registered}` — the same three fields scripts/lib/vault-store.js writes, and
+ * nothing more. It used to carry a title as well, which this side had no way to
+ * know and therefore wrote empty, so every editor save produced a keys.enc the
+ * next build changed straight back.
  */
-export async function keyringBlob(db, env, titles) {
+export async function keyringBlob(db, env) {
   const master = await importMaster(env.VAULT_MASTER);
   const { results } = await db.prepare("SELECT id, slug, wrapped FROM vault_posts").all();
 
   const map = {};
-  for (const id of (results || []).map((r) => r.id).sort()) {
-    const row = results.find((r) => r.id === id);
+  for (const row of (results || []).slice().sort((a, b) => (a.id < b.id ? -1 : 1))) {
     let key;
     try {
       key = await unwrap(master, row.wrapped);
     } catch {
       continue; // a row from before a rotation opens for nobody
     }
-    map[id] = {
-      key,
-      slug: row.slug,
-      title: (titles && titles[id]) || "",
-      registered: true,
-    };
+    map[row.id] = { key, slug: row.slug, registered: true };
   }
 
   return (await seal(master, JSON.stringify(map, null, 2) + "\n")) + "\n";
@@ -330,14 +328,39 @@ export async function verifyBuildSignature(rawBody, header, secret) {
   return diff === 0;
 }
 
-export async function registerPost(db, { id, slug, wrapped }) {
-  await db
-    .prepare(
-      `INSERT INTO vault_posts (id, slug, wrapped) VALUES (?1, ?2, ?3)
-       ON CONFLICT(id) DO UPDATE SET slug = excluded.slug, wrapped = excluded.wrapped`
-    )
-    .bind(id, slug, wrapped)
-    .run();
+/**
+ * Make this table match the build's keyring — the whole of it, every build.
+ *
+ * A post is registered because it was sealed and revoked because it was not,
+ * and both are facts about the build rather than decisions anybody makes. So
+ * the build sends its complete keyring and this replaces the table with it:
+ * every row in the set is upserted, every row outside it is deleted, in one
+ * batch so no request can observe a half-applied registry.
+ *
+ * Grants are left alone. A stale id in `moderation.vault` matches no row on the
+ * next read, and rewriting every reader's grant list here would be a write per
+ * follower, on the scarce side of a free plan, to save nothing.
+ */
+export async function reconcile(db, posts) {
+  const { results } = await db.prepare("SELECT id FROM vault_posts").all();
+  const wanted = new Set(posts.map((p) => p.id));
+  const revoked = (results || []).map((r) => r.id).filter((id) => !wanted.has(id));
+
+  const statements = posts.map((p) =>
+    db
+      .prepare(
+        `INSERT INTO vault_posts (id, slug, wrapped, draft) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO UPDATE SET
+           slug = excluded.slug, wrapped = excluded.wrapped, draft = excluded.draft`
+      )
+      .bind(p.id, p.slug, p.wrapped, p.draft ? 1 : 0)
+  );
+  for (const id of revoked) {
+    statements.push(db.prepare("DELETE FROM vault_posts WHERE id = ?1").bind(id));
+  }
+
+  if (statements.length) await db.batch(statements);
+  return { registered: posts.length, revoked };
 }
 
 export async function deletePost(db, id) {
@@ -351,8 +374,18 @@ export async function deletePost(db, id) {
 /**
  * Replace the audience of ONE post. `ids` is the complete new list, so the diff
  * is computed here and only the identities that actually changed are written.
+ *
+ * A DRAFT has no audience to replace. It is the author's unfinished copy of an
+ * article — the published version is what readers are granted, and a draft that
+ * could be handed out would publish work in progress under a control that looks
+ * like the one for the finished post. Refused here rather than merely hidden in
+ * the console, so the rule does not depend on which client asked.
  */
 export async function setAudience(db, postId, ids) {
+  const row = await db.prepare("SELECT draft FROM vault_posts WHERE id = ?1").bind(postId).first();
+  if (!row) return { error: "no such post" };
+  if (row.draft) return { error: "a draft has no audience" };
+
   const logins = new Map(ids.map((v) => [String(v.id || v), String(v.login || "")]));
   const wanted = new Set(logins.keys());
 
@@ -412,5 +445,5 @@ export async function setAudience(db, postId, ids) {
   }
 
   if (statements.length) await db.batch(statements);
-  return statements.length;
+  return { written: statements.length };
 }

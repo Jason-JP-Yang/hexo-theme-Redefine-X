@@ -298,25 +298,24 @@ management:
   confirm: Appuyez a nouveau
   orphans: Appareils sans proprietaire
   orphans_hint: Abonnements dont le proprietaire s'est desabonne. Seuls les bloques sont conserves - le balayage quotidien supprime les autres.
-  v_title: Articles chiffres
-  v_lede: Tous les articles chiffres publies et qui peut les ouvrir. Seules leurs cles sont conservees ici, jamais leur contenu.
-  v_empty: Aucun article chiffre n'a encore ete active.
-  v_add: Activer un article
-  v_add_hint: Collez une ligne de la sortie de compilation. La recoller la met a jour.
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: Activer
-  v_added: Active
-  v_bad: Ce n'est pas une ligne d'activation.
-  v_revoke: Revoquer
-  v_revoke_hint: Plus personne ne pourra l'ouvrir, vous compris.
+  p_title: Gestion des articles
+  p_lede: "Chaque article et album du site, et ce qu'on peut en faire. Rien n'est telecharge ici ; la generation l'a scelle dans cette page."
+  p_all: Tout
+  p_encrypted: Chiffres
+  p_drafts: Brouillons
+  p_unpublished: Non publies
+  p_new: Nouvel article
+  p_album: Album
+  p_draft: Brouillon
+  p_unpublished_tag: Non publie
+  p_sticky: Epingle
+  p_untitled: Sans titre
+  p_empty: Rien ne correspond a ce filtre.
+  p_unpublish: Depublier
+  v_badge: Chiffre
   v_audience: Qui peut le lire
-  v_save: Enregistrer les lecteurs
-  v_saved: Enregistre
-  v_slug: Chemin
   v_reader: lecteur
   v_readers: lecteurs
-  v_unreadable: Illisible - la cle ne correspond pas a cette compilation
-  v_none: personne pour l'instant
 
 vault:
   unlocking: Verification de votre acces
@@ -329,3 +328,10 @@ vault:
   no_comments_hint: Un fil public sous un article que seuls certains lecteurs peuvent ouvrir exposerait de nouveau son titre et son contenu.
   no_comments_album: Les commentaires et les mentions J'aime sont desactives sur les albums chiffres
   no_comments_album_hint: Un fil public exposerait le titre de l'album et le nom de fichier de chaque photo, et les mentions J'aime vivent dans ce meme fil, donc ni l'un ni l'autre n'est propose ici.
+  draft: Brouillon
+  draft_hint: "Une copie inachevee d'un article publie. Vous seul pouvez la lire."
+  unpublished: Non publie
+  unpublished_hint: "Cet article n'a jamais ete publie. Vous seul pouvez le lire."
+  published: Publie
+  view_published: Voir la version publiee
+  view_draft: Voir le brouillon

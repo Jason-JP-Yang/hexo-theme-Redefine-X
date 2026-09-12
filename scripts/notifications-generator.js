@@ -252,44 +252,38 @@ hexo.extend.generator.register("redefine_manifest", function () {
 });
 
 // ─── the admin management page ──────────────────────────────
-// A real page rather than a panel: it holds three long-lived lists that outgrow
-// a 440px card. It renders for everybody — the route has to exist for Swup to
-// navigate to it — and shows nothing but a locked notice until the front end has
-// confirmed an admin session. Authorisation is the Worker's, not this page's.
+// A real page rather than a panel: it holds several long-lived lists that
+// outgrow a 440px card. The route has to exist for Swup to navigate to it, but
+// what it publishes is only the access probe — the markup itself is sealed
+// under the admin key (scripts/vault-generator.js) and mounted after the Worker
+// releases that key and the blob opens under it.
 hexo.extend.generator.register("redefine_blog_management", function () {
   const theme = hexo.theme.config || {};
   if (!theme.notifications || !theme.notifications.enable) return [];
 
-  const pages = [
-    {
-      path: "blog-management/index.html",
+  const shell = (kind, title) => ({
+    layout: "page",
+    data: {
+      type: "admin-gate",
+      admin_kind: kind,
+      title,
       layout: "page",
-      data: {
-        type: "blog-management",
-        title: "Blog Management",
-        layout: "page",
-        content: "",
-        comment: false,
-        robots: "noindex,nofollow",
-      },
+      content: "",
+      comment: false,
+      robots: "noindex,nofollow",
     },
+  });
+
+  const pages = [
+    Object.assign({ path: "blog-management/index.html" }, shell("console", "Blog Management")),
   ];
 
   // A new post needs somewhere to be composed; an existing one is edited where
-  // it already is. This page is the article layout with nothing in it.
+  // it already is.
   if (theme.backend && theme.backend.vault_enable) {
-    pages.push({
-      path: "blog-management/write/index.html",
-      layout: "page",
-      data: {
-        type: "blog-editor",
-        title: "Write",
-        layout: "page",
-        content: "",
-        comment: false,
-        robots: "noindex,nofollow",
-      },
-    });
+    pages.push(
+      Object.assign({ path: "blog-management/write/index.html" }, shell("composer", "Write"))
+    );
 
     // The editor's strings, as a route rather than as part of every page's
     // config block. The editor can now open on ANY article, and this table is

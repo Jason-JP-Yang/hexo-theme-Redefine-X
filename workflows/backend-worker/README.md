@@ -128,7 +128,12 @@ forward with the numbered files in `migrations/` instead, each run once:
 
 ```sh
 wrangler d1 execute instant-notes-db --remote --file=./migrations/0001-moderation.sql
+wrangler d1 execute instant-notes-db --remote --file=./migrations/0002-vault.sql
+wrangler d1 execute instant-notes-db --remote --file=./migrations/0003-vault-draft.sql
 ```
+
+`0003` needs no backfill: the first build after it runs writes the true value for
+every row, because every sync sends the whole keyring.
 
 ## API reference
 
@@ -354,21 +359,42 @@ CPU: one HMAC session verify plus one AES-GCM unwrap per post, well under a
 millisecond for any realistic N.
 
 #### `GET /api/admin/vault`
-`?offset=<n>` → `{ "posts": [{ "id", "slug", "created_at", "audience": [{id, login}] }],
-"more": bool }`, 20 per page.
+→ `{ "audiences": { "<post id>": [{ "id", "login" }] } }`, unpaginated.
 
-#### `POST /api/admin/vault`
-`{ "id", "slug", "wrapped" }` — one line of the block the build prints. Upserts,
-so re-pasting the same line is an update rather than a duplicate.
+The only part of the registry the console asks for. Everything else it shows —
+titles, dates, taxonomy, draft state, which file each post lives in — travels in
+the inventory the build seals into the console page, so opening Posts Management
+costs one blob and this one small answer.
 
-#### `DELETE /api/admin/vault/:id`
-Revokes a post outright. Stale ids left behind in `moderation.vault` match no
-row on the next read; rewriting every grant row here would be a write per reader
-in the scarce direction to save nothing.
+#### `POST /api/admin/vault/sync`
+Build-signed, no session. `{ "posts": [{ "id", "slug", "wrapped", "draft" }] }` —
+the build's **whole** keyring. Every row in it is registered and every row
+outside it is revoked, in one batch.
+→ `{ "ok": true, "registered": n, "revoked": ["<id>"] }`
+
+There is no route to add a post or to delete one. Registration and revocation
+are consequences of what carries `vault:`, decided by the build that also writes
+the ciphertext — a second authority over them could only ever disagree. A build
+that cannot reach the Worker changes nothing; the next one that can puts the
+table right, which is why the whole set travels rather than a delta.
+
+Authorized by an HMAC over the raw body, keyed by `HKDF(VAULT_MASTER,
+"rdfx-vault-push")`. Neither `hexo generate` on a laptop nor a CI runner can hold
+an admin session, and both already hold `VAULT_MASTER` — without it they could
+not seal `.vault/keys.enc` either.
+
+Stale ids left behind in `moderation.vault` match no row on the next read;
+rewriting every grant row on a revoke would be a write per reader in the scarce
+direction to save nothing.
 
 #### `PUT /api/admin/vault/:id/audience`
 `{ "audience": [{ "id": 108601445 }] }` — the **complete** new list. The diff is
 computed server-side, so only the identities that actually changed are written.
+
+Refused with 400 for a **draft**. A draft is the author's unfinished copy of an
+article and has exactly one reader; the published version is what anyone else is
+granted. `vault_posts.draft` is set by every sync, so the rule holds whatever
+client asks.
 
 #### `POST /api/admin/lookup`
 `{ "ids": ["Jason-JP-Yang", 108601445] }` — names the identities typed into an
@@ -455,21 +481,11 @@ notification simply not created yet.
 
 ### Editor
 
-Two routes, and the Worker's whole involvement in the online editor. It is **not**
+Three routes, and the Worker's whole involvement in the online editor. It is **not**
 in the commit path: the browser talks to Gitea directly, so a save carrying
 twenty megabytes of images never touches the 10 ms CPU budget. One editing
 session costs one `ticket` call plus one `mint` per new encrypted post.
 
-#### `GET /api/admin/gitea/ticket`
-
-Admin only. Returns the repository coordinates and the Gitea token the browser
-commits with.
-
-```jsonc
-{ "api": "https://repos.…/api/v1", "owner": "…", "repo": "…", "branch": "main",
-  "token": "<gitea token>",
-  "author": { "name": "…", "email": "…" } }
-```
 
 The token is contained where it is **spent**, not where it is handed out — a
 dedicated Gitea account with write on the content repository only, token scope
@@ -480,7 +496,7 @@ admin session is code execution on a runner that holds `VAULT_MASTER`.
 
 #### `POST /api/admin/vault/mint`
 
-Admin only. `{ "source": "source/_posts/x.md", "titles": { "<id>": "…" } }`
+Admin only. `{ "source": "source/_posts/x.md" }`
 
 The one thing the editor cannot do for itself: wrapping a post key needs
 `VAULT_MASTER`. Returns the key, its slug, and **the whole keyring re-sealed** —
@@ -492,9 +508,16 @@ Idempotent on `source`: a path that already has a key gets that key back. A post
 key is stable forever, and a second one would orphan everything already sealed
 under the first.
 
-`titles` is supplied by the browser, which reads them from each post's own
-sealed record. The database stores none: a dump of it says how many encrypted
-posts exist and who may read them, never what any of them is called.
+The path is normalised by stripping a leading `source/` before it is hashed,
+because the build hashes Hexo's `post.source` — which is relative to `source/` —
+and the editor only ever holds repository paths. Hashing whichever spelling
+arrived minted a **second** key for every post the editor created, which the
+build then orphaned: a row in this table that opened nothing, and which the
+console could only describe as unreadable.
+
+A keyring entry is `{key, slug, registered}` and nothing else. The database
+stores no titles: a dump of it says how many encrypted posts exist and who may
+read them, never what any of them is called.
 
 #### `DELETE /api/admin/vault/mint?id=…`
 

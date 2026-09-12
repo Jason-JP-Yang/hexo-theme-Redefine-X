@@ -203,6 +203,40 @@ function supersedingMap(map) {
   return out;
 }
 
+/**
+ * The SOURCE FILE a draft stands in front of — `_posts/x.draft.md` → `_posts/x.md`.
+ *
+ * `supersedes` is a permalink, which is the right key for taking a published
+ * post's row out of markup that is already on the page. It is the wrong key for
+ * an ENCRYPTED published post, whose row is not on the page at all but is about
+ * to be inserted from its own sealed metadata: matching those two would mean
+ * rebuilding a permalink from an ISO date here and from a front-matter date
+ * there, and a post written in the evening lands on a different day in the two.
+ * The file name is exact and has no timezone.
+ */
+function draftedSources(map) {
+  const out = new Set();
+  for (const entry of map.values()) {
+    const meta = entry.meta;
+    if (!meta || !meta.supersedes || !meta.source) continue;
+    out.add(String(meta.source).replace(/\.draft\.md$/i, ".md"));
+  }
+  return out;
+}
+
+/** Readable posts with any that a readable draft replaces taken out, so a
+ *  listing shows one row per article rather than both versions of it. */
+function withoutSuperseded(entries, drafted) {
+  if (!drafted.size) return entries;
+  return entries.filter((entry) => !drafted.has(entry.meta.source || ""));
+}
+
+/** Readable posts, ONE PER ARTICLE — what every listing and every count should
+ *  be drawn from. `readable` is the raw set and includes both versions. */
+function articles(map) {
+  return withoutSuperseded(readable(map), draftedSources(map));
+}
+
 // What a draft is standing in front of, so signing out can put it back. The
 // home grid's own snapshot cannot carry this: it records the tile ELEMENTS, and
 // a swap happens inside one of them.
@@ -218,15 +252,43 @@ function undoSupersedes() {
   }
 }
 
+/**
+ * Drafts keyed by the VAULT ID of the encrypted post they replace.
+ *
+ * An encrypted post's tile links to `/v/<slug>/`, not to its permalink, so the
+ * permalink map cannot find it and the draft of an encrypted article was simply
+ * invisible on the front page — the published version kept the tile. What the
+ * tile does carry is `data-vault-id`, and the two entries can be paired through
+ * their source files, which is timezone-free where a rebuilt permalink is not.
+ */
+function supersedingByVaultId(map) {
+  const byTargetSource = new Map();
+  for (const entry of map.values()) {
+    const meta = entry.meta;
+    if (!meta || !meta.supersedes || !meta.source) continue;
+    byTargetSource.set(String(meta.source).replace(/\.draft\.md$/i, ".md"), entry);
+  }
+  if (!byTargetSource.size) return new Map();
+
+  const out = new Map();
+  for (const entry of map.values()) {
+    const meta = entry.meta;
+    if (!meta || meta.supersedes || !meta.source || !meta.id) continue;
+    const draft = byTargetSource.get(meta.source);
+    if (draft) out.set(meta.id, draft);
+  }
+  return out;
+}
+
 /** Put every readable draft into the tile of the post it replaces. */
-function swapSuperseded(drafts, list) {
-  if (!drafts.size) return;
+function swapSuperseded(drafts, byId, list) {
+  if (!drafts.size && !byId.size) return;
 
   for (const item of list.querySelectorAll(".home-article-item")) {
     const link = item.querySelector(".home-article-title a");
-    if (!link) continue;
-
-    const entry = drafts.get(normalizePath(new URL(link.href, location.href).pathname));
+    const entry =
+      (item.dataset.vaultId && byId.get(item.dataset.vaultId)) ||
+      (link && drafts.get(normalizePath(new URL(link.href, location.href).pathname)));
     if (!entry || !entry.card) continue;
 
     const original = Array.from(item.childNodes);
@@ -238,20 +300,15 @@ function swapSuperseded(drafts, list) {
       },
     });
 
+    // The card brings its own badge — the build renders it from the draft's own
+    // front matter, so the tile says "Draft" in the one object the whole site
+    // uses to say what a card is (components/vault-badge). A ribbon added here
+    // as well was a second badge making the same statement.
     item.replaceChildren(...Array.from(entry.card.cloneNode(true).childNodes));
     item.classList.add("vault-draft");
     item.dataset.vaultId = entry.meta.id || "";
-    item.appendChild(draftRibbon());
     reveal(item);
   }
-}
-
-function draftRibbon() {
-  const badge = document.createElement("span");
-  badge.className = "vault-draft-ribbon";
-  badge.innerHTML = `<i class="fa-solid fa-pen-nib" aria-hidden="true"></i>`;
-  badge.appendChild(document.createTextNode(i18n("draft", "Draft")));
-  return badge;
 }
 
 /** Take the superseded post's row out of a listing before the draft's goes in. */
@@ -323,12 +380,32 @@ async function unlockPost(gate) {
     // photographs opens as fast as one of two.
     await revealAssets(host, entry.raw);
 
+    // A DRAFT has no audience. It is the author's unfinished copy of an article
+    // — the published version is what readers are granted — and offering the
+    // control here would look like a way to hand out work in progress. The
+    // Worker refuses the grant as well, so this is tidiness on top of a rule.
+    //
+    // Read off the markup that just arrived rather than from the metadata: the
+    // article carries its own version banner (pages/post/article-content), so
+    // this costs no second fetch on a page that only wanted one post.
     const isAlbum = gate.dataset.vaultKind === "masonry";
-    if (isAdmin && !isAlbum) mountAudienceEditor(host, entry);
+    const isDraft = !!host.querySelector('.article-version[data-version="draft"]');
+    if (isAdmin && !isAlbum && !isDraft) mountAudienceEditor(host, entry);
 
     setGate(gate, "open");
     if (isAlbum) rehydrateAlbum(host);
     else rehydrate(host);
+
+    // The way from a published ENCRYPTED post to the draft in front of it. Its
+    // page is `/v/<slug>/`, so there is no permalink here to match on — the
+    // pairing is by source file, which needs the other grants' metadata. Only
+    // for an admin: nobody else has a draft to be shown, and only an admin is
+    // few enough for the extra card fetches to be free.
+    if (isAdmin && !isAlbum && !isDraft) {
+      await hydrateMeta(map);
+      const draft = supersedingByVaultId(map).get(entry.id);
+      if (draft && draft.meta) mountDraftSwap(new Map([[normalizePath(location.pathname), draft]]));
+    }
 
     host.animate(
       [
@@ -454,9 +531,47 @@ async function mountAudienceEditor(host, entry) {
     },
   });
 
-  const listing = await callWorker("/api/admin/vault?offset=0");
-  const row = listing && (listing.posts || []).find((r) => r.id === entry.id);
-  if (row) picker.set(row.audience || []);
+  const listing = await callWorker("/api/admin/vault");
+  const audience = listing && (listing.audiences || {})[entry.id];
+  if (audience) picker.set(audience);
+}
+
+/**
+ * The way from a published post to the draft standing in front of it.
+ *
+ * The other direction is rendered by the build, inside the draft's own sealed
+ * article. This one cannot be: a published post's markup is read by everybody,
+ * and saying "there is a draft" would disclose that a draft exists. So it is
+ * mounted here, for the one reader who already holds the key that opens it.
+ *
+ * Same object as the build's, at the same end of the same row, so the two
+ * directions are one control seen from either side.
+ */
+function mountDraftSwap(drafts) {
+  const header = document.querySelector(".article-header");
+  if (!header || header.querySelector(".article-version")) return;
+
+  const entry = drafts.get(normalizePath(location.pathname));
+  if (!entry) return;
+
+  const box = document.createElement("div");
+  box.className = "article-version";
+  box.dataset.version = "published";
+  box.setAttribute(INSERTED, "1");
+  box.innerHTML =
+    `<span class="article-version-tag is-published">` +
+    `<i class="fa-regular fa-circle-check" aria-hidden="true"></i></span>` +
+    `<a class="article-version-swap"><i class="fa-solid fa-pen-nib" aria-hidden="true"></i><span></span></a>`;
+  box.querySelector(".article-version-tag").appendChild(
+    document.createTextNode(i18n("published", "Published"))
+  );
+  const link = box.querySelector(".article-version-swap");
+  link.href = entry.meta.href;
+  link.querySelector("span").textContent = i18n("view_draft", "View draft");
+
+  header.appendChild(box);
+  reveal(box);
+  settle();
 }
 
 /* ─── the home grid ────────────────────────────────────────────────────────── */
@@ -527,6 +642,9 @@ async function prepareHome(map, source) {
 
   await hydrateMeta(map);
   const drafts = supersedingMap(map);
+  // Two ways in, because a tile identifies its post two ways: a public one by
+  // the permalink its title links to, an encrypted one by `data-vault-id`.
+  const draftsById = supersedingByVaultId(map);
   const mine = postsForThisPage(
     map,
     Array.from(source.querySelectorAll(".home-article-item")),
@@ -536,7 +654,8 @@ async function prepareHome(map, source) {
 
   // A page whose only readable posts are drafts still has work to do: no new
   // tile, but the tiles that are there show the wrong version.
-  const swapOnly = drafts.size ? (list) => swapSuperseded(drafts, list) : null;
+  const swapOnly =
+    drafts.size || draftsById.size ? (list) => swapSuperseded(drafts, draftsById, list) : null;
   if (!mine.length) return swapOnly;
 
   const plan = await variantFor(page, mine);
@@ -549,7 +668,7 @@ async function prepareHome(map, source) {
   // first: a swap made before it would be recorded AS the public arrangement.
   return (list) => {
     applyPlan(list, plan, cards);
-    swapSuperseded(drafts, list);
+    swapSuperseded(drafts, draftsById, list);
   };
 }
 
@@ -877,10 +996,13 @@ async function unlockArchiveLike(map) {
   const container = root.querySelector(".archive-list-container");
   if (!container) return;
 
-  const mine = postsForListing(readable(map), root);
-  if (!mine.length) return;
-
   const drafts = supersedingMap(map);
+  // One row per ARTICLE. An ENCRYPTED post that has a draft is not on the page
+  // to be removed — both versions would be inserted from their own metadata —
+  // so the published one is dropped by `articles`, and a PUBLIC one is dropped
+  // from the markup by `dropSuperseded` below.
+  const mine = postsForListing(articles(map), root);
+  if (!mine.length) return;
 
   root.dataset.vaultApplied = "1";
   await animateHeight(root, () => {
@@ -934,7 +1056,7 @@ async function unlockTagCloud(map) {
   const scope = document.querySelector(".tagcloud-content");
   if (!scope || scope.dataset.vaultApplied === "1") return;
 
-  const rows = taxonomyOf(readable(map), "tags");
+  const rows = taxonomyOf(articles(map), "tags");
   if (!rows.size) return;
   scope.dataset.vaultApplied = "1";
 
@@ -972,7 +1094,7 @@ async function unlockCategoryTree(map) {
   const scope = document.querySelector(".category-list-content");
   if (!scope || scope.dataset.vaultApplied === "1") return;
 
-  const rows = taxonomyOf(readable(map), "categories");
+  const rows = taxonomyOf(articles(map), "categories");
   if (!rows.size) return;
   scope.dataset.vaultApplied = "1";
 
@@ -1145,7 +1267,7 @@ async function unlockListingGate(gate) {
   }
 
   await hydrateMeta(map);
-  const entries = readable(map);
+  const entries = articles(map);
   const hash = String(location.hash || "").replace(/^#/, "");
   const [, kind, wanted] = /^(t|c)=([0-9a-f]{16})$/.exec(hash) || [];
 
@@ -1328,6 +1450,7 @@ export default async function initVault() {
   if (!map || !map.size) return;
 
   await hydrateMeta(map);
+  mountDraftSwap(supersedingMap(map));
   await unlockHome(map);
   await unlockArchiveLike(map);
   await unlockTagCloud(map);

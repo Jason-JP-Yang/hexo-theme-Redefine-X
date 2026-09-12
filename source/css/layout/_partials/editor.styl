@@ -2236,11 +2236,18 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   font-size 0.72rem
   cursor pointer
 // ─── the console's link into here ───────────────────────────
+// Sits at the top of Posts Management, on the primary fill.
+//
+// The ink is a LITERAL white on BOTH the anchor and its children. common/basic
+// colours `a i, a span` directly, and two element selectors (0,0,0,2) beat this
+// class (0,1,0,0) for the inner nodes only — so the button's label took
+// `--default-text-color`, which is near-black in light mode: an invisible label
+// on a dark red pill, while the same rule in dark mode looked fine. Colouring
+// the anchor alone is what left it that way.
 .bm-write
   display inline-flex
   align-items center
   gap 7px
-  margin-top 12px
   padding 7px 13px
   border 1px solid transparent
   border-radius 10px
@@ -2254,26 +2261,17 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
     transform translateY(-1px)
     filter brightness(1.08)
 
-// ─── the draft ribbon on a superseded tile ──────────────────
+  // Doubled to outrank `a:hover i` / `a:hover span` without `!important`.
+  &.bm-write
+    i, span
+      color $ed-on-primary
+
+  &:hover,
+  &:active
+    color $ed-on-primary
+
 .vault-draft
   position relative
-
-.vault-draft-ribbon
-  position absolute
-  top 10px
-  left 10px
-  z-index 2
-  display inline-flex
-  align-items center
-  gap 5px
-  padding 3px 9px
-  border-radius 999px
-  background var(--box-amber-bg)
-  color var(--box-amber-text)
-  font-size 0.66rem
-  font-weight 650
-  letter-spacing 0.02em
-  pointer-events none
 
 .vault-archive-draft .vault-archive-lock
   color var(--box-amber-text)

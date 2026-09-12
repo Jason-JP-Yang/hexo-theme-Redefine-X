@@ -298,25 +298,24 @@ management:
   confirm: Pulsa otra vez
   orphans: Dispositivos sin propietario
   orphans_hint: Suscripciones cuyo propietario dejo de seguir. Solo se conservan las bloqueadas; el barrido diario elimina el resto.
-  v_title: Entradas cifradas
-  v_lede: Todas las entradas cifradas publicadas y quien puede abrirlas. Aqui solo se guardan sus claves, nunca su contenido.
-  v_empty: Aun no se ha activado ninguna entrada cifrada.
-  v_add: Activar una entrada
-  v_add_hint: Pega una linea de la salida de compilacion. Repetirla la actualiza.
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: Activar
-  v_added: Activada
-  v_bad: Esa no es una linea de activacion.
-  v_revoke: Revocar
-  v_revoke_hint: Nadie podra volver a abrirla, tu incluido.
+  p_title: Gestion de publicaciones
+  p_lede: Cada articulo y album del sitio, y lo que se puede hacer con cada uno. Nada de esto se descarga; la compilacion lo sello en esta pagina.
+  p_all: Todo
+  p_encrypted: Cifrados
+  p_drafts: Borradores
+  p_unpublished: Sin publicar
+  p_new: Nueva publicacion
+  p_album: Album
+  p_draft: Borrador
+  p_unpublished_tag: Sin publicar
+  p_sticky: Fijado
+  p_untitled: Sin titulo
+  p_empty: Nada coincide con este filtro.
+  p_unpublish: Retirar
+  v_badge: Cifrado
   v_audience: Quien puede leerla
-  v_save: Guardar lectores
-  v_saved: Guardado
-  v_slug: Ruta
   v_reader: lector
   v_readers: lectores
-  v_unreadable: "Ilegible - la clave no corresponde a esta compilacion"
-  v_none: nadie todavia
 
 vault:
   unlocking: Comprobando tu acceso
@@ -329,3 +328,10 @@ vault:
   no_comments_hint: Un hilo publico bajo una entrada que solo algunos lectores pueden abrir volveria a exponer su titulo y su contenido.
   no_comments_album: Los comentarios y los me gusta estan cerrados en los albumes cifrados
   no_comments_album_hint: Un hilo publico expondria el titulo del album y el nombre de archivo de cada foto, y los me gusta viven en ese mismo hilo, asi que no se ofrece ninguno de los dos.
+  draft: Borrador
+  draft_hint: Una copia sin terminar de una publicacion ya publicada. Solo tu puedes leerla.
+  unpublished: Sin publicar
+  unpublished_hint: Esta publicacion nunca se ha publicado. Solo tu puedes leerla.
+  published: Publicado
+  view_published: Ver la version publicada
+  view_draft: Ver el borrador

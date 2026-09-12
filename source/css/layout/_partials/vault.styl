@@ -1,9 +1,9 @@
 // ========================================================================================
 //                                    ENCRYPTED POSTS
 // ========================================================================================
-// The gate an encrypted post's page renders, the badge an authorized card
-// carries in a listing, the audience field an admin gets above the article, and
-// the management console's registry.
+// The gate an encrypted post's page renders, the gate the admin pages render,
+// the badge a card carries in a listing, the audience field an admin gets above
+// the article, and the console's Posts Management list.
 //
 // Material: BASE tier only. Nothing here floats over live content.
 // Auto-included: style.styl requires layout/_partials/* as a glob.
@@ -26,15 +26,32 @@ $vault-radius = 14px
   .vault-article-host
     display contents
 
-// ─── the authorized badge ───────────────────────────────────
+// ─── the admin gate ─────────────────────────────────────────
+// Blog Management and the composer wait exactly as an encrypted post does, and
+// once their markup is in they get out of its way for the same reason: every
+// rule the article layout has is written against
+// `.main-content > .post-page-container`, and two wrappers in between defeat all
+// of them.
+.admin-gate[data-admin-state="open"]
+  display contents
+
+  .admin-gate-host
+    display contents
+
+// ─── the status badge ───────────────────────────────────────
 // ONE badge for the whole site, rendered from components/vault-badge: the home
-// tile and the album card make the same statement about the same thing, so they
-// wear the same object rather than two rules that drift apart.
+// tile, the album card and Posts Management make the same statement about the
+// same thing, so they wear the same object rather than rules that drift apart.
 //
-// The ink is a LITERAL white, not `var(--background-color)`. That token inverts
-// with the theme, so in dark mode the label was printed in near-black on the
-// primary fill and became unreadable — the fill does not invert, so neither may
-// what sits on it.
+// Three states. Encrypted is the primary fill; a draft and an unpublished post
+// are the theme's amber and slate pairs, which are the tokens that already mean
+// "in progress" and "set aside" everywhere else in the theme and which invert
+// correctly on their own.
+//
+// The ink on the primary fill is a LITERAL white, not `var(--background-color)`.
+// That token inverts with the theme, so in dark mode the label was printed in
+// near-black on the primary fill and became unreadable — the fill does not
+// invert, so neither may what sits on it.
 $vault-badge-ink = #fff
 
 .vault-badge
@@ -63,6 +80,25 @@ $vault-badge-ink = #fff
   &.vault-badge
     i, span
       color $vault-badge-ink
+
+// Both of these carry their own ink, so the doubled rule above has to be
+// overridden as well — it names a literal white for the primary fill, and these
+// two do not sit on it.
+.vault-badge.is-draft,
+.vault-badge.is-draft.vault-badge
+  background var(--box-amber-bg)
+  color var(--box-amber-text)
+
+  i, span
+    color var(--box-amber-text)
+
+.vault-badge.is-unpublished,
+.vault-badge.is-unpublished.vault-badge
+  background var(--box-slate-bg)
+  color var(--box-slate-text)
+
+  i, span
+    color var(--box-slate-text)
 
 // In flow, for a card with no picture to sit on: the home tile with no cover,
 // where the body starts at the tile's top edge, and the album card with no
@@ -116,45 +152,20 @@ $vault-badge-ink = #fff
   font-size 0.76rem
   color var(--primary-color)
 
-// ─── management console ─────────────────────────────────────
-.bm-vault-add-row
+// ─── Posts Management ───────────────────────────────────────
+// The console's list of every article and album. Built from the SAME grid the
+// registry it replaces used — identity on the left, status and controls on the
+// right, and the audience field spanning both underneath, because that field is
+// the widest thing here and reads badly in a gutter.
+
+.bm-post-bar
   display flex
-  gap 8px
-  margin-top 10px
+  align-items center
+  justify-content space-between
+  flex-wrap wrap
+  gap 10px
 
-  @media screen and (max-width: 600px)
-    flex-direction column
-
-.bm-vault-line
-  flex 1
-  min-width 0
-  padding 9px 11px
-  border 1px solid var(--border-color)
-  border-radius 10px
-  background var(--second-background-color)
-  font-family var(--code-font)
-  font-size 0.74rem
-  color var(--text-color)
-
-  &:focus
-    border-color var(--primary-color)
-    outline none
-
-.bm-vault-add-state
-  margin 8px 0 0
-  font-size 0.74rem
-  color var(--third-text-color)
-
-  &[data-tone="ok"]
-    color var(--primary-color)
-
-  &[data-tone="bad"]
-    color var(--box-red-text)
-
-  &:empty
-    display none
-
-.bm-vault-list
+.bm-post-list
   display flex
   flex-direction column
   gap 12px
@@ -162,9 +173,7 @@ $vault-badge-ink = #fff
   padding 0
   list-style none
 
-// Two columns for the identity of the post, a third row spanning both for the
-// audience — the field is the widest thing here and reads badly in a gutter.
-.bm-vault
+.bm-post
   display grid
   grid-template-columns minmax(0, 1fr) auto
   gap 6px 18px
@@ -172,21 +181,44 @@ $vault-badge-ink = #fff
   border 1px solid var(--border-color)
   border-radius $vault-radius
   background var(--background-color)
-  transition border-color 0.2s ease
+  transition border-color 0.2s ease, opacity 0.2s ease
 
   &:hover
     border-color var(--shadow-color-1)
 
+  // An encrypted item is outlined exactly as its home tile is — the same
+  // primary rule at the same opacity, drawn as an overlay so it does not move
+  // the row by a pixel — so the two surfaces agree about what an outline means.
+  &.is-encrypted
+    position relative
+
+    &::after
+      content ''
+      position absolute
+      inset 0
+      border-radius inherit
+      border 1px solid var(--primary-color)
+      opacity 0.34
+      pointer-events none
+
+  // While a commit is in flight. The row stays legible and stops being a target.
+  &.is-working
+    opacity 0.55
+    pointer-events none
+
+  &.is-bad
+    border-color var(--box-red-text)
+
   @media screen and (max-width: 640px)
     grid-template-columns minmax(0, 1fr)
 
-.bm-vault-main
+.bm-post-main
   display flex
   flex-direction column
   gap 6px
   min-width 0
 
-.bm-vault-title
+.bm-post-title
   display flex
   align-items center
   gap 9px
@@ -209,7 +241,7 @@ $vault-badge-ink = #fff
     &:hover
       color var(--primary-color)
 
-.bm-vault-meta
+.bm-post-meta
   display flex
   flex-wrap wrap
   align-items center
@@ -226,11 +258,11 @@ $vault-badge-ink = #fff
     font-size 0.68rem
     opacity 0.75
 
-.bm-vault-slug
+.bm-post-slug
   font-family var(--code-font)
   opacity 0.8
 
-.bm-vault-excerpt
+.bm-post-excerpt
   overflow hidden
   display -webkit-box
   -webkit-line-clamp 2
@@ -240,45 +272,113 @@ $vault-badge-ink = #fff
   line-height 1.55
   color var(--third-text-color)
 
-.bm-vault-side
+// Status above, controls below — the order they are read in, and the reason the
+// side column is a column rather than a row.
+.bm-post-side
   display flex
   flex-direction column
   align-items flex-end
   gap 8px
 
   @media screen and (max-width: 640px)
-    flex-direction row
-    align-items center
-    justify-content space-between
+    align-items stretch
 
-.bm-vault-readers
+.bm-bubbles
+  display flex
+  flex-wrap wrap
+  align-items center
+  justify-content flex-end
+  gap 6px
+
+  @media screen and (max-width: 640px)
+    justify-content flex-start
+
+// The bento home's count pill: a rounded chip, an icon, a word. Every state a
+// row can be in wears one, so a column of rows reads down as a single vocabulary
+// instead of a mix of badges, tags and numbers.
+//
+// Each variant takes a matched background/foreground PAIR from the theme's box
+// tokens, which invert together — so nothing here needs a dark-mode branch and
+// nothing can end up dark-on-dark.
+.bm-bubble
   display inline-flex
-  align-items baseline
+  align-items center
   gap 6px
   padding 4px 10px
   border-radius 999px
   background var(--third-background-color-transparent)
-  font-size 0.72rem
+  font-size 0.7rem
+  font-weight 600
+  letter-spacing 0.01em
   color var(--third-text-color)
   white-space nowrap
 
   i
-    align-self center
-    font-size 0.68rem
-    color var(--primary-color)
+    font-size 0.66rem
 
-  strong
-    font-size 0.86rem
-    font-weight 650
-    color var(--second-text-color)
-    font-variant-numeric tabular-nums
+  &.is-encrypted
+    background var(--box-indigo-bg)
+    color var(--box-indigo-text)
 
-  &[data-empty="1"]
+  &.is-draft
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
+
+  &.is-unpublished
+    background var(--box-slate-bg)
+    color var(--box-slate-text)
+
+  &.is-album
+    background var(--box-teal-bg)
+    color var(--box-teal-text)
+
+  &.is-sticky
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
+
+  // The readers count, alongside the state chips rather than below them: how
+  // many people can open a post is part of what state it is in.
+  &.is-readers
+    align-items baseline
+    background var(--third-background-color-transparent)
+    color var(--third-text-color)
+
     i
+      align-self center
+      color var(--primary-color)
+
+    strong
+      font-size 0.84rem
+      font-weight 650
+      color var(--second-text-color)
+      font-variant-numeric tabular-nums
+
+    &[data-empty="1"] i
       color var(--third-text-color)
       opacity 0.6
 
-.bm-vault-audience
+.bm-post-actions
+  display flex
+  align-items center
+  flex-wrap wrap
+  justify-content flex-end
+  gap 4px
+
+  @media screen and (max-width: 640px)
+    justify-content flex-start
+
+// An anchor, not a button, so Edit is a place you can open in a new tab — but it
+// has to look like every other quiet control in the console.
+a.bm-post-edit
+  color var(--second-text-color)
+
+  &:hover
+    color var(--first-text-color)
+
+  i, span
+    color inherit
+
+.bm-post-audience
   grid-column 1 / -1
   display flex
   flex-direction column
@@ -286,6 +386,14 @@ $vault-badge-ink = #fff
   margin-top 6px
   padding-top 12px
   border-top 1px dashed var(--border-color)
+
+.bm-post-error
+  margin 0
+  font-size 0.76rem
+  color var(--box-red-text)
+
+  &:empty
+    display none
 
 // ─── the audience field's own box ───────────────────────────
 // It sits OUTSIDE `.article-content` for a reason (plugins/vault.js): inside it,
@@ -301,6 +409,103 @@ $vault-badge-ink = #fff
     margin 0
     border-radius 50%
     cursor inherit
+
+// ─── which version you are reading ──────────────────────────
+// One control, seen from either side: the build renders it inside a draft's
+// sealed article, and plugins/vault.js mounts the same object on the published
+// post for the reader who holds the draft's key. It sits at the far end of the
+// author row, so the row says who wrote this and which copy of it this is.
+//
+// The row is allowed to WRAP. It is a fixed 46px avatar plus two lines of meta
+// plus this, inside a column whose width is a fraction of the page, and a
+// flex row that cannot wrap does not stay inside its container — it runs off
+// the edge. Below the tablet breakpoint the control takes a line of its own.
+.article-header
+  flex-wrap wrap
+  row-gap 10px
+
+.article-version
+  display inline-flex
+  align-items center
+  gap 8px
+  margin-left auto
+  flex-shrink 0
+
+  +redefine-tablet()
+    margin-left 0
+    width 100%
+
+.article-version-tag
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 4px 10px
+  border-radius 999px
+  font-size 0.7rem
+  font-weight 650
+  letter-spacing 0.01em
+  white-space nowrap
+
+  i
+    font-size 0.66rem
+
+  // Matched background/foreground pairs, so neither mode needs a branch and
+  // neither can end up printing dark ink on a dark fill.
+  &.is-draft
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
+
+    i
+      color var(--box-amber-text)
+
+  &.is-unpublished
+    background var(--box-slate-bg)
+    color var(--box-slate-text)
+
+    i
+      color var(--box-slate-text)
+
+  &.is-published
+    background var(--box-green-bg)
+    color var(--box-green-text)
+
+    i
+      color var(--box-green-text)
+
+// The way to the other version. A quiet control, the console's own: an outline
+// that appears on hover rather than a second filled button competing with the
+// tag beside it.
+.article-version-swap
+  display inline-flex
+  align-items center
+  gap 6px
+  padding 5px 11px
+  border 1px solid var(--border-color)
+  border-radius 9px
+  font-size 0.74rem
+  font-weight 500
+  color var(--second-text-color)
+  white-space nowrap
+  transition border-color 0.2s ease, color 0.2s ease, background 0.2s ease
+
+  i, span
+    color inherit
+
+  &:hover
+    border-color var(--primary-color)
+    background var(--third-background-color-transparent)
+    color var(--primary-color)
+
+    i, span
+      color var(--primary-color)
+
+// While the editor is open, the version you are editing is the only version
+// there is. Switching away mid-edit would leave unsaved text behind on a page
+// the save no longer belongs to, so the swap goes quiet rather than disappearing
+// — the tag still says which copy this is.
+.blog-editing .article-version-swap
+  opacity 0.4
+  pointer-events none
 
 // ─── decrypted rows in a listing ────────────────────────────
 // Archive, tag page, category page and the taxonomy gate all render through

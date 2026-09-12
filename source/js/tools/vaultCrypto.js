@@ -63,6 +63,13 @@ export async function openJSON(key, sealed) {
   return JSON.parse(await openText(key, sealed));
 }
 
+/** Mirrors `pageId` in scripts/lib/vault-crypto.js. The admin console and the
+ *  composer are sealed like any other item, and this is how a browser holding
+ *  the keyring recognises which grant opens them. */
+export function pageId(name) {
+  return sha256Hex("page|" + String(name)).then((hex) => hex.slice(0, 16));
+}
+
 export function vaultPrefix() {
   return String((window.theme && window.theme.backend && window.theme.backend.vault_prefix) || "/v")
     .replace(/\/+$/, "");

@@ -1,45 +1,70 @@
 <%#
-    Blog Management — the admin console for the notification subsystem.
+    Blog Management — the admin console.
 
-    The server renders the shell only. Everything inside the three sections
-    depends on who is signed in, which is not known at build time, so
-    source/js/plugins/blog-management.js paints them from the Worker's answers.
+    This markup is never published. The build renders it, seals it under the
+    admin key and writes the ciphertext to the vault prefix; what lands at
+    /blog-management/ is the access probe in pages/management/admin-gate.ejs,
+    and this arrives only once the Worker has released the key AND the blob has
+    opened under it. See scripts/vault-generator.js.
 
-    The page is generated for everybody (a route Swup can navigate to has to
-    exist) and shows nothing but the locked notice until an admin session comes
-    back. That is presentation: authorisation lives in the Worker, and every
-    route this page calls checks the isAdmin claim on its own.
+    The shell is the article layout's, not a page container's: the console is a
+    long document with sections, and the contents rail beside it is the one the
+    theme already has. Everything inside the sections is painted by
+    source/js/plugins/blog-management.js — from the inventory sealed alongside
+    this markup for anything the build knew, and from the Worker only for what
+    it could not: who may read what, and the notification database.
 %>
-<div id="blog-management" class="bm" data-phase="loading">
-    <header class="bm-head">
-        <h1 class="bm-heading">
-            <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
-            <%= __('management.title') %>
-        </h1>
-        <p class="bm-lede"><%= __('management.lede') %></p>
-        <% if (theme.backend && theme.backend.vault_enable) { %>
-        <a class="bm-write blog-admin-only" href="<%= url_for('/blog-management/write/') %>">
-            <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
-            <span><%= __('editor.new_post') %></span>
-        </a>
-        <% } %>
-    </header>
+<div class="post-page-container flex relative justify-between box-border w-full h-full">
+    <div class="article-content-container">
+        <%# The article's own inset, as the same utility `.article-content`
+            carries — the console is a document in the article container, so it
+            has to sit on the article's measure. %>
+        <div id="blog-management" class="bm px-2 sm:px-6 md:px-8">
+            <header class="bm-head">
+                <h1 class="bm-heading" id="bm-top">
+                    <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
+                    <%= __('management.title') %>
+                </h1>
+                <p class="bm-lede"><%= __('management.lede') %></p>
+            </header>
 
-    <%# The same card the encrypted-post gate waits behind: both are one Worker
-        deciding what this identity may see, and they should not look like two
-        different kinds of wait. %>
-    <div class="bm-gate">
-        <%- partial('components/access-probe', { text: __('management.checking') }) %>
+            <div class="bm-console">
+                <%# Posts first: it is the section this console is opened for, and
+                    the only one whose content the build already knows. %>
+                <% if (theme.backend && theme.backend.vault_enable) { %>
+                <section class="bm-section" data-part="posts" id="bm-posts"></section>
+                <% } %>
+                <section class="bm-section" data-part="announce" id="bm-announce"></section>
+                <section class="bm-section" data-part="notifications" id="bm-notifications"></section>
+                <section class="bm-section" data-part="followers" id="bm-followers"></section>
+            </div>
+        </div>
     </div>
 
-    <div class="bm-console" hidden>
-        <section class="bm-section" data-part="announce"></section>
-        <section class="bm-section" data-part="notifications"></section>
-        <%# Encrypted Posts sits ABOVE the follower list: it is a short, bounded
-            registry, and the follower list grows without limit and pages. %>
-        <% if (theme.backend && theme.backend.vault_enable) { %>
-        <section class="bm-section" data-part="vault"></section>
-        <% } %>
-        <section class="bm-section" data-part="followers"></section>
+    <%# The contents rail, written out rather than generated: this page has no
+        `page.content` for toc() to read, and its sections are fixed. Same
+        markup the helper emits, so layouts/toc.js drives it unchanged. %>
+    <% if (theme.articles.toc.enable === true) {
+        const sections = [
+            theme.backend && theme.backend.vault_enable ? ['bm-posts', __('management.p_title')] : null,
+            ['bm-announce', __('management.announce')],
+            ['bm-notifications', __('management.notifications')],
+            ['bm-followers', __('management.followers')],
+        ].filter(Boolean);
+    %>
+    <div class="toc-content-container">
+        <div class="post-toc-wrap">
+            <div class="post-toc">
+                <div class="toc-title"><%- __('toc') %></div>
+                <div class="page-title"><%= __('management.title') %></div>
+                <ol class="nav">
+                    <% sections.forEach(([id, label]) => { %>
+                    <li class="nav-item nav-level-2">
+                        <a class="nav-link" href="#<%= id %>"><span class="nav-text"><%= label %></span></a>
+                    </li>
+                    <% }); %>
+                </ol>
+            </div>
+        </div>
     </div>
 </div>

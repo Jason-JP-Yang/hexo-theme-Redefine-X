@@ -15,10 +15,18 @@ $bm-gap = 12px
 $bm-radius = 14px
 $bm-morph = 0.28s cubic-bezier(0.32, 0.72, 0, 1)
 
+// Inside `.article-content-container`, which is the article layout's own box —
+// the console is a long document with a contents rail beside it, and that is the
+// one container in the theme shaped for exactly that. It therefore brings no
+// border and no background of its own, and its side inset is the ARTICLE's, as a
+// Tailwind utility on the element (px-2 sm:px-6 md:px-8) exactly as
+// `.article-content` carries it. A width written here instead would be a second
+// answer to the same question.
 .bm
   display flex
   flex-direction column
   gap 26px
+  padding-top 4px
   padding-bottom 40px
 
 // ─── head ───────────────────────────────────────────────────
@@ -52,34 +60,10 @@ $bm-morph = 0.28s cubic-bezier(0.32, 0.72, 0, 1)
   line-height 1.65
   color var(--third-text-color)
 
-// ─── gate ───────────────────────────────────────────────────
-.bm-gate
-  display flex
-  flex-direction column
-  align-items center
-  justify-content center
-  gap 12px
-  padding 64px 24px
-  border 1px solid var(--border-color)
-  border-radius $bm-radius
-  color var(--third-text-color)
-  text-align center
-
-  > i
-    font-size 22px
-    opacity 0.7
-
-  .bm-gate-text
-    margin 0
-    max-width 40ch
-    font-size 0.86rem
-    line-height 1.6
-
-  .bm-quiet
-    width auto
-    padding 7px 14px
-    border-color var(--border-color)
-
+// There is no gate here any more. The page does not exist until
+// plugins/admin-gate.js has both the key and a blob that opens under it, so
+// there is no state in which the console is on screen and not yet allowed —
+// waiting happens in _partials/access-probe.styl, in front of nothing.
 .bm-console
   display flex
   flex-direction column

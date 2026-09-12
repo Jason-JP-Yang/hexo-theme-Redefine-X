@@ -1,12 +1,29 @@
 <%
-    // The one "Encrypted" marker the whole site uses — the home grid's tile and
-    // the album collection card render THIS, so the two can never drift.
+    // The one status marker the whole site uses — the home grid's tile, the
+    // album collection card and Posts Management all render THIS, so the three
+    // can never drift.
+    //
+    // Three states, one object. Which one a card wears follows from the post's
+    // own front matter, so a draft's tile says Draft rather than Encrypted:
+    // every draft is encrypted, so saying so tells a reader nothing, while
+    // which VERSION they are looking at is the whole question.
+    //
+    //   draft + supersedes   Draft        an unfinished copy of a live post
+    //   draft, nothing else  Unpublished  never published at all
+    //   otherwise            Encrypted
     //
     // `extra` carries only the host card's layout classes. `is-inline` takes the
     // badge out of absolute positioning for a card with no picture to sit on,
     // where an overlay would land on the text instead.
     const cls = typeof extra === "undefined" || !extra ? "" : " " + extra;
+    const draft = typeof isDraft !== "undefined" && isDraft;
+    const shadows = typeof supersedes !== "undefined" && supersedes;
+
+    const kind = draft ? (shadows ? "draft" : "unpublished") : "encrypted";
+    const icon = { draft: "fa-pen-nib", unpublished: "fa-eye-slash", encrypted: "fa-lock-keyhole" }[kind];
+    const label = __("vault." + (kind === "encrypted" ? "badge" : kind));
+    const title = __("vault." + (kind === "encrypted" ? "authorized" : kind + "_hint"));
 %>
-<div class="vault-badge<%= cls %>" title="<%- __('vault.authorized') %>">
-    <i class="fa-regular fa-lock-keyhole"></i><%- __('vault.badge') %>
+<div class="vault-badge is-<%= kind %><%= cls %>" title="<%- title %>">
+    <i class="fa-regular <%= icon %>"></i><%- label %>
 </div>

@@ -298,25 +298,24 @@ management:
   confirm: もう一度押す
   orphans: 所有者のいないデバイス
   orphans_hint: 所有者がフォローを解除した購読です。ブロック済みのものだけが残り、それ以外は日次の掃除で削除されます。
-  v_title: 暗号化された記事
-  v_lede: 公開済みの暗号化記事と、それを開ける人の一覧。ここに保存されるのは鍵だけで、本文は決して保存されません。
-  v_empty: まだ有効化された暗号化記事はありません。
-  v_add: 記事を有効化
-  v_add_hint: ビルド出力の1行を貼り付けてください。同じ行を貼り直すと更新になります。
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: 有効化
-  v_added: 有効化しました
-  v_bad: これは有効化用の行ではありません。
-  v_revoke: 失効
-  v_revoke_hint: 以後は自分を含め誰も開けなくなります。
+  p_title: 記事の管理
+  p_lede: サイトのすべての記事とアルバム、そしてそれぞれに対してできること。ここに表示される内容は取得したものではなく、ビルドがこのページに封入したものです。
+  p_all: すべて
+  p_encrypted: 暗号化
+  p_drafts: 下書き
+  p_unpublished: 未公開
+  p_new: 新しい記事
+  p_album: アルバム
+  p_draft: 下書き
+  p_unpublished_tag: 未公開
+  p_sticky: 固定
+  p_untitled: 無題
+  p_empty: この絞り込みに一致するものはありません。
+  p_unpublish: 公開を取り消す
+  v_badge: 暗号化
   v_audience: 読める人
-  v_save: 読者を保存
-  v_saved: 保存しました
-  v_slug: パス
   v_reader: 人
   v_readers: 人
-  v_unreadable: 読み取れません — 鍵が今回のビルドと一致しません
-  v_none: まだ誰もいません
 
 vault:
   unlocking: アクセス権を確認しています
@@ -329,3 +328,10 @@ vault:
   no_comments_hint: 一部の読者しか開けない記事に公開スレッドを置くと、題名と内容が再び公開されてしまいます。
   no_comments_album: 暗号化アルバムではコメントといいねを受け付けません
   no_comments_album_hint: 公開スレッドにはアルバム名と各写真のファイル名が残り、いいねの数も同じスレッドに保存されるため、どちらも有効にしていません。
+  draft: 下書き
+  draft_hint: 公開済みの記事の未完成のコピーです。読めるのはあなただけです。
+  unpublished: 未公開
+  unpublished_hint: この記事はまだ公開されていません。読めるのはあなただけです。
+  published: 公開済み
+  view_published: 公開版を見る
+  view_draft: 下書きを見る

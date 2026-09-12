@@ -33,7 +33,7 @@
         the tile's own top edge there, so an overlay lands on the running numeral
         and the title. %>
     <% if (vault && hasCover) { %>
-        <%- partial('components/vault-badge') %>
+        <%- partial('components/vault-badge', { isDraft: post.draft === true, supersedes: post.supersedes }) %>
     <% } else if (!vault && post.sticky) { %>
         <div class="home-article-sticky-badge">
             <i class="fa-regular fa-thumbtack"></i><%- __('sticky') %>
@@ -64,7 +64,7 @@
             line of summary that silently disappears. %>
         <div class="home-article-head">
             <% if (vault && !hasCover) { %>
-                <%- partial('components/vault-badge', { extra: 'is-inline' }) %>
+                <%- partial('components/vault-badge', { extra: 'is-inline', isDraft: post.draft === true, supersedes: post.supersedes }) %>
             <% } %>
 
             <% if (post.categories.length && theme.home.categories.enable === true) { %>

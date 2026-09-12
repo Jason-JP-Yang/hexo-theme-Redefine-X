@@ -42,6 +42,7 @@ import { closeDialogs, createStage, forgetTree, openAsk, openPicker, openSheet, 
 import { holdTOC, releaseTOC, scheduleTOC } from "./toc.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents } from "./render.js";
+import { vaultPrefix } from "../../tools/vaultCrypto.js";
 import {
   bindImage,
   buildPreloader,
@@ -432,10 +433,23 @@ async function activate(host) {
     } else {
       const entry = await session.entryForPage(identity);
       if (!entry) throw new Error(t("no_document", "This post is not in the repository you can write to."));
+
+      // A published post that already HAS a draft is edited on the DRAFT's own
+      // page, never here. Opening the draft's text under the published post's
+      // URL left the two versions sharing one address: the contents rail, the
+      // recovery stash and the page you would reload after a save all belonged
+      // to the published copy while the text on screen was the draft's, and
+      // which one a later save landed on depended on how you had arrived.
+      if (entry.draft && identity.source && entry.slug) {
+        state.dirty = false;
+        location.href = `${siteRoot()}${vaultPrefix()}/${entry.slug}/#edit`;
+        return;
+      }
+
       state.doc = await session.openDocument(entry);
       state.entry = entry;
 
-      if (entry.draft && identity.source) {
+      if (entry.draft) {
         notice("info", t("editing_draft", "You are editing the draft that supersedes this post."));
       } else if (state.doc.stale) {
         notice("warn", t("stale", "The published copy is behind the repository — a build is probably still running."));
@@ -2378,6 +2392,11 @@ export async function initEditor() {
   // it is pressed rather than now.
   pencils = Array.from(document.querySelectorAll(".tool-edit-post"));
   for (const node of pencils) node.addEventListener("click", onPencil);
+
+  // Arriving with `#edit` IS the press. It is how Posts Management opens a
+  // post and how the redirect above lands on a draft's own page, and it costs
+  // nothing to anyone else: a fragment never reaches a server.
+  if (location.hash === "#edit") openHere();
 }
 
 function onPencil(e) {

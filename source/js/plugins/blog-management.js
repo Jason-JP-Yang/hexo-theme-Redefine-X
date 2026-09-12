@@ -1,24 +1,25 @@
 /**
  * Blog Management — the admin console at /blog-management/.
  *
- * Four sections, each fetched and painted independently so a slow list never
- * holds up the others:
+ * Four sections, each painted independently so a slow list never holds up the
+ * others:
  *
- *   A · Announce   compose and send one announcement, with an allowlist or a
+ *   A · Posts      every article and album the site has, whatever state it is
+ *                  in, with what can be done to each. Built entirely from the
+ *                  inventory sealed alongside this page (scripts/lib/post-
+ *                  inventory.js) — the Worker is asked ONE question, which is
+ *                  the only one a build cannot answer: who may read what.
+ *   B · Announce   compose and send one announcement, with an allowlist or a
  *                  blocklist of GitHub identities, and a full server receipt.
- *   B · Notifications  what the database still holds — edit the wording, or
+ *   C · Notifications  what the database still holds — edit the wording, or
  *                  delete a row and every inbox reference to it.
- *   C · Encrypted Posts  the key registry: register a post, revoke it, and set
- *                  who may open it.
  *   D · Followers  the global per-topic blocklists, then every follower with the
  *                  devices hanging off them, each mutable or bannable.
  *
- * Loaded on demand: notifications.js dynamic-imports this file only when the
- * page it belongs to is on screen, so no reader ever downloads it.
- *
- * Nothing here is a security boundary. The page renders for anyone who reaches
- * the URL and every route it calls is checked by the Worker against the isAdmin
- * claim in the session token; the gate below is a courtesy, not a lock.
+ * Reached only through plugins/admin-gate.js, which has already established two
+ * things by the time this runs: the Worker released the admin key, and this
+ * page's markup decrypted under it. Every route called from here is checked by
+ * the Worker against the isAdmin claim in the session token as well.
  */
 
 import {
@@ -30,14 +31,7 @@ import {
   describeDevice,
 } from "./notifications-inbox.js";
 import { Picker, avatarOf } from "../tools/chipPicker.js";
-import {
-  b64urlToBytes,
-  importAesKey,
-  openJSON,
-  fetchSealed,
-  vaultPrefix,
-  siteRoot,
-} from "../tools/vaultCrypto.js";
+import { siteRoot } from "../tools/vaultCrypto.js";
 
 // The morph used for inline editing: content fades out, the box resizes, content
 // fades back. Same shape and the same feel as editing an instant-note bubble.
@@ -96,7 +90,9 @@ const state = {
   compose: { mode: "all" },
   notifications: { type: "", items: [], cursor: 0, more: false, error: false, loading: false },
   followers: { items: [], cursor: 0, more: false, orphans: [], totals: null, error: false, loading: false },
-  vault: { items: [], offset: 0, more: false, error: false, loading: false, keys: null },
+  // `items` arrives sealed with the page and is never fetched; only `audiences`
+  // is asked for, because only the Worker knows it.
+  posts: { items: [], audiences: {}, filter: "", loading: false },
   blocklists: { posts: [], notes: [], announcements: [] },
 };
 
@@ -255,7 +251,7 @@ function renderCompose(section) {
 
       <footer class="bm-compose-foot">
         <span class="bm-counter"><span class="bm-c-count">0</span>/500</span>
-        <button type="button" class="bm-primary bm-post" disabled>
+        <button type="button" class="bm-primary bm-send" disabled>
           <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
           <span class="np-btn-label">${e("post", "Post announcement")}</span>
         </button>
@@ -302,7 +298,7 @@ function syncCompose() {
   const title = section.querySelector(".bm-c-title");
   const body = section.querySelector(".bm-c-body");
   const url = section.querySelector(".bm-c-url");
-  const post = section.querySelector(".bm-post");
+  const post = section.querySelector(".bm-send");
   const picker = pickers.get("audience");
   if (!title || !post) return;
 
@@ -666,231 +662,265 @@ function collapseAway(item, after) {
   setTimeout(after, MORPH_MS);
 }
 
-// ─── C · encrypted posts ─────────────────────────────────────
+// ─── A · posts ───────────────────────────────────────────────
+//
+// Every article and album the site has, in one list, whatever state it is in.
+//
+// ── What a row knows ────────────────────────────────────────────────────────
+//
+// All of it, before the page opened. Titles, dates, taxonomy, excerpts, which
+// file each one lives in and what state it is in were settled by the build and
+// sealed into this page (scripts/lib/post-inventory.js). The console used to
+// ask the Worker for a registry that holds no metadata and then fetch and
+// decrypt one card per encrypted post to find out what it was called; none of
+// that happens any more. ONE request is made, for the audiences, because who
+// may read what is the only thing a build cannot know.
+//
+// ── The states, and which controls each one earns ───────────────────────────
+//
+//   published + public       Edit · Unpublish
+//   published + encrypted    Edit · Unpublish · who may read it
+//   published + a draft      the draft's own badge; Edit opens the DRAFT
+//   unpublished (draft only) Edit · nothing to unpublish, and no audience —
+//                            a draft is the author's unfinished copy and has
+//                            exactly one reader, which is why the Worker
+//                            refuses to grant one however it is asked.
+//   album                    who may read it, when it is encrypted. Its flag
+//                            lives in masonry.yml, so there is no file here to
+//                            edit and nothing to unpublish.
 
-/**
- * The registry of encrypted posts and, per post, who may open it.
- *
- * Activation is a paste, not a form: the build prints one JSON line per new
- * post — id, obfuscated slug, wrapped key — and that line goes in whole. The
- * key is already wrapped under VAULT_MASTER when it is printed, so it is opaque
- * to this page, to the network, and to the database it lands in.
- */
-function renderVaultShell(section) {
+const POST_FILTERS = ["", "encrypted", "draft", "unpublished"];
+
+/** Where the composer lives. Not a section of its own: writing a post is the
+ *  thing this list is for, so the button belongs at the top of the list. */
+function writeHref() {
+  return siteRoot() + "/blog-management/write/";
+}
+
+function renderPostsShell(section) {
+  const filters = [
+    ["", t("p_all", "All")],
+    ["encrypted", t("p_encrypted", "Encrypted")],
+    ["draft", t("p_drafts", "Drafts")],
+    ["unpublished", t("p_unpublished", "Unpublished")],
+  ];
+
   section.innerHTML = `
     <h2 class="bm-section-title">
-      <i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i>${e("v_title", "Encrypted posts")}
-      <span class="bm-count bm-vault-count"></span>
+      <i class="fa-solid fa-newspaper" aria-hidden="true"></i>${e("p_title", "Posts management")}
+      <span class="bm-count bm-post-count"></span>
     </h2>
-    <p class="bm-lede">${e("v_lede", "Every encrypted post the site has published, and who may open it.")}</p>
+    <p class="bm-lede">${e(
+      "p_lede",
+      "Every article and album on the site, and what can be done with each. Nothing here is fetched — it was sealed into this page by the build."
+    )}</p>
 
-    <div class="bm-card bm-vault-add-card">
-      <h3 class="bm-sub-title">${e("v_add", "Activate a post")}</h3>
-      <p class="bm-hint">${e("v_add_hint", "Paste one line from the build output.")}</p>
-      <div class="bm-vault-add-row">
-        <input type="text" class="bm-input bm-vault-line" spellcheck="false" autocomplete="off"
-               placeholder='${escapeHTML(t("v_paste", '{"id":"...","slug":"...","wrapped":"..."}'))}' />
-        <button type="button" class="bm-primary bm-vault-add">
-          <span class="np-btn-label">${e("v_activate", "Activate")}</span>
-        </button>
+    <div class="bm-post-bar">
+      <div class="bm-seg bm-post-filter" role="group">
+        ${filters
+          .map(
+            ([value, label]) =>
+              `<button type="button" data-filter="${escapeHTML(value)}"${
+                value === state.posts.filter ? ' class="is-on"' : ""
+              }>${escapeHTML(label)}</button>`
+          )
+          .join("")}
       </div>
-      <p class="bm-vault-add-state" role="status"></p>
+      <a class="bm-write" href="${escapeHTML(writeHref())}">
+        <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
+        <span>${e("p_new", "New post")}</span>
+      </a>
     </div>
 
-    <ul class="bm-vault-list"></ul>
-    <div class="bm-foot"></div>`;
+    <ul class="bm-post-list"></ul>`;
+}
+
+/** Which chips a row wears. Order is fixed so a column of rows reads down. */
+function postFlags(row) {
+  const flags = [];
+  if (row.kind === "album") flags.push(["album", "fa-images", t("p_album", "Album")]);
+  if (row.encrypted) flags.push(["encrypted", "fa-lock-keyhole", t("v_badge", "Encrypted")]);
+  if (row.draft) flags.push(["draft", "fa-pen-nib", t("p_draft", "Draft")]);
+  if (!row.published) flags.push(["unpublished", "fa-eye-slash", t("p_unpublished_tag", "Unpublished")]);
+  if (row.sticky) flags.push(["sticky", "fa-thumbtack", t("p_sticky", "Pinned")]);
+  return flags;
+}
+
+function matchesFilter(row, filter) {
+  if (!filter) return true;
+  if (filter === "encrypted") return !!row.encrypted;
+  if (filter === "draft") return !!row.draft;
+  if (filter === "unpublished") return !row.published;
+  return true;
 }
 
 /**
- * The Worker stores no metadata for an encrypted post — only its key. An admin
- * holds every key, so the panel decrypts each post's own `c.bin` (the same
- * record every listing on the site is built from) and reads its `meta` field.
- * Nothing readable is ever added to the database for the sake of this list.
+ * Can this row's audience be set?
+ *
+ * Only a genuinely PUBLISHED encrypted item. A draft is not published, so there
+ * is nobody to grant it to; an article whose published version is public is
+ * readable by everyone already. An encrypted post that also has a draft keeps
+ * its control — the grant is on the published version, which is what readers
+ * still see, and the draft standing in front of it changes nothing about that.
  */
-async function hydrateVaultMeta(rows) {
-  await Promise.all(
-    rows.map(async (row) => {
-      if (row.meta) return;
-      row.meta = {};
-      try {
-        const key = await importAesKey(b64urlToBytes(row.key));
-        const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/c.bin`);
-        if (!sealed) return;
-        const meta = (await openJSON(key, sealed)).meta || {};
-        const album = meta.kind === "album";
-        row.meta = {
-          album,
-          title: (album ? meta.name : meta.title) || meta.title || "",
-          date: meta.date || "",
-          category: album
-            ? meta.category || ""
-            : (meta.categories || []).map((c) => c.name).join(" / "),
-          tags: (meta.tags || []).map((t2) => t2.name),
-          excerpt: ((album ? meta.description : meta.excerpt) || "").slice(0, 150),
-        };
-      } catch (err) {
-        /* a post whose key no longer opens its record still lists by slug */
-      }
-    })
-  );
+function canGrant(row) {
+  return !!(row.published && row.encrypted && row.vaultId);
 }
 
-function vaultRowHTML(row) {
-  const m = row.meta || {};
-  const when = m.date ? new Date(m.date) : null;
-  const readers = row.audience.length;
+/** The draft's page when there is one — editing anything else forks a second
+ *  draft of the same article, and the reader is already being shown this one. */
+function editHref(row) {
+  const target = row.draft ? row.draft.href : row.href;
+  return target + (target.indexOf("#") < 0 ? "#edit" : "");
+}
+
+function postRowHTML(row) {
+  const when = row.date ? new Date(row.date) : null;
+  const readers = (state.posts.audiences[row.vaultId] || []).length;
+  const grant = canGrant(row);
+  const meta = [];
+
+  if (when) {
+    meta.push(
+      `<span><i class="fa-solid fa-calendars"></i>${when.toISOString().slice(0, 10)}</span>`
+    );
+  }
+  if ((row.categories || []).length) {
+    meta.push(
+      `<span><i class="fa-solid fa-folders"></i>${escapeHTML(row.categories.join(" / "))}</span>`
+    );
+  }
+  if ((row.tags || []).length) {
+    meta.push(`<span><i class="fa-solid fa-tags"></i>${escapeHTML(row.tags.join(", "))}</span>`);
+  }
+  if (row.slug) {
+    meta.push(`<span class="bm-post-slug"><i class="fa-solid fa-link"></i>${escapeHTML(row.slug)}</span>`);
+  }
+
+  // The bubbles, top right — the same object the bento home uses for a count on
+  // a card: a pill, an icon, a number. The readers bubble is one of them rather
+  // than a control of its own, so a row's status reads as one line of chips.
+  const bubbles = postFlags(row)
+    .map(
+      ([kind, icon, label]) =>
+        `<span class="bm-bubble is-${kind}"><i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHTML(
+          label
+        )}</span>`
+    )
+    .join("");
+
+  const readerBubble = grant
+    ? `<span class="bm-bubble is-readers" data-empty="${readers ? "0" : "1"}">
+         <i class="fa-solid fa-user-lock" aria-hidden="true"></i>
+         <strong>${readers}</strong>${escapeHTML(
+           t(readers === 1 ? "v_reader" : "v_readers", "readers")
+         )}</span>`
+    : "";
+
+  // An album's `vault:` flag lives in masonry.yml, so there is no markdown file
+  // here to open and nothing to take down.
+  const actions =
+    row.kind === "album"
+      ? ""
+      : `<a class="bm-quiet bm-post-edit" href="${escapeHTML(editHref(row))}">
+           <i class="fa-solid fa-pen" aria-hidden="true"></i>
+           <span class="np-btn-label">${e("edit", "Edit")}</span></a>
+         ${
+           row.published
+             ? `<button type="button" class="bm-quiet bm-danger bm-post-unpublish">
+                  <i class="fa-solid fa-eye-slash" aria-hidden="true"></i>
+                  <span class="np-btn-label">${e("p_unpublish", "Unpublish")}</span></button>`
+             : ""
+         }`;
 
   return `
-    <li class="bm-vault" data-id="${escapeHTML(row.id)}">
-      <div class="bm-vault-main">
-        <div class="bm-vault-title">
-          <i class="fa-solid ${m.album ? "fa-images" : "fa-lock-keyhole"}" aria-hidden="true"></i>
-          <a href="${escapeHTML(vaultPrefix() + "/" + row.slug + "/")}" target="_blank" rel="noopener">
-            ${escapeHTML(m.title || t("v_unreadable", "Unreadable — key does not match"))}
-          </a>
+    <li class="bm-post${row.encrypted ? " is-encrypted" : ""}${
+      row.draft ? " is-draft" : ""
+    }" data-key="${escapeHTML(row.key)}">
+      <div class="bm-post-main">
+        <div class="bm-post-title">
+          <i class="fa-solid ${
+            row.kind === "album" ? "fa-images" : row.encrypted ? "fa-lock-keyhole" : "fa-file-lines"
+          }" aria-hidden="true"></i>
+          <a href="${escapeHTML(row.href)}" target="_blank" rel="noopener">${escapeHTML(
+            row.title || t("p_untitled", "Untitled")
+          )}</a>
         </div>
-        <div class="bm-vault-meta">
-          ${when ? `<span><i class="fa-solid fa-calendars"></i>${when.toISOString().slice(0, 10)}</span>` : ""}
-          ${m.category ? `<span><i class="fa-solid fa-folders"></i>${escapeHTML(m.category)}</span>` : ""}
-          ${(m.tags || []).length ? `<span><i class="fa-solid fa-tags"></i>${m.tags.map(escapeHTML).join(", ")}</span>` : ""}
-          <span class="bm-vault-slug"><i class="fa-solid fa-link"></i>${escapeHTML(row.slug)}</span>
-        </div>
-        ${m.excerpt ? `<p class="bm-vault-excerpt">${escapeHTML(m.excerpt)}…</p>` : ""}
+        <div class="bm-post-meta">${meta.join("")}</div>
+        ${row.excerpt ? `<p class="bm-post-excerpt">${escapeHTML(row.excerpt)}</p>` : ""}
       </div>
 
-      <div class="bm-vault-side">
-        <div class="bm-vault-readers" data-empty="${readers ? "0" : "1"}">
-          <i class="fa-solid fa-user-lock" aria-hidden="true"></i>
-          <strong>${readers}</strong>
-          <span>${escapeHTML(t(readers === 1 ? "v_reader" : "v_readers", "readers"))}</span>
-        </div>
-        <button type="button" class="bm-quiet bm-danger bm-vault-revoke" title="${escapeHTML(t("v_revoke_hint", ""))}">
-          <i class="fa-solid fa-trash" aria-hidden="true"></i>
-          <span class="np-btn-label">${e("v_revoke", "Revoke")}</span>
-        </button>
+      <div class="bm-post-side">
+        <div class="bm-bubbles">${bubbles}${readerBubble}</div>
+        <div class="bm-post-actions">${actions}</div>
       </div>
 
-      <div class="bm-vault-audience">
-        <label class="bm-blocklist-label">
-          ${e("v_audience", "Who can read this")}
-          <span class="bm-save-state" data-save="vault:${escapeHTML(row.id)}"></span>
-        </label>
-        <div class="bm-picker-host" data-picker="vault:${escapeHTML(row.id)}"></div>
-      </div>
+      ${
+        grant
+          ? `<div class="bm-post-audience">
+               <label class="bm-blocklist-label">
+                 ${e("v_audience", "Who can read this")}
+                 <span class="bm-save-state" data-save="vault:${escapeHTML(row.vaultId)}"></span>
+               </label>
+               <div class="bm-picker-host" data-picker="vault:${escapeHTML(row.vaultId)}"></div>
+             </div>`
+          : ""
+      }
     </li>`;
 }
 
-function paintVault() {
-  const section = root.querySelector('[data-part="vault"]');
+function paintPosts() {
+  const section = root.querySelector('[data-part="posts"]');
   if (!section) return;
-  const list = section.querySelector(".bm-vault-list");
-  const foot = section.querySelector(".bm-foot");
-  const box = state.vault;
+  const list = section.querySelector(".bm-post-list");
+  const box = state.posts;
+  const shown = box.items.filter((row) => matchesFilter(row, box.filter));
 
-  section.querySelector(".bm-vault-count").textContent = box.items.length || "";
-  section.classList.toggle("is-loading", box.loading);
+  section.querySelector(".bm-post-count").textContent = shown.length || "";
 
-  if (box.loading && !box.items.length) {
-    list.innerHTML = SPINNER_ROW;
-  } else if (box.error) {
-    list.innerHTML = `<li class="bm-blank">${e("unreachable", "Couldn't reach the service.")}</li>`;
-  } else if (!box.items.length) {
-    list.innerHTML = `<li class="bm-blank">${e("v_empty", "No encrypted post has been activated yet.")}</li>`;
+  if (!shown.length) {
+    list.innerHTML = `<li class="bm-blank">${e("p_empty", "Nothing matches this filter.")}</li>`;
   } else {
-    list.innerHTML = box.items.map(vaultRowHTML).join("");
+    list.innerHTML = shown.map(postRowHTML).join("");
   }
 
-  foot.innerHTML = box.more
-    ? `<button type="button" class="bm-quiet bm-more" data-more="vault">
-         <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
-         <span class="np-btn-label">${e("load_more", "Load more")}</span></button>`
-    : "";
-
-  // One picker per post, rebuilt with the list because the rows it hangs off
-  // are replaced wholesale. Unlike the blocklists these do NOT autosave: a
-  // half-typed audience must not silently take someone's access away.
-  for (const row of box.items) {
-    const key = `vault:${row.id}`;
+  // One picker per grantable row, rebuilt with the list because the rows they
+  // hang off are replaced wholesale. Unlike the blocklists these do NOT
+  // autosave on every keystroke: a half-typed audience must not silently take
+  // someone's access away.
+  for (const row of shown) {
+    if (!canGrant(row)) continue;
+    const key = `vault:${row.vaultId}`;
     const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
     if (!host) continue;
     const picker = makePicker(key, host, {
       placeholder: t("aud_placeholder", "GitHub login or numeric id, then Enter"),
-      onCommit: (p) => saveVaultAudience(row.id, p),
+      onCommit: (p) => saveAudience(row.vaultId, p),
     });
-    picker.set(row.audience);
+    picker.set(box.audiences[row.vaultId] || []);
     pickers.set(key, picker);
   }
 
   contentChanged();
 }
 
-async function loadVault({ reset = false, trigger = null } = {}) {
-  const box = state.vault;
-  if (reset) {
-    box.items = [];
-    box.offset = 0;
-    box.more = false;
-    box.keys = null;
-  }
-  if (trigger) setBusy(trigger, true);
-  box.loading = true;
-  paintVault();
-
-  // The registry and the keys, together: the listing has no metadata in it, and
-  // the titles this panel shows come from decrypting each post's own card.
-  const [result, keys] = await Promise.all([
-    api(`/api/admin/vault?offset=${box.offset}`),
-    box.keys ? Promise.resolve(null) : api("/api/vault/keys", { method: "POST", body: {} }),
-  ]);
-  box.loading = false;
-  box.error = !result.ok;
-
-  if (keys && keys.ok && keys.data) {
-    box.keys = new Map((keys.data.posts || []).map((p) => [p.id, p.key]));
-  }
-
-  if (result.ok && result.data) {
-    const rows = (result.data.posts || []).map((r) => ({ ...r, key: box.keys?.get(r.id) }));
-    await hydrateVaultMeta(rows.filter((r) => r.key));
-    box.items = box.items.concat(rows);
-    box.more = !!result.data.more;
-    box.offset = box.items.length;
-  }
-  paintVault();
-}
-
-async function activateVault(trigger) {
-  const section = root.querySelector('[data-part="vault"]');
-  const field = section.querySelector(".bm-vault-line");
-  const flag = section.querySelector(".bm-vault-add-state");
-  const raw = field.value.trim();
-  if (!raw) return;
-
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    flag.textContent = t("v_bad", "That is not an activation line.");
-    flag.dataset.tone = "bad";
-    return;
-  }
-
-  setBusy(trigger, true);
-  const result = await api("/api/admin/vault", {
-    method: "POST",
-    body: { id: parsed.id, slug: parsed.slug, wrapped: parsed.wrapped },
+function setPostFilter(value) {
+  state.posts.filter = POST_FILTERS.includes(value) ? value : "";
+  root.querySelectorAll(".bm-post-filter button").forEach((b) => {
+    b.classList.toggle("is-on", b.dataset.filter === state.posts.filter);
   });
-  setBusy(trigger, false);
-
-  flag.textContent = result.ok ? t("v_added", "Activated") : t("v_bad", "That is not an activation line.");
-  flag.dataset.tone = result.ok ? "ok" : "bad";
-  if (result.ok) {
-    field.value = "";
-    loadVault({ reset: true });
-  }
+  paintPosts();
 }
 
-async function saveVaultAudience(postId, picker) {
+/** The one question the build could not answer. */
+async function loadAudiences() {
+  const result = await api("/api/admin/vault");
+  if (!result.ok || !result.data) return;
+  state.posts.audiences = result.data.audiences || {};
+  paintPosts();
+}
+
+async function saveAudience(postId, picker) {
   const flag = root.querySelector(`[data-save="${CSS.escape("vault:" + postId)}"]`);
   if (!picker.settled) {
     if (flag) flag.innerHTML = "";
@@ -912,31 +942,72 @@ async function saveVaultAudience(postId, picker) {
       : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
     if (result.ok) setTimeout(() => (flag.innerHTML = ""), 1800);
   }
-  if (result.ok) {
-    const row = state.vault.items.find((r) => r.id === postId);
-    if (row) {
-      row.audience = audience;
-      const badge = root.querySelector(`.bm-vault[data-id="${CSS.escape(postId)}"] .bm-vault-readers`);
-      if (badge) {
-        badge.querySelector("strong").textContent = audience.length;
-        badge.dataset.empty = audience.length ? "0" : "1";
-      }
-    }
+  if (!result.ok) return;
+
+  state.posts.audiences[postId] = audience;
+  const host = root.querySelector(`[data-picker="${CSS.escape("vault:" + postId)}"]`);
+  const bubble = host && host.closest(".bm-post").querySelector(".bm-bubble.is-readers");
+  if (bubble) {
+    bubble.querySelector("strong").textContent = audience.length;
+    bubble.dataset.empty = audience.length ? "0" : "1";
   }
 }
 
-async function revokeVault(item, trigger) {
-  const id = item.dataset.id;
-  setBusy(trigger, true);
-  const result = await api(`/api/admin/vault/${encodeURIComponent(id)}`, { method: "DELETE" });
-  setBusy(trigger, false);
-  if (!result.ok) return;
+/**
+ * Take a published article down without losing it.
+ *
+ * Its markdown becomes a draft — encrypted, readable by nobody else — and the
+ * published file is deleted, in ONE commit, so there is no window in which the
+ * article is both live and withdrawn or in which neither copy exists. An
+ * encrypted post's key is revoked in the same commit that removes its
+ * ciphertext; a new draft gets its own minted first, so the keyring the commit
+ * carries is correct whichever way the article went in.
+ *
+ * The build that follows is what actually rebuilds the site without it.
+ */
+async function unpublishPost(item, trigger) {
+  const row = state.posts.items.find((r) => r.key === item.dataset.key);
+  if (!row) return;
 
-  collapseAway(item, () => {
-    state.vault.items = state.vault.items.filter((r) => r.id !== id);
-    pickers.delete(`vault:${id}`);
-    paintVault();
-  });
+  setBusy(trigger, true);
+  item.classList.add("is-working");
+
+  try {
+    const [repo, session] = await Promise.all([
+      import("./editor/repo.js"),
+      import("./editor/session.js"),
+    ]);
+    await repo.open(true);
+    await session.unpublish(row);
+
+    // Repainted from local state: the article is a draft now, and what changed
+    // about it is known here without asking anything again.
+    row.published = false;
+    row.encrypted = false;
+    row.draft = row.draft || { id: "", slug: row.slug || "", href: row.href, source: row.source };
+    row.vaultId = "";
+    paintPosts();
+  } catch (err) {
+    item.classList.add("is-bad");
+    setTimeout(() => item.classList.remove("is-bad"), 1600);
+    notePostError(err && err.message);
+  } finally {
+    item.classList.remove("is-working");
+    setBusy(trigger, false);
+  }
+}
+
+function notePostError(message) {
+  const section = root.querySelector('[data-part="posts"]');
+  if (!section) return;
+  let note = section.querySelector(".bm-post-error");
+  if (!note) {
+    note = document.createElement("p");
+    note.className = "bm-post-error";
+    section.appendChild(note);
+  }
+  note.textContent = message || t("offline", "The Worker did not answer.");
+  contentChanged();
 }
 
 // ─── D · followers ───────────────────────────────────────────
@@ -1207,54 +1278,10 @@ async function moderate(button) {
   paintFollowers();
 }
 
-// ─── gate + boot ─────────────────────────────────────────────
-function showGate(kind) {
-  const gate = root.querySelector(".bm-gate");
-  const panel = root.querySelector(".bm-console");
-  root.dataset.phase = kind;
-
-  if (kind === "ready") {
-    gate.hidden = true;
-    panel.hidden = false;
-    contentChanged();
-    return;
-  }
-
-  gate.hidden = false;
-  panel.hidden = true;
-
-  // Waiting is the encrypted-post gate's card, verbatim; the two outcomes are
-  // the console's own, because only one of them is about access at all.
-  if (kind === "loading") {
-    gate.innerHTML = `<div class="access-probe" role="status">
-      <div class="access-probe-lock"><i class="fa-solid fa-lock-keyhole" aria-hidden="true"></i></div>
-      <p class="access-probe-text">${escapeHTML(t("checking", "Checking your session…"))}</p>
-      <div class="access-probe-bar"><span></span></div></div>`;
-    return;
-  }
-
-  const copy = {
-    denied: ["fa-lock", t("denied", "This page is for the blog's administrator.")],
-    error: ["fa-plug-circle-xmark", t("unreachable", "Couldn't reach the notification service.")],
-  }[kind];
-
-  gate.innerHTML = `<i class="fa-solid ${copy[0]}" aria-hidden="true"></i>
-    <p class="bm-gate-text">${escapeHTML(copy[1])}</p>
-    <button type="button" class="bm-quiet bm-retry">
-      <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
-      <span class="np-btn-label">${e("retry", "Try again")}</span></button>`;
-}
-
+// ─── boot ────────────────────────────────────────────────────
 function wire() {
   root.addEventListener("click", (event) => {
     const target = event.target;
-
-    const retry = target.closest(".bm-retry");
-    if (retry) {
-      setBusy(retry, true);
-      boot(true);
-      return;
-    }
 
     const mode = target.closest(".bm-seg [data-mode]");
     if (mode) return void composeMode(mode.dataset.mode);
@@ -1262,19 +1289,18 @@ function wire() {
     const filter = target.closest(".bm-notif-filter [data-type]");
     if (filter) return void setFilter(filter.dataset.type);
 
-    const post = target.closest(".bm-post");
-    if (post) return void send(post);
+    const postFilter = target.closest(".bm-post-filter [data-filter]");
+    if (postFilter) return void setPostFilter(postFilter.dataset.filter);
+
+    const send_ = target.closest(".bm-send");
+    if (send_) return void send(send_);
 
     const more = target.closest(".bm-more");
     if (more) {
       if (more.dataset.more === "followers") loadFollowers({ trigger: more });
-      else if (more.dataset.more === "vault") loadVault({ trigger: more });
       else loadNotifications({ trigger: more });
       return;
     }
-
-    const activate = target.closest(".bm-vault-add");
-    if (activate) return void activateVault(activate);
 
     const edit = target.closest(".bm-edit");
     if (edit) return void startEdit(edit.closest(".bm-notif"));
@@ -1301,11 +1327,11 @@ function wire() {
       return;
     }
 
-    const revoke = target.closest(".bm-vault-revoke");
-    if (revoke) {
-      const item = revoke.closest(".bm-vault");
-      if (confirmStep(revoke, `vault:${item.dataset.id}`, t("confirm", "Press again"))) {
-        revokeVault(item, revoke);
+    const unpublish = target.closest(".bm-post-unpublish");
+    if (unpublish) {
+      const item = unpublish.closest(".bm-post");
+      if (confirmStep(unpublish, `unpub:${item.dataset.key}`, t("confirm", "Press again"))) {
+        unpublishPost(item, unpublish);
       }
       return;
     }
@@ -1314,43 +1340,40 @@ function wire() {
   });
 }
 
-async function boot(force = false) {
-  showGate("loading");
-
-  // One cheap admin route decides the gate. Everything else follows only once
-  // it has said yes, so a non-admin never fires three requests to be refused
-  // three times.
-  if (force && window.blogAuth) await window.blogAuth.getSession(true);
-  const probe = await api("/api/admin/notifications?cursor=0&type=");
-
-  if (probe.status === 401 || probe.status === 403) return void showGate("denied");
-  if (!probe.ok) return void showGate("error");
-
-  showGate("ready");
-
+/**
+ * Paint everything, then fetch only what the build could not settle.
+ *
+ * Posts is on screen before a single request is made — it was sealed into this
+ * page — and the three Worker-backed sections fill in independently, so a slow
+ * follower list never holds up the rest. There is no gate here: the page only
+ * exists at all because plugins/admin-gate.js already had the key and the blob
+ * opened under it.
+ */
+function boot() {
   const sections = {
+    posts: root.querySelector('[data-part="posts"]'),
     announce: root.querySelector('[data-part="announce"]'),
     notifications: root.querySelector('[data-part="notifications"]'),
     followers: root.querySelector('[data-part="followers"]'),
-    vault: root.querySelector('[data-part="vault"]'),
   };
 
+  if (sections.posts) {
+    renderPostsShell(sections.posts);
+    paintPosts();
+  }
   renderCompose(sections.announce);
   renderNotificationsShell(sections.notifications);
-  if (sections.vault) renderVaultShell(sections.vault);
   renderFollowersShell(sections.followers);
 
-  const box = state.notifications;
-  box.items = probe.data.items || [];
-  box.more = probe.data.cursor != null;
-  box.cursor = probe.data.cursor || 0;
-  paintNotifications();
-
-  if (sections.vault) loadVault({ reset: true });
+  if (sections.posts) loadAudiences();
+  loadNotifications({ reset: true });
   loadFollowers({ reset: true });
 }
 
-export function initBlogManagement() {
+/**
+ * @param {{items: Array}} inventory  sealed with the page by the build
+ */
+export function initBlogManagement(inventory) {
   const el = document.getElementById("blog-management");
   if (!el) return;
 
@@ -1360,32 +1383,18 @@ export function initBlogManagement() {
   state.notifications.type = "";
   state.notifications.loading = false;
   state.followers.loading = false;
-  state.vault.loading = false;
+  state.posts.items = (inventory && inventory.items) || [];
+  state.posts.audiences = {};
+  state.posts.filter = "";
   reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const backend = (window.theme && window.theme.backend) || {};
   base = window.blogAuth
     ? window.blogAuth.resolveApiBase()
     : String(backend.api_url || "").replace(/\/+$/, "");
-  if (!base) return void showGate("error");
 
   // The page lives INSIDE #swup, so this element is new markup on every visit —
   // the listener goes with it and nothing has to be torn down.
   wire();
-  wireSignOut();
   boot();
-}
-
-/** Every panel here is data this browser is no longer entitled to. Same answer
- *  as an encrypted post: leave, without leaving a Back entry to return by. */
-let signOutWired = false;
-
-function wireSignOut() {
-  if (signOutWired) return;
-  signOutWired = true;
-  window.addEventListener("blog:auth-change", async () => {
-    if (!document.getElementById("blog-management")) return;
-    const session = window.blogAuth && (await window.blogAuth.getSession());
-    if (!session || !session.token) location.replace(siteRoot() + "/");
-  });
 }

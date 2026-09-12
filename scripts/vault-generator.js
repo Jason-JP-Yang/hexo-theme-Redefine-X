@@ -49,6 +49,7 @@ const path = require("path");
 const vc = require("./lib/vault-crypto");
 const state = require("./lib/vault-state");
 const store = require("./lib/vault-store");
+const inventory = require("./lib/post-inventory");
 
 // A page whose date range holds more encrypted posts than this would need more
 // pre-solved arrangements than it is worth writing to disk (2^k). Raising it is
@@ -773,6 +774,39 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     layout: "page",
     data: { type: "vault-listing", title: "", comment: false },
   });
+
+  // ── the admin surface ─────────────────────────────────────────────────────
+  // Blog Management and the composer, sealed like anything else. Two blobs
+  // under one key, because they are one audience and splitting them would mean
+  // two grants to keep in step:
+  //
+  //   b.bin  the console's markup, with the post inventory folded in. Every
+  //          fact Posts Management shows is settled here — titles, dates,
+  //          taxonomy, draft state, where each file lives — so opening the
+  //          console costs one blob rather than a request per post.
+  //   e.bin  the composer, which is the article layout with nothing in it.
+  for (const entry of state.pages()) {
+    const consoleView = hexo.theme.getView("pages/management/blog-management.ejs");
+    const composerView = hexo.theme.getView("pages/management/editor.ejs");
+
+    const shell = await consoleView.render(cardLocals({ page: { type: "blog-management" } }));
+    const composer = await composerView.render(cardLocals({ page: { type: "blog-editor" } }));
+
+    routes.set(
+      `${p}/${entry.slug}/b.bin`,
+      vc.seal(
+        entry.key,
+        JSON.stringify({
+          shell: avifRewrite ? avifRewrite(shell) : shell,
+          inventory: inventory.build(hexo, entries, state.albums(), p),
+        })
+      )
+    );
+    routes.set(
+      `${p}/${entry.slug}/e.bin`,
+      vc.seal(entry.key, avifRewrite ? avifRewrite(composer) : composer)
+    );
+  }
 
   // ── pre-solved geometry ───────────────────────────────────────────────────
   const bentoPlan = hexo.extend.helper.get("bentoPlan");

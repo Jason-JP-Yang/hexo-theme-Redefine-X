@@ -37,21 +37,51 @@
 		</div>
 
 		<% if (theme.info.author || config.author) { %>
-		<div class="article-header flex flex-row gap-2 items-center px-2 sm:px-6 md:px-8">
-			<div class="avatar w-[46px] h-[46px] flex-shrink-0 rounded-medium border border-border-color p-[1px]">
-				<%- image_tag((typeof page.avatar === "string" && (page.avatar)) || page.author?.avatar || theme.defaults.avatar) %>
-			</div>
-			<div class="info flex flex-col justify-between">
-				<div class="author flex items-center">
-					<span class="name text-default-text-color text-lg font-semibold"><%= (typeof page.author === "string" && (page.author)) || page.author?.name || theme.info.author || config.author %></span>
-					<% if (theme.hasOwnProperty('articles') && theme.articles.author_label.enable === true) { %>
-					<span class="author-label ml-1.5 text-xs px-2 py-0.5 rounded-small text-third-text-color border border-shadow-color-1"><%- getAuthorLabel(site.posts.length, theme.articles.author_label.auto, theme.articles.author_label.list) %></span>
-					<% } %>
+		<%# A row, not a huddle: the author sits at one end and what can be done
+		    with this version of the article at the other. On every post but a
+		    draft the right-hand end is empty and the row reads exactly as it
+		    always did. %>
+		<div class="article-header flex flex-row gap-2 items-center justify-between px-2 sm:px-6 md:px-8">
+			<div class="article-header-author flex flex-row gap-2 items-center min-w-0">
+				<div class="avatar w-[46px] h-[46px] flex-shrink-0 rounded-medium border border-border-color p-[1px]">
+					<%- image_tag((typeof page.avatar === "string" && (page.avatar)) || page.author?.avatar || theme.defaults.avatar) %>
 				</div>
-				<div class="meta-info">
-					<%- partial('pages/post/article-info', {articleObject: page, index: true}) %>
+				<div class="info flex flex-col justify-between min-w-0">
+					<div class="author flex items-center">
+						<span class="name text-default-text-color text-lg font-semibold"><%= (typeof page.author === "string" && (page.author)) || page.author?.name || theme.info.author || config.author %></span>
+						<% if (theme.hasOwnProperty('articles') && theme.articles.author_label.enable === true) { %>
+						<span class="author-label ml-1.5 text-xs px-2 py-0.5 rounded-small text-third-text-color border border-shadow-color-1"><%- getAuthorLabel(site.posts.length, theme.articles.author_label.auto, theme.articles.author_label.list) %></span>
+						<% } %>
+					</div>
+					<div class="meta-info">
+						<%- partial('pages/post/article-info', {articleObject: page, index: true}) %>
+					</div>
 				</div>
 			</div>
+
+			<%# Which version you are reading, and the way to the other one.
+			    A draft that stands in front of a published post offers the swap;
+			    an UNPUBLISHED one has no other version to go to, so it says only
+			    what it is. The other direction — a published post admitting a
+			    draft exists — cannot be rendered here without disclosing it, so
+			    plugins/vault.js mounts that for the reader holding the key. %>
+			<% if (page.draft === true) { %>
+			<div class="article-version" data-version="draft">
+				<% if (page.supersedes) { %>
+				<span class="article-version-tag is-draft">
+					<i class="fa-solid fa-pen-nib" aria-hidden="true"></i><%= __('vault.draft') %>
+				</span>
+				<a class="article-version-swap" href="<%= url_for(page.supersedes) %>">
+					<i class="fa-regular fa-eye" aria-hidden="true"></i>
+					<span><%= __('vault.view_published') %></span>
+				</a>
+				<% } else { %>
+				<span class="article-version-tag is-unpublished">
+					<i class="fa-solid fa-eye-slash" aria-hidden="true"></i><%= __('vault.unpublished') %>
+				</span>
+				<% } %>
+			</div>
+			<% } %>
 		</div>
 		<% } else { %>
 		<div class="article-header-meta-info px-2 sm:px-6 md:px-8">

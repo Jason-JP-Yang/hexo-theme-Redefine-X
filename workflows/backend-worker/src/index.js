@@ -51,8 +51,8 @@ import {
 import { verifySignature, fetchChangelog, isLiveDeployment } from "./hooks.js";
 import {
   grantedPosts,
-  listPosts,
-  registerPost,
+  listAudiences,
+  reconcile,
   deletePost,
   setAudience,
   mintPost,
@@ -1524,46 +1524,32 @@ app.post("/api/vault/keys", userMiddleware, async (c) => {
   return c.json({ posts, admin: !!session.isAdmin });
 });
 
-// ─── ADMIN: encrypted post registry ─────────────────────────
+// ─── ADMIN: who may read which encrypted post ───────────────
+//
+// The only part of the registry that is not already in the console's hands. The
+// posts themselves — titles, dates, taxonomy, draft state — travel in the
+// inventory the build seals into the console page, so this answers the one
+// question a build cannot: who has been granted what.
 app.get("/api/admin/vault", authMiddleware, async (c) => {
-  const offset = Math.max(0, Number(c.req.query("offset")) || 0);
-  const { posts, more } = await listPosts(c.env.DB, ADMIN_PAGE, offset);
-  return c.json({ posts, more, offset });
-});
-
-// Activation. The build prints one JSON line per post and it is pasted here;
-// re-pasting the same line is an update, so a repeated paste cannot duplicate.
-app.post("/api/admin/vault", authMiddleware, async (c) => {
-  let body;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Bad request" }, 400);
-  }
-
-  const id = String(body?.id || "").trim();
-  const slug = String(body?.slug || "").trim();
-  const wrapped = String(body?.wrapped || "").trim();
-  if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: "Bad id" }, 400);
-  if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: "Bad slug" }, 400);
-  if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: "Bad key" }, 400);
-
-  await registerPost(c.env.DB, { id, slug, wrapped });
-  return c.json({ ok: true, id, slug });
+  return c.json({ audiences: await listAudiences(c.env.DB) });
 });
 
 /**
- * Activation from a BUILD, with no session — the same registration the route
- * above does by hand, done automatically.
+ * The registry, reconciled by a BUILD with no session.
  *
- * A build that mints a key must be able to register it, or the ciphertext ships
- * and nobody, the author included, can open it until a block of JSON is pasted
- * into a panel. Neither `hexo generate` on a laptop nor a CI runner can hold an
- * admin session, so this is authorized by an HMAC keyed off VAULT_MASTER, which
- * both already hold and without which they could not seal the keyring anyway.
- * No session, no new secret, and no route a browser can reach.
+ * Registration and revocation are consequences of what carries `vault:`, never
+ * commands anybody issues, so the build sends its WHOLE keyring and this makes
+ * the table match: everything in the set is registered, everything outside it
+ * is revoked. That is why there is no route here to add a post or to delete
+ * one — a post's ciphertext and its key are decided together, by the same
+ * build, and a second authority over them could only ever disagree.
+ *
+ * Neither `hexo generate` on a laptop nor a CI runner can hold an admin
+ * session, so this is authorized by an HMAC keyed off VAULT_MASTER, which both
+ * already hold and without which they could not seal the keyring anyway. No
+ * session, no new secret, and no route a browser can reach.
  */
-app.post("/api/admin/vault/push", async (c) => {
+app.post("/api/admin/vault/sync", async (c) => {
   if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
 
   const raw = await c.req.text();
@@ -1578,7 +1564,9 @@ app.post("/api/admin/vault/push", async (c) => {
   }
   if (!Array.isArray(posts) || posts.length > 200) return c.json({ error: "Bad request" }, 400);
 
-  const written = [];
+  // Validated in full BEFORE anything is written: a malformed row half way down
+  // the set would otherwise revoke every post that was not reached.
+  const clean = [];
   for (const row of posts) {
     const id = String(row?.id || "").trim();
     const slug = String(row?.slug || "").trim();
@@ -1586,16 +1574,10 @@ app.post("/api/admin/vault/push", async (c) => {
     if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: `Bad id: ${id}` }, 400);
     if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: `Bad slug for ${id}` }, 400);
     if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: `Bad key for ${id}` }, 400);
-    await registerPost(c.env.DB, { id, slug, wrapped });
-    written.push(id);
+    clean.push({ id, slug, wrapped });
   }
 
-  return c.json({ ok: true, registered: written });
-});
-
-app.delete("/api/admin/vault/:id", authMiddleware, async (c) => {
-  const removed = await deletePost(c.env.DB, c.req.param("id"));
-  return c.json({ ok: removed });
+  return c.json({ ok: true, ...(await reconcile(c.env.DB, clean)) });
 });
 
 // The complete new audience for one post, not a delta: the panel always sends
@@ -1610,8 +1592,9 @@ app.put("/api/admin/vault/:id/audience", authMiddleware, async (c) => {
   const ids = Array.isArray(body?.audience) ? body.audience : [];
   if (ids.length > ADMIN_LOOKUP_MAX) return c.json({ error: "Too many" }, 400);
 
-  const written = await setAudience(c.env.DB, c.req.param("id"), ids);
-  return c.json({ ok: true, written });
+  const result = await setAudience(c.env.DB, c.req.param("id"), ids);
+  if (result.error) return c.json({ error: result.error }, 400);
+  return c.json({ ok: true, written: result.written });
 });
 
 // ─── EDITOR: mint a post key, and re-seal the keyring ───────
@@ -1642,8 +1625,7 @@ app.post("/api/admin/vault/mint", authMiddleware, async (c) => {
     return c.json({ error: "Bad source path" }, 400);
   }
 
-  const titles = body && typeof body.titles === "object" ? body.titles : null;
-  const minted = await mintPost(c.env.DB, c.env, { source, titles });
+  const minted = await mintPost(c.env.DB, c.env, { source });
 
   c.header("Cache-Control", "no-store");
   return c.json(minted);
@@ -1658,7 +1640,7 @@ app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
   if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: "Bad id" }, 400);
 
   await deletePost(c.env.DB, id);
-  const keysEnc = await keyringBlob(c.env.DB, c.env, null);
+  const keysEnc = await keyringBlob(c.env.DB, c.env);
 
   c.header("Cache-Control", "no-store");
   return c.json({ ok: true, keysEnc });
@@ -1750,18 +1732,6 @@ app.get("/api/admin/repo/ticket", authMiddleware, (c) => {
 
   c.header("Cache-Control", "no-store");
   return c.json({ prefer: c.env.REPO_PREFER || "gitea", backends });
-});
-
-// The shape the editor asked for before there were two of them. Kept because a
-// Worker deploy and a site deploy are not the same event: between them, the
-// published bundle is the previous one.
-app.get("/api/admin/gitea/ticket", authMiddleware, (c) => {
-  const ticket = giteaTicket(c.env);
-  if (!ticket) return c.json({ error: "Repository access is not configured" }, 503);
-
-  c.header("Cache-Control", "no-store");
-  const { id, kind, label, ...rest } = ticket;
-  return c.json(rest);
 });
 
 // ─── EDITOR: fast-forward the backend that fell behind ──────

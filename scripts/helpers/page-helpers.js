@@ -88,18 +88,14 @@ const pageData = {
 		partial: "pages/bookmarks/bookmarks",
 		layout: "raw",
 	},
-	blogManagement: {
+	// Both admin pages publish a probe and nothing else — their markup is sealed
+	// under the admin key and mounted by plugins/admin-gate.js. `raw` for both,
+	// because what each one mounts brings its own container: the console the
+	// article layout's, the composer the article layout it is composing into.
+	adminGate: {
 		titles: [],
-		types: ["blog-management"],
-		partial: "pages/management/blog-management",
-		layout: "default",
-	},
-	blogEditor: {
-		titles: [],
-		types: ["blog-editor"],
-		partial: "pages/management/editor",
-		// `raw`, exactly as `post` is: a new post is composed in the article
-		// layout, so it must reach the same container by the same route.
+		types: ["admin-gate"],
+		partial: "pages/management/admin-gate",
 		layout: "raw",
 	},
 	vault: {
