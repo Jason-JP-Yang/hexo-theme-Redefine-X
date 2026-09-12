@@ -192,7 +192,22 @@ async function sealAssets(entry, html, routes) {
   out = out.replace(/\s+data-original-src\s*=\s*("|')[^"']*\1/gi, "");
 
   for (const job of jobs) {
-    const bytes = await readRoute(job.routePath);
+    // The reference can still name the PRE-AVIF path: avifRewriteHtml rewrites
+    // only what it can resolve back to a source file, so a path spelled
+    // differently from the file on disk — a masonry avatar given the wrong
+    // extension in masonry.yml — arrives here untouched. Reading it directly
+    // then failed, the reference was left pointing at a withdrawn route, and the
+    // derivative was never noted and so never withheld: the picture stayed
+    // published in the clear while the card that wanted it showed nothing.
+    let bytes = null;
+    let matched = "";
+    for (const candidate of assetCandidates(job.routePath)) {
+      bytes = await readRoute(candidate);
+      if (bytes) {
+        matched = candidate;
+        break;
+      }
+    }
     if (!bytes) {
       // Not an image this build produced (a theme asset, an external mount).
       // Leave the reference alone rather than breaking it.
@@ -208,7 +223,9 @@ async function sealAssets(entry, html, routes) {
     // The reference carries the hash only. `src` is emptied so nothing is
     // requested before the blob has been fetched and decrypted.
     out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="" data-vault-asset="${hash}"`);
-    noteAsset(entry, job.routePath, hash);
+    // The route that was actually READ, not the reference the template wrote:
+    // withholding the wrong one leaves the real derivative published.
+    noteAsset(entry, matched, hash);
   }
 
   return out;
@@ -320,7 +337,14 @@ function addPublicMasonryRoutes(into) {
     for (const item of (category && category.list) || []) {
       add(item.avatar);
       add(item.thumbnail);
-      for (const image of item.images || []) add("masonry/" + image.image);
+      // A leading slash is an absolute site path, not a name inside the album
+      // folder — the same rule masonry.ejs's buildImagePath applies. Prefixing
+      // it anyway named a route that does not exist, so a public album written
+      // that way lost any picture it shares with an encrypted one.
+      for (const image of item.images || []) {
+        const rel = String(image.image || "");
+        add(rel.startsWith("/") ? rel : "masonry/" + rel);
+      }
     }
   }
 }
@@ -356,6 +380,19 @@ function addThemeConfigRoutes(into) {
   // photograph site furniture and publish it.
   const { masonry, ...rest } = hexo.theme.config || {};
   walk(rest, 0);
+}
+
+const IMAGE_EXT = /\.(avif|png|jpe?g|gif|webp|bmp|svg|ico)$/i;
+
+/**
+ * The same search for a reference taken out of rendered markup, where `src` may
+ * name something that is not a picture at all. A non-image keeps its one exact
+ * route: probing `build/js/…` for a script would be a lookup that can only ever
+ * find the wrong file.
+ */
+function assetCandidates(relPath) {
+  if (!IMAGE_EXT.test(relPath)) return [relPath];
+  return avifCandidates(relPath);
 }
 
 /** Where an image may have ended up once img-optimizer had a turn at it. */
