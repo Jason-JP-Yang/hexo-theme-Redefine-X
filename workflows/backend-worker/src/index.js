@@ -60,6 +60,7 @@ import {
   verifyBuildSignature,
 } from "./vault.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
+import { installationToken } from "./github-app.js";
 
 const app = new Hono();
 
@@ -1699,14 +1700,32 @@ function giteaTicket(env) {
     repo: name,
     branch: env.GITEA_BRANCH || "main",
     token: env.GITEA_TOKEN,
+    // Gitea has no App model and its tokens have no expiry, so this one is
+    // standing by construction. It is contained the other way instead — a
+    // dedicated account, `write:repository` on the content repository only, and
+    // Protected File Patterns on `main`.
+    expires: "",
     author: commitAuthor(env),
   };
 }
 
-function githubTicket(env) {
+/**
+ * `expires` is what makes the credential short-lived END TO END: the browser
+ * re-asks before it lapses rather than discovering a dead token on the commit
+ * that mattered. An empty string means "does not expire", which is the honest
+ * answer for a standing token.
+ */
+async function githubTicket(env) {
   const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
   const [owner, name] = String(env.GITHUB_REPO || "").split("/");
-  if (!api || !owner || !name || !env.GITHUB_EDITOR_TOKEN) return null;
+  if (!api || !owner || !name) return null;
+
+  // The App if it is configured, the standing PAT only if it is not: refusing to
+  // let the author write is worse than handing over the credential that was
+  // being handed over before.
+  const minted = await installationToken(env, name);
+  const token = minted ? minted.token : env.GITHUB_EDITOR_TOKEN;
+  if (!token) return null;
 
   return {
     id: "github",
@@ -1716,7 +1735,8 @@ function githubTicket(env) {
     owner,
     repo: name,
     branch: env.GITHUB_BRANCH || "main",
-    token: env.GITHUB_EDITOR_TOKEN,
+    token,
+    expires: minted ? minted.expires : "",
     // Which workflow's runs answer "where has the build got to". GitHub Actions
     // writes no commit status, so there is nothing else to read.
     workflow: env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml",
@@ -1724,8 +1744,9 @@ function githubTicket(env) {
   };
 }
 
-app.get("/api/admin/repo/ticket", authMiddleware, (c) => {
-  const backends = [giteaTicket(c.env), githubTicket(c.env)].filter(Boolean);
+app.get("/api/admin/repo/ticket", authMiddleware, async (c) => {
+  const rows = await Promise.all([giteaTicket(c.env), githubTicket(c.env)]);
+  const backends = rows.filter(Boolean);
   if (!backends.length) {
     return c.json({ error: "Repository access is not configured" }, 503);
   }

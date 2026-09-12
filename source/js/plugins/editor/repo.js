@@ -57,6 +57,9 @@ const FORBIDDEN = [
 
 const PROBE_MS = 6000;
 const TICKET_MS = 90 * 60 * 1000;
+// A minted credential is re-asked for this long before it lapses, so a commit
+// is never started on a token that dies while it is in flight.
+const EXPIRY_SLACK_MS = 3 * 60 * 1000;
 
 let ticket = null;
 let ticketAt = 0;
@@ -102,10 +105,39 @@ async function fetchTicket() {
   const rows = (body.backends || []).filter((b) => b && b.id && DRIVERS[b.kind || b.id]);
   if (!rows.length) throw new Error("ticket unavailable");
 
+  // The EARLIEST expiry across the backends, because one lapsed credential is a
+  // stale ticket however fresh the other one is. A backend that reports none has
+  // a standing token and contributes nothing here.
+  const stamps = rows.map((b) => Date.parse(b.expires || "")).filter((n) => !isNaN(n));
+
   return {
     prefer: body.prefer || rows[0].id,
     backends: rows.map((b) => ({ ...b, driver: DRIVERS[b.kind || b.id] })),
+    expiresAt: stamps.length ? Math.min(...stamps) : 0,
   };
+}
+
+/** Whether the ticket in hand is still worth using. */
+function ticketFresh() {
+  if (!ticket || !chosen) return false;
+  if (Date.now() - ticketAt >= TICKET_MS) return false;
+  return !(ticket.expiresAt && Date.now() > ticket.expiresAt - EXPIRY_SLACK_MS);
+}
+
+/**
+ * A new ticket for the backend already chosen — no probe, no re-selection.
+ *
+ * Which repository this session commits to was decided once and must not change
+ * because a credential rolled over: the open document's blob shas were read from
+ * that host, and moving hosts mid-session is a decision with consequences, not a
+ * side effect of a token's age.
+ */
+async function refreshTicket(id) {
+  ticket = await fetchTicket();
+  ticketAt = Date.now();
+  const row = ticket.backends.find((backend) => backend.id === id);
+  if (row) chosen = row;
+  return row || null;
 }
 
 /* ─── selection ────────────────────────────────────────────────────────────── */
@@ -157,7 +189,7 @@ async function order(a, b) {
  * @returns {Promise<{active: object, rows: Array, behind: object|null, diverged: boolean}>}
  */
 export async function open(force) {
-  if (!force && ticket && chosen && Date.now() - ticketAt < TICKET_MS) {
+  if (!force && ticketFresh()) {
     return { active: chosen, rows: ticket.backends, behind: null, diverged: false };
   }
 
@@ -289,17 +321,40 @@ export async function catchUp(target, timeoutMs = 120000) {
 /* ─── reads ────────────────────────────────────────────────────────────────── */
 
 /**
- * A backend rejecting the ticket means the whole selection is stale — the
- * token is gone, not this one request — so the next call re-opens rather than
- * spending the session on a credential nothing will accept.
+ * A 401 is the expected end of a short-lived credential, not a failure.
+ *
+ * The GitHub side is a one-hour installation token, so a session left open over
+ * lunch WILL meet this — and the author meeting it on the save that mattered is
+ * exactly what makes short-lived tokens feel like a downgrade. So the first
+ * rejection is answered by minting a new ticket and trying once more, on the
+ * same backend.
+ *
+ * Once, and once only: a second rejection is a real authorisation failure — the
+ * session has gone, or the grant has — and retrying it would spend the session
+ * on a credential nothing will accept.
+ *
+ * Safe for a commit as well as a read. A 401 means the request was refused
+ * before it changed anything, and every step a commit takes before the ref
+ * update is content-addressed and idempotent: a replayed blob is the same blob.
  */
 async function guard(fn) {
   const backend = active();
   try {
     return await fn(backend);
   } catch (err) {
-    if (err && err.status === 401) forget();
-    throw err;
+    if (!err || err.status !== 401) throw err;
+
+    let again = null;
+    try {
+      again = await refreshTicket(backend.id);
+    } catch (fail) {
+      /* the session itself is gone — report the original refusal */
+    }
+    if (!again) {
+      forget();
+      throw err;
+    }
+    return fn(again);
   }
 }
 
@@ -328,8 +383,10 @@ export function read(path) {
  *   null means the request itself failed — ask again.
  */
 export function commitStatus(sha) {
-  const backend = active();
-  return backend.driver.runStatus(backend, sha);
+  // Through `guard`, because a build outlasts a one-hour token more often than
+  // not — and never rejecting, because the callers are polling loops and "ask
+  // again" is already this function's answer for a request that did not land.
+  return guard((backend) => backend.driver.runStatus(backend, sha)).catch(() => null);
 }
 
 /* ─── the commit ───────────────────────────────────────────────────────────── */

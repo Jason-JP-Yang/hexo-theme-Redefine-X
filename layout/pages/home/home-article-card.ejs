@@ -35,18 +35,19 @@
     <%- vault ? ' data-vault-id="' + vaultId + '"' : "" %>
     <%- style ? ' style="' + style + '"' : "" %>>
 
-    <%# Over the cover, where an overlay has a picture to sit on. A tile with no
-        cover puts it in the flow of the head instead (below): the body starts at
-        the tile's own top edge there, so an overlay lands on the running numeral
-        and the title. %>
-    <% if (badges.length && hasCover) { %>
-        <div class="home-article-badges">
-            <% badges.forEach((badge) => { %><%- partial('components/vault-badge', badge) %><% }); %>
-        </div>
-    <% } %>
-
     <% if (hasCover) { %>
         <div class="home-article-thumbnail">
+            <%# INSIDE the frame, not beside it. Anchored to the tile it would land
+                wherever the tile's top-left corner happens to be, which on a
+                split tile whose cover is on the right is the middle of the
+                eyebrow. Anchored to the picture it cannot reach the text in any
+                composition, and the stylesheet only has to say which corner. %>
+            <% if (badges.length) { %>
+            <div class="home-article-badges">
+                <% badges.forEach((badge) => { %><%- partial('components/vault-badge', badge) %><% }); %>
+            </div>
+            <% } %>
+
             <%# aria-hidden + tabindex="-1": this links to the same place as the
                 title below it, so it is decorative to a screen reader and should
                 not cost a second tab stop. %>
@@ -68,6 +69,10 @@
             excerpt is sized from what is left over, so a phantom 0.9rem is a
             line of summary that silently disappears. %>
         <div class="home-article-head">
+            <%# No picture to sit on, so the stack takes a line of the head — and
+                the planner reserves that line (bento-helpers, BADGE_ROW),
+                because a row solved without it is a row whose summary has
+                nowhere to go. %>
             <% if (badges.length && !hasCover) { %>
                 <div class="home-article-badges is-inline">
                     <% badges.forEach((badge) => { %><%- partial('components/vault-badge', Object.assign({ extra: 'is-inline' }, badge)) %><% }); %>

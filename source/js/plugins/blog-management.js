@@ -32,6 +32,7 @@ import {
 } from "./notifications-inbox.js";
 import { Picker, avatarOf } from "../tools/chipPicker.js";
 import { siteRoot } from "../tools/vaultCrypto.js";
+import { enter, exit, pop } from "./editor/motion.js";
 
 // The morph used for inline editing: content fades out, the box resizes, content
 // fades back. Same shape and the same feel as editing an instant-note bubble.
@@ -91,8 +92,9 @@ const state = {
   notifications: { type: "", items: [], cursor: 0, more: false, error: false, loading: false },
   followers: { items: [], cursor: 0, more: false, orphans: [], totals: null, error: false, loading: false },
   // `items` arrives sealed with the page and is never fetched; only `audiences`
-  // is asked for, because only the Worker knows it.
-  posts: { items: [], audiences: {}, filter: "", loading: false },
+  // is asked for, because only the Worker knows it. `queue` is what the next
+  // unpublish commit will carry — one commit for the whole selection.
+  posts: { items: [], audiences: {}, filter: "", loading: false, queue: [], bar: null, busy: false },
   blocklists: { posts: [], notes: [], announcements: [] },
 };
 
@@ -689,7 +691,7 @@ function collapseAway(item, after) {
 //                            lives in masonry.yml, so there is no file here to
 //                            edit and nothing to unpublish.
 
-const POST_FILTERS = ["", "encrypted", "draft", "unpublished"];
+const POST_FILTERS = ["", "encrypted", "draft", "unpublished", "pinned"];
 
 /** Where the composer lives. Not a section of its own: writing a post is the
  *  thing this list is for, so the button belongs at the top of the list. */
@@ -703,6 +705,7 @@ function renderPostsShell(section) {
     ["encrypted", t("p_encrypted", "Encrypted")],
     ["draft", t("p_drafts", "Drafts")],
     ["unpublished", t("p_unpublished", "Unpublished")],
+    ["pinned", t("p_sticky", "Sticky")],
   ];
 
   section.innerHTML = `
@@ -757,6 +760,7 @@ function matchesFilter(row, filter) {
   if (filter === "encrypted") return !!row.encrypted;
   if (filter === "draft") return !!row.draft;
   if (filter === "unpublished") return !row.published;
+  if (filter === "pinned") return !!row.sticky;
   return true;
 }
 
@@ -832,6 +836,7 @@ function postRowHTML(row) {
 
   // An album's `vault:` flag lives in masonry.yml, so there is no markdown file
   // here to open and nothing to take down.
+  const queued = state.posts.queue.includes(row.key);
   const actions =
     row.kind === "album"
       ? ""
@@ -840,15 +845,17 @@ function postRowHTML(row) {
            <span class="np-btn-label">${e("edit", "Edit")}</span></a>
          ${
            row.published
-             ? `<button type="button" class="bm-quiet bm-danger bm-post-unpublish">
-                  <i class="fa-solid fa-eye-slash" aria-hidden="true"></i>
-                  <span class="np-btn-label">${e("p_unpublish", "Unpublish")}</span></button>`
+             ? `<button type="button" class="bm-quiet bm-danger bm-post-unpublish${queued ? " is-on" : ""}">
+                  <i class="fa-solid ${queued ? "fa-check" : "fa-eye-slash"}" aria-hidden="true"></i>
+                  <span class="np-btn-label">${
+                    queued ? e("p_unpub_queued", "Queued") : e("p_unpublish", "Unpublish")
+                  }</span></button>`
              : ""
          }`;
 
   return `
-    <li class="bm-post${row.encrypted ? " is-encrypted" : ""}${
-      row.draft ? " is-draft" : ""
+    <li class="bm-post${row.encrypted ? " is-encrypted" : ""}${row.draft ? " is-draft" : ""}${
+      queued ? " is-queued" : ""
     }" data-key="${escapeHTML(row.key)}">
       <div class="bm-post-main">
         <div class="bm-post-title">
@@ -967,48 +974,316 @@ async function saveAudience(postId, picker) {
   }
 }
 
-/**
- * Take a published article down without losing it.
+/* ─── unpublishing ───────────────────────────────────────────
  *
- * Its markdown becomes a draft — encrypted, readable by nobody else — and the
- * published file is deleted, in ONE commit, so there is no window in which the
- * article is both live and withdrawn or in which neither copy exists. An
- * encrypted post's key is revoked in the same commit that removes its
- * ciphertext; a new draft gets its own minted first, so the keyring the commit
- * carries is correct whichever way the article went in.
+ * Taking an article down is a COMMIT and a BUILD, not a button that finishes
+ * when it stops spinning, so it is run the way the editor runs a publish and
+ * wears the editor's own document bar: the same box, the same pin line, the same
+ * stage rail, the same backend chip. A second design for the same act would be a
+ * second thing to learn about one thing.
  *
- * The build that follows is what actually rebuilds the site without it.
+ * Pressing Unpublish QUEUES a row rather than acting on it. Five articles
+ * withdrawn one at a time are five commits and five builds of the same site;
+ * queued they are one of each, and the bar is where that one is armed, aimed at
+ * a repository, and let go. There is no second confirmation because the bar is
+ * the confirmation — the selection is visible, reversible, and nothing has been
+ * written until Save & publish.
  */
-async function unpublishPost(item, trigger) {
-  const row = state.posts.items.find((r) => r.key === item.dataset.key);
-  if (!row) return;
 
-  setBusy(trigger, true);
-  item.classList.add("is-working");
+const UNPUB_STAGES = [
+  ["committed", "fa-code-commit", "Committed"],
+  ["building", "fa-hammer", "Building"],
+  ["pushed", "fa-upload", "Artifact pushed"],
+  ["deployed", "fa-globe", "Deployed"],
+];
+
+const BACKEND_ICON = { gitea: "fa-solid fa-server", github: "fa-brands fa-github" };
+
+// How long the deploy that follows the artifact push is given before the page is
+// reloaded. Vercel is downstream of a push nothing here can see, so the last
+// stage is optimistic by design — the same 20s the editor allows.
+const DEPLOY_MS = 20000;
+const POLL_MS = 6000;
+
+let repoMod = null;
+let buildTimer = null;
+
+function loadRepo() {
+  if (!repoMod) repoMod = import("./editor/repo.js");
+  return repoMod;
+}
+
+function rowEl(key) {
+  return root.querySelector(`.bm-post[data-key="${CSS.escape(key)}"]`);
+}
+
+function queuedRows() {
+  const keys = new Set(state.posts.queue);
+  return state.posts.items.filter((row) => keys.has(row.key));
+}
+
+/** Queue or unqueue one row. Nothing is written and nothing is asked. */
+function toggleUnpublish(item) {
+  const box = state.posts;
+  if (box.busy) return;
+
+  const key = item.dataset.key;
+  const at = box.queue.indexOf(key);
+  if (at < 0) box.queue.push(key);
+  else box.queue.splice(at, 1);
+
+  paintPosts();
+  if (box.queue.length) openBar();
+  else closeBar();
+}
+
+function stageRail() {
+  return UNPUB_STAGES.map(
+    ([key, icon, label]) =>
+      `<span class="ed-stage" data-key="${key}" data-state="wait">
+         <i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHTML(t("p_s_" + key, label))}
+       </span>`
+  ).join("");
+}
+
+function markStage(key, value) {
+  const bar = state.posts.bar;
+  const node = bar && bar.querySelector(`.ed-stage[data-key="${key}"]`);
+  if (!node || node.dataset.state === value) return;
+  node.dataset.state = value;
+  pop(node);
+}
+
+function barNotice(kind, text) {
+  const bar = state.posts.bar;
+  if (!bar) return;
+  const note = bar.querySelector(".ed-notice");
+  if (!text) {
+    note.hidden = true;
+    return;
+  }
+  const icon =
+    kind === "error"
+      ? "fa-circle-exclamation"
+      : kind === "warn"
+        ? "fa-triangle-exclamation"
+        : "fa-circle-info";
+  note.hidden = false;
+  note.dataset.kind = kind;
+  note.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHTML(text)}</span>`;
+  pop(note);
+}
+
+/**
+ * The bar itself — above Posts Management, because what it is about to do is to
+ * the whole list rather than to one row of it. No file name: a batch has no one
+ * path, and what the author needs to see is how far the build has got.
+ */
+function openBar() {
+  const box = state.posts;
+
+  if (!box.bar) {
+    const bar = document.createElement("div");
+    bar.className = "ed-docbar bm-unpub";
+    bar.innerHTML = `
+      <div class="ed-docbar-id">
+        <i class="fa-solid fa-eye-slash" aria-hidden="true"></i>
+        <span class="bm-unpub-count"></span>
+      </div>
+      <div class="ed-docbar-actions">
+        <button type="button" class="ed-act ed-backend bm-unpub-backend" hidden></button>
+        <span class="ed-dot" data-state="dirty"></span>
+        <button type="button" class="ed-act ed-act-primary bm-unpub-go">
+          <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
+          <span>${e("p_unpub_go", "Save & publish")}</span>
+        </button>
+        <button type="button" class="ed-act ed-close bm-unpub-x" title="${escapeHTML(t("p_unpub_cancel", "Cancel"))}">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="ed-progress">${stageRail()}</div>
+      <div class="ed-notice" hidden></div>`;
+
+    root.insertBefore(bar, root.querySelector(".bm-console"));
+    box.bar = bar;
+    bar.querySelector(".bm-unpub-x").addEventListener("click", () => closeBar());
+    bar.querySelector(".bm-unpub-go").addEventListener("click", () => runUnpublish());
+    bar.querySelector(".bm-unpub-backend").addEventListener("click", () => switchBackend());
+    enter(bar);
+    paintBackend();
+  }
+
+  const n = box.queue.length;
+  box.bar.querySelector(".bm-unpub-count").textContent =
+    `${n} ${t(n === 1 ? "p_unpub_one" : "p_unpub_many", n === 1 ? "post to withdraw" : "posts to withdraw")}`;
+  contentChanged();
+}
+
+async function closeBar() {
+  const box = state.posts;
+  clearInterval(buildTimer);
+  box.queue = [];
+  box.busy = false;
+  root.classList.remove("is-unpublishing");
+
+  const bar = box.bar;
+  box.bar = null;
+  paintPosts();
+
+  if (!bar) return;
+  await exit(bar);
+  bar.remove();
+  contentChanged();
+}
+
+/**
+ * Which repository the commit goes to. Only worth showing when there is a
+ * choice: with one backend configured the chip stays hidden rather than
+ * labelling the obvious. The ticket is resolved once per session and cached by
+ * repo.open, so opening this bar costs at most one request.
+ */
+async function paintBackend() {
+  const bar = state.posts.bar;
+  if (!bar) return;
+  const chip = bar.querySelector(".bm-unpub-backend");
+
+  let repo;
+  try {
+    repo = await loadRepo();
+    await repo.open(false);
+  } catch (err) {
+    chip.hidden = true;
+    return;
+  }
+
+  const rows = repo.backends();
+  const id = repo.activeId();
+  if (!id || rows.length < 2) {
+    chip.hidden = true;
+    return;
+  }
+
+  const now = rows.find((row) => row.id === id);
+  const other = rows.find((row) => row.id !== id);
+  chip.hidden = false;
+  chip.dataset.backend = id;
+  chip.innerHTML =
+    `<i class="${BACKEND_ICON[id] || BACKEND_ICON.gitea}" aria-hidden="true"></i>` +
+    `<span>${escapeHTML((now && now.label) || id)}</span>`;
+  chip.title = other ? `${t("p_backend", "Build on")} ${other.label || other.id}` : "";
+}
+
+async function switchBackend() {
+  const bar = state.posts.bar;
+  if (!bar || state.posts.busy) return;
+  const chip = bar.querySelector(".bm-unpub-backend");
+
+  const repo = await loadRepo();
+  const other = repo.backends().find((row) => row.id !== repo.activeId());
+  if (!other) return;
+
+  chip.disabled = true;
+  try {
+    await repo.use(other.id);
+    await paintBackend();
+  } catch (err) {
+    barNotice("error", t("unreachable", "Couldn't reach the backend."));
+  } finally {
+    chip.disabled = false;
+  }
+}
+
+/**
+ * One commit for the whole selection: every article's markdown becomes a draft —
+ * encrypted, readable by nobody else — and every published file is deleted, so
+ * there is no window in which one of them is both live and withdrawn or in which
+ * neither copy exists. The build that follows is what rebuilds the site without
+ * them.
+ */
+async function runUnpublish() {
+  const box = state.posts;
+  if (box.busy || !box.queue.length) return;
+
+  const rows = queuedRows();
+  if (!rows.length) return void closeBar();
+
+  const bar = box.bar;
+  const go = bar.querySelector(".bm-unpub-go");
+  box.busy = true;
+  root.classList.add("is-unpublishing");
+  setBusy(go, true);
+  bar.querySelector(".ed-dot").dataset.state = "busy";
+  barNotice(null, "");
+  for (const row of rows) rowEl(row.key)?.classList.add("is-working");
 
   try {
-    const [repo, session] = await Promise.all([
-      import("./editor/repo.js"),
-      import("./editor/session.js"),
-    ]);
+    const [repo, session] = await Promise.all([loadRepo(), import("./editor/session.js")]);
     await repo.open(true);
-    await session.unpublish(row);
+    const result = await session.unpublishAll(rows);
+    if (!result) throw new Error(t("p_unpub_empty", "There was nothing to commit."));
 
-    // Repainted from local state: the article is a draft now, and what changed
+    markStage("committed", "done");
+    barNotice("info", `${t("p_unpub_done", "Committed")} ${result.short || ""}`.trim());
+
+    // Repainted from local state: each article is a draft now, and what changed
     // about it is known here without asking anything again.
-    row.published = false;
-    row.encrypted = false;
-    row.draft = row.draft || { id: "", slug: row.slug || "", href: row.href, source: row.source };
-    row.vaultId = "";
+    for (const row of rows) {
+      row.published = false;
+      row.encrypted = false;
+      row.draft = row.draft || { id: "", slug: row.slug || "", href: row.href, source: row.source };
+      row.vaultId = "";
+    }
+    box.queue = [];
     paintPosts();
+    watchBuild(result.sha);
   } catch (err) {
-    item.classList.add("is-bad");
-    setTimeout(() => item.classList.remove("is-bad"), 1600);
-    notePostError(err && err.message);
-  } finally {
-    item.classList.remove("is-working");
-    setBusy(trigger, false);
+    markStage("committed", "fail");
+    barNotice("error", (err && err.message) || t("offline", "The Worker did not answer."));
+    box.busy = false;
+    root.classList.remove("is-unpublishing");
+    setBusy(go, false);
+    bar.querySelector(".ed-dot").dataset.state = "dirty";
+    for (const row of rows) rowEl(row.key)?.classList.remove("is-working");
   }
+}
+
+/**
+ * Where the build for the commit just made has got to — the commit status the
+ * Actions run writes for that sha, polled exactly as the editor polls it. When
+ * it lands the console is showing a list that no longer describes the site, so
+ * the answer is the front page rather than a repaint of a stale page.
+ */
+function watchBuild(sha) {
+  clearInterval(buildTimer);
+  markStage("building", "live");
+
+  let ticks = 0;
+  buildTimer = setInterval(async () => {
+    if ((ticks += 1) > 100) return clearInterval(buildTimer);
+
+    const repo = await loadRepo();
+    const status = await repo.commitStatus(sha);
+    if (!status || !status.count) return;
+    if (status.state === "pending") return void markStage("building", "live");
+
+    if (status.state === "success") {
+      clearInterval(buildTimer);
+      markStage("building", "done");
+      markStage("pushed", "done");
+      markStage("deployed", "live");
+      setTimeout(() => {
+        markStage("deployed", "done");
+        barNotice("info", t("p_unpub_land", "Done. Loading the site as readers see it…"));
+        setTimeout(() => location.replace(siteRoot() + "/"), 1200);
+      }, DEPLOY_MS);
+    } else if (status.state === "failure" || status.state === "error") {
+      clearInterval(buildTimer);
+      markStage("building", "fail");
+      barNotice("error", t("p_unpub_failed", "The build failed. The commit landed; nothing published has changed."));
+      state.posts.busy = false;
+      root.classList.remove("is-unpublishing");
+    }
+  }, POLL_MS);
 }
 
 function notePostError(message) {
@@ -1341,14 +1616,10 @@ function wire() {
       return;
     }
 
+    // Not armed and not confirmed: this only adds the row to the bar's
+    // selection, and the bar is where it becomes a commit.
     const unpublish = target.closest(".bm-post-unpublish");
-    if (unpublish) {
-      const item = unpublish.closest(".bm-post");
-      if (confirmStep(unpublish, `unpub:${item.dataset.key}`, t("confirm", "Press again"))) {
-        unpublishPost(item, unpublish);
-      }
-      return;
-    }
+    if (unpublish) return void toggleUnpublish(unpublish.closest(".bm-post"));
 
     disarmConfirm();
   });
@@ -1400,6 +1671,10 @@ export function initBlogManagement(inventory) {
   state.posts.items = (inventory && inventory.items) || [];
   state.posts.audiences = {};
   state.posts.filter = "";
+  state.posts.queue = [];
+  state.posts.bar = null;
+  state.posts.busy = false;
+  clearInterval(buildTimer);
   reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const backend = (window.theme && window.theme.backend) || {};

@@ -2270,6 +2270,23 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   &:active
     color $ed-on-primary
 
+// ─── the console's copy of the document bar ─────────────────
+// Blog Management arms an unpublish in THIS bar rather than in one of its own:
+// the act is a commit and a build, which is what this bar is for, and a second
+// box for the same thing would be a second thing to learn about one thing.
+//
+// One declaration for every width, and it comes after the base rule's media
+// queries so it wins on source order at all of them. The only difference is the
+// side inset: the console's sections already carry the article's, so the bar's
+// own would be that inset twice.
+.bm-unpub
+  margin 0 0 4px
+
+.bm-unpub-count
+  font-size 0.8rem
+  font-weight 600
+  color var(--second-text-color)
+
 .vault-draft
   position relative
 

@@ -556,68 +556,77 @@ function pathForTitle(title) {
 }
 
 /**
- * Take a published article down without losing it.
+ * Take published articles down without losing them.
  *
- * Its markdown becomes a draft — encrypted, and readable by nobody but its
- * author — and the published file is deleted. ONE commit, so the article is
- * never both live and withdrawn, and never neither.
+ * Each one's markdown becomes a draft — encrypted, and readable by nobody but
+ * its author — and the published file is deleted. ONE commit for the whole
+ * selection, so no article is ever both live and withdrawn, never neither, and
+ * a batch of five costs one build rather than five.
  *
  * `supersedes` is dropped on the way: it names the published post a draft
  * stands in front of, and after this there is no such post. A draft that kept
  * it would be folded back into a row whose published half no longer exists,
  * both in the console's inventory and in the reader's listings.
  *
- * @param {object} row  one item of the console's sealed inventory
+ * The keyring is written ONCE, at the end. Every mint and every revoke hands
+ * back the whole file rebuilt from the database, so only the last answer is
+ * current — collecting them all and keeping the last is the same rule the
+ * single-post path followed, generalised.
+ *
+ * @param {Array<object>} rows  items of the console's sealed inventory
  */
-export async function unpublish(row) {
+export async function unpublishAll(rows) {
   const files = [];
   let keysEnc = null;
 
-  const source = repoPath(row.source);
-  const published = source ? await repo.read(source) : null;
-  const draftSource = row.draft && row.draft.source ? repoPath(row.draft.source) : "";
+  for (const row of rows) {
+    const source = repoPath(row.source);
+    const published = source ? await repo.read(source) : null;
+    const draftSource = row.draft && row.draft.source ? repoPath(row.draft.source) : "";
 
-  if (draftSource) {
-    // A draft already stands in front of it. It simply stops standing in for
-    // anything — its path and its key are unchanged, so no key moves here.
-    const current = await repo.read(draftSource);
-    if (current) {
+    if (draftSource) {
+      // A draft already stands in front of it. It simply stops standing in for
+      // anything — its path and its key are unchanged, so no key moves here.
+      const current = await repo.read(draftSource);
+      if (current) {
+        files.push({
+          operation: "update",
+          path: draftSource,
+          sha: current.sha,
+          content: repo.toBase64(
+            withFront(current.text, { vault: "true", draft: "true", supersedes: null })
+          ),
+        });
+      }
+    } else {
+      if (!published) throw new Error(`${source || row.title} is not in the repository`);
+      const path = draftPathFor(source);
+      if (await repo.read(path)) throw new Error(`${path} already exists`);
+      keysEnc = (await mintVaultKey(path)).keysEnc;
       files.push({
-        operation: "update",
-        path: draftSource,
-        sha: current.sha,
+        operation: "create",
+        path,
         content: repo.toBase64(
-          withFront(current.text, { vault: "true", draft: "true", supersedes: null })
+          withFront(published.text, { vault: "true", draft: "true", supersedes: null })
         ),
       });
     }
-  } else {
-    if (!published) throw new Error(`${source || row.title} is not in the repository`);
-    const path = draftPathFor(source);
-    if (await repo.read(path)) throw new Error(`${path} already exists`);
-    const minted = await mintVaultKey(path);
-    keysEnc = minted.keysEnc;
-    files.push({
-      operation: "create",
-      path,
-      content: repo.toBase64(
-        withFront(published.text, { vault: "true", draft: "true", supersedes: null })
-      ),
-    });
+
+    if (published) files.push({ operation: "delete", path: source, sha: published.sha });
+
+    if (row.encrypted && row.vaultId) {
+      keysEnc = (await revokeVaultKey(row.vaultId)).keysEnc;
+    }
   }
 
-  if (published) files.push({ operation: "delete", path: source, sha: published.sha });
-
-  // The published post's own key goes with its ciphertext. Revoked AFTER any
-  // mint above, because each call hands back the whole keyring rebuilt from the
-  // database and only the last answer is current.
-  if (row.encrypted && row.vaultId) {
-    const revoked = await revokeVaultKey(row.vaultId);
-    keysEnc = revoked.keysEnc;
-  }
+  if (!files.length) return null;
   if (keysEnc) files.push(await keyringFile(keysEnc));
 
-  return repo.commit(files, `Unpublish: ${row.title || source}`);
+  const titles = rows.map((row) => row.title || repoPath(row.source)).filter(Boolean);
+  return repo.commit(
+    files,
+    titles.length === 1 ? `Unpublish: ${titles[0]}` : `Unpublish ${titles.length} posts`
+  );
 }
 
 export async function remove(entry) {

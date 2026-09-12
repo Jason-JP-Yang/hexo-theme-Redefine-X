@@ -120,7 +120,12 @@ $vault-badge-gold-ink = #3D2900
 // corner are one badge as far as the reader is concerned. The BOX is placed and
 // the badges inside it are laid out in flow.
 //
-// It wraps and is bounded by the tile: two long translated labels on a narrow
+// Positioned against the PICTURE (the template puts it inside
+// `.home-article-thumbnail`, which is already a containing block), never against
+// the tile: the tile's top-left corner is the text column on a split tile whose
+// cover is on the right, which is how a lock ended up printed across the eyebrow.
+//
+// It wraps and is bounded by the frame: two long translated labels on a narrow
 // phone tile would otherwise run off the picture.
 .home-article-badges
   position absolute
@@ -239,6 +244,29 @@ $vault-badge-gold-ink = #3D2900
       border 1px solid var(--primary-color)
       opacity 0.34
       pointer-events none
+
+  // Selected for the next unpublish commit. Nothing has been written — the bar
+  // at the top of the console is what writes — so this is a statement about
+  // what is about to happen, in the theme's red pair so it reads the same way in
+  // both modes and cannot print dark ink on a dark fill.
+  &.is-queued
+    border-color var(--box-red-text)
+    background var(--box-red-bg)
+
+    .bm-post-title,
+    .bm-post-title a,
+    .bm-post-title i,
+    .bm-post-meta,
+    .bm-post-excerpt
+      color var(--box-red-text)
+
+    .bm-post-meta,
+    .bm-post-excerpt
+      opacity 0.8
+
+    // The primary outline an encrypted row wears would fight the red one.
+    &::after
+      border-color var(--box-red-text)
 
   // While a commit is in flight. The row stays legible and stops being a target.
   &.is-working
@@ -428,6 +456,25 @@ a.bm-post-edit
 
   i, span
     color inherit
+
+// Queued. The red pair the other way up, so the button reads as the thing that
+// put the row in that state rather than as another copy of it.
+.bm-post-unpublish.is-on
+  background var(--box-red-text)
+  border-color transparent
+  color var(--box-red-bg)
+  font-weight 600
+
+  i, span
+    color var(--box-red-bg)
+
+// While the commit is in flight nothing else may be queued, edited or started.
+#blog-management.is-unpublishing
+  .bm-post-unpublish,
+  .bm-post-edit,
+  .bm-write
+    pointer-events none
+    opacity 0.45
 
 .bm-post-audience
   grid-column 1 / -1

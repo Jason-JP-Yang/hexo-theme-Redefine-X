@@ -313,6 +313,20 @@ management:
   p_untitled: Untitled
   p_empty: Nothing matches this filter.
   p_unpublish: Unpublish
+  p_unpub_queued: Queued
+  p_unpub_one: post to withdraw
+  p_unpub_many: posts to withdraw
+  p_unpub_go: Save & publish
+  p_unpub_cancel: Cancel
+  p_unpub_done: Committed
+  p_unpub_empty: There was nothing to commit.
+  p_unpub_land: Done. Loading the site as readers see it...
+  p_unpub_failed: The build failed. The commit landed; nothing published has changed.
+  p_backend: Build on
+  p_s_committed: Committed
+  p_s_building: Building
+  p_s_pushed: Artifact pushed
+  p_s_deployed: Deployed
   v_badge: Encrypted
   v_audience: Who can read this
   v_reader: reader

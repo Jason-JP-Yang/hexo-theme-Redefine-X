@@ -132,6 +132,13 @@ const TITLE_EM = 19;
 const LINE = 24;
 const EM = 16;
 
+// The badge stack's line in the head, charged ONLY to a tile with no picture: one
+// with a picture carries its badges over it and pays nothing. Without this the
+// solver reserves a row for chrome the tile does not have, the summary is left
+// with less than a whole line, and `round(down, 100%, 1lh)` floors it to none —
+// a tile with an excerpt and no excerpt on it.
+const BADGE_ROW = 31;
+
 // A split tile's text column may not fall below this; its cover column takes what
 // is left of the width, and never more than SPLIT_COVER_MAX of the tile. Mirrors
 // $bento-split-text-min and $bento-split-cover-max, whose comment explains the
@@ -220,9 +227,13 @@ function measure(post, now) {
   const body = measureText(post.content);
   const summary = excerpt ? measureText(excerpt) : null;
 
+  const cover = post.thumbnail !== false && !!(post.thumbnail || post.cover || post.banner);
+
   return {
     sticky: !!post.sticky,
-    cover: post.thumbnail !== false && !!(post.thumbnail || post.cover || post.banner),
+    cover,
+    // Pinned, encrypted, draft — whatever it is, one wrapping row of chips.
+    badges: !cover && !!(post.sticky || post.vault),
     // A post with no excerpt of its own gets one generated from its body, so the
     // body is the supply; one that asked for silence has nothing to show at all.
     textEms: silent ? 0 : summary ? summary.ems : body.ems,
@@ -253,7 +264,10 @@ function ask(m, shape, height) {
   const room = Math.min(shape.width - SPLIT_TEXT_MIN, shape.width * SPLIT_COVER_MAX);
   const column = shape.split && m.cover ? Math.min(Math.max(0, height) * COVER, room) : 0;
   const width = shape.width - pad - column;
-  const chrome = CHROME + Math.max(1, lines(m.titleEms, width / TITLE_EM)) * TITLE_LINE;
+  const chrome =
+    CHROME +
+    Math.max(1, lines(m.titleEms, width / TITLE_EM)) * TITLE_LINE +
+    (m.badges ? BADGE_ROW : 0);
 
   // Only a cover ABOVE the text takes a share of the tile's HEIGHT.
   const stacked = m.cover && !shape.split;

@@ -565,6 +565,11 @@ $bento-split-text  = 'minmax(0, 1fr)'
       grid-row 1
       padding 1.5rem
 
+    // Side by side here too, so the same corner for the same reason.
+    .home-article-badges
+      left auto
+      right 10px
+
   .home-content-container .home-article-list:not(.bento) .home-article-item:nth-child(even):not(.no-cover)
     grid-template-columns unquote(s('minmax(0, 1fr) %s', $list-cover-width))
 
@@ -673,6 +678,13 @@ split-composition()
     grid-column 2
     grid-row 1
     padding 1.5rem
+
+  // The far corner of the picture from the text, whichever side the picture is
+  // on: side by side there is no band above the words for a badge to sit over,
+  // and the frame's own corner is the one place it costs the text nothing.
+  .home-article-badges
+    left auto
+    right 10px
 
 // Every second one mirrors, so a run of them zig-zags instead of stamping the
 // same L-shape over and over. The class is put on by the plan.

@@ -315,6 +315,20 @@ management:
   p_untitled: 无标题
   p_empty: 没有符合该筛选条件的内容。
   p_unpublish: 取消发布
+  p_unpub_queued: 已选中
+  p_unpub_one: 篇文章待撤下
+  p_unpub_many: 篇文章待撤下
+  p_unpub_go: 保存并发布
+  p_unpub_cancel: 取消
+  p_unpub_done: 已提交
+  p_unpub_empty: 没有需要提交的内容。
+  p_unpub_land: 已完成，正在载入读者看到的站点……
+  p_unpub_failed: 构建失败。提交已落地，已发布的内容没有变化。
+  p_backend: 构建于
+  p_s_committed: 已提交
+  p_s_building: 构建中
+  p_s_pushed: 产物已推送
+  p_s_deployed: 已部署
   v_badge: 加密
   v_audience: 可以阅读的人
   v_reader: 人

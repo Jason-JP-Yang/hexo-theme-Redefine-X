@@ -112,6 +112,10 @@ const state = {
   pointerY: 0,
   leaving: false,
   perchOff: null,
+  // Opened on /blog-management/write/ rather than on an article. There is no
+  // page under this editor to go back to or to reload, so both exits are
+  // somewhere else: the console, or the site.
+  fresh: false,
 };
 
 let ui = null;
@@ -423,6 +427,7 @@ async function activate(host) {
   settleBackend(opened);
 
   const identity = pageIdentity(host);
+  state.fresh = !!identity.fresh;
 
   try {
     await Promise.all([loadComponents(), loadManifest()]);
@@ -663,6 +668,11 @@ async function deactivate() {
   // what it was asked about may be gone by the time it is answered.
   if (!(await confirmLeave()) || !state.on) return;
 
+  // Stopping work on a NEW post leaves nothing behind to look at — the composer
+  // is an empty article shell — so the way out is back to the console it was
+  // opened from. Read before the teardown resets it.
+  const composer = state.fresh;
+
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
   unwire();
@@ -717,10 +727,12 @@ async function deactivate() {
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
     put: [], doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null, vaultChoice: undefined,
-    perchOff: null,
+    perchOff: null, fresh: false,
   });
   ui = null;
   contentChanged();
+
+  if (composer) location.href = `${siteRoot()}/blog-management/`;
 }
 
 /* ─── header ───────────────────────────────────────────────────────────────── */
@@ -1961,6 +1973,17 @@ async function doSave(mode) {
     syncHeader();
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);
+
+    // A post written HERE now lives somewhere else, and this page is the empty
+    // composer it was written in — there is no build rail worth watching on a
+    // page that will never show the result. Draft or published, the answer is
+    // the site.
+    if (state.fresh) {
+      state.dirty = false;
+      setTimeout(() => location.replace(`${siteRoot()}/`), 1200);
+      return;
+    }
+
     startProgress(result);
 
     // Publishing is the end of a piece of work, and what it produces — the

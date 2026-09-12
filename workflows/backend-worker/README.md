@@ -494,6 +494,45 @@ Patterns** covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`,
 `package.json`, `package-lock.json`, `_config.yml`. Without that last control an
 admin session is code execution on a runner that holds `VAULT_MASTER`.
 
+#### `GET /api/admin/repo/ticket`
+
+Admin only. Returns `{ prefer, backends: [{ id, api, owner, repo, branch, token,
+expires, … }] }` — one row per configured backend, and the browser picks.
+
+`expires` is what makes the GitHub credential short-lived **end to end**. When a
+GitHub App is configured the Worker mints a **one-hour installation token**,
+narrowed per request to that one repository and to `contents: write` /
+`metadata: read` / `actions: read`; the App's private key never leaves the
+Worker. The browser re-asks before the stamp lapses, and a 401 mid-session is
+answered by one silent re-mint on the same backend rather than by a failed save
+(`source/js/plugins/editor/repo.js`).
+
+Set three values to switch it on; without them the route falls back to
+`GITHUB_EDITOR_TOKEN` and behaves exactly as before.
+
+| | |
+|---|---|
+| `GITHUB_APP_ID` | var — the App's numeric id |
+| `GITHUB_APP_INSTALLATION_ID` | var — from the installation's settings URL |
+| `GITHUB_APP_PRIVATE_KEY` | **secret** — the PKCS#8 PEM, newlines and all |
+
+```sh
+wrangler secret put GITHUB_APP_PRIVATE_KEY   # paste the whole .pem
+```
+
+The App needs **Contents: write**, **Metadata: read**, **Actions: read** and —
+deliberately — no **Workflows** permission, which is what makes GitHub itself
+refuse every write under `.github/workflows/`.
+
+Cost on the free plan: one RS256 signature and one subrequest, at most once per
+isolate per fifty-five minutes. The imported key and the token are cached at
+module scope — no D1 row, no KV read, and nothing in the shared edge cache,
+where a credential under a routable key could be fetched back out.
+
+Gitea is **not** short-lived and cannot be: it has no App model and its tokens
+carry no expiry, so `expires` is `""` there and containment stays what it is
+above.
+
 #### `POST /api/admin/vault/mint`
 
 Admin only. `{ "source": "source/_posts/x.md" }`
