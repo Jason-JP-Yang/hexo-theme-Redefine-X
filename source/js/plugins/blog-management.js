@@ -809,12 +809,19 @@ function postRowHTML(row) {
     )
     .join("");
 
+  // The count is the one thing on a row that is NOT sealed with the page, so
+  // until the Worker answers it shows the console's own spinner rather than a
+  // zero that would read as "nobody can open this".
   const readerBubble = grant
     ? `<span class="bm-bubble is-readers" data-empty="${readers ? "0" : "1"}">
          <i class="fa-solid fa-user-lock" aria-hidden="true"></i>
-         <strong>${readers}</strong>${escapeHTML(
-           t(readers === 1 ? "v_reader" : "v_readers", "readers")
-         )}</span>`
+         ${
+           state.posts.loading
+             ? `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`
+             : `<strong>${readers}</strong>${escapeHTML(
+                 t(readers === 1 ? "v_reader" : "v_readers", "readers")
+               )}`
+         }</span>`
     : "";
 
   // An album's `vault:` flag lives in masonry.yml, so there is no markdown file
@@ -914,9 +921,10 @@ function setPostFilter(value) {
 
 /** The one question the build could not answer. */
 async function loadAudiences() {
+  state.posts.loading = true;
   const result = await api("/api/admin/vault");
-  if (!result.ok || !result.data) return;
-  state.posts.audiences = result.data.audiences || {};
+  state.posts.loading = false;
+  if (result.ok && result.data) state.posts.audiences = result.data.audiences || {};
   paintPosts();
 }
 
