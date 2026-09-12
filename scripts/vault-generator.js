@@ -783,6 +783,14 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
             category: entry.category.links_category,
             thumbs: entry.category.has_thumbnail === true,
             href,
+            // The same two the post branch writes, and for the same reason: an
+            // album's photographs are withheld from build/manifest.json, so
+            // this is the ONLY record of what they are called and what they
+            // weigh. Written after `b.bin` above, which is the pass that seals
+            // them and fills the map. Without it the editor's picture browser
+            // showed an album with most of its photographs missing.
+            assets: entry.assetMap || {},
+            sizes: entry.assetSizes || {},
             // Where the card goes back, sealed so the public build discloses no
             // gap in the sequence. See markedAlbums in scripts/filters/vault.js.
             index: entry.index,
