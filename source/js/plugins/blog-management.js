@@ -30,6 +30,7 @@ import {
   escapeHTML,
   describeDevice,
 } from "./notifications-inbox.js";
+import { initManagementAnalytics } from "./management-analytics.js";
 import { Picker, avatarOf } from "../tools/chipPicker.js";
 import { siteRoot } from "../tools/vaultCrypto.js";
 import { enter, exit, pop } from "./editor/motion.js";
@@ -1659,6 +1660,7 @@ function wire() {
 function boot() {
   const sections = {
     posts: root.querySelector('[data-part="posts"]'),
+    analytics: root.querySelector('[data-part="analytics"]'),
     announce: root.querySelector('[data-part="announce"]'),
     notifications: root.querySelector('[data-part="notifications"]'),
     followers: root.querySelector('[data-part="followers"]'),
@@ -1668,6 +1670,9 @@ function boot() {
     renderPostsShell(sections.posts);
     paintPosts();
   }
+  // Owns its own fetching: it is the only section that talks to something other
+  // than the Worker, and its six views are asked for one at a time.
+  if (sections.analytics) initManagementAnalytics(sections.analytics, root, t);
   renderCompose(sections.announce);
   renderNotificationsShell(sections.notifications);
   renderFollowersShell(sections.followers);

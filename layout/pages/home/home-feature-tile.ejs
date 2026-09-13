@@ -20,6 +20,8 @@
             <%- partial("components/sidebar/author") %>
             <%- partial('components/sidebar/statistics') %>
         </div>
+    <% } else if (tile.name === "pulse") { %>
+        <%- partial("components/sidebar/pulse") %>
     <% } else if (hasLinks || hasAnnouncement) { %>
         <div class="sidebar-links">
             <div class="site-info">
@@ -33,7 +35,8 @@
             <% if (hasLinks) { %>
                 <% for (let i in sidebar.links) { %>
                     <% if (sidebar.links[i].path !== 'none') { %>
-                        <a class="links" href="<%= url_for(sidebar.links[i].path) %>">
+                        <a class="links" href="<%= url_for(sidebar.links[i].path) %>"
+                           data-ux="browse" data-ux-kind="links" data-ux-value="<%= i %>">
                             <% if (sidebar.links[i].icon) { %>
                                 <i class="<%- sidebar.links[i].icon %> icon-space"></i>
                             <% } %>

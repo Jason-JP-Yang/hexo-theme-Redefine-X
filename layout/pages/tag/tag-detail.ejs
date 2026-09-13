@@ -2,5 +2,5 @@
     <i class="fa-solid fa-tag"></i>&nbsp;<%= page.tag %>
 </div>
 <div class="tag-post-list">
-    <%- partial('utils/posts-list', {posts: page.posts}) %>
+    <%- partial('utils/posts-list', {posts: page.posts, from: 'tag'}) %>
 </div>

@@ -225,6 +225,43 @@ notifications:
   account_banned_note: Vous restez connecte et pouvez continuer a commenter les articles ; seule la possibilite de vous abonner a ce blog a ete retiree. Si l'auteur vous a egalement bloque sur GitHub, les commentaires s'arretent aussi.
 
 management:
+  a_title: Analytics
+  a_lede: Read straight from Umami with an admin credential the Worker releases per session.
+  a_overview: Overview
+  a_events: Events
+  a_sessions: Sessions
+  a_performance: Performance
+  a_compare: Compare
+  a_breakdown: Breakdown
+  a_visitors: Visitors
+  a_visits: Visits
+  a_views: Views
+  a_bounce: Bounce rate
+  a_duration: Visit duration
+  a_countries: Countries
+  a_pages: Pages
+  a_referrers: Referrers
+  a_browsers: Browsers
+  a_os: Systems
+  a_devices: Devices
+  a_direct: Direct / none
+  a_events_fired: Events
+  a_event_types: Types
+  a_by_name: By name
+  a_recent: Recent sessions
+  a_unknown: Unknown
+  a_nodata: Nothing in this range
+  a_offline: Umami did not answer.
+  a_denied: The analytics credential was refused.
+  a_perf_none: No web vitals yet. The tracker collects them only when data-performance is set.
+  a_compare_note: Against the previous period of the same length.
+  a_break_note: Pick up to three dimensions to cross.
+  a_f_path: Path
+  a_f_referrer: Referrer
+  a_f_browser: Browser
+  a_f_os: System
+  a_f_device: Device
+  a_f_country: Country
   title: Administration du blog
   lede: Les annonces, ce que la base de notifications conserve encore, et chaque abonne avec ses appareils.
   checking: Verification de votre session...
@@ -335,3 +372,10 @@ vault:
   published: Publie
   view_published: Voir la version publiee
   view_draft: Voir le brouillon
+analytics:
+  activity: Activite
+  views: vues
+  weeks: semaines
+  less: moins
+  more: plus
+  no_views: Aucune vue

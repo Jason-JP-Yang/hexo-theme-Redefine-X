@@ -1,4 +1,7 @@
 <% const postList = createNewArchivePosts(posts) %>
+<%# Which listing this is, for the `open-post` event. The three callers pass it;
+    the default keeps a caller that forgets from reporting nothing at all. %>
+<% const listFrom = typeof from !== "undefined" ? from : "archive"; %>
 <div class="archive-list-container">
     <% postList.forEach(postYear => { %>
         <section class="archive-item mb-spacing-unit last:mb-0">
@@ -16,7 +19,8 @@
                         <% } %> <!-- Close the previous LI if not the first item -->
                         <li class="article-item space-y-2 px-6 pt-10 pb-2 text-xl relative border-l-2 border-border-color" date-is='<%= currentDate %>'>
                     <% } %>
-                    <a href="<%- url_for(post.path) %>" class="block w-fit">
+                    <a href="<%- url_for(post.path) %>" class="block w-fit"
+                       data-ux="open-post" data-ux-from="<%= listFrom %>">
                         <span class="article-title my-0.5 text-2xl"><%= post.title %></span>
                     </a>
                     <% previousDate = currentDate; %>

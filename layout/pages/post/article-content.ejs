@@ -137,7 +137,7 @@
 		<ul class="post-tags-box text-lg mt-1.5 flex-wrap justify-center flex md:hidden">
 			<% page.tags.forEach((tag) => { %>
 			<li class="tag-item mx-0.5">
-				<a href="<%- url_for(tag.path) %>">#<%= tag.name %></a>&nbsp;
+				<a href="<%- url_for(tag.path) %>" data-ux="browse" data-ux-kind="tag" data-ux-value="<%= tag.name %>">#<%= tag.name %></a>&nbsp;
 			</li>
 			<% }); %>
 		</ul>

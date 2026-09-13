@@ -34,6 +34,9 @@
                 <% if (theme.backend && theme.backend.vault_enable) { %>
                 <section class="bm-section" data-part="posts" id="bm-posts"></section>
                 <% } %>
+                <% if (theme.analytics && theme.analytics.enable === true) { %>
+                <section class="bm-section" data-part="analytics" id="bm-analytics"></section>
+                <% } %>
                 <section class="bm-section" data-part="announce" id="bm-announce"></section>
                 <section class="bm-section" data-part="notifications" id="bm-notifications"></section>
                 <section class="bm-section" data-part="followers" id="bm-followers"></section>
@@ -47,6 +50,7 @@
     <% if (theme.articles.toc.enable === true) {
         const sections = [
             theme.backend && theme.backend.vault_enable ? ['bm-posts', __('management.p_title')] : null,
+            theme.analytics && theme.analytics.enable === true ? ['bm-analytics', __('management.a_title')] : null,
             ['bm-announce', __('management.announce')],
             ['bm-notifications', __('management.notifications')],
             ['bm-followers', __('management.followers')],

@@ -228,6 +228,43 @@ notifications:
   account_banned_note: 你仍可保持登录并在文章下评论 —— 被收回的只是订阅本博客的权限。如果博主同时在 GitHub 上封禁了你的账号，评论也会一并停止。
 
 management:
+  a_title: 访问分析
+  a_lede: 直接读取 Umami 数据，凭据由 Worker 在每次管理员会话中下发。
+  a_overview: 总览
+  a_events: 事件
+  a_sessions: 会话
+  a_performance: 性能
+  a_compare: 对比
+  a_breakdown: 交叉分析
+  a_visitors: 访客
+  a_visits: 访问
+  a_views: 浏览
+  a_bounce: 跳出率
+  a_duration: 停留时长
+  a_countries: 国家/地区
+  a_pages: 页面
+  a_referrers: 来源
+  a_browsers: 浏览器
+  a_os: 操作系统
+  a_devices: 设备
+  a_direct: 直接访问
+  a_events_fired: 事件数
+  a_event_types: 类型数
+  a_by_name: 按名称
+  a_recent: 最近会话
+  a_unknown: 未知
+  a_nodata: 该时间段内没有数据
+  a_offline: Umami 没有响应。
+  a_denied: 分析凭据被拒绝。
+  a_perf_none: 暂无 Web Vitals 数据。只有设置 data-performance 后追踪器才会采集。
+  a_compare_note: 与上一个等长周期对比。
+  a_break_note: 最多选择三个维度进行交叉。
+  a_f_path: 路径
+  a_f_referrer: 来源
+  a_f_browser: 浏览器
+  a_f_os: 系统
+  a_f_device: 设备
+  a_f_country: 国家/地区
   title: 博客管理
   lede: 发布公告、查看通知数据库中现存的内容，以及每一位关注者与其名下的推送设备。
   checking: 正在检查你的登录状态…
@@ -561,3 +598,10 @@ editor:
   pick_bytes: 大小
   pick_served: 实际路径
   pick_moved: 移动自
+analytics:
+  activity: 访问活动
+  views: 次浏览
+  weeks: 周
+  less: 少
+  more: 多
+  no_views: 无访问

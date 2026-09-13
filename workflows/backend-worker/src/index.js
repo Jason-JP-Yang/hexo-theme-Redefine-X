@@ -1724,6 +1724,33 @@ function githubTicket(env) {
   };
 }
 
+// ─── ANALYTICS: release the Umami credential ────────────────
+//
+// The same shape as the repository ticket above, and for the same reason: the
+// browser talks to Umami DIRECTLY afterwards. Proxying a dashboard's worth of
+// queries through here would spend a 10 ms CPU budget on work this Worker adds
+// nothing to.
+//
+// UMAMI_TOKEN is the bearer from Umami's POST /api/auth/login. It does not
+// expire, which is exactly why it is a secret here and never in the page: the
+// public half of the site reads Umami through a share slug restricted to the
+// Overview section, and everything past that costs an admin session.
+//
+// No fetch, no database read. The whole handler is a signature check that has
+// already happened in authMiddleware.
+app.get("/api/admin/analytics/ticket", authMiddleware, (c) => {
+  const token = c.env.UMAMI_TOKEN;
+  const host = String(c.env.UMAMI_API_URL || "").replace(/\/+$/, "");
+  const websiteId = c.env.UMAMI_WEBSITE_ID;
+
+  if (!token || !host || !websiteId) {
+    return c.json({ error: "Analytics is not configured" }, 503);
+  }
+
+  c.header("Cache-Control", "no-store");
+  return c.json({ token, host, websiteId });
+});
+
 app.get("/api/admin/repo/ticket", authMiddleware, (c) => {
   const backends = [giteaTicket(c.env), githubTicket(c.env)].filter(Boolean);
   if (!backends.length) {

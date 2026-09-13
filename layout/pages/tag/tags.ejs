@@ -15,7 +15,7 @@
 			    permutation per machine. tagcloud() above is already name-ordered. %>
 			<% site.tags.sort('name').forEach(function(tag){ %>
 				<li>
-					<a data-weight="<%- tag.posts.length %>" href="<%- url_for("/" + tag.path) %>">
+					<a data-weight="<%- tag.posts.length %>" href="<%- url_for("/" + tag.path) %>" data-ux="browse" data-ux-kind="tag" data-ux-value="<%= tag.name %>">
 						<i class="fa-solid fa-hashtag"></i><%- tag.name %>
 					</a>
 				</li>

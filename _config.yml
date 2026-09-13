@@ -521,6 +521,29 @@ backend:
   vault_prefix: /v
 # BACKEND <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
+# ANALYTICS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
+# Docs: https://redefine-x-docs.jason-yang.top/zh/analytics
+# A self-hosted Umami instance, read back INTO the site rather than linked out to.
+analytics:
+  # Whether to enable the tracker and everything that reads from it.
+  enable: false
+  # Umami base URL, no trailing slash.
+  host:
+  # The website id the tracker reports under.
+  website_id:
+  # Public read-only share slug. Restrict it to the Overview section in Umami:
+  # anything the slug can reach, the whole web can reach.
+  share:
+  # Web-vitals collection (LCP/FCP/CLS/INP/TTFB). Off in Umami's tracker by default.
+  performance: true
+  # Session replay + heatmap capture (recorder.js).
+  recorder: true
+  # The activity card on the home grid.
+  pulse: true
+  # Custom events. The taxonomy lives in source/js/tools/uxEvents.js, not here.
+  events: true
+# ANALYTICS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
+
 # NOTIFICATIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/notifications
 # Requires the backend Worker in workflows/backend-worker (see its README).

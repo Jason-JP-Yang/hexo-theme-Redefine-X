@@ -2,14 +2,14 @@
 	<ul class="article-tools-list">
 		<!-- TOC aside toggle -->
 		<% if (theme.articles.toc.enable) { %>
-		<li class="right-bottom-tools page-aside-toggle">
+		<li class="right-bottom-tools page-aside-toggle" data-ux="tool" data-ux-name="toc">
 			<i class="fa-regular fa-outdent"></i>
 		</li>
 		<% } %>
 
 		<!-- go comment -->
 		<% if (theme.comment.enable === true && theme.comment.hasOwnProperty('system') && page.comment !== false) { %>
-		<li class="go-comment">
+		<li class="go-comment" data-ux="tool" data-ux-name="comment">
 			<i class="fa-regular fa-comments"></i>
 		</li>
 		<% } %>

@@ -13,6 +13,9 @@ import initBentoFit from "./layouts/bentoFit.js";
 import initTileSpotlight from "./layouts/tileSpotlight.js";
 import initCoverParallax from "./layouts/coverParallax.js";
 import initHomePagination from "./layouts/homePagination.js";
+import initPulseCard from "./layouts/pulseCard.js";
+import initUxEvents from "./tools/uxEvents.js";
+import initFrameFit from "./tools/frameFit.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 import initInstantNotes from "./plugins/instantNotes.js";
 import initVault from "./plugins/vault.js";
@@ -65,6 +68,10 @@ export const main = {
     }
   },
   refresh: () => {
+    // First: it clears the per-pageview event budget, and swup calls refresh()
+    // exactly once per pageview Umami records.
+    initUxEvents();
+
     initUtils();
     initModeToggle();
     initScrollTopBottom();
@@ -102,6 +109,10 @@ export const main = {
     // place.
     initBentoFit();
 
+    // After the row is pinned: the card solves its calendar against the box it
+    // has actually been given, and re-solves on its own from there.
+    initPulseCard();
+
     initTileSpotlight();
 
     initCoverParallax();
@@ -131,6 +142,9 @@ export const main = {
 export function initMain() {
   main.printThemeInfo();
   main.refresh();
+  // Last, and once: inside a heatmap frame the page is held still and its real
+  // height reported back. A no-op everywhere else.
+  initFrameFit();
 }
 
 document.addEventListener("DOMContentLoaded", initMain);

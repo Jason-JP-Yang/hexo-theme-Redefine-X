@@ -20,7 +20,7 @@
 %>
 <li class="<%= vault ? "is-vault-album" : hover %>"
     <%- vault ? ' data-vault-album="1"' : "" %>>
-    <a href="<%= f.link %>">
+    <a href="<%= f.link %>" data-ux="browse" data-ux-kind="masonry" data-ux-value="<%= f.name || "album" %>">
         <%# Over the thumbnail, which is the only part of the card that is a
             picture. The flat variant has none, so its badge goes in the row
             (below) rather than on top of the avatar and the album's name. %>

@@ -6,6 +6,7 @@
         .home-article-item,
         .sidebar-links,
         .sidebar-content,
+        .sidebar-pulse,
         a.page-number,
         a.extend,
         .sidebar-links .links:hover,
@@ -67,25 +68,25 @@
                         <% if(theme.home_banner.social_links.links[key]) { %>
                             <% if(key === 'email') { %>
                                 <span class="social-contact-item <%= key %> ">
-                                    <a href="mailto:<%- theme.home_banner.social_links.links[key] %>">
+                                    <a href="mailto:<%- theme.home_banner.social_links.links[key] %>" data-ux="social" data-ux-to="email">
                                         <i class="fa-solid fa-fw fa-at fa-lg"></i>
                                     </a>
                                 </span>
                             <% } else if(key.includes("fa-")) { %>
                                 <span class="social-contact-item">
-                                    <a target="_blank" href="<%- theme.home_banner.social_links.links[key] %>">
+                                    <a target="_blank" href="<%- theme.home_banner.social_links.links[key] %>" data-ux="social" data-ux-to="<%= key %>">
                                         <i class="<%= key %> fa-fw fa-lg"></i>
                                     </a>
                                 </span>
                             <% } else if(key.startsWith('/') || key.startsWith('http')) { %>
                                 <span class="social-contact-item">
-                                    <a target="_blank" href="<%- theme.home_banner.social_links.links[key] %>">
+                                    <a target="_blank" href="<%- theme.home_banner.social_links.links[key] %>" data-ux="social" data-ux-to="<%= key %>">
                                         <img src="<%- url_for(key) %>" alt="social-icon" class="w-5 h-5 object-contain">
                                     </a>
                                 </span>
                             <% } else { %>
                                 <span class="social-contact-item <%= key %>">
-                                    <a target="_blank" href="<%- theme.home_banner.social_links.links[key] %>">
+                                    <a target="_blank" href="<%- theme.home_banner.social_links.links[key] %>" data-ux="social" data-ux-to="<%= key %>">
                                         <i class="fa-brands fa-fw fa-lg fa-<%= key %>"></i>
                                     </a>
                                 </span>

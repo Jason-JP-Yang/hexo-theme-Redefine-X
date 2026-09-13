@@ -51,7 +51,8 @@
             <%# aria-hidden + tabindex="-1": this links to the same place as the
                 title below it, so it is decorative to a screen reader and should
                 not cost a second tab stop. %>
-            <a href="<%- target %>" tabindex="-1" aria-hidden="true">
+            <a href="<%- target %>" tabindex="-1" aria-hidden="true"
+               data-ux="open-post" data-ux-from="home" data-ux-tier="<%= tier %>">
                 <%# A vault cover carries its hash, never a path: the file it names
                     is sealed and the client swaps in a blob: URL after decrypting. %>
                 <img src="<%- cover %>" alt="<%= post.title %>"<%- asset ? ' data-vault-asset="' + asset + '"' : "" %>
@@ -86,7 +87,7 @@
             <%# Never clamped. A title that does not fit is a tile that was sized
                 wrong, and the plan is what fixes that. %>
             <h3 class="home-article-title">
-                <a href="<%- target %>"><%= post.title %></a>
+                <a href="<%- target %>" data-ux="open-post" data-ux-from="home" data-ux-tier="<%= tier %>"><%= post.title %></a>
             </h3>
         </div>
 
