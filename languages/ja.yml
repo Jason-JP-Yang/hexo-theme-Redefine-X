@@ -268,6 +268,23 @@ management:
   a_change: 変化
   a_prev_views: 閲覧数（前期間）
   a_prev_visitors: 訪問者（前期間）
+  a_map: 国別の訪問者
+  a_linear: 線形
+  a_log: 対数
+  a_less: 閉じる
+  a_more: もっと見る
+  a_u_hour: 時間
+  a_u_day: 日
+  a_u_month: 月
+  a_ch_direct: 直接
+  a_ch_search: 検索
+  a_ch_social: ソーシャル
+  a_ch_referral: 参照
+  a_ch_email: メール
+  a_ch_paid: 広告
+  a_ch_affiliate: アフィリエイト
+  a_ch_video: 動画
+  a_ch_unknown: 不明
   a_search: 検索
   a_prev: 前へ
   a_next: 次へ

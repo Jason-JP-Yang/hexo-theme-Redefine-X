@@ -271,6 +271,23 @@ management:
   a_change: 变化
   a_prev_views: 浏览量（上一周期）
   a_prev_visitors: 访客（上一周期）
+  a_map: 访客国家分布
+  a_linear: 线性
+  a_log: 对数
+  a_less: 收起
+  a_more: 展开
+  a_u_hour: 小时
+  a_u_day: 天
+  a_u_month: 月
+  a_ch_direct: 直接访问
+  a_ch_search: 搜索
+  a_ch_social: 社交
+  a_ch_referral: 引荐
+  a_ch_email: 邮件
+  a_ch_paid: 付费
+  a_ch_affiliate: 联盟
+  a_ch_video: 视频
+  a_ch_unknown: 未知
   a_search: 搜索
   a_prev: 上一页
   a_next: 下一页

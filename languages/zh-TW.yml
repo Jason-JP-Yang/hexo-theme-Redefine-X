@@ -270,6 +270,23 @@ management:
   a_change: 變化
   a_prev_views: 瀏覽量（上一週期）
   a_prev_visitors: 訪客（上一週期）
+  a_map: 訪客國家分布
+  a_linear: 線性
+  a_log: 對數
+  a_less: 收合
+  a_more: 展開
+  a_u_hour: 小時
+  a_u_day: 天
+  a_u_month: 月
+  a_ch_direct: 直接造訪
+  a_ch_search: 搜尋
+  a_ch_social: 社群
+  a_ch_referral: 引薦
+  a_ch_email: 郵件
+  a_ch_paid: 付費
+  a_ch_affiliate: 聯盟
+  a_ch_video: 影片
+  a_ch_unknown: 未知
   a_search: 搜尋
   a_prev: 上一頁
   a_next: 下一頁

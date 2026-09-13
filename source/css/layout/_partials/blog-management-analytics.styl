@@ -6,18 +6,19 @@
 // The console's sixth section: Umami's own dashboard at Umami's own density,
 // wearing this theme's type, spacing and colour.
 //
-// It is built from the parts the other five sections already use — `.bm-card`
-// for a panel, `.bm-seg` for a picker, `.bm-sub-title` for a panel head,
-// `.bm-hint` for a note, `.bm-blank` for an empty state. What is added here is
-// only what a dashboard needs and a form does not: a metric tile, a ranked row,
-// a chart, a data table, a pager.
+// Built from the parts the other five sections already use — `.bm-card` for a
+// panel, `.bm-seg` for a picker, `.bm-sub-title` for a panel head, `.bm-hint`
+// for a note, `.bm-blank` for an empty state. What is added is only what a
+// dashboard needs and a form does not: a metric tile, a ranked row, a chart, a
+// choropleth, a data table, a pager.
 //
-// COLOUR. Every colour is derived, never literal: the series come from
-// --primary-color, the surfaces from the theme's own background/border/text
-// tokens. That is what keeps the section legible on a light ground, a dark
-// ground and an accent-tinted ground without a second palette per mode. The one
-// exception is the good/warn/bad triple, which must NOT follow the site accent —
-// "this page is slow" cannot change meaning when the accent does.
+// COLOUR. The surfaces are the theme's own tokens, so the section reads on a
+// light, a dark and an accent-tinted ground. The SERIES are a twelve-hue
+// palette whose first entry is the site accent: one colour for everything is
+// unreadable the moment a chart stacks more than two things, and a palette
+// derived entirely from the accent would be twelve shades of one hue. The
+// good/warn/bad triple is literal on purpose — "this page is slow" must not
+// change meaning when the accent does.
 //
 // Material: BASE tier. Nothing floats; nothing earns a backdrop-filter.
 //
@@ -33,15 +34,27 @@ $bma-radius = 12px
   --bma-warn #d97706
   --bma-bad #dc2626
 
-  // The series ramp. Three steps that stay apart on any ground: the accent
-  // itself, the accent pulled toward the page's own mid-grey, and the accent
-  // pulled further toward its quiet grey. unquote() is mandatory — Stylus reads
-  // `in oklab` as an expression and fails the WHOLE stylesheet on it.
-  --bma-c1 var(--primary-color)
-  --bma-c2 unquote('color-mix(in oklab, var(--primary-color) 45%, var(--second-text-color))')
-  --bma-c3 unquote('color-mix(in oklab, var(--primary-color) 30%, var(--third-text-color))')
-  --bma-ghost unquote('color-mix(in oklab, var(--third-text-color) 55%, transparent)')
+  // The series palette. p1 is the site accent so the lead series stays on
+  // brand; the other eleven are chosen to stay apart from each other and to
+  // hold their own on both a white and a near-black panel.
+  --bma-p1 var(--primary-color)
+  --bma-p2 #2680eb
+  --bma-p3 #9256d9
+  --bma-p4 #2fa84f
+  --bma-p5 #e68619
+  --bma-p6 #00a7c0
+  --bma-p7 #6b7f95
+  --bma-p8 #c2185b
+  --bma-p9 #7cb342
+  --bma-p10 #8d6e63
+  --bma-p11 #5c6bc0
+  --bma-p12 #c9a227
+
+  // unquote() is mandatory — Stylus reads `in oklab` as an expression and fails
+  // the WHOLE stylesheet on it.
   --bma-track unquote('color-mix(in oklab, var(--primary-color) 14%, transparent)')
+  --bma-map-ground var(--third-background-color-transparent)
+  --bma-map-line var(--border-color)
 
   display flex
   flex-direction column
@@ -53,6 +66,12 @@ $bma-radius = 12px
   --bma-warn #fbbf24
   --bma-bad #f87171
 
+  // Four of the twelve sit too dark on a near-black panel; the rest carry over.
+  --bma-p4 #4ac26b
+  --bma-p8 #ef5a8c
+  --bma-p10 #b08a7c
+  --bma-p11 #8a97e0
+
 // ─── head ────────────────────────────────────────────────────────────────────
 .bma-head
   display flex
@@ -61,9 +80,11 @@ $bma-radius = 12px
   flex-wrap wrap
   gap $bma-gap
 
+// `.bm-seg` and `.bm-card` are declared in blog-management.styl, which the glob
+// concatenates AFTER this file — a bare `.bma-*` rule loses the tie.
 .bm-seg.bma-seg
-  // `.bm-seg` wraps by default; a long picker (17 dimensions) has to scroll
-  // instead, or it becomes five rows of buttons above a four-row table.
+  // A long picker (seventeen dimensions) has to scroll rather than become five
+  // rows of buttons above a four-row table.
   flex-wrap nowrap
   overflow-x auto
   overscroll-behavior-x contain
@@ -71,6 +92,16 @@ $bma-radius = 12px
 
   &::-webkit-scrollbar
     display none
+
+  &.is-mini button
+    padding 3px 9px
+    font-size 0.7rem
+
+.bma-controls
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
 
 .bma-wait
   display flex
@@ -187,6 +218,14 @@ $bma-radius = 12px
   gap $bma-gap
   align-items start
 
+  // The map wants twice the width of the traffic grid beside it, which is the
+  // proportion Umami gives them.
+  &.is-two-one
+    grid-template-columns minmax(0, 2fr) minmax(260px, 1fr)
+
+    +redefine-tablet()
+      grid-template-columns minmax(0, 1fr)
+
 .bm-card.bma-panel
   display flex
   flex-direction column
@@ -198,6 +237,7 @@ $bma-radius = 12px
   display flex
   align-items center
   justify-content space-between
+  flex-wrap wrap
   gap 10px
 
 // ─── tabs ────────────────────────────────────────────────────────────────────
@@ -276,7 +316,6 @@ $bma-radius = 12px
   margin 0
   padding 0
   list-style none
-  counter-reset bma
 
 // The bar is the row's own background, not a track beside it: a separate column
 // would cost the width the name needs more.
@@ -286,7 +325,7 @@ $bma-radius = 12px
   grid-template-columns minmax(0, 1fr) auto auto
   align-items center
   gap 10px
-  padding 6px 8px
+  padding 5px 8px
   border-radius 7px
   font-size 0.8rem
   overflow hidden
@@ -306,11 +345,17 @@ $bma-radius = 12px
 
 .bma-row-name
   position relative
+  display flex
+  align-items center
+  gap 8px
   min-width 0
-  overflow hidden
-  text-overflow ellipsis
-  white-space nowrap
   color var(--second-text-color)
+
+  > span
+    min-width 0
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
 
 .bma-row-value
   position relative
@@ -325,28 +370,82 @@ $bma-radius = 12px
   font-variant-numeric tabular-nums
   color var(--third-text-color)
 
-.bma-flag
-  margin-right 6px
-  font-style normal
+// ─── icons ───────────────────────────────────────────────────────────────────
+// One fixed box whatever goes inside it — a brand glyph, a flag, or a remote
+// favicon that may never arrive — so a column of names stays aligned.
+.bma-ico
+  display inline-flex
+  align-items center
+  justify-content center
+  flex 0 0 auto
+  width 16px
+  height 16px
+  font-size 0.82em
+  line-height 1
+  color var(--third-text-color)
+
+  img
+    width 16px
+    height 16px
+    object-fit contain
+    border-radius 3px
+
+  &.bma-flag
+    font-size 1.02em
+    font-style normal
+
+.bma-cell
+  display inline-flex
+  align-items center
+  gap 7px
+  min-width 0
+  max-width 100%
+
+  > span
+    min-width 0
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+.bma-more
+  align-self center
+  margin-top 6px
+  padding 4px 12px
+  border none
+  border-radius 999px
+  background var(--third-background-color-transparent)
+  color var(--third-text-color)
+  font-family $default-font-family
+  font-size 0.72rem
+  font-weight 500
+  cursor pointer
+  transition color 0.2s ease, background 0.2s ease
+
+  i
+    margin-right 5px
+
+  &:hover
+    color var(--primary-color)
+    background var(--bma-track)
 
 // ─── chart ───────────────────────────────────────────────────────────────────
 .bma-chart
   position relative
   width 100%
   min-width 0
-  height auto
 
 .bma-chart-svg
   display block
   width 100%
-  height var(--bma-chart-h, 260px)
+  height var(--bma-chart-h, 300px)
   overflow visible
 
 .bma-legend
   display flex
   flex-wrap wrap
-  gap 14px
-  margin-bottom 6px
+  justify-content center
+  gap 6px 16px
+  margin-top 2px
   font-size 0.72rem
   color var(--third-text-color)
 
@@ -356,26 +455,30 @@ $bma-radius = 12px
     gap 6px
 
   i
-    width 9px
-    height 9px
+    width 10px
+    height 10px
     border-radius 3px
 
-// The axis furniture. Quiet enough to read past, present enough to read from —
-// the first version had neither, which is why a bar could not be valued.
-.bma-gridline
-  stroke var(--border-color)
-  stroke-width 1
-  shape-rendering crispEdges
+    // A line series is drawn as a line, so its key is one.
+    &.is-line
+      height 3px
+      border-radius 2px
 
+// The axis furniture. Quiet enough to read past, present enough to read from.
+.bma-gridline,
 .bma-axis
   stroke var(--border-color)
   stroke-width 1
   shape-rendering crispEdges
 
+.bma-axis
+  stroke var(--third-text-color)
+  opacity 0.45
+
 .bma-axis-x,
 .bma-axis-y
   fill var(--third-text-color)
-  font-size 10px
+  font-size 10.5px
   font-variant-numeric tabular-nums
 
 .bma-axis-y
@@ -384,17 +487,11 @@ $bma-radius = 12px
 .bma-axis-x
   text-anchor middle
 
-.bma-col
-  transition opacity 0.15s ease
-
 .bma-line
   fill none
   stroke-width 2
   stroke-linecap round
   stroke-linejoin round
-
-.bma-hover
-  fill transparent
 
 .bma-cursor
   fill var(--bma-track)
@@ -403,11 +500,11 @@ $bma-radius = 12px
 .bma-chart-tip
   position absolute
   z-index 3
-  top 4px
+  top 6px
   display flex
   flex-direction column
   gap 3px
-  padding 7px 10px
+  padding 8px 11px
   border 1px solid var(--border-color)
   border-radius 9px
   background var(--background-color)
@@ -438,7 +535,7 @@ $bma-radius = 12px
 
   em
     margin-left auto
-    padding-left 12px
+    padding-left 14px
     font-style normal
     font-weight 600
     font-variant-numeric tabular-nums
@@ -447,6 +544,120 @@ $bma-radius = 12px
   &.is-on
     opacity 1
     transform translate(-50%, 0) scale(1)
+
+// ─── world map ───────────────────────────────────────────────────────────────
+// Six steps rather than a continuous ramp: a country's exact share is what the
+// list beside it is for, and a smooth fill over 174 shapes reads as noise.
+.bma-map
+  position relative
+  width 100%
+  min-width 0
+
+  &.is-waiting
+    min-height 200px
+
+  svg
+    display block
+    width 100%
+    height auto
+
+.bma-land
+  fill var(--bma-map-ground)
+  stroke var(--bma-map-line)
+  stroke-width 0.4
+  vector-effect non-scaling-stroke
+  transition fill 0.15s ease
+
+  &.l1
+    fill unquote('color-mix(in oklab, var(--primary-color) 18%, var(--background-color))')
+  &.l2
+    fill unquote('color-mix(in oklab, var(--primary-color) 34%, var(--background-color))')
+  &.l3
+    fill unquote('color-mix(in oklab, var(--primary-color) 50%, var(--background-color))')
+  &.l4
+    fill unquote('color-mix(in oklab, var(--primary-color) 66%, var(--background-color))')
+  &.l5
+    fill unquote('color-mix(in oklab, var(--primary-color) 83%, var(--background-color))')
+  &.l6
+    fill var(--primary-color)
+
+  &:hover
+    stroke var(--first-text-color)
+    stroke-width 1
+
+.bma-map-tip
+  position absolute
+  z-index 3
+  display flex
+  flex-direction column
+  padding 6px 10px
+  border 1px solid var(--border-color)
+  border-radius 9px
+  background var(--background-color)
+  box-shadow 0 4px 18px var(--shadow-color-1)
+  font-size 0.72rem
+  line-height 1.4
+  color var(--third-text-color)
+  white-space nowrap
+  pointer-events none
+  opacity 0
+  transform translate(-50%, 0)
+  transition opacity 0.14s ease
+
+  b
+    color var(--first-text-color)
+    font-weight 600
+
+  &.is-on
+    opacity 1
+
+// ─── weekly traffic ──────────────────────────────────────────────────────────
+// Days across, hours down, each cell a dot whose size AND opacity carry the
+// count. Umami's own grid: a quiet hour has to read as nearly nothing, which a
+// pale square does not manage.
+.bma-week
+  display flex
+  flex-direction column
+  gap 3px
+  min-width 0
+
+.bma-week-row
+  display grid
+  grid-template-columns 36px repeat(7, minmax(0, 1fr))
+  align-items center
+  justify-items center
+  gap 3px
+
+  > span:first-child
+    justify-self end
+    padding-right 4px
+    font-size 0.6rem
+    color var(--third-text-color)
+    font-variant-numeric tabular-nums
+
+  i
+    position relative
+    width 15px
+    height 15px
+    border-radius 50%
+    background var(--third-background-color-transparent)
+
+    &::after
+      content ''
+      position absolute
+      inset 0
+      border-radius 50%
+      background var(--primary-color)
+      opacity var(--bma-dot, 0)
+      transform unquote('scale(var(--bma-dot, 0))')
+
+  &.is-head span
+    padding 0
+    justify-self center
+    font-size 0.68rem
+    font-weight 600
+    letter-spacing 0.03em
+    color var(--second-text-color)
 
 // ─── tables ──────────────────────────────────────────────────────────────────
 .bma-scroll
@@ -586,7 +797,7 @@ $bma-radius = 12px
 
 // ─── breakdown field picker ──────────────────────────────────────────────────
 // Chips rather than a segmented control: this is a multiple choice, and a
-// segment that can have four of its buttons lit is the wrong affordance.
+// segment with four of its buttons lit is the wrong affordance.
 .bma-fields
   display flex
   flex-wrap wrap
@@ -614,60 +825,13 @@ $bma-radius = 12px
       color var(--primary-color)
       font-weight 600
 
-// ─── weekly traffic ──────────────────────────────────────────────────────────
-// Days across, hours down, which is the orientation Umami's own grid uses and
-// the one a "when do people read" question is asked in.
-.bma-week
-  display flex
-  flex-direction column
-  gap 2px
-  min-width 0
-
-.bma-week-head,
-.bma-week-row
-  display grid
-  grid-template-columns 30px repeat(7, minmax(0, 1fr))
-  align-items center
-  gap 2px
-
-.bma-week-head span
-  font-size 0.64rem
-  font-weight 600
-  letter-spacing 0.04em
-  text-align center
-  color var(--third-text-color)
-
-.bma-week-row
-  span
-    font-size 0.6rem
-    text-align right
-    padding-right 4px
-    color var(--third-text-color)
-    font-variant-numeric tabular-nums
-
-  i
-    height 9px
-    border-radius 2px
-    background var(--second-background-color)
-
-    &.l1
-      background unquote('color-mix(in oklab, var(--primary-color) 22%, var(--background-color))')
-    &.l2
-      background unquote('color-mix(in oklab, var(--primary-color) 42%, var(--background-color))')
-    &.l3
-      background unquote('color-mix(in oklab, var(--primary-color) 62%, var(--background-color))')
-    &.l4
-      background unquote('color-mix(in oklab, var(--primary-color) 81%, var(--background-color))')
-    &.l5
-      background var(--primary-color)
-
 // ─── narrow ──────────────────────────────────────────────────────────────────
 +redefine-tablet()
   .bma-head
     flex-direction column
     align-items stretch
 
-    .bma-seg
+    .bm-seg.bma-seg
       align-self stretch
 
   .bma-metric-value
@@ -689,8 +853,9 @@ $bma-radius = 12px
   .bma-search input
     width 110px
 
-  // The hour rail is the one column a phone can lose and still be read: the
-  // columns are labelled, and the rows run midnight to midnight either way.
-  .bma-week-head,
   .bma-week-row
-    grid-template-columns 22px repeat(7, minmax(0, 1fr))
+    grid-template-columns 26px repeat(7, minmax(0, 1fr))
+
+    i
+      width 12px
+      height 12px

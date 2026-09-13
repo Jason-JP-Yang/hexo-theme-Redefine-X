@@ -269,6 +269,23 @@ management:
   a_change: Change
   a_prev_views: Views (previous)
   a_prev_visitors: Visitors (previous)
+  a_map: Visitors by country
+  a_linear: Linear
+  a_log: Log
+  a_less: Less
+  a_more: More
+  a_u_hour: Hour
+  a_u_day: Day
+  a_u_month: Month
+  a_ch_direct: Direct
+  a_ch_search: Search
+  a_ch_social: Social
+  a_ch_referral: Referral
+  a_ch_email: Email
+  a_ch_paid: Paid
+  a_ch_affiliate: Affiliate
+  a_ch_video: Video
+  a_ch_unknown: Unknown
   a_search: Search
   a_prev: Previous
   a_next: Next

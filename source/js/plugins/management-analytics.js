@@ -1,30 +1,25 @@
 /**
  * The console's Analytics section — Umami's own dashboard, rebuilt in the
- * theme's vocabulary.
+ * theme's vocabulary, panel for panel.
  *
- * Six views, and each one carries what Umami's corresponding page carries:
- *
- *   Overview     five headline metrics against the previous period, the
- *                views/visitors chart, and the four tabbed metric panels
- *                (Pages, Sources, Environment, Location) plus the weekly grid.
- *   Events       four metrics, the event series, the ranked event list, the
- *                paged activity log, and the event-property explorer.
- *   Sessions     five metrics, the paged session table, and the session-property
- *                explorer.
+ *   Overview     five headline metrics against the previous period; the stacked
+ *                visitors/views chart with a unit and a scale picker; Pages,
+ *                Sources, Environment and Location as tabbed ranked tables; and
+ *                the world map beside the weekly traffic grid.
+ *   Events       four metrics, the event series stacked by name, the ranked
+ *                event list, the paged activity log, the property explorer.
+ *   Sessions     five metrics, the paged session table, the property explorer.
  *   Performance  a percentile picker, the five web vitals as selectable cards,
- *                the p50/p75/p95 chart, and the pages/environment tables.
+ *                the p50/p75/p95 chart, the pages and environment tables.
  *   Compare      the metrics bar and the chart against the previous period, and
- *                the side-by-side dimension tables.
- *   Breakdown    any combination of dimensions, crossed, with the full set of
- *                per-row metrics.
+ *                the dimension table with per-row change.
+ *   Breakdown    any combination of dimensions, crossed, with every metric.
  *
- * The browser talks to Umami DIRECTLY with the bearer the Worker released;
- * nothing here passes through the Worker after the ticket.
+ * The browser talks to Umami DIRECTLY with the bearer the Worker released.
  *
  * The chart is drawn at MEASURED PIXEL SIZE rather than in a stretched viewBox.
  * That is what makes an axis possible: a stretched box cannot carry a tick, a
- * gridline or a label without deforming them, which is the whole reason the
- * first version had none.
+ * gridline or a label without deforming them.
  */
 
 import { escapeHTML } from "./notifications-inbox.js";
@@ -32,9 +27,7 @@ import { adminQuery, adminReport, adminToken, timezone } from "../tools/analytic
 
 const VIEWS = ["overview", "events", "sessions", "performance", "compare", "breakdown"];
 
-// [days, chart unit, short label]. The unit is not free: Umami replaces any unit
-// finer than the span allows (lib/date.getMinimumUnit), so these mirror it — a
-// year can only be asked for by month.
+// [days, default unit, label]
 const RANGES = [
   [1, "hour", "24h"],
   [7, "day", "7d"],
@@ -43,6 +36,8 @@ const RANGES = [
   [180, "day", "6m"],
   [365, "month", "1y"],
 ];
+
+const UNITS = ["hour", "day", "month"];
 
 // The four tabbed panels of the overview, exactly as Umami groups them.
 const PANELS = [
@@ -81,11 +76,11 @@ const PANELS = [
 ];
 
 const VITALS = [
-  ["lcp", "LCP", 2500, 4000, "ms"],
-  ["inp", "INP", 200, 500, "ms"],
-  ["cls", "CLS", 0.1, 0.25, ""],
-  ["fcp", "FCP", 1800, 3000, "ms"],
-  ["ttfb", "TTFB", 800, 1800, "ms"],
+  ["lcp", "LCP", 2500, 4000],
+  ["inp", "INP", 200, 500],
+  ["cls", "CLS", 0.1, 0.25],
+  ["fcp", "FCP", 1800, 3000],
+  ["ttfb", "TTFB", 800, 1800],
 ];
 
 const VITAL_NAMES = {
@@ -98,8 +93,6 @@ const VITAL_NAMES = {
 
 const PERCENTILES = ["p50", "p75", "p95"];
 
-// Everything Umami's breakdown and compare pickers offer that a website (rather
-// than a link or a pixel) can answer.
 const FIELDS = [
   ["path", "a_f_path"],
   ["entry", "a_entry"],
@@ -121,31 +114,27 @@ const FIELDS = [
 ];
 
 // Breakdown is validated against Umami's own `fieldsParam` enum, which is a
-// SHORTER list than the metrics one: entry, exit, screen and channel are not
-// groupable, and sending them is a 400 rather than an empty table.
-const BREAKDOWN_FIELDS = [
-  ["path", "a_f_path"],
-  ["title", "a_f_title"],
-  ["query", "a_f_query"],
-  ["referrer", "a_f_referrer"],
-  ["hostname", "a_f_hostname"],
-  ["browser", "a_f_browser"],
-  ["os", "a_f_os"],
-  ["device", "a_f_device"],
-  ["language", "a_f_language"],
-  ["country", "a_f_country"],
-  ["region", "a_f_region"],
-  ["city", "a_f_city"],
-  ["tag", "a_f_tag"],
-];
+// SHORTER list: entry, exit, screen and channel are not groupable, and sending
+// them is a 400 rather than an empty table.
+const BREAKDOWN_FIELDS = FIELDS.filter(
+  ([f]) => !["entry", "exit", "screen", "channel"].includes(f),
+);
 
 const PAGE_SIZE = 10;
+const LIST_LIMIT = 10;
+const LIST_MORE = 30;
+
+// Twelve hues, the first of which is the site accent so the lead series stays on
+// brand and the other eleven stay apart from it and from each other. Resolved in
+// the stylesheet, where each can be tuned per colour scheme.
+const SERIES = Array.from({ length: 12 }, (_, i) => `var(--bma-p${i + 1})`);
 
 let section = null;
 let t = (k, f) => f;
 let state = null;
 let charts = new Map();
 let chartObserver = null;
+let worldMap = null;
 
 /* ─── formatting ──────────────────────────────────────────────────────────── */
 
@@ -155,7 +144,7 @@ function compact(v) {
   const n = num(v);
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
-  return String(Math.round(n));
+  return String(Math.round(n * 100) / 100);
 }
 
 const full = (v) => Math.round(num(v)).toLocaleString();
@@ -174,21 +163,13 @@ function vital(key, value) {
   return n >= 1000 ? (n / 1000).toFixed(2) + "s" : Math.round(n) + "ms";
 }
 
-const pct = (part, whole) => (num(whole) ? Math.round((num(part) / num(whole)) * 100) : 0);
+const share = (part, whole) => (num(whole) ? Math.round((num(part) / num(whole)) * 100) : 0);
 
-/** The signed change between two numbers as a percentage of the older one. */
 function delta(now, before) {
   const a = num(now);
   const b = num(before);
   if (!b) return a ? null : 0;
   return Math.round(((a - b) / b) * 100);
-}
-
-/** A two-letter country code as its flag, with no asset and no lookup table. */
-function flag(code) {
-  const c = String(code || "").toUpperCase();
-  if (!/^[A-Z]{2}$/.test(c)) return "";
-  return String.fromCodePoint(...[...c].map((ch) => 127397 + ch.charCodeAt(0)));
 }
 
 function when(value) {
@@ -202,19 +183,16 @@ function when(value) {
   return d.toLocaleDateString();
 }
 
-/** A bucket timestamp, labelled the way its unit deserves. */
 function bucketLabel(x, unit) {
   const s = String(x);
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}))?/.exec(s);
   if (!m) return s;
-  if (unit === "hour") return m[4] + ":00";
+  if (unit === "hour") return String(+m[4]) + ":00";
   if (unit === "month") return m[1].slice(2) + "/" + m[2];
   return m[2] + "/" + m[3];
 }
 
 function rangeOf(days) {
-  // A rolling 24 hours ends NOW; everything longer is whole days and ends
-  // tonight, which is what makes "the previous period" the same length.
   const end = new Date();
   const start = new Date(end);
   if (days <= 1) {
@@ -228,16 +206,153 @@ function rangeOf(days) {
   return { startAt: start.getTime(), endAt: end.getTime(), start, end };
 }
 
-const unitFor = () => (RANGES.find(([d]) => d === state.days) || [0, "day"])[1];
+/**
+ * Which units Umami will actually honour for the current span. It clamps
+ * anything finer than the range allows (lib/date.getAllowedUnits), so offering
+ * `hour` over a year would be offering a button that silently does nothing.
+ */
+function allowedUnits() {
+  const d = state.days;
+  const min = d <= 30 ? "hour" : d <= 180 ? "day" : "month";
+  return UNITS.slice(UNITS.indexOf(min));
+}
+
+function unitFor() {
+  const allowed = allowedUnits();
+  if (state.unit && allowed.includes(state.unit)) return state.unit;
+  const fallback = (RANGES.find(([d]) => d === state.days) || [0, "day"])[1];
+  return allowed.includes(fallback) ? fallback : allowed[0];
+}
+
+/* ─── names and icons ─────────────────────────────────────────────────────── */
+
+const display = {};
+
+/** Intl carries every region and language name already; a table would be dead weight. */
+function named(kind, code) {
+  const value = String(code || "").trim();
+  if (!value) return "";
+  try {
+    if (!display[kind]) {
+      display[kind] = new Intl.DisplayNames(
+        [document.documentElement.lang || "en"],
+        { type: kind },
+      );
+    }
+    return display[kind].of(kind === "region" ? value.toUpperCase() : value) || value;
+  } catch {
+    return value;
+  }
+}
+
+function flag(code) {
+  const c = String(code || "").toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return "";
+  return String.fromCodePoint(...[...c].map((ch) => 127397 + ch.charCodeAt(0)));
+}
+
+// Font Awesome is already on every page of this site, brands included, so the
+// icons cost nothing and match the rest of the console's iconography.
+const BROWSER_ICONS = [
+  [/edge/, "fa-brands fa-edge"],
+  [/(chrome|chromium|crios)/, "fa-brands fa-chrome"],
+  [/(firefox|fxios)/, "fa-brands fa-firefox-browser"],
+  [/(safari|^ios)/, "fa-brands fa-safari"],
+  [/opera/, "fa-brands fa-opera"],
+  [/(samsung|miui|huawei|oppo|vivo)/, "fa-solid fa-mobile-screen"],
+  [/(yandex|qq|uc|baidu|sogou|maxthon|360)/, "fa-solid fa-compass"],
+];
+
+const OS_ICONS = [
+  [/windows/, "fa-brands fa-windows"],
+  [/(mac|ios|ipad|iphone)/, "fa-brands fa-apple"],
+  [/android/, "fa-brands fa-android"],
+  [/ubuntu/, "fa-brands fa-ubuntu"],
+  [/(linux|debian|fedora|centos|arch|suse)/, "fa-brands fa-linux"],
+  [/chrome/, "fa-brands fa-chrome"],
+];
+
+const DEVICE_ICONS = {
+  desktop: "fa-solid fa-display",
+  laptop: "fa-solid fa-laptop",
+  mobile: "fa-solid fa-mobile-screen",
+  tablet: "fa-solid fa-tablet-screen-button",
+  tv: "fa-solid fa-tv",
+  wearable: "fa-solid fa-stopwatch",
+  console: "fa-solid fa-gamepad",
+  embedded: "fa-solid fa-microchip",
+};
+
+const CHANNEL_ICONS = {
+  direct: "fa-solid fa-arrow-right-to-bracket",
+  search: "fa-solid fa-magnifying-glass",
+  organic: "fa-solid fa-magnifying-glass",
+  social: "fa-solid fa-share-nodes",
+  referral: "fa-solid fa-link",
+  email: "fa-solid fa-envelope",
+  paid: "fa-solid fa-tag",
+  affiliate: "fa-solid fa-handshake",
+  video: "fa-solid fa-play",
+  unknown: "fa-solid fa-circle-question",
+};
+
+const pick = (table, value) => {
+  const v = String(value || "").toLowerCase();
+  for (const [re, cls] of table) if (re.test(v)) return cls;
+  return null;
+};
+
+/**
+ * The mark that goes in front of a row's name.
+ *
+ * A referrer gets its real favicon; everything else gets a Font Awesome glyph,
+ * because a name alone in a list of ten is a paragraph and an icon makes it a
+ * table you can scan.
+ */
+function rowIcon(type, value) {
+  const v = String(value == null ? "" : value);
+
+  if (type === "country") {
+    const f = flag(v);
+    return f ? `<span class="bma-ico bma-flag">${f}</span>` : dot("fa-solid fa-globe");
+  }
+  if (type === "browser") return dot(pick(BROWSER_ICONS, v) || "fa-solid fa-window-maximize");
+  if (type === "os") return dot(pick(OS_ICONS, v) || "fa-solid fa-desktop");
+  if (type === "device") return dot(DEVICE_ICONS[v.toLowerCase()] || "fa-solid fa-display");
+  if (type === "channel") return dot(CHANNEL_ICONS[v.toLowerCase()] || CHANNEL_ICONS.unknown);
+  if (type === "referrer") {
+    if (!v) return dot("fa-solid fa-arrow-right-to-bracket");
+    const host = v.replace(/^https?:\/\//, "").split("/")[0];
+    if (!host.includes(".")) return dot("fa-solid fa-link");
+    return (
+      `<span class="bma-ico"><img loading="lazy" alt="" src="https://icons.duckduckgo.com/ip3/${
+        encodeURIComponent(host)
+      }.ico" onerror="this.remove()"></span>`
+    );
+  }
+  if (type === "path" || type === "fullPath" || type === "entry" || type === "exit") {
+    return dot("fa-regular fa-file-lines");
+  }
+  if (type === "language") return dot("fa-solid fa-language");
+  if (type === "region" || type === "city") return dot("fa-solid fa-location-dot");
+  if (type === "event") return dot("fa-solid fa-bolt");
+  return "";
+}
+
+const dot = (cls) => `<span class="bma-ico"><i class="${cls}" aria-hidden="true"></i></span>`;
+
+/** The readable form of a raw dimension value. */
+function label(type, value) {
+  const v = value == null || value === "" ? "" : String(value);
+  if (!v) return t("a_direct", "Direct / none");
+  if (type === "country") return named("region", v) || v;
+  if (type === "language") return named("language", v.split("-")[0]) || v;
+  if (type === "channel") return t("a_ch_" + v.toLowerCase(), v);
+  return v;
+}
 
 /* ─── fetching ────────────────────────────────────────────────────────────── */
 
-/**
- * One read, memoised for the life of the current range.
- *
- * The cache is on the REQUEST, not on the rendered HTML: switching a tab inside
- * a view re-renders it, and every series it already had is then free.
- */
 function get(path, params) {
   const { startAt, endAt } = rangeOf(state.days);
   const body = { startAt, endAt, ...params };
@@ -251,11 +366,7 @@ function get(path, params) {
 
 function report(type, parameters) {
   const { start, end } = rangeOf(state.days);
-  const body = {
-    startDate: start.toISOString(),
-    endDate: end.toISOString(),
-    ...parameters,
-  };
+  const body = { startDate: start.toISOString(), endDate: end.toISOString(), ...parameters };
   const key = "report:" + type + JSON.stringify(body);
   if (state.cache.has(key)) return state.cache.get(key);
 
@@ -271,9 +382,7 @@ function failure(res) {
   if (status === 401 || status === 403) {
     return blank(t("a_denied", "The analytics credential was refused."));
   }
-  return blank(
-    t("a_offline", "Umami did not answer.") + (status ? ` (${status})` : ""),
-  );
+  return blank(t("a_offline", "Umami did not answer.") + (status ? ` (${status})` : ""));
 }
 
 /* ─── small builders ──────────────────────────────────────────────────────── */
@@ -281,23 +390,18 @@ function failure(res) {
 const blank = (m) => `<p class="bm-blank">${escapeHTML(m)}</p>`;
 const spinner = () => `<div class="bma-wait"><i class="fa-solid fa-circle-notch fa-spin"></i></div>`;
 
-function seg(group, items, active) {
-  return `<div class="bm-seg bma-seg" data-seg="${group}" role="group">${items
+function seg(group, items, active, extra = "") {
+  return `<div class="bm-seg bma-seg${extra}" data-seg="${group}" role="group">${items
     .map(
-      ([id, label]) =>
+      ([id, text]) =>
         `<button type="button" data-seg-id="${escapeHTML(String(id))}"${
           String(id) === String(active) ? ' class="is-on"' : ""
-        }>${escapeHTML(label)}</button>`,
+        }>${escapeHTML(text)}</button>`,
     )
     .join("")}</div>`;
 }
 
-/**
- * One headline metric. The change is the previous period's, and the arrow is
- * the only coloured thing on the tile — a whole number turning red at five tiles
- * side by side reads as an alarm rather than as a comparison.
- */
-function metric(label, value, options = {}) {
+function metric(text, value, options = {}) {
   const change = options.change;
   const has = change !== null && change !== undefined;
   const good = options.inverse ? change < 0 : change > 0;
@@ -307,7 +411,7 @@ function metric(label, value, options = {}) {
     <div class="bma-metric${options.tone ? " tone-" + options.tone : ""}${
       options.on ? " is-on" : ""
     }"${options.pick ? ` data-pick="${escapeHTML(options.pick)}" tabindex="0" role="button"` : ""}>
-      <div class="bma-metric-label">${escapeHTML(label)}</div>
+      <div class="bma-metric-label">${escapeHTML(text)}</div>
       <div class="bma-metric-value">${escapeHTML(String(value))}</div>
       ${
         has
@@ -323,52 +427,84 @@ const metricsBar = (tiles) => `<div class="bma-metrics">${tiles.join("")}</div>`
 
 function panel(title, inner, options = {}) {
   return `
-    <section class="bm-card bma-panel${options.wide ? " is-wide" : ""}">
-      <div class="bma-panel-head">
-        <h3 class="bm-sub-title">${escapeHTML(title)}</h3>
-        ${options.aside || ""}
-      </div>
+    <section class="bm-card bma-panel${options.span ? " span-" + options.span : ""}">
+      ${
+        title || options.aside
+          ? `<div class="bma-panel-head">
+              <h3 class="bm-sub-title">${escapeHTML(title || "")}</h3>
+              ${options.aside || ""}
+            </div>`
+          : ""
+      }
       ${inner}
     </section>`;
 }
 
+function tabsOf(group, items, active) {
+  return `<div class="bma-tabs" data-tabs="${group}" role="tablist">${items
+    .map(
+      ([id, text]) =>
+        `<button type="button" role="tab" data-tab-id="${id}"${
+          id === active ? ' class="is-on" aria-selected="true"' : ""
+        }>${escapeHTML(text)}</button>`,
+    )
+    .join("")}</div>`;
+}
+
 /**
- * A ranked list — name, bar, count, share — which is the one shape every
- * dimension in Umami is shown in.
+ * A ranked list: icon, name, count, share of the returned set — the one shape
+ * every dimension in Umami is shown in, with the bar drawn INTO the row rather
+ * than beside it so the proportion costs no column.
  */
 function listTable(items, options = {}) {
-  const list = (items || []).slice(0, options.limit || 10);
-  if (!list.length) return blank(t("a_nodata", "Nothing in this range"));
+  const all = items || [];
+  if (!all.length) return blank(t("a_nodata", "Nothing in this range"));
+
+  const key = options.more;
+  const expanded = key ? !!state.more[key] : false;
+  const list = all.slice(0, options.limit || (expanded ? LIST_MORE : LIST_LIMIT));
 
   const max = list.reduce((m, r) => Math.max(m, num(r.y)), 0) || 1;
-  const sum = options.total || list.reduce((s, r) => s + num(r.y), 0) || 1;
+  const total = all.reduce((s, r) => s + num(r.y), 0) || 1;
   const format = options.format || full;
+  const type = options.type;
 
   const body = list
     .map((r) => {
-      const raw = r.x == null || r.x === "" ? t("a_direct", "Direct / none") : String(r.x);
-      const icon = options.icon ? options.icon(r) : "";
+      const name = options.label ? options.label(r) : label(type, r.x);
+      const icon = options.icon === false ? "" : rowIcon(type, r.x);
       return `
         <li class="bma-row" style="--bma-bar:${((num(r.y) / max) * 100).toFixed(2)}%">
-          <span class="bma-row-name" title="${escapeHTML(raw)}">${icon}${escapeHTML(raw)}</span>
+          <span class="bma-row-name" title="${escapeHTML(name)}">${icon}<span>${escapeHTML(
+            name,
+          )}</span></span>
           <span class="bma-row-value">${escapeHTML(format(r.y))}</span>
           ${
             options.share === false
               ? ""
-              : `<span class="bma-row-share">${pct(r.y, sum)}%</span>`
+              : `<span class="bma-row-share">${share(r.y, total)}%</span>`
           }
         </li>`;
     })
     .join("");
 
+  const more =
+    key && all.length > LIST_LIMIT
+      ? `<button type="button" class="bma-more" data-more="${key}">
+           <i class="fa-solid fa-${expanded ? "chevron-up" : "chevron-down"}" aria-hidden="true"></i>
+           ${escapeHTML(expanded ? t("a_less", "Less") : t("a_more", "More"))}
+         </button>`
+      : "";
+
   return `
     <div class="bma-list">
       <div class="bma-list-head">
-        <span>${escapeHTML(options.label || t("a_name", "Name"))}</span>
+        <span>${escapeHTML(options.head || t("a_name", "Name"))}</span>
         <span>${escapeHTML(options.metric || t("a_visitors", "Visitors"))}</span>
         ${options.share === false ? "" : "<span></span>"}
       </div>
       <ol class="bma-rows">${body}</ol>
+      ${more}
     </div>`;
 }
 
@@ -383,7 +519,6 @@ function table(head, body, options = {}) {
     </div>`;
 }
 
-/** Paging that says where it is, which a bare pair of arrows does not. */
 function pager(name, page, count) {
   const pages = Math.max(1, Math.ceil(num(count) / PAGE_SIZE));
   if (pages <= 1 && page <= 1) return "";
@@ -408,38 +543,50 @@ function search(name, value) {
   </label>`;
 }
 
-function tabsOf(group, items, active) {
-  return `<div class="bma-tabs" data-tabs="${group}" role="tablist">${items
-    .map(
-      ([id, label]) =>
-        `<button type="button" role="tab" data-tab-id="${id}"${
-          id === active ? ' class="is-on" aria-selected="true"' : ""
-        }>${escapeHTML(label)}</button>`,
-    )
-    .join("")}</div>`;
+/** The unit and scale pickers a chart panel carries in its head. */
+function chartControls(options = {}) {
+  const units = allowedUnits().map((u) => [u, t("a_u_" + u, u)]);
+  return (
+    `<div class="bma-controls">` +
+    (options.unit === false || units.length < 2 ? "" : seg("unit", units, unitFor())) +
+    seg("scale", [["linear", t("a_linear", "Linear")], ["log", t("a_log", "Log")]], state.scale) +
+    `</div>`
+  );
 }
 
 /* ─── the chart ───────────────────────────────────────────────────────────── */
 
-/**
- * A chart placeholder. The drawing waits for layout, because the whole point of
- * this chart is that it is drawn at its real pixel size: an axis, a gridline and
- * a tick can only be honest in a box that is not being stretched.
- */
 function chart(spec) {
   const id = "c" + state.seq + "-" + charts.size;
   charts.set(id, spec);
   return `<div class="bma-chart" data-chart="${id}" style="--bma-chart-h:${
-    spec.height || 260
+    spec.height || 300
   }px"><div class="bma-chart-tip" data-chart-tip></div></div>`;
 }
 
-function niceCeil(value) {
-  if (value <= 0) return 1;
-  const exp = Math.pow(10, Math.floor(Math.log10(value)));
-  const f = value / exp;
-  const step = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
-  return step * exp;
+/**
+ * A tick step that lands close above the peak.
+ *
+ * The naive round-to-a-power-of-ten leaves a chart whose tallest bar reaches
+ * two thirds of the box — the whitespace this list of steps exists to remove.
+ */
+const STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+
+function niceScale(peak) {
+  if (!(peak > 0)) return { top: 1, step: 1, count: 1 };
+  const raw = peak / 5;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = (STEPS.find((s) => raw / mag <= s) || 10) * mag;
+  const top = Math.ceil(peak / step) * step;
+  return { top, step, count: Math.max(1, Math.round(top / step)) };
+}
+
+/** Decade ticks for a log axis, plus the zero line the bars sit on. */
+function logTicks(peak) {
+  const top = Math.max(1, Math.pow(10, Math.ceil(Math.log10(Math.max(1, peak)))));
+  const ticks = [0];
+  for (let v = 1; v <= top; v *= 10) ticks.push(v);
+  return { top, ticks };
 }
 
 function drawChart(host, spec) {
@@ -453,85 +600,100 @@ function drawChart(host, spec) {
     return;
   }
 
-  const points = series[0].data.length;
-  const height = spec.height || 260;
-  const padT = 14;
-  const padB = 26;
-  const padR = 10;
+  const log = state.scale === "log" && spec.log !== false;
+  const points = series.reduce((m, s) => Math.max(m, s.data.length), 0);
+  const height = spec.height || 300;
+  const padT = 12;
+  const padB = 42;
+  const padR = 12;
+  const format = spec.format || compact;
 
-  const peak = series.reduce(
-    (m, s) => s.data.reduce((n, d) => Math.max(n, num(d.y)), m),
-    0,
+  const bars = series.filter((s) => s.type !== "line");
+  const lines = series.filter((s) => s.type === "line");
+
+  // Stacked bars: the peak is the tallest TOTAL, not the tallest segment.
+  const totals = [];
+  for (let i = 0; i < points; i++) {
+    totals.push(bars.reduce((sum, s) => sum + num(s.data[i] && s.data[i].y), 0));
+  }
+  const peak = Math.max(
+    totals.reduce((m, v) => Math.max(m, v), 0),
+    lines.reduce((m, s) => s.data.reduce((n, d) => Math.max(n, num(d.y)), m), 0),
   );
-  const top = niceCeil(peak || 1);
-  const ticks = 4;
-  const label = spec.format || compact;
-  const padL = Math.max(34, label(top).length * 8 + 12);
 
+  const axis = log ? logTicks(peak) : niceScale(peak);
+  const top = axis.top;
+  const ticks = log ? axis.ticks : Array.from({ length: axis.count + 1 }, (_, i) => axis.step * i);
+
+  const lg = (v) => Math.log10(num(v) + 1);
+  const frac = (v) => (log ? lg(v) / lg(top) : num(v) / top);
+
+  const padL = Math.max(38, ticks.reduce((m, v) => Math.max(m, format(v).length), 1) * 7 + 14);
   const plotW = Math.max(10, width - padL - padR);
   const plotH = Math.max(10, height - padT - padB);
-  const x = (i) => padL + (points > 1 ? (i / points) * plotW : 0);
-  const y = (v) => padT + plotH - (num(v) / top) * plotH;
+  const band = plotW / Math.max(1, points);
+  const y = (v) => padT + plotH - frac(v) * plotH;
 
   const parts = [];
 
-  for (let i = 0; i <= ticks; i++) {
-    const value = (top / ticks) * i;
-    const py = padT + plotH - (plotH / ticks) * i;
+  for (const value of ticks) {
+    const py = y(value);
     parts.push(
-      `<line class="bma-gridline" x1="${padL}" y1="${py}" x2="${padL + plotW}" y2="${py}"/>`,
-      `<text class="bma-axis-y" x="${padL - 8}" y="${py + 4}">${escapeHTML(label(value))}</text>`,
-    );
-  }
-
-  // At most one label per 64px, so the axis never overprints itself.
-  const every = Math.max(1, Math.ceil(points / Math.max(2, Math.floor(plotW / 64))));
-  for (let i = 0; i < points; i++) {
-    if (i % every && i !== points - 1) continue;
-    const px = x(i) + plotW / points / 2;
-    if (px > padL + plotW - 6) continue;
-    parts.push(
-      `<text class="bma-axis-x" x="${px.toFixed(1)}" y="${height - 8}">${escapeHTML(
-        bucketLabel(series[0].data[i].x, spec.unit),
+      `<line class="bma-gridline" x1="${padL}" y1="${py.toFixed(1)}" x2="${
+        padL + plotW
+      }" y2="${py.toFixed(1)}"/>`,
+      `<text class="bma-axis-y" x="${padL - 9}" y="${(py + 4).toFixed(1)}">${escapeHTML(
+        format(value),
       )}</text>`,
     );
   }
 
-  const band = plotW / Math.max(1, points);
-  const bars = series.filter((s) => s.type !== "line");
-  const lines = series.filter((s) => s.type === "line");
-  const slot = (band * 0.72) / Math.max(1, bars.length);
+  // One label per 70px at most, so the date axis never overprints itself.
+  const every = Math.max(1, Math.ceil(points / Math.max(2, Math.floor(plotW / 70))));
+  const labelSource = series[0].data;
+  for (let i = 0; i < points; i++) {
+    if (i % every || !labelSource[i]) continue;
+    const px = padL + (i + 0.5) * band;
+    parts.push(
+      `<text class="bma-axis-x" x="${px.toFixed(1)}" y="${height - padB + 18}">${escapeHTML(
+        bucketLabel(labelSource[i].x, spec.unit),
+      )}</text>`,
+    );
+  }
 
-  bars.forEach((s, si) => {
-    s.data.forEach((d, i) => {
-      const h = Math.max(num(d.y) > 0 ? 1.5 : 0, plotH - (y(d.y) - padT));
-      if (!h) return;
-      const px = x(i) + band * 0.14 + si * slot;
+  // Wide bars with a hairline between them, which is what makes a month of data
+  // read as a run rather than as a picket fence.
+  const bw = Math.max(1, band * (band > 6 ? 0.82 : 0.94));
+  const bx = (i) => padL + i * band + (band - bw) / 2;
+
+  for (let i = 0; i < points; i++) {
+    let below = 0;
+    for (const s of bars) {
+      const value = num(s.data[i] && s.data[i].y);
+      if (value <= 0) continue;
+      const yTop = y(below + value);
+      const yBottom = y(below);
+      below += value;
+      const h = Math.max(1, yBottom - yTop);
       parts.push(
-        `<rect class="bma-col" fill="${s.color}" x="${px.toFixed(2)}" y="${(
-          padT +
-          plotH -
-          h
-        ).toFixed(2)}" width="${slot.toFixed(2)}" height="${h.toFixed(2)}" rx="${Math.min(
+        `<rect class="bma-col" fill="${s.color}" x="${bx(i).toFixed(2)}" y="${yTop.toFixed(
           2,
-          slot / 3,
-        ).toFixed(2)}"/>`,
+        )}" width="${bw.toFixed(2)}" height="${h.toFixed(2)}"/>`,
       );
-    });
-  });
+    }
+  }
 
-  lines.forEach((s) => {
-    const path = s.data
-      .map((d, i) => (i ? "L" : "M") + (x(i) + band / 2).toFixed(2) + " " + y(d.y).toFixed(2))
+  for (const s of lines) {
+    const d = s.data
+      .map((p, i) => (i ? "L" : "M") + (padL + (i + 0.5) * band).toFixed(2) + " " + y(p.y).toFixed(2))
       .join(" ");
-    parts.push(`<path class="bma-line" stroke="${s.color}" d="${path}"/>`);
-  });
+    parts.push(`<path class="bma-line" stroke="${s.color}" d="${d}"/>`);
+  }
 
   parts.push(
     `<line class="bma-axis" x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${
       padT + plotH
     }"/>`,
-    `<rect class="bma-hover" data-hover x="${padL}" y="${padT}" width="${plotW}" height="${plotH}"/>`,
     `<rect class="bma-cursor" data-cursor x="0" y="${padT}" width="${band.toFixed(
       2,
     )}" height="${plotH}" hidden/>`,
@@ -541,19 +703,19 @@ function drawChart(host, spec) {
     `<svg class="bma-chart-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" ` +
     `role="img" aria-label="${escapeHTML(spec.label || "")}">${parts.join("")}</svg>`;
 
-  const legend = series.length
-    ? `<div class="bma-legend">${series
-        .map(
-          (s) =>
-            `<span><i style="background:${s.color}"></i>${escapeHTML(s.name)}</span>`,
-        )
-        .join("")}</div>`
-    : "";
+  const legend = `<div class="bma-legend">${series
+    .map(
+      (s) =>
+        `<span><i class="${s.type === "line" ? "is-line" : ""}" style="background:${
+          s.color
+        }"></i>${escapeHTML(s.name)}</span>`,
+    )
+    .join("")}</div>`;
 
   host.dataset.w = String(width);
-  host.innerHTML = legend + svg + '<div class="bma-chart-tip" data-chart-tip></div>';
+  host.innerHTML = svg + legend + '<div class="bma-chart-tip" data-chart-tip></div>';
 
-  wireChartHover(host, { series, padL, plotW, points, band, format: label, unit: spec.unit });
+  wireChartHover(host, { series, padL, band, points, format, unit: spec.unit });
 }
 
 function wireChartHover(host, ctx) {
@@ -562,18 +724,23 @@ function wireChartHover(host, ctx) {
   const tip = host.querySelector("[data-chart-tip]");
   if (!svg || !cursor || !tip || !ctx.points) return;
 
-  const move = (event) => {
+  const leave = () => {
+    cursor.setAttribute("hidden", "");
+    tip.classList.remove("is-on");
+  };
+
+  svg.addEventListener("pointermove", (event) => {
     const box = svg.getBoundingClientRect();
-    const scale = box.width / svg.viewBox.baseVal.width || 1;
-    const local = (event.clientX - box.left) / scale;
-    const i = Math.floor((local - ctx.padL) / ctx.band);
+    const scale = box.width / (svg.viewBox.baseVal.width || box.width) || 1;
+    const i = Math.floor(((event.clientX - box.left) / scale - ctx.padL) / ctx.band);
     if (i < 0 || i >= ctx.points) return leave();
 
     cursor.setAttribute("x", (ctx.padL + i * ctx.band).toFixed(2));
     cursor.removeAttribute("hidden");
 
+    const head = ctx.series.find((s) => s.data[i]);
     tip.innerHTML =
-      `<b>${escapeHTML(bucketLabel(ctx.series[0].data[i].x, ctx.unit))}</b>` +
+      `<b>${escapeHTML(bucketLabel(head ? head.data[i].x : "", ctx.unit))}</b>` +
       ctx.series
         .map(
           (s) =>
@@ -584,38 +751,32 @@ function wireChartHover(host, ctx) {
         .join("");
     tip.classList.add("is-on");
 
-    const hostBox = host.getBoundingClientRect();
     const px = (ctx.padL + (i + 0.5) * ctx.band) * scale;
     tip.style.left =
-      Math.min(Math.max(px, tip.offsetWidth / 2 + 4), hostBox.width - tip.offsetWidth / 2 - 4) +
-      "px";
-  };
+      Math.min(Math.max(px, tip.offsetWidth / 2 + 4), box.width - tip.offsetWidth / 2 - 4) + "px";
+  });
 
-  const leave = () => {
-    cursor.setAttribute("hidden", "");
-    tip.classList.remove("is-on");
-  };
-
-  svg.addEventListener("pointermove", move);
   svg.addEventListener("pointerleave", leave);
 }
 
-/** Draw every placeholder the last render left, and keep them at the right size. */
 function paintCharts() {
   const hosts = section.querySelectorAll("[data-chart]");
   if (!hosts.length) return;
 
   // Redraw on a real width change only: the draw replaces the host's contents,
   // and a redraw that reacted to its own output would never settle.
-  chartObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      const host = entry.target;
-      const spec = charts.get(host.getAttribute("data-chart"));
-      if (spec && host.clientWidth && host.dataset.w !== String(host.clientWidth)) {
-        drawChart(host, spec);
-      }
-    }
-  });
+  chartObserver =
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const host = entry.target;
+            const spec = charts.get(host.getAttribute("data-chart"));
+            if (spec && host.clientWidth && host.dataset.w !== String(host.clientWidth)) {
+              drawChart(host, spec);
+            }
+          }
+        });
 
   hosts.forEach((host) => {
     const spec = charts.get(host.getAttribute("data-chart"));
@@ -624,13 +785,6 @@ function paintCharts() {
     if (chartObserver) chartObserver.observe(host);
   });
 }
-
-const COLORS = {
-  primary: "var(--bma-c1)",
-  second: "var(--bma-c2)",
-  third: "var(--bma-c3)",
-  ghost: "var(--bma-ghost)",
-};
 
 /* ─── overview ────────────────────────────────────────────────────────────── */
 
@@ -669,34 +823,38 @@ async function viewOverview(compareMode) {
   ]);
 
   const d = chartRes.data || {};
+  const views = d.pageviews || [];
+  const sessions = d.sessions || [];
+
+  // Visitors at the bottom, the rest of the views above: the bar's full height
+  // is the views, and the split says how much of it was repeat reading. Two
+  // separate bars per bucket would say neither.
   const series = [
+    { name: t("a_visitors", "Visitors"), data: sessions, color: SERIES[0] },
     {
       name: t("a_views", "Views"),
-      data: d.pageviews || [],
-      color: COLORS.primary,
-    },
-    {
-      name: t("a_visitors", "Visitors"),
-      data: d.sessions || [],
-      color: COLORS.second,
+      data: views.map((r, i) => ({
+        x: r.x,
+        y: Math.max(0, num(r.y) - num(sessions[i] && sessions[i].y)),
+      })),
+      color: SERIES[6],
     },
   ];
+
   if (compareMode && d.compare) {
-    // The previous period is drawn on the CURRENT period's x values, or the two
-    // runs would be two charts sharing an axis they do not agree on.
     const align = (from, onto) =>
       (from || []).map((r, i) => ({ x: ((onto || [])[i] || r).x, y: r.y }));
     series.push(
       {
         name: t("a_prev_views", "Views (previous)"),
-        data: align(d.compare.pageviews, d.pageviews),
-        color: COLORS.ghost,
+        data: align(d.compare.pageviews, views),
+        color: SERIES[4],
         type: "line",
       },
       {
         name: t("a_prev_visitors", "Visitors (previous)"),
-        data: align(d.compare.sessions, d.sessions),
-        color: COLORS.third,
+        data: align(d.compare.sessions, sessions),
+        color: SERIES[3],
         type: "line",
       },
     );
@@ -704,57 +862,132 @@ async function viewOverview(compareMode) {
 
   const plot = panel(
     t("a_traffic_over_time", "Traffic"),
-    chart({ series, unit, height: 280, label: t("a_views", "Views") }),
-    { wide: true },
+    chart({ series, unit, height: 320, label: t("a_views", "Views") }),
+    { aside: chartControls() },
   );
 
   if (compareMode) return bar + plot + (await compareTables());
-
   return bar + plot + (await overviewPanels());
 }
 
 async function overviewPanels() {
-  const picks = PANELS.map(([group, tabs]) => {
-    const type = state.tab[group] || tabs[0][0];
-    return [group, tabs, type];
-  });
+  const picks = PANELS.map(([group, tabs]) => [group, tabs, state.tab[group] || tabs[0][0]]);
 
-  const results = await Promise.all(
-    picks.map(([, , type]) => get("/api/websites/:id/metrics", { type, limit: 10 })),
-  );
-
-  const weekly = await get("/api/websites/:id/sessions/weekly", { timezone: timezone() });
+  const [results, weekly, map] = await Promise.all([
+    Promise.all(picks.map(([, , type]) => get("/api/websites/:id/metrics", { type, limit: 30 }))),
+    get("/api/websites/:id/sessions/weekly", { timezone: timezone() }),
+    get("/api/websites/:id/metrics", { type: "country", limit: 250 }),
+  ]);
 
   const cards = picks
     .map(([group, tabs, type], i) => {
       const res = results[i];
-      const label = t("a_" + group, group);
+      const head = tabs.find(([f]) => f === type);
       const body = res.ok
         ? listTable(rows(res), {
-            label: t((tabs.find(([f]) => f === type) || [])[1] || type, type),
-            icon: group === "location" && type === "country" ? countryIcon : null,
+            type,
+            head: t(head ? head[1] : type, type),
+            more: group,
           })
         : failure(res);
       return panel(
-        label,
+        t("a_" + group, group),
         tabsOf(group, tabs.map(([f, key]) => [f, t(key, f)]), type) + body,
       );
     })
     .join("");
 
-  return `<div class="bma-grid">${cards}</div>${panel(
-    t("a_weekly", "Weekly traffic"),
-    weeklyGrid(weekly.ok ? weekly.data : null),
-    { wide: true },
-  )}`;
+  return (
+    `<div class="bma-grid">${cards}</div>` +
+    `<div class="bma-grid is-two-one">` +
+    panel(t("a_map", "Visitors by country"), worldMapPanel(rows(map)), { span: 2 }) +
+    panel(t("a_weekly", "Weekly traffic"), weeklyGrid(weekly.ok ? weekly.data : null), {
+      aside: seg(
+        "scale",
+        [["linear", t("a_linear", "Linear")], ["log", t("a_log", "Log")]],
+        state.scale,
+        " is-mini",
+      ),
+    }) +
+    `</div>`
+  );
 }
 
-const countryIcon = (r) => {
-  const f = flag(r.x);
-  return f ? `<em class="bma-flag">${f}</em>` : "";
-};
+/* ─── world map ───────────────────────────────────────────────────────────── */
 
-/** Hours down, days across — Umami's own traffic grid. */
+/**
+ * The choropleth. Six steps rather than a continuous ramp: a country's exact
+ * share is what the list beside it is for, and a continuous fill on 174 shapes
+ * reads as noise at this size.
+ */
+function worldMapPanel(list) {
+  if (!worldMap) return `<div class="bma-map is-waiting">${spinner()}</div>`;
+
+  const total = list.reduce((s, r) => s + num(r.y), 0);
+  const byCode = new Map(list.map((r) => [String(r.x || "").toUpperCase(), num(r.y)]));
+  const peak = list.reduce((m, r) => Math.max(m, num(r.y)), 0) || 1;
+
+  const shapes = Object.entries(worldMap.PATHS)
+    .map(([code, d]) => {
+      const value = byCode.get(code) || 0;
+      // Logarithmic, because one country is almost always an order of magnitude
+      // ahead and a linear ramp paints every other country the same empty grey.
+      const level = value
+        ? Math.max(1, Math.min(6, Math.ceil((Math.log1p(value) / Math.log1p(peak)) * 6)))
+        : 0;
+      return (
+        `<path class="bma-land l${level}" d="${d}" data-c="${code}"` +
+        ` data-n="${escapeHTML(named("region", code) || code)}"` +
+        ` data-v="${value}" data-s="${share(value, total)}"/>`
+      );
+    })
+    .join("");
+
+  return `
+    <div class="bma-map" data-map>
+      <svg viewBox="${worldMap.VIEWBOX}" preserveAspectRatio="xMidYMid meet"
+           role="img" aria-label="${escapeHTML(t("a_map", "Visitors by country"))}">${shapes}</svg>
+      <div class="bma-map-tip" data-map-tip></div>
+    </div>`;
+}
+
+function wireMap() {
+  const host = section.querySelector("[data-map]");
+  const tip = host && host.querySelector("[data-map-tip]");
+  if (!host || !tip) return;
+
+  host.addEventListener("pointermove", (event) => {
+    const land = event.target.closest(".bma-land");
+    if (!land) {
+      tip.classList.remove("is-on");
+      return;
+    }
+    tip.innerHTML =
+      `<b>${escapeHTML(land.getAttribute("data-n"))}</b>` +
+      `<span>${escapeHTML(full(land.getAttribute("data-v")))} ${escapeHTML(
+        t("a_visitors", "Visitors").toLowerCase(),
+      )} · ${land.getAttribute("data-s")}%</span>`;
+    tip.classList.add("is-on");
+
+    const box = host.getBoundingClientRect();
+    tip.style.left =
+      Math.min(
+        Math.max(event.clientX - box.left, tip.offsetWidth / 2 + 4),
+        box.width - tip.offsetWidth / 2 - 4,
+      ) + "px";
+    tip.style.top = Math.max(0, event.clientY - box.top - tip.offsetHeight - 12) + "px";
+  });
+
+  host.addEventListener("pointerleave", () => tip.classList.remove("is-on"));
+}
+
+/* ─── weekly traffic ──────────────────────────────────────────────────────── */
+
+/**
+ * Days across, hours down, each cell a dot whose size and opacity carry the
+ * count — Umami's own grid, and the reason it is dots rather than squares is
+ * that a quiet hour should read as nearly nothing rather than as a pale tile.
+ */
 function weeklyGrid(data) {
   if (!Array.isArray(data) || data.length !== 7) {
     return blank(t("a_nodata", "Nothing in this range"));
@@ -762,22 +995,31 @@ function weeklyGrid(data) {
 
   let peak = 0;
   data.forEach((day) => day.forEach((v) => (peak = Math.max(peak, num(v)))));
-  const days = t("a_weekdays", "Sun,Mon,Tue,Wed,Thu,Fri,Sat").split(",");
 
-  const head = `<div class="bma-week-head"><span></span>${days
+  const log = state.scale === "log";
+  const ratio = (v) => {
+    const n = num(v);
+    if (!n || !peak) return 0;
+    return log ? Math.log1p(n) / Math.log1p(peak) : n / peak;
+  };
+
+  const days = t("a_weekdays", "Sun,Mon,Tue,Wed,Thu,Fri,Sat").split(",");
+  const hour = (h) =>
+    h === 0 ? "12am" : h < 12 ? h + "am" : h === 12 ? "12pm" : h - 12 + "pm";
+
+  const head = `<div class="bma-week-row is-head"><span></span>${days
     .map((d) => `<span>${escapeHTML(d)}</span>`)
     .join("")}</div>`;
 
-  const body = Array.from({ length: 24 }, (_, hour) => {
+  const body = Array.from({ length: 24 }, (_, h) => {
     const cells = data
       .map((day) => {
-        const v = num(day[hour]);
-        const level = !v ? 0 : Math.max(1, Math.min(5, Math.ceil((v / (peak || 1)) * 5)));
-        return `<i class="l${level}" title="${escapeHTML(full(v))}"></i>`;
+        const v = num(day[h]);
+        const r = ratio(v);
+        return `<i style="--bma-dot:${r.toFixed(3)}" title="${escapeHTML(full(v))}"></i>`;
       })
       .join("");
-    const label = hour % 3 === 0 ? (hour === 0 ? "12a" : hour < 12 ? hour + "a" : (hour === 12 ? "12p" : hour - 12 + "p")) : "";
-    return `<div class="bma-week-row"><span>${label}</span>${cells}</div>`;
+    return `<div class="bma-week-row"><span>${hour(h)}</span>${cells}</div>`;
   }).join("");
 
   return `<div class="bma-week">${head}${body}</div>`;
@@ -787,13 +1029,6 @@ function weeklyGrid(data) {
 
 async function viewEvents() {
   const tab = state.tab.events || "chart";
-  const head =
-    tabsOf("events", [
-      ["chart", t("a_chart", "Chart")],
-      ["activity", t("a_activity", "Activity")],
-      ["properties", t("a_properties", "Properties")],
-    ], tab);
-
   const stats = await get("/api/websites/:id/events/stats");
   if (!stats.ok) return failure(stats);
 
@@ -810,12 +1045,22 @@ async function viewEvents() {
     }),
   ]);
 
+  const head = tabsOf("events", [
+    ["chart", t("a_chart", "Chart")],
+    ["activity", t("a_activity", "Activity")],
+    ["properties", t("a_properties", "Properties")],
+  ], tab);
+
   let body;
+  let aside = "";
   if (tab === "activity") body = await eventsActivity();
   else if (tab === "properties") body = await eventProperties();
-  else body = await eventsChart();
+  else {
+    body = await eventsChart();
+    aside = chartControls();
+  }
 
-  return bar + panel(t("a_events", "Events"), head + body, { wide: true });
+  return bar + panel(t("a_events", "Events"), head + body, { aside });
 }
 
 async function eventsChart() {
@@ -827,27 +1072,42 @@ async function eventsChart() {
 
   if (!series.ok) return failure(series);
 
-  // One row per (name, bucket). The chart carries the total; the list beside it
-  // carries the split, which is the pair Umami shows too.
-  const buckets = new Map();
+  // One row per (name, bucket). Stacked by name is the shape Umami draws, and
+  // the only one that answers "which event moved" rather than "something did".
+  const buckets = [];
+  const seen = new Set();
+  const byName = new Map();
   for (const row of rows(series)) {
     const key = String(row.t);
-    buckets.set(key, (buckets.get(key) || 0) + num(row.y));
+    if (!seen.has(key)) {
+      seen.add(key);
+      buckets.push(key);
+    }
+    const name = String(row.x);
+    if (!byName.has(name)) byName.set(name, new Map());
+    byName.get(name).set(key, num(row.y));
   }
-  const data = Array.from(buckets.entries())
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map(([x, y]) => ({ x, y }));
+  buckets.sort();
+
+  const names = [...byName.keys()].sort(
+    (a, b) =>
+      [...byName.get(b).values()].reduce((x, v) => x + v, 0) -
+      [...byName.get(a).values()].reduce((x, v) => x + v, 0),
+  );
+
+  const stacks = names.map((name, i) => ({
+    name,
+    color: SERIES[i % SERIES.length],
+    data: buckets.map((b) => ({ x: b, y: byName.get(name).get(b) || 0 })),
+  }));
 
   return (
-    chart({
-      series: [{ name: t("a_events_fired", "Events"), data, color: COLORS.primary }],
-      unit,
-      height: 240,
-    }) +
+    chart({ series: stacks, unit, height: 300, label: t("a_events_fired", "Events") }) +
     listTable(rows(totals), {
-      label: t("a_event", "Event"),
+      type: "event",
+      head: t("a_event", "Event"),
       metric: t("a_count", "Count"),
-      limit: 50,
+      more: "eventNames",
     })
   );
 }
@@ -869,18 +1129,16 @@ async function eventsActivity() {
     .map(
       (r) => `
       <tr>
-        <td>
-          <span class="bma-kind ${r.eventName ? "is-event" : "is-view"}">
-            <i class="fa-solid fa-${r.eventName ? "bolt" : "eye"}" aria-hidden="true"></i>
-            ${escapeHTML(r.eventName ? t("a_triggered", "Event") : t("a_viewed", "View"))}
-          </span>
-        </td>
+        <td><span class="bma-kind ${r.eventName ? "is-event" : "is-view"}">
+          <i class="fa-solid fa-${r.eventName ? "bolt" : "eye"}" aria-hidden="true"></i>
+          ${escapeHTML(r.eventName ? t("a_triggered", "Event") : t("a_viewed", "View"))}
+        </span></td>
         <td class="bma-strong" title="${escapeHTML(r.eventName || r.urlPath || "")}">${escapeHTML(
           r.eventName || r.urlPath || "",
         )}</td>
-        <td>${escapeHTML([r.city, r.country].filter(Boolean).join(", "))}</td>
-        <td>${escapeHTML(r.browser || "")}</td>
-        <td>${escapeHTML(r.device || "")}</td>
+        <td>${cell("country", r.country, [r.city, label("country", r.country)].filter(Boolean).join(", "))}</td>
+        <td>${cell("browser", r.browser)}</td>
+        <td>${cell("device", r.device)}</td>
         <td class="bma-num">${escapeHTML(when(r.createdAt))}</td>
       </tr>`,
     )
@@ -893,17 +1151,28 @@ async function eventsActivity() {
       ["events", t("a_events", "Events")],
     ], view)}${search("events", state.search.events)}</div>` +
     table(
-      `<th>${escapeHTML(t("a_type", "Type"))}</th><th>${escapeHTML(
-        t("a_event", "Event"),
-      )}</th><th>${escapeHTML(t("a_location", "Location"))}</th><th>${escapeHTML(
-        t("a_f_browser", "Browser"),
-      )}</th><th>${escapeHTML(t("a_f_device", "Device"))}</th><th class="bma-num">${escapeHTML(
-        t("a_when", "When"),
-      )}</th>`,
+      th(t("a_type", "Type")) +
+        th(t("a_event", "Event")) +
+        th(t("a_location", "Location")) +
+        th(t("a_f_browser", "Browser")) +
+        th(t("a_f_device", "Device")) +
+        th(t("a_when", "When"), true),
       body,
     ) +
     pager("events", page, (res.data && res.data.count) || 0)
   );
+}
+
+const th = (text, right) =>
+  `<th${right ? ' class="bma-num"' : ""}>${escapeHTML(text)}</th>`;
+
+/** A table cell that carries the same icon its ranked list would. */
+function cell(type, value, text) {
+  const shown = text !== undefined ? text : label(type, value);
+  if (!value) return escapeHTML(shown || "");
+  return `<span class="bma-cell" title="${escapeHTML(shown)}">${rowIcon(type, value)}<span>${escapeHTML(
+    shown,
+  )}</span></span>`;
 }
 
 async function eventProperties() {
@@ -922,20 +1191,20 @@ async function eventProperties() {
     ? await get("/api/websites/:id/event-data/values", { eventName: name, propertyName: prop })
     : null;
 
-  const picker = `<div class="bma-bar">
-    ${seg("propEvent", names.map((n) => [n, n]), name)}
-    ${props.length ? seg("propName", props.map((n) => [n, n]), prop) : ""}
-  </div>`;
-
-  const body =
-    values && values.ok
-      ? listTable(
-          rows(values).map((r) => ({ x: r.value, y: r.total })),
-          { label: prop, metric: t("a_count", "Count"), limit: 20 },
-        )
-      : blank(t("a_nodata", "Nothing in this range"));
-
-  return picker + body;
+  return (
+    `<div class="bma-bar">
+      ${seg("propEvent", names.map((n) => [n, n]), name)}
+      ${props.length ? seg("propName", props.map((n) => [n, n]), prop) : ""}
+    </div>` +
+    (values && values.ok
+      ? listTable(rows(values).map((r) => ({ x: r.value, y: r.total })), {
+          head: prop,
+          metric: t("a_count", "Count"),
+          icon: false,
+          more: "eventValues",
+        })
+      : blank(t("a_nodata", "Nothing in this range")))
+  );
 }
 
 /* ─── sessions ────────────────────────────────────────────────────────────── */
@@ -961,7 +1230,7 @@ async function viewSessions() {
   ], tab);
 
   const body = tab === "properties" ? await sessionProperties() : await sessionsActivity();
-  return bar + panel(t("a_sessions", "Sessions"), head + body, { wide: true });
+  return bar + panel(t("a_sessions", "Sessions"), head + body);
 }
 
 async function sessionsActivity() {
@@ -977,9 +1246,7 @@ async function sessionsActivity() {
   const list = (res.data && res.data.data) || [];
   const body = list
     .map((r) => {
-      const where = [r.city, r.country && (flag(r.country) + " " + r.country)]
-        .filter(Boolean)
-        .join(", ");
+      const where = [r.city, label("country", r.country)].filter(Boolean).join(", ");
       return `
       <tr>
         <td class="bma-id" title="${escapeHTML(r.id || "")}">${escapeHTML(
@@ -988,10 +1255,10 @@ async function sessionsActivity() {
         <td class="bma-num">${escapeHTML(full(r.visits))}</td>
         <td class="bma-num">${escapeHTML(full(r.views))}</td>
         <td class="bma-num">${escapeHTML(full(r.events))}</td>
-        <td title="${escapeHTML(where)}">${escapeHTML(where)}</td>
-        <td>${escapeHTML(r.browser || "")}</td>
-        <td>${escapeHTML(r.os || "")}</td>
-        <td>${escapeHTML(r.device || "")}</td>
+        <td>${cell("country", r.country, where)}</td>
+        <td>${cell("browser", r.browser)}</td>
+        <td>${cell("os", r.os)}</td>
+        <td>${cell("device", r.device)}</td>
         <td class="bma-num">${escapeHTML(when(r.lastAt || r.createdAt))}</td>
       </tr>`;
     })
@@ -1000,17 +1267,15 @@ async function sessionsActivity() {
   return (
     `<div class="bma-bar">${search("sessions", state.search.sessions)}</div>` +
     table(
-      `<th>${escapeHTML(t("a_session", "Session"))}</th><th class="bma-num">${escapeHTML(
-        t("a_visits", "Visits"),
-      )}</th><th class="bma-num">${escapeHTML(
-        t("a_views", "Views"),
-      )}</th><th class="bma-num">${escapeHTML(
-        t("a_events", "Events"),
-      )}</th><th>${escapeHTML(t("a_location", "Location"))}</th><th>${escapeHTML(
-        t("a_f_browser", "Browser"),
-      )}</th><th>${escapeHTML(t("a_f_os", "OS"))}</th><th>${escapeHTML(
-        t("a_f_device", "Device"),
-      )}</th><th class="bma-num">${escapeHTML(t("a_last_seen", "Last seen"))}</th>`,
+      th(t("a_session", "Session")) +
+        th(t("a_visits", "Visits"), true) +
+        th(t("a_views", "Views"), true) +
+        th(t("a_events", "Events"), true) +
+        th(t("a_location", "Location")) +
+        th(t("a_f_browser", "Browser")) +
+        th(t("a_f_os", "OS")) +
+        th(t("a_f_device", "Device")) +
+        th(t("a_last_seen", "Last seen"), true),
       body,
     ) +
     pager("sessions", page, (res.data && res.data.count) || 0)
@@ -1031,10 +1296,12 @@ async function sessionProperties() {
   return (
     `<div class="bma-bar">${seg("sessProp", names.map((n) => [n, n]), prop)}</div>` +
     (values.ok
-      ? listTable(
-          rows(values).map((r) => ({ x: r.value, y: r.total })),
-          { label: prop, metric: t("a_count", "Count"), limit: 20 },
-        )
+      ? listTable(rows(values).map((r) => ({ x: r.value, y: r.total })), {
+          head: prop,
+          metric: t("a_count", "Count"),
+          icon: false,
+          more: "sessValues",
+        })
       : failure(values))
   );
 }
@@ -1065,9 +1332,9 @@ async function viewPerformance() {
   }
 
   const cards = metricsBar(
-    VITALS.map(([key, label, good, poor]) => {
+    VITALS.map(([key, name, good, poor]) => {
       const v = num(summary[key] && summary[key][p]);
-      return metric(label, vital(key, v), {
+      return metric(name, vital(key, v), {
         tone: v <= good ? "good" : v <= poor ? "warn" : "bad",
         pick: key,
         on: key === state.metric,
@@ -1079,51 +1346,52 @@ async function viewPerformance() {
   const series = PERCENTILES.map((name, i) => ({
     name,
     type: "line",
-    color: [COLORS.third, COLORS.primary, COLORS.second][i],
+    color: SERIES[[0, 4, 1][i]],
     data: (data.chart || []).map((r) => ({ x: r.t, y: num(r[name]) })),
   }));
 
   const format = (v) => vital(state.metric, v);
   const spec = VITALS.find(([k]) => k === state.metric) || VITALS[0];
 
-  const listOf = (source) =>
+  const listOf = (source, type) =>
     listTable(
       (source || [])
         .filter((r) => num(r[p]) > 0)
         .slice(0, 20)
         .map((r) => ({ x: r.name, y: num(r[p]) })),
-      { label: t("a_name", "Name"), metric: spec[1] + " " + p, format, share: false },
+      {
+        type,
+        head: t("a_name", "Name"),
+        metric: spec[1] + " " + p,
+        format,
+        share: false,
+      },
     );
 
   const pagesTab = state.tab.perfPages || "path";
   const envTab = state.tab.perfEnv || "device";
 
   return (
-    `<div class="bma-bar">${seg(
-      "percentile",
-      PERCENTILES.map((x) => [x, x]),
-      p,
-    )}<span class="bm-hint">${escapeHTML(
-      t("a_samples", "Samples") + ": " + full(summary.count),
-    )}</span></div>` +
+    `<div class="bma-bar">${seg("percentile", PERCENTILES.map((x) => [x, x]), p)}
+      <span class="bm-hint">${escapeHTML(
+        t("a_samples", "Samples") + ": " + full(summary.count),
+      )}</span></div>` +
     cards +
-    panel(
-      VITAL_NAMES[state.metric] || spec[1],
-      chart({ series, unit, height: 280, format }),
-      { wide: true },
-    ) +
+    panel(VITAL_NAMES[state.metric] || spec[1], chart({ series, unit, height: 300, format }), {
+      aside: chartControls(),
+    }) +
     `<div class="bma-grid">${panel(
       t("a_pages", "Pages"),
       tabsOf("perfPages", [
         ["path", t("a_f_path", "Path")],
         ["title", t("a_f_title", "Title")],
-      ], pagesTab) + listOf(pagesTab === "title" ? data.pageTitles : data.pages),
+      ], pagesTab) + listOf(pagesTab === "title" ? data.pageTitles : data.pages, "path"),
     )}${panel(
       t("a_environment", "Environment"),
       tabsOf("perfEnv", [
         ["device", t("a_f_device", "Device")],
         ["browser", t("a_f_browser", "Browser")],
-      ], envTab) + listOf(envTab === "browser" ? data.browsers : data.devices),
+      ], envTab) + listOf(envTab === "browser" ? data.browsers : data.devices, envTab),
     )}</div>`
   );
 }
@@ -1134,8 +1402,8 @@ const viewCompare = () => viewOverview(true);
 
 async function compareTables() {
   const type = state.compareField;
-  const { start, end } = rangeOf(state.days);
-  const span = end.getTime() - start.getTime();
+  const { start, startAt, endAt } = rangeOf(state.days);
+  const span = endAt - startAt;
 
   const [now, before] = await Promise.all([
     get("/api/websites/:id/metrics", { type, limit: 20 }),
@@ -1148,25 +1416,22 @@ async function compareTables() {
   ]);
 
   const prev = new Map(rows(before).map((r) => [String(r.x), num(r.y)]));
-  const withChange = rows(now).map((r) => ({ ...r, prev: prev.get(String(r.x)) }));
+  const list = rows(now).map((r) => ({ ...r, prev: prev.get(String(r.x)) }));
 
-  const body = withChange.length
-    ? withChange
-        .map((r) => {
-          const change = delta(r.y, r.prev);
-          const name = r.x == null || r.x === "" ? t("a_direct", "Direct / none") : String(r.x);
-          return `
-          <tr>
-            <td title="${escapeHTML(name)}">${escapeHTML(name)}</td>
-            <td class="bma-num">${escapeHTML(full(r.prev || 0))}</td>
-            <td class="bma-num bma-strong">${escapeHTML(full(r.y))}</td>
-            <td class="bma-num"><span class="bma-delta${
-              change === null || change === 0 ? "" : change > 0 ? " is-up" : " is-down"
-            }">${change === null ? "—" : (change > 0 ? "+" : "") + change + "%"}</span></td>
-          </tr>`;
-        })
-        .join("")
-    : "";
+  const body = list
+    .map((r) => {
+      const change = delta(r.y, r.prev);
+      return `
+      <tr>
+        <td>${cell(type, r.x)}</td>
+        <td class="bma-num">${escapeHTML(full(r.prev || 0))}</td>
+        <td class="bma-num bma-strong">${escapeHTML(full(r.y))}</td>
+        <td class="bma-num"><span class="bma-delta${
+          change === null || change === 0 ? "" : change > 0 ? " is-up" : " is-down"
+        }">${change === null ? "—" : (change > 0 ? "+" : "") + change + "%"}</span></td>
+      </tr>`;
+    })
+    .join("");
 
   return panel(
     t("a_compare", "Compare"),
@@ -1176,14 +1441,12 @@ async function compareTables() {
       type,
     )}</div>` +
       table(
-        `<th>${escapeHTML(t("a_name", "Name"))}</th><th class="bma-num">${escapeHTML(
-          t("a_previous", "Previous"),
-        )}</th><th class="bma-num">${escapeHTML(
-          t("a_current", "Current"),
-        )}</th><th class="bma-num">${escapeHTML(t("a_change", "Change"))}</th>`,
+        th(t("a_name", "Name")) +
+          th(t("a_previous", "Previous"), true) +
+          th(t("a_current", "Current"), true) +
+          th(t("a_change", "Change"), true),
         body,
       ),
-    { wide: true },
   );
 }
 
@@ -1204,24 +1467,21 @@ async function viewBreakdown() {
 
   const head =
     state.fields
-      .map((f) => `<th>${escapeHTML(t((FIELDS.find(([x]) => x === f) || [])[1] || f, f))}</th>`)
+      .map((f) => th(t((FIELDS.find(([x]) => x === f) || [])[1] || f, f)))
       .join("") +
-    `<th class="bma-num">${escapeHTML(t("a_visitors", "Visitors"))}</th>` +
-    `<th class="bma-num">${escapeHTML(t("a_visits", "Visits"))}</th>` +
-    `<th class="bma-num">${escapeHTML(t("a_views", "Views"))}</th>` +
-    `<th class="bma-num">${escapeHTML(t("a_bounce", "Bounce rate"))}</th>` +
-    `<th class="bma-num">${escapeHTML(t("a_duration", "Visit duration"))}</th>`;
+    th(t("a_visitors", "Visitors"), true) +
+    th(t("a_visits", "Visits"), true) +
+    th(t("a_views", "Views"), true) +
+    th(t("a_bounce", "Bounce rate"), true) +
+    th(t("a_duration", "Visit duration"), true);
 
   const body = list
     .slice(0, 100)
     .map((r) => {
-      const cells = state.fields
-        .map((f) => {
-          const v = r[f] == null || r[f] === "" ? t("a_direct", "Direct / none") : String(r[f]);
-          return `<td title="${escapeHTML(v)}">${escapeHTML(v)}</td>`;
-        })
-        .join("");
-      const bounce = num(r.visits) ? Math.round((Math.min(num(r.bounces), num(r.visits)) / num(r.visits)) * 100) : 0;
+      const cells = state.fields.map((f) => `<td>${cell(f, r[f])}</td>`).join("");
+      const bounce = num(r.visits)
+        ? Math.round((Math.min(num(r.bounces), num(r.visits)) / num(r.visits)) * 100)
+        : 0;
       return `<tr>${cells}
         <td class="bma-num bma-strong">${escapeHTML(full(r.visitors))}</td>
         <td class="bma-num">${escapeHTML(full(r.visits))}</td>
@@ -1241,7 +1501,6 @@ async function viewBreakdown() {
         t("a_break_note", "Pick the dimensions to cross. At least one, at most four."),
       )}</p>` +
       table(head, body, { fixed: true }),
-    { wide: true },
   );
 }
 
@@ -1268,7 +1527,7 @@ function shell() {
     )}</p>
     <div class="bma-head">
       ${seg("view", VIEWS.map((v) => [v, t("a_" + v, v)]), state.view)}
-      ${seg("days", RANGES.map(([d, , label]) => [d, label]), state.days)}
+      ${seg("days", RANGES.map(([d, , text]) => [d, text]), state.days)}
     </div>
     <div class="bma-body" data-a-body>${spinner()}</div>`;
 }
@@ -1277,9 +1536,8 @@ async function paint() {
   const body = section.querySelector("[data-a-body]");
   if (!body) return;
 
-  // Every chart of the outgoing view is gone the moment the body is replaced,
-  // so its observer has to go with it or it watches detached nodes for the life
-  // of the page.
+  // Every chart of the outgoing view goes with the body, so its observer has to
+  // go too or it watches detached nodes for the life of the page.
   if (chartObserver) {
     chartObserver.disconnect();
     chartObserver = null;
@@ -1309,6 +1567,7 @@ async function paint() {
 
   body.innerHTML = html;
   paintCharts();
+  wireMap();
 
   if (keep) {
     const input = body.querySelector(`[data-search="${keep.name}"]`);
@@ -1327,9 +1586,9 @@ async function paint() {
 
 /** The head pickers live outside the body, so their state is not repainted. */
 function markOn(group, button) {
-  const box = section.querySelector(`[data-seg="${group}"]`);
-  if (!box) return;
-  box.querySelectorAll("button").forEach((b) => b.classList.remove("is-on"));
+  section.querySelectorAll(`[data-seg="${group}"]`).forEach((box) => {
+    box.querySelectorAll("button").forEach((b) => b.classList.remove("is-on"));
+  });
   button.classList.add("is-on");
 }
 
@@ -1346,10 +1605,14 @@ function wire() {
         markOn(group, segBtn);
       } else if (group === "days") {
         state.days = Number(value);
-        // The range moves every series, so nothing cached survives it.
+        // The range moves every series, and it can move the unit out from under
+        // the picker as well.
         state.cache.clear();
+        if (!allowedUnits().includes(state.unit)) state.unit = null;
         markOn(group, segBtn);
-      } else if (group === "percentile") state.percentile = value;
+      } else if (group === "unit") state.unit = value;
+      else if (group === "scale") state.scale = value;
+      else if (group === "percentile") state.percentile = value;
       else if (group === "compareField") state.compareField = value;
       else {
         state.tab[group] = value;
@@ -1364,6 +1627,14 @@ function wire() {
     if (tab) {
       state.tab[tab.closest("[data-tabs]").getAttribute("data-tabs")] =
         tab.getAttribute("data-tab-id");
+      paint();
+      return;
+    }
+
+    const more = target.closest("[data-more]");
+    if (more) {
+      const key = more.getAttribute("data-more");
+      state.more[key] = !state.more[key];
       paint();
       return;
     }
@@ -1390,7 +1661,10 @@ function wire() {
     const step = target.closest("[data-pager] [data-step]");
     if (step) {
       const name = step.closest("[data-pager]").getAttribute("data-pager");
-      state.page[name] = Math.max(1, (state.page[name] || 1) + Number(step.getAttribute("data-step")));
+      state.page[name] = Math.max(
+        1,
+        (state.page[name] || 1) + Number(step.getAttribute("data-step")),
+      );
       paint();
     }
   });
@@ -1412,7 +1686,7 @@ function wire() {
 
 /**
  * @param {Element} host       the `[data-part="analytics"]` section
- * @param {Element} consoleEl  the console root, for delegated lookups
+ * @param {Element} consoleEl  the console root
  * @param {Function} translate the console's own `t`
  */
 export function initManagementAnalytics(host, consoleEl, translate) {
@@ -1423,6 +1697,8 @@ export function initManagementAnalytics(host, consoleEl, translate) {
   state = {
     view: "overview",
     days: 30,
+    unit: null,
+    scale: "linear",
     metric: "lcp",
     percentile: "p75",
     compareField: "path",
@@ -1430,15 +1706,27 @@ export function initManagementAnalytics(host, consoleEl, translate) {
     tab: {},
     page: {},
     search: {},
+    more: {},
     cache: new Map(),
     seq: 0,
   };
 
-  // The credential is asked for once, ahead of the first view, so six parallel
-  // requests do not each race to mint it.
+  // The credential is asked for once, ahead of the first view, so several
+  // parallel requests do not each race to mint it.
   adminToken();
 
   shell();
   wire();
   paint();
+
+  // 115 KB of country outlines, wanted by exactly one panel of one admin page.
+  // Fetched beside the first render rather than bundled into it.
+  if (!worldMap) {
+    import("../data/worldMap.js")
+      .then((mod) => {
+        worldMap = mod.default || mod;
+        if (section === host && state.view === "overview") paint();
+      })
+      .catch(() => {});
+  }
 }
