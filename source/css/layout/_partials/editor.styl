@@ -1007,7 +1007,12 @@ textarea.ed-f-input
 // The article zeroes the top margin of its first child. With blocks that child
 // is a wrapper, so the rule has to reach one level further in — otherwise the
 // body starts a line lower here than it will once published.
-.article-content > .ed-block:first-child .ed-body > *
+//
+// `.ed-shed` is a block mid-way through leaving: the rule moves to whoever
+// inherits it so `exit` can travel to the layout the removal produces instead
+// of jumping into it afterwards. See motion.js.
+.article-content > .ed-block:first-child:not(.ed-shed) .ed-body > *,
+.article-content > .ed-block.ed-shed:first-child + .ed-block .ed-body > *
   margin-top 0 !important
 
 // The carried block keeps its own handle lit — hover is not a thing you can do
@@ -1180,12 +1185,14 @@ textarea.ed-f-input
   > .ed-block[data-on="1"] > .ed-gutter
     opacity 1
 
-  > .ed-block:first-child .ed-body > *
+  > .ed-block:first-child:not(.ed-shed) .ed-body > *,
+  > .ed-block.ed-shed:first-child + .ed-block .ed-body > *
     margin-top 0
 
   // `:last-of-type`, not `:last-child`: every box now ends with its own `+`
   // button, so the last BLOCK is no longer the last child of anything.
-  > .ed-block:last-of-type .ed-body > *
+  > .ed-block:last-of-type:not(.ed-shed) .ed-body > *,
+  > .ed-block:has(+ .ed-block.ed-shed:last-of-type) .ed-body > *
     margin-bottom 0
 
 // ─── an equation in a sentence ──────────────────────────────
@@ -1626,86 +1633,64 @@ $ed-pop-h = 620px
 // ends the file's details begin — a box that centred it vertically put the
 // details somewhere else entirely and made a small picture look like a mistake.
 //
-// ── Why this is a flex column and not a grid ────────────────────────────────
+// ── The size is arithmetic, not a cascade of caps ───────────────────────────
 //
-// `flex: 0 1 auto` + `min-height: 0` is what caps the height, and it is the
-// ONLY arrangement here that does. The box's natural height is the picture's;
-// when that does not fit, flex shrinks the box, and a flex item's post-flexing
-// main size is definite — so `max-height: 100%` on the picture inside resolves
-// against it and the picture comes down with it. When it does fit, nothing
-// shrinks and the box is exactly the picture, so the details sit right beneath.
+// There is no `max-width`, no `max-height`, no `aspect-ratio` and no
+// `object-fit` here. Every one of those was tried and each broke a different
+// way, because they all ask CSS to solve "fit this rectangle inside that one"
+// through a chain of clamps that behaves differently depending on whether the
+// element has loaded, whether its width is auto, and whether the box it is
+// clamped against has a definite height:
 //
-// Two earlier versions got this wrong in the same way. A `.img-preloader`
-// wrapper handed to the article's lazyload observer put the caps on the wrapper
-// while the picture inside sized itself; replacing it with `display: grid;
-// place-items: center` moved the picture into an auto-sized row, and a
-// percentage against a track sized by its own content is circular — so the cap
-// quietly became `none`, the row took the picture's full 925px, and `overflow:
-// hidden` cropped it. Both times the picture stood taller than the pane.
+//   attributes + `width/height: auto`   right once decoded, and ZERO before —
+//                                       so the skeleton had no box at all and
+//                                       the pane jumped when the bytes landed.
+//   attributes sizing the box directly  `max-width` and `max-height` then clamp
+//                                       INDEPENDENTLY: squashed in a short pane.
+//   `aspect-ratio` + `width: 100%`      the box could no longer shrink, so it
+//                                       stretched the pane and pushed the file's
+//                                       details out of it — and `object-fit`
+//                                       made the painted picture a DIFFERENT
+//                                       rectangle from the element, which is
+//                                       where the rounded corners went and why
+//                                       the skeleton was never the picture's
+//                                       size.
 //
-// ── The box is `aspect-ratio`, and nothing else ─────────────────────────────
-//
-// Three arrangements were tried here and each broke a different way.
-//
-//   width/height ATTRIBUTES with `width: auto; height: auto`
-//     The ratio is right once the picture decodes, and the box is ZERO before
-//     it does — `auto` on a replaced element with nothing loaded is nothing —
-//     so every click inserted a skeleton with no height and the pane jumped
-//     when the bytes landed. For a sealed picture, which cannot even be
-//     REQUESTED until it is decrypted, that was the whole wait.
-//
-//   the attributes with `auto` REMOVED, so they size the box
-//     A box before the bytes, but the wrong one under pressure: with both
-//     `width` and `height` specified, `max-width` and `max-height` clamp
-//     INDEPENDENTLY, and a picture in a short pane came out squashed.
-//
-//   `aspect-ratio`, set inline from the size the build measured
-//     What is here. `width: 100%` under the two caps, `height` from the ratio,
-//     and min/max clamping transfers THROUGH the ratio, so the box is the
-//     picture's shape at every width and every height — before the bytes,
-//     while the placeholder stands in, and after it decodes. `object-fit`
-//     makes that structural rather than a promise.
-//
-// `--shot-w` stops a 200px thumbnail being blown up across a 600px pane.
+// `fitShot` in picker.js works out one scale factor from the picture's measured
+// pixels and the room actually left beside the details, and writes the result
+// as a width and a height. One number for both axes is what "never distorted"
+// means; an explicit size is what makes the skeleton's box and the picture's
+// box the same box, because they are the same element at the same size before
+// and after it decodes. The details cannot be pushed out because the height
+// they need was subtracted before the picture got any.
 .ed-pick-stage
   display flex
   justify-content center
   align-items flex-start
-  flex 0 1 auto
+  flex 0 0 auto
   min-height 0
   min-width 0
   overflow hidden
 
+  // An author `display` beats the UA's `[hidden]`, and `fitShot` uses the
+  // attribute to put the pane down to the file's details alone.
+  &[hidden]
+    display none
+
   > img
     display block
-    width 100%
-    height auto
-    max-width css-min(100%, var(--shot-w, 100%))
-    max-height 100%
-    object-fit contain
     border-radius 10px
-    transition opacity $ed-fade
 
   // Until it decodes, the box it already occupies IS the skeleton — the theme's
-  // own shimmer, on the element that is about to hold the picture. The element
-  // is never rebuilt between selections, so the shimmer is already standing
-  // when the next picture is chosen; assets.js owns `data-ready` precisely so a
-  // failed first route keeps it here while the repository is asked.
+  // own shimmer, on the element that is about to hold the picture.
   > img[data-ready="0"]
     background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
     animation ed-shot-wait 1.5s ease-in-out infinite
 
-  // Every route has been tried. `src` is cleared rather than left pointing at a
-  // 404, so what stands in the box is the file's name, not the browser's
-  // broken-picture glyph.
+  // Every route has been tried. A flat plate rather than the browser's
+  // broken-picture glyph, which `assets.js` keeps out of the box entirely.
   > img[data-ready="err"]
-    padding 0 12px
     background var(--third-background-color)
-    color var(--third-text-color)
-    font-size 0.72rem
-    line-height 1.6
-    text-align center
-    overflow-wrap anywhere
 
 // Nothing chosen: the hint is the whole pane rather than one line pinned to
 // the top of it.

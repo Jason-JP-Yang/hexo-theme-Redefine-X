@@ -619,6 +619,7 @@ export function openPicker(ctx, opts = {}) {
     const body = mask.querySelector(".ed-pick-body");
     const side = mask.querySelector(".ed-pick-side");
     const grip = mask.querySelector(".ed-pick-grip");
+    const view = mask.querySelector(".ed-pick-view");
     const stage = mask.querySelector(".ed-pick-stage");
     const meta = mask.querySelector(".ed-pick-meta");
     const field = mask.querySelector(".ed-pick-field");
@@ -803,36 +804,14 @@ export function openPicker(ctx, opts = {}) {
     }
 
     /**
-     * The preview: one `<img>`, and nothing wrapped around it.
+     * The preview: one `<img>`, built once and re-pointed on every selection.
      *
-     * It used to mount the article's `.img-preloader` and hand it to the
-     * article's lazyload observer, which built an `<img>` inside it — three
-     * layers and an IntersectionObserver for a picture the author has just
-     * clicked on, with nothing to defer and nothing to be lazy about. The
-     * nesting is also what made the size uncontrollable: the caps landed on the
-     * wrapper while the picture inside sized itself.
+     * Rebuilding it per click is what put a fresh skeleton into the layout each
+     * time — the old box left, a new one arrived at a different height, and the
+     * details under it jumped. The element never leaves, so the skeleton is
+     * already standing when the next picture is chosen.
      *
-     * Then the wrapper became a grid with a centred item, which is the same bug
-     * wearing different clothes — a grid item in an auto-sized row IS the row,
-     * so `max-height: 100%` was a percentage of the picture's own height and
-     * silently meant nothing. The picture stood full height inside a box that
-     * cropped it. It is a flex column now: see `.ed-pick-stage`.
-     *
-     * ── One element, for the life of the dialogue ───────────────────────────
-     *
-     * It is BUILT ONCE, here, and every selection re-points it. Rebuilding it
-     * per click is what put a fresh skeleton into the layout on every click: the
-     * old box left, a new one arrived at a different height, and the details
-     * under it jumped. The element never leaves, so the skeleton is already
-     * standing when the next picture is chosen and its box TRAVELS from one
-     * shape to the next — see `travel`.
-     *
-     * `naturalSize` gives the intrinsic pixels, which go on as `width`/`height`
-     * attributes so the box is the picture's shape before a byte arrives and as
-     * `--shot-w` so a small picture is never blown up. Since the tree is built
-     * from the build's own measurements, that answer now exists for every file
-     * in it — including the withheld ones, whose size travels in the vault's
-     * metadata. `bindImage` keeps the resolution rules and owns `data-ready`.
+     * Its size is arithmetic, not CSS: see `fitShot` and `.ed-pick-stage`.
      */
     const shot = document.createElement("img");
     shot.decoding = "async";
@@ -843,23 +822,63 @@ export function openPicker(ctx, opts = {}) {
       `<i class="fa-solid fa-images" aria-hidden="true"></i>` +
       escapeHTML(t("pick_hint", "Choose a picture, or drag one onto a folder to move it."));
 
+    // Below this there is no picture worth looking at, only a strip of one.
+    // The pane is then the file's details alone, which is the right answer on a
+    // phone with the tree pulled most of the way down.
+    const MIN_SHOT = 56;
+
+    /** The picture's measured pixels, or null when nothing is chosen. */
+    let shape = null;
+
     /**
-     * Carry the pane from the height it had to the height it now has.
+     * Size the picture to the room that is actually left.
      *
-     * The stage hugs the picture — that is deliberate, so the details begin
-     * where the picture ends — which means every selection changes its height
-     * and moves everything under it. Animating the used height is what turns
-     * that from a jump into a move; the picture's own `max-height: 100%`
-     * resolves against it frame by frame, so the picture comes along.
+     * ONE scale factor for both axes — that is the whole of "never distorted" —
+     * worked out from the pane's inside width and the height remaining once the
+     * details have taken theirs. Written as an explicit width and height, so
+     * the box the skeleton stands in and the box the picture lands in are the
+     * same box: same element, same numbers, before and after it decodes.
+     *
+     * Never above 1: a 200px thumbnail is 200px, not blown up across the pane.
      */
+    function fitShot() {
+      if (!shape) return 0;
+
+      const cs = getComputedStyle(view);
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      const facts = meta.offsetHeight;
+      const gap = facts ? parseFloat(cs.rowGap) || 0 : 0;
+
+      const room = Math.max(0, view.clientHeight - padY - facts - gap);
+      const wide = Math.max(0, view.clientWidth - padX);
+
+      if (room < MIN_SHOT || wide <= 0) {
+        stage.hidden = true;
+        return 0;
+      }
+      stage.hidden = false;
+
+      const scale = Math.min(1, wide / shape.width, room / shape.height);
+      shot.style.width = Math.max(1, Math.round(shape.width * scale)) + "px";
+      shot.style.height = Math.max(1, Math.round(shape.height * scale)) + "px";
+      return 1;
+    }
+
+    /** Carry the pane from the height it had to the height it now has. */
     function travel(before) {
-      const after = stage.getBoundingClientRect().height;
+      const after = stage.hidden ? 0 : stage.getBoundingClientRect().height;
       if (!before || !after || Math.abs(before - after) < 1) return;
       stage.animate([{ height: before + "px" }, { height: after + "px" }], {
         duration: MORPH_MS,
         easing: EASE,
       });
     }
+
+    // The pane changes size for three reasons — the window, the splitter and
+    // the phone turning — and the answer above depends on all of them.
+    const refit = new ResizeObserver(() => fitShot());
+    refit.observe(view);
 
     function paintPreview(animate) {
       const known = !!chosen && IMAGE.test(chosen);
@@ -870,13 +889,14 @@ export function openPicker(ctx, opts = {}) {
       // and moving off it takes the bytes back.
       relockPreviewed();
 
-      const before = animate === false ? 0 : stage.getBoundingClientRect().height;
+      const before = animate === false || stage.hidden ? 0 : stage.getBoundingClientRect().height;
 
       if (!known) {
+        shape = null;
         shot.remove();
+        stage.hidden = false;
         if (!blank.isConnected) stage.appendChild(blank);
         stage.dataset.empty = "1";
-        stage.style.removeProperty("--shot-w");
         meta.innerHTML = "";
         return void travel(before);
       }
@@ -895,14 +915,11 @@ export function openPicker(ctx, opts = {}) {
         ctx.naturalSize(address) || (node && node.width ? { width: node.width, height: node.height } : null);
 
       shot.alt = nameOf(chosen);
-      // The shape of the box, in one property, so it is the same before the
-      // bytes, while the placeholder stands in and after the picture decodes.
-      // A neutral 3:2 for the only thing that can be unmeasured — a picture
+      // A nominal 3:2 for the only thing that can be unmeasured — a picture
       // staged in this session that could not be read.
-      const shape = size && size.width && size.height ? size : null;
-      shot.style.aspectRatio = shape ? `${shape.width} / ${shape.height}` : "3 / 2";
-      stage.style.setProperty("--shot-w", shape ? shape.width + "px" : "100%");
+      shape = size && size.width && size.height ? size : { width: 1200, height: 800 };
 
+      // The details first: their height is what the picture's is subtracted from.
       meta.innerHTML =
         metaRow(t("pick_name", "Name"), nameOf(chosen)) +
         metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
@@ -911,6 +928,7 @@ export function openPicker(ctx, opts = {}) {
         metaRow(t("pick_served", "Served at"), servedAt(node)) +
         (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
 
+      fitShot();
       travel(before);
       ctx.bindImage(shot, address);
     }
@@ -1155,6 +1173,7 @@ export function openPicker(ctx, opts = {}) {
       if (done) return;
       done = true;
       scroller.stop();
+      refit.disconnect();
       mask.remove();
       unlockPage();
       // Whatever was being looked at is locked again with the dialogue. A

@@ -305,6 +305,50 @@ export function flowCost(parent, before) {
   return probe ? probe.offsetTop : parent.offsetHeight;
 }
 
+/**
+ * Take the neighbours' facing margins to zero and hand their value to this box.
+ *
+ * THE reason a block arriving or leaving at the end of a box jolted. Every
+ * number below is a compensation written onto this box's own margins, and
+ * between two block boxes the gap is not the sum of the two margins, it is
+ * `max` of them — so while this box's margin is the smaller of the pair the gap
+ * does not respond to it AT ALL. The compensation is swallowed, and the page
+ * jumps by exactly what was swallowed at the moment the two cross.
+ *
+ * Negative against positive is linear (`max(positives) + min(negatives)`),
+ * which is why the beginning of the travel looked right and the end did not:
+ * the margin climbs back through zero, meets the neighbour's, and stops
+ * mattering for the rest of the way.
+ *
+ * Zeroing the other side of each pair and giving this box `max` of the two
+ * leaves the resting layout identical — the gap was that number either way —
+ * and makes it a gap that moves when the box does. Restored by `restore`, at
+ * the same moment the box's own inline margins go.
+ */
+function hushNeighbours(el, below) {
+  const held = [];
+
+  const take = (node, prop) => {
+    if (!node) return 0;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || (style.position !== "static" && style.position !== "relative")) return 0;
+    const value = parseFloat(style[prop]) || 0;
+    if (value <= 0) return 0;
+    held.push([node, prop, node.style[prop]]);
+    node.style[prop] = "0px";
+    return value;
+  };
+
+  return {
+    above: take(el.previousElementSibling, "marginBottom"),
+    below: take(below, "marginTop"),
+    restore() {
+      for (const [node, prop, value] of held) node.style[prop] = value;
+      held.length = 0;
+    },
+  };
+}
+
 function measureFlow(el, gone) {
   const parent = el.parentElement;
   const probe = flowProbe(el);
@@ -318,8 +362,9 @@ function measureFlow(el, gone) {
   const cost = probe ? () => probe.offsetTop : () => (parent ? parent.offsetHeight : 0);
 
   const own = getComputedStyle(el);
-  const natMT = parseFloat(own.marginTop) || 0;
-  const natMB = parseFloat(own.marginBottom) || 0;
+  const hushed = hushNeighbours(el, beside ? probe : null);
+  const natMT = Math.max(parseFloat(own.marginTop) || 0, hushed.above);
+  const natMB = Math.max(parseFloat(own.marginBottom) || 0, hushed.below);
   const back = {
     height: el.style.height,
     overflow: el.style.overflow,
@@ -364,7 +409,7 @@ function measureFlow(el, gone) {
   const mb0 = mb1 + (zero - cost());
 
   Object.assign(el.style, back);
-  return { height, mt0, mb0, mt1, mb1, loose };
+  return { height, mt0, mb0, mt1, mb1, loose, restore: hushed.restore };
 }
 
 function frames(flow) {
@@ -414,8 +459,12 @@ export async function enter(el, ready, gone) {
     // that reading revealed — what the first/last selectors are worth — rather
     // than the number, re-anchored to where the page is now.
     const selectors = gone == null ? 0 : gone - flow.loose;
+    flow.restore();
     flow = measureFlow(el);
-    if (selectors) flow = measureFlow(el, flow.loose + selectors);
+    if (selectors) {
+      flow.restore();
+      flow = measureFlow(el, flow.loose + selectors);
+    }
   }
 
   el.style.overflow = "clip";
@@ -427,18 +476,61 @@ export async function enter(el, ready, gone) {
   el.style.marginTop = "";
   el.style.marginBottom = "";
   await settle(run);
+  // In the same task the animation stops owning the margins, so the box's own
+  // margins and the neighbours' come back together and neither is seen alone.
+  flow.restore();
   el.style.overflow = "";
 }
 
-/** A block leaving. Resolves once it is safe to remove from the DOM — by then it
- *  costs the page nothing, so removing it moves nothing. */
+/**
+ * A block leaving. Resolves once it is safe to remove from the DOM — by then it
+ * costs the page nothing, so removing it moves nothing.
+ *
+ * The layout it travels TO is the one that exists after the removal, not the
+ * one with a collapsed box still in it. Those differ, and by a whole paragraph
+ * margin at the end of a box: `.ed-block:last-of-type .ed-body > *` zeroes the
+ * last block's bottom margin, so the block ABOVE the one being deleted inherits
+ * that rule the instant this element leaves the tree. Nothing was compensating
+ * for it, which is why deleting at a tail jumped where deleting anywhere else
+ * did not. Read by taking the element out and putting it straight back, inside
+ * one task, so no frame is painted without it.
+ */
 export async function exit(el) {
   if (reduced()) return;
-  const flow = measureFlow(el);
+
+  const parent = el.parentElement;
+  let gone;
+  if (parent) {
+    // `.ed-shed` moves the first/last structural rules onto the neighbour that
+    // is about to inherit them, so this reading is the layout AFTER the
+    // removal. Put back immediately: the travel starts from the layout that is
+    // on screen, and ends at this one, which is what makes the removal itself
+    // move nothing. A class rather than actually taking the element out —
+    // detaching it would blur the caret that is very often still inside it.
+    el.classList.add("ed-shed");
+    const next = el.nextElementSibling;
+    gone = flowCost(parent, next);
+    el.classList.remove("ed-shed");
+  }
+
+  const flow = measureFlow(el, gone);
   el.style.overflow = "clip";
-  await settle(
-    el.animate(frames(flow).reverse(), { duration: MORPH_MS, easing: EASE, fill: "forwards" })
-  );
+  const run = el.animate(frames(flow).reverse(), {
+    duration: MORPH_MS,
+    easing: EASE,
+    fill: "forwards",
+  });
+  await settle(run);
+
+  // The neighbours get their margins back, and this box is pinned at no size
+  // and no margin of its own — which collapses to exactly the gap the two of
+  // them will have once it is gone. Set before the animation's fill is dropped,
+  // so no frame is painted with neither in charge.
+  flow.restore();
+  el.style.height = "0px";
+  el.style.marginTop = "0px";
+  el.style.marginBottom = "0px";
+  run.cancel();
 }
 
 /**
