@@ -21,10 +21,19 @@
  * 10ms CPU budget it has no business spending.
  */
 
-const HOUR = 3600e3;
 const SHARE_KEY = "umami-share";
 const PULSE_KEY = "umami-pulse";
 const PULSE_TTL = 30 * 60e3;
+
+/**
+ * Umami refuses a `unit` finer than the span allows: lib/date.getMinimumUnit
+ * returns `month` as soon as the range covers more than seven CALENDAR months,
+ * and lib/request.getRequestDateRange then silently replaces the requested
+ * `day` with it. A year asked for in one request therefore comes back as twelve
+ * monthly totals — which is what a calendar cannot be drawn from. So a long span
+ * is asked for in pieces short enough to keep daily buckets.
+ */
+const MAX_DAY_SPAN = 180;
 
 let adminCache = null; // { token, host, websiteId } — memory only, never stored
 let adminPromise = null;
@@ -75,7 +84,9 @@ function keep(key, value) {
 function query(params) {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
-    if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+    if (v === undefined || v === null || v === "") continue;
+    if (Array.isArray(v)) v.forEach((item) => q.append(k, String(item)));
+    else q.set(k, String(v));
   }
   const s = q.toString();
   return s ? "?" + s : "";
@@ -246,6 +257,25 @@ export async function adminQuery(path, params, options = {}, retry = true) {
   return { ok: res.ok, status: res.status, data };
 }
 
+/**
+ * One report. These endpoints take the website id and the whole parameter set in
+ * the BODY, so the credential has to be in hand before the request can be built.
+ */
+export async function adminReport(type, parameters, filters) {
+  const cred = await adminToken();
+  if (!cred) return { ok: false, status: 401, data: null };
+
+  return adminQuery("/api/reports/" + type, null, {
+    method: "POST",
+    body: {
+      websiteId: cred.websiteId,
+      type,
+      filters: filters || {},
+      parameters,
+    },
+  });
+}
+
 /* ─── the activity series ─────────────────────────────────────────────────── */
 
 function dayKey(date) {
@@ -265,6 +295,21 @@ function rowKey(x) {
   return isNaN(d) ? null : dayKey(d);
 }
 
+/** One window of daily buckets, short enough that Umami keeps the unit. */
+async function dayChunk(from, to) {
+  const start = new Date(from);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(to);
+  end.setHours(23, 59, 59, 999);
+
+  return publicQuery("/api/websites/:id/pageviews", {
+    startAt: start.getTime(),
+    endAt: end.getTime(),
+    unit: "day",
+    timezone: timezone(),
+  });
+}
+
 /**
  * Daily view counts for the last `days` days, oldest first, gaps filled with 0.
  *
@@ -282,21 +327,26 @@ export async function dailyViews(days) {
 
   const start = new Date(today);
   start.setDate(start.getDate() - (span - 1));
-  const end = new Date(today);
-  end.setHours(23, 59, 59, 999);
 
-  const data = await publicQuery("/api/websites/:id/pageviews", {
-    startAt: start.getTime(),
-    endAt: end.getTime(),
-    unit: "day",
-    timezone: timezone(),
-  });
-  if (!data || !Array.isArray(data.pageviews)) return null;
+  const windows = [];
+  for (let offset = 0; offset < span; offset += MAX_DAY_SPAN) {
+    const from = new Date(start);
+    from.setDate(from.getDate() + offset);
+    const to = new Date(start);
+    to.setDate(to.getDate() + Math.min(offset + MAX_DAY_SPAN - 1, span - 1));
+    windows.push([from, to]);
+  }
+
+  const responses = await Promise.all(windows.map(([from, to]) => dayChunk(from, to)));
+  if (!responses.some((r) => r && Array.isArray(r.pageviews))) return null;
 
   const counts = new Map();
-  for (const row of data.pageviews) {
-    const key = rowKey(row.x);
-    if (key) counts.set(key, (counts.get(key) || 0) + Number(row.y || 0));
+  for (const data of responses) {
+    if (!data || !Array.isArray(data.pageviews)) continue;
+    for (const row of data.pageviews) {
+      const key = rowKey(row.x);
+      if (key) counts.set(key, (counts.get(key) || 0) + Number(row.y || 0));
+    }
   }
 
   const series = [];
@@ -316,15 +366,32 @@ function readPulseCache(span, today) {
   if (!raw) return null;
   try {
     const saved = JSON.parse(raw);
-    if (!saved || saved.span !== span || saved.today !== today) return null;
+    if (!saved || saved.today !== today) return null;
     if (Date.now() - saved.at > PULSE_TTL) return null;
-    return Array.isArray(saved.series) ? saved.series : null;
+    if (!Array.isArray(saved.series) || saved.series.length < span) return null;
+    // A longer cached run answers a shorter question for free: the series ends
+    // on today either way, so the tail is the shorter series exactly.
+    return saved.series.slice(saved.series.length - span);
   } catch {
     return null;
   }
 }
 
 function writePulseCache(span, today, series) {
+  const raw = store(PULSE_KEY);
+  try {
+    const saved = raw ? JSON.parse(raw) : null;
+    // Never trade a long run for a short one: the long one answers both.
+    if (
+      saved &&
+      saved.today === today &&
+      Date.now() - saved.at <= PULSE_TTL &&
+      Array.isArray(saved.series) &&
+      saved.series.length >= series.length
+    ) {
+      return;
+    }
+  } catch {}
   keep(PULSE_KEY, JSON.stringify({ span, today, at: Date.now(), series }));
 }
 
@@ -344,6 +411,7 @@ export default {
   publicQuery,
   adminToken,
   adminQuery,
+  adminReport,
   dropAdminToken,
   dailyViews,
 };

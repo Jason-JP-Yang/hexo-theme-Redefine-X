@@ -70,7 +70,7 @@
                         </li>
                         <li class="navbar-item navbar-follow">
                             <button type="button" class="follow-trigger"
-                                    data-ux="social" data-ux-to="follow"
+                                    data-ux="nav" data-ux-to="follow" data-ux-from="bar"
                                     aria-label="<%= __('notifications.follow_blog') %>">
                                 <i class="fa-regular fa-bell" aria-hidden="true"></i>
                                 <span class="follow-label"><%= __('notifications.follow_nav') %></span>
@@ -97,7 +97,7 @@
                     </div>
                     <div class="navbar-follow">
                         <button type="button" class="follow-trigger"
-                                data-ux="social" data-ux-to="follow"
+                                data-ux="nav" data-ux-to="follow" data-ux-from="bar"
                                 aria-label="<%= __('notifications.follow_blog') %>">
                             <i class="fa-regular fa-bell" aria-hidden="true"></i>
                             <span class="follow-label"><%= __('notifications.follow_nav') %></span>
@@ -190,7 +190,7 @@
                     <li class="drawer-navbar-item text-base my-1.5 flex flex-col w-full">
                         <a class="py-1.5 px-2 flex flex-row items-center justify-between gap-1 hover:!text-primary active:!text-primary text-2xl font-semibold group border-b border-border-color hover:border-primary w-full active"
                            href="<%= url_for(theme.home.sidebar.links[i].path) %>"
-                           data-ux="browse" data-ux-kind="links" data-ux-value="<%= i %>"
+                           data-ux="nav" data-ux-to="<%= i %>" data-ux-from="drawer"
                         >
                             <span><%= __(i) %></span>
                             <i class="<%= theme.home.sidebar.links[i].icon %> fa-sm fa-fw"></i>

@@ -225,43 +225,76 @@ notifications:
   account_banned_note: サインインしたまま記事へのコメントは続けられます。取り消されたのはこのブログを購読する権限だけです。管理者が GitHub 上でもブロックしている場合は、コメントもできなくなります。
 
 management:
-  a_title: Analytics
-  a_lede: Read straight from Umami with an admin credential the Worker releases per session.
-  a_overview: Overview
-  a_events: Events
-  a_sessions: Sessions
-  a_performance: Performance
-  a_compare: Compare
-  a_breakdown: Breakdown
-  a_visitors: Visitors
-  a_visits: Visits
-  a_views: Views
-  a_bounce: Bounce rate
-  a_duration: Visit duration
-  a_countries: Countries
-  a_pages: Pages
-  a_referrers: Referrers
-  a_browsers: Browsers
-  a_os: Systems
-  a_devices: Devices
-  a_direct: Direct / none
-  a_events_fired: Events
-  a_event_types: Types
-  a_by_name: By name
-  a_recent: Recent sessions
-  a_unknown: Unknown
-  a_nodata: Nothing in this range
-  a_offline: Umami did not answer.
-  a_denied: The analytics credential was refused.
-  a_perf_none: No web vitals yet. The tracker collects them only when data-performance is set.
-  a_compare_note: Against the previous period of the same length.
-  a_break_note: Pick up to three dimensions to cross.
-  a_f_path: Path
-  a_f_referrer: Referrer
-  a_f_browser: Browser
-  a_f_os: System
-  a_f_device: Device
-  a_f_country: Country
+  a_title: アクセス解析
+  a_lede: Worker がセッションごとに発行する管理者資格情報で、Umami から直接読み取ります。
+  a_overview: 概要
+  a_events: イベント
+  a_sessions: セッション
+  a_performance: パフォーマンス
+  a_compare: 比較
+  a_breakdown: 内訳
+  a_visitors: 訪問者
+  a_visits: 訪問
+  a_views: 閲覧数
+  a_bounce: 直帰率
+  a_duration: 滞在時間
+  a_countries: 国と地域
+  a_pages: ページ
+  a_sources: 参照元
+  a_environment: 環境
+  a_location: 地域
+  a_traffic_over_time: トラフィック
+  a_weekly: 曜日別トラフィック
+  a_weekdays: 日,月,火,水,木,金,土
+  a_chart: チャート
+  a_activity: 履歴
+  a_properties: プロパティ
+  a_all: すべて
+  a_type: 種類
+  a_event: イベント
+  a_events_fired: イベント数
+  a_event_types: イベント種類
+  a_triggered: イベント
+  a_viewed: 閲覧
+  a_session: セッション
+  a_last_seen: 最終アクセス
+  a_when: 日時
+  a_count: 回数
+  a_name: 名前
+  a_direct: 直接アクセス
+  a_samples: サンプル数
+  a_previous: 前の期間
+  a_current: 今の期間
+  a_change: 変化
+  a_prev_views: 閲覧数（前期間）
+  a_prev_visitors: 訪問者（前期間）
+  a_search: 検索
+  a_prev: 前へ
+  a_next: 次へ
+  a_now: たった今
+  a_f_path: パス
+  a_f_url: URL
+  a_entry: 入口ページ
+  a_exit: 離脱ページ
+  a_f_referrer: リファラー
+  a_channel: チャネル
+  a_f_browser: ブラウザ
+  a_f_os: OS
+  a_f_device: デバイス
+  a_f_screen: 画面
+  a_f_language: 言語
+  a_f_country: 国
+  a_f_region: 地方
+  a_f_city: 都市
+  a_f_title: ページタイトル
+  a_f_query: クエリ
+  a_f_hostname: ホスト名
+  a_f_tag: タグ
+  a_nodata: この期間のデータはありません
+  a_offline: Umami が応答しませんでした。
+  a_denied: 解析用の資格情報が拒否されました。
+  a_perf_none: Web Vitals はまだありません。data-performance を有効にした場合のみ収集されます。
+  a_break_note: 交差させる項目を選んでください。1 つ以上 4 つまで。
   title: ブログ管理
   lede: お知らせの配信、通知データベースに残っている内容、そしてフォロワーとそれぞれの登録デバイス。
   checking: セッションを確認しています...
@@ -373,9 +406,4 @@ vault:
   view_published: 公開版を見る
   view_draft: 下書きを見る
 analytics:
-  activity: アクセス
-  views: 回閲覧
-  weeks: 週
-  less: 少
-  more: 多
-  no_views: アクセスなし
+  activity: ブログの活動

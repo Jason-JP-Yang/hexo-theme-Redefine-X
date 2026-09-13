@@ -1,34 +1,18 @@
 <%#
     The activity card — one cell of the home grid's furniture row.
 
-    Nothing is rendered here but the frame. The calendar is drawn by
-    layouts/pulseCard.js, which cannot know its own shape until the row has been
-    measured: how many days fit is a function of the width it is given, and the
-    row's height belongs to the two cards beside it.
-
-    The strings ride on the element rather than through config-export, because
-    there are four of them and they are only ever read by the one script that
-    paints this card.
+    Nothing is rendered here but the frame and its one label. The calendar is
+    drawn by layouts/pulseCard.js, which cannot know its own shape until the row
+    has been measured: the cell size comes from the height the row hands it and
+    the day count from the width, so neither is expressible here.
 %>
-<div class="sidebar-pulse" data-pulse
-     data-l-title="<%= __('analytics.activity') %>"
-     data-l-views="<%= __('analytics.views') %>"
-     data-l-weeks="<%= __('analytics.weeks') %>"
-     data-l-less="<%= __('analytics.less') %>"
-     data-l-more="<%= __('analytics.more') %>"
-     data-l-empty="<%= __('analytics.no_views') %>">
+<div class="sidebar-pulse" data-pulse data-l-title="<%= __('analytics.activity') %>"
+     data-ux="bento" data-ux-card="activity">
     <div class="pulse-head">
         <span class="pulse-title"><%= __('analytics.activity') %></span>
-        <span class="pulse-total" data-pulse-total></span>
     </div>
     <div class="pulse-plot" data-pulse-plot>
-        <div class="pulse-months" data-pulse-months aria-hidden="true"></div>
         <div class="pulse-grid" data-pulse-grid role="img"
              aria-label="<%= __('analytics.activity') %>"></div>
-        <div class="pulse-tip" data-pulse-tip aria-hidden="true"></div>
-    </div>
-    <div class="pulse-foot">
-        <span class="pulse-range" data-pulse-range></span>
-        <span class="pulse-scale" data-pulse-scale aria-hidden="true"></span>
     </div>
 </div>

@@ -1,6 +1,15 @@
 /**
  * Custom events, on a budget.
  *
+ * WHY THESE EVENTS EXIST
+ * ──────────────────────
+ * Umami already counts pageviews, sessions, referrers and time. An event that
+ * restates any of those is dead weight. What it cannot see is WHICH SURFACE of
+ * the site a reader reached for — the same article opened from the home grid,
+ * from a recommendation or from a tag page is one pageview either way, and the
+ * navbar, the contents rail, the side tools and the two admin consoles leave no
+ * trace at all. That, and only that, is what is recorded here.
+ *
  * WHY NOT `data-umami-event`
  * ─────────────────────────
  * Umami's tracker carries its own click handler, and it fires on EVERY match.
@@ -8,67 +17,73 @@
  * and no place to put one, so a site that marks up its controls honestly ends up
  * with an Events table dominated by whoever fidgeted the most.
  *
- * So the theme marks its controls with `data-ux` instead, and this file decides
- * what actually gets sent. One delegated capture listener for the whole page,
- * one budget per pageview, cleared by main.refresh() — which runs on load and on
+ * So the theme marks its controls with `data-ux` and this file decides what
+ * actually gets sent: one delegated capture listener for the whole page, one
+ * budget per pageview, cleared by main.refresh() — which runs on load and on
  * every swup navigation, i.e. exactly once per pageview Umami records.
  *
  * THE TAXONOMY
  * ────────────
- * Eight names. The category is the NAME; what was clicked is DATA. `nav` with
- * `{to: "archive"}` rather than a `nav-archive` event, because a name per link
- * makes an Events table nobody can read and an event-data table nobody needs.
- *
- *   nav          navbar, drawer, logo, submenu
- *   open-post    a post opened FROM A LIST — home, archive, category, tag,
- *                search, recommendations, vault. `from` says which.
- *   browse       a listing surface used: category, tag, archive, links, masonry
- *   tool         side tools and post tools
- *   post-action  clickable things inside an article
- *   engage       ONCE per pageview: this reader actually read the page
- *   search       the local search was used
- *   social       an outbound link: social icon, friend link, RSS, follow
- *
- * THE BUDGET
- * ──────────
- * A typical visit spends `nav` + `open-post` + `engage` and stops at three. The
- * caps below are what make that a guarantee rather than an expectation: per-name
- * limits first, then a hard ceiling on the pageview as a whole.
+ * One name per SURFACE, spelled out, because the name is what an Events table
+ * shows. What was clicked inside that surface is event data, never a new name:
+ * "Use Navbar" with `{to: "archive"}` rather than a `nav-archive` event.
  */
 
-import { onScroll } from "./scrollScheduler.js";
-
-// How many of each name may be sent in one pageview. A navigation ends the
-// pageview anyway, so the ones worth capping are the ones that do not.
-const CAPS = {
-  nav: 1,
-  "open-post": 1,
-  browse: 1,
-  tool: 2,
-  "post-action": 2,
-  engage: 1,
-  search: 1,
-  social: 1,
+// `data-ux` key → the name Umami records. The markup stays terse; the dashboard
+// stays readable.
+const NAMES = {
+  "home-post": "Open Post from Home",
+  recommend: "Open Post from Recommend",
+  archives: "Browse Archives",
+  categories: "Browse Categories",
+  tags: "Browse Tags",
+  nav: "Use Navbar",
+  bento: "Use Bento Card",
+  tool: "Use Side Tools",
+  toc: "Use Table of Contents",
+  image: "Open Image Viewer",
+  editor: "Use Online Editor",
+  manage: "Use Blog Management",
+  external: "Open External Link",
+  search: "Search Site",
 };
+
+// How many of each may be sent in one pageview. A navigation ends the pageview
+// anyway, so the ones worth capping are the surfaces a reader stays on: the
+// tools rail and the two consoles, where the session is one long page.
+const CAPS = { tool: 2, editor: 2, manage: 2 };
 
 // Whatever the per-name caps allow, a single pageview never sends more than
 // this. It is the backstop for a taxonomy that grows later without the budget
 // being revisited.
-const CEILING = 6;
+const CEILING = 4;
 
-// What counts as having read the page: both, not either. Thirty seconds with no
-// scrolling is a tab left open; half the page in three seconds is a scroll to
-// the comments.
-const ENGAGE_MS = 30000;
-const ENGAGE_DEPTH = 50;
+// A listing page opens posts too, and that click belongs to the listing rather
+// than to a fourth "opened a post" name.
+const LIST_SURFACE = {
+  archive: "archives",
+  category: "categories",
+  tag: "tags",
+};
+
+// Surfaces built by the theme's own scripts at runtime, so there is no template
+// to mark: the image viewer's targets, the contents rail, and the two consoles.
+// Matching them here keeps the taxonomy in one file instead of scattering
+// `setAttribute` calls through five unrelated modules.
+const RUNTIME = [
+  [
+    ".markdown-body img, .markdown-body .img-preloader, .masonry-item img," +
+      " .masonry-item .img-preloader, #shuoshuo-content img, #shuoshuo-content .img-preloader",
+    "image",
+  ],
+  [".post-toc, .toc-content-container", "toc"],
+  ['.article-content-container.is-editing, [class^="ed-"], [class*=" ed-"]', "editor"],
+  ["#blog-management", "manage"],
+];
 
 let spent = null;
 let total = 0;
 let wired = false;
-let unsubscribe = null;
-let clock = null;
-let deepest = 0;
-let startedAt = 0;
 
 /* ─── sending ─────────────────────────────────────────────────────────────── */
 
@@ -77,17 +92,18 @@ function enabled() {
   return a.enable === true && a.events !== false && !window.__umamiFramed;
 }
 
-function send(name, data) {
-  if (!enabled() || total >= CEILING) return;
+function send(key, data) {
+  const name = NAMES[key];
+  if (!name || !enabled() || total >= CEILING) return;
 
-  const cap = CAPS[name] || 1;
-  const used = spent.get(name) || 0;
+  const cap = CAPS[key] || 1;
+  const used = spent.get(key) || 0;
   if (used >= cap) return;
 
   const umami = window.umami;
   if (!umami || typeof umami.track !== "function") return;
 
-  spent.set(name, used + 1);
+  spent.set(key, used + 1);
   total++;
   try {
     umami.track(name, data);
@@ -97,7 +113,7 @@ function send(name, data) {
 /* ─── clicks ──────────────────────────────────────────────────────────────── */
 
 /**
- * `data-ux="name"` plus `data-ux-<key>="value"` for the payload.
+ * `data-ux="key"` plus `data-ux-<field>="value"` for the payload.
  *
  * Read off the closest marked ancestor, so a control can be marked once on its
  * wrapper and every icon and label inside it inherits the mark.
@@ -105,51 +121,31 @@ function send(name, data) {
 function payload(el) {
   const data = {};
   for (const attr of el.attributes) {
-    if (attr.name.startsWith("data-ux-")) {
-      data[attr.name.slice(8)] = attr.value;
-    }
+    if (attr.name.startsWith("data-ux-")) data[attr.name.slice(8)] = attr.value;
   }
   return data;
 }
 
-/**
- * What a reader did INSIDE an article, matched by selector rather than by an
- * attribute on the element.
- *
- * These controls are built by the theme's own scripts at runtime — the copy
- * button, the image viewer's targets, a folding block's summary — so there is no
- * template to mark. Matching them here keeps the taxonomy in one file instead of
- * scattering `setAttribute` calls through five unrelated modules.
- */
-const IN_ARTICLE = [
-  [".copy-button", "copy"],
-  [".markdown-body img, .markdown-body .img-preloader", "image"],
-  [".markdown-body .folding > summary, .markdown-body .tabs .tab", "disclose"],
-  [".markdown-body a[href]", "link"],
-];
-
-function inArticle(target) {
-  if (!target.closest(".article-content, .markdown-body")) return null;
-
-  for (const [selector, kind] of IN_ARTICLE) {
+/** The nearest surface that is only recognisable at runtime. */
+function runtimeSurface(target) {
+  for (const [selector, key] of RUNTIME) {
     const el = target.closest(selector);
     if (!el) continue;
-    // An in-article link that leaves the site is worth telling apart from one
-    // that moves around inside it; both are one event either way.
-    if (kind === "link") {
-      const href = el.getAttribute("href") || "";
-      if (href.startsWith("#")) return { kind: "anchor" };
-      const external = /^https?:\/\//i.test(href) && !href.startsWith(location.origin);
-      return { kind: external ? "external" : "link" };
+    if (key === "manage") {
+      const part = target.closest("[data-part]");
+      return [key, { section: (part && part.getAttribute("data-part")) || "console" }];
     }
-    return { kind };
+    if (key === "toc") {
+      return [key, { action: target.closest(".nav-link") ? "jump" : "open" }];
+    }
+    return [key, {}];
   }
   return null;
 }
 
 function onClick(e) {
   // Modifier and middle clicks open a new tab: the reader is collecting links,
-  // not navigating, and counting those as `open-post` inflates every list.
+  // not navigating, and counting those as an open inflates every list.
   if (e.button > 1 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 
   const target = e.target && e.target.closest ? e.target : null;
@@ -157,68 +153,29 @@ function onClick(e) {
 
   const el = target.closest("[data-ux]");
   if (!el) {
-    const hit = inArticle(target);
-    if (hit) send("post-action", hit);
+    const hit = runtimeSurface(target);
+    if (hit) send(hit[0], hit[1]);
     return;
   }
 
-  const name = el.getAttribute("data-ux");
-  if (!name || !CAPS[name]) return;
-
+  let key = el.getAttribute("data-ux");
   const data = payload(el);
+
+  // A post opened out of a listing is that listing's event, with the action as
+  // data — one name per surface, not one per (surface × thing done to it).
+  if (key === "list-post") {
+    key = LIST_SURFACE[data.from] || "archives";
+    data.action = "open-post";
+    delete data.from;
+  }
+
   // A link's own href is the most useful thing about it and the one thing the
   // markup should never have to repeat.
   if (!data.to && el.tagName === "A" && el.getAttribute("href")) {
     data.to = el.getAttribute("href");
   }
-  send(name, data);
-}
 
-/* ─── engagement ──────────────────────────────────────────────────────────── */
-
-function bucket(pct) {
-  if (pct >= 90) return 100;
-  if (pct >= 70) return 75;
-  if (pct >= 45) return 50;
-  return 25;
-}
-
-function fireEngage() {
-  if (!startedAt) return;
-  const seconds = Math.round((Date.now() - startedAt) / 1000);
-  send("engage", {
-    depth: bucket(deepest),
-    // Bucketed, because the exact second is noise and a bucket is what any
-    // question about reading time is actually asking.
-    seconds: seconds >= 300 ? 300 : seconds >= 120 ? 120 : seconds >= 60 ? 60 : 30,
-  });
-  startedAt = 0;
-}
-
-function watchEngagement() {
-  deepest = 0;
-  startedAt = Date.now();
-
-  // Read only: the depth is measured in the scheduler's read phase and nothing
-  // is written back, which is what keeps this off the layout path entirely.
-  unsubscribe = onScroll(
-    (m) => {
-      if (!startedAt || !m.docH) return;
-      const pct = ((m.scrollY + m.viewportH) / m.docH) * 100;
-      if (pct > deepest) deepest = Math.min(100, pct);
-      if (deepest >= ENGAGE_DEPTH && Date.now() - startedAt >= ENGAGE_MS) fireEngage();
-    },
-    null,
-    "uxEngage",
-  );
-
-  // A reader who never scrolls past the fold but stays is still a reader, as
-  // long as the page had nothing more to show them.
-  clock = setTimeout(() => {
-    const doc = document.documentElement;
-    const complete = doc.scrollHeight <= window.innerHeight * 1.2;
-    if (complete || deepest >= ENGAGE_DEPTH) fireEngage();
-  }, ENGAGE_MS);
+  send(key, data);
 }
 
 /* ─── search ──────────────────────────────────────────────────────────────── */
@@ -235,31 +192,13 @@ export function trackSearch(hits) {
 /* ─── run ─────────────────────────────────────────────────────────────────── */
 
 export default function initUxEvents() {
-  if (unsubscribe) {
-    unsubscribe();
-    unsubscribe = null;
-  }
-  clearTimeout(clock);
-
-  // Anything still owed from the page being left is owed now: swup replaces the
-  // content without unloading, so `pagehide` never comes.
-  if (startedAt) fireEngage();
-
   spent = new Map();
   total = 0;
 
-  if (!enabled()) return;
+  if (!enabled() || wired) return;
 
-  if (!wired) {
-    wired = true;
-    // Capture, so a handler that stops propagation on its own control cannot
-    // silently remove it from the record.
-    document.addEventListener("click", onClick, true);
-    // The last pageview of a visit still has its reading to report.
-    window.addEventListener("pagehide", () => {
-      if (deepest >= ENGAGE_DEPTH) fireEngage();
-    });
-  }
-
-  watchEngagement();
+  wired = true;
+  // Capture, so a handler that stops propagation on its own control cannot
+  // silently remove it from the record.
+  document.addEventListener("click", onClick, true);
 }

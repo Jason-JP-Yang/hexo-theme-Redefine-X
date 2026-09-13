@@ -225,43 +225,76 @@ notifications:
   account_banned_note: Puedes seguir con la sesion iniciada y comentar en las entradas; solo se ha retirado la posibilidad de suscribirte a este blog. Si el autor tambien te ha bloqueado en GitHub, los comentarios tambien se detienen.
 
 management:
-  a_title: Analytics
-  a_lede: Read straight from Umami with an admin credential the Worker releases per session.
-  a_overview: Overview
-  a_events: Events
-  a_sessions: Sessions
-  a_performance: Performance
-  a_compare: Compare
-  a_breakdown: Breakdown
-  a_visitors: Visitors
-  a_visits: Visits
-  a_views: Views
-  a_bounce: Bounce rate
-  a_duration: Visit duration
-  a_countries: Countries
-  a_pages: Pages
-  a_referrers: Referrers
-  a_browsers: Browsers
-  a_os: Systems
-  a_devices: Devices
-  a_direct: Direct / none
-  a_events_fired: Events
-  a_event_types: Types
-  a_by_name: By name
-  a_recent: Recent sessions
-  a_unknown: Unknown
-  a_nodata: Nothing in this range
-  a_offline: Umami did not answer.
-  a_denied: The analytics credential was refused.
-  a_perf_none: No web vitals yet. The tracker collects them only when data-performance is set.
-  a_compare_note: Against the previous period of the same length.
-  a_break_note: Pick up to three dimensions to cross.
-  a_f_path: Path
-  a_f_referrer: Referrer
-  a_f_browser: Browser
-  a_f_os: System
-  a_f_device: Device
-  a_f_country: Country
+  a_title: Analítica
+  a_lede: Se lee directamente de Umami con una credencial de administrador que el Worker entrega por sesión.
+  a_overview: Resumen
+  a_events: Eventos
+  a_sessions: Sesiones
+  a_performance: Rendimiento
+  a_compare: Comparar
+  a_breakdown: Desglose
+  a_visitors: Visitantes
+  a_visits: Visitas
+  a_views: Vistas
+  a_bounce: Tasa de rebote
+  a_duration: Duración de visita
+  a_countries: Países
+  a_pages: Páginas
+  a_sources: Fuentes
+  a_environment: Entorno
+  a_location: Ubicación
+  a_traffic_over_time: Tráfico
+  a_weekly: Tráfico semanal
+  a_weekdays: Dom,Lun,Mar,Mié,Jue,Vie,Sáb
+  a_chart: Gráfico
+  a_activity: Actividad
+  a_properties: Propiedades
+  a_all: Todo
+  a_type: Tipo
+  a_event: Evento
+  a_events_fired: Eventos
+  a_event_types: Eventos únicos
+  a_triggered: Evento
+  a_viewed: Vista
+  a_session: Sesión
+  a_last_seen: Última vez
+  a_when: Cuándo
+  a_count: Recuento
+  a_name: Nombre
+  a_direct: Directo / ninguno
+  a_samples: Muestras
+  a_previous: Anterior
+  a_current: Actual
+  a_change: Cambio
+  a_prev_views: Vistas (anterior)
+  a_prev_visitors: Visitantes (anterior)
+  a_search: Buscar
+  a_prev: Anterior
+  a_next: Siguiente
+  a_now: ahora mismo
+  a_f_path: Ruta
+  a_f_url: URL
+  a_entry: Página de entrada
+  a_exit: Página de salida
+  a_f_referrer: Referente
+  a_channel: Canal
+  a_f_browser: Navegador
+  a_f_os: Sistema
+  a_f_device: Dispositivo
+  a_f_screen: Pantalla
+  a_f_language: Idioma
+  a_f_country: País
+  a_f_region: Región
+  a_f_city: Ciudad
+  a_f_title: Título de página
+  a_f_query: Consulta
+  a_f_hostname: Host
+  a_f_tag: Etiqueta
+  a_nodata: Nada en este rango
+  a_offline: Umami no respondió.
+  a_denied: Se rechazó la credencial de analítica.
+  a_perf_none: Aún no hay web vitals. El rastreador solo los recoge cuando data-performance está activo.
+  a_break_note: Elige las dimensiones a cruzar. Al menos una, como máximo cuatro.
   title: Administracion del blog
   lede: Anuncios, lo que aun guarda la base de datos de notificaciones y cada seguidor con sus dispositivos.
   checking: Comprobando tu sesion...
@@ -373,9 +406,4 @@ vault:
   view_published: Ver la version publicada
   view_draft: Ver el borrador
 analytics:
-  activity: Actividad
-  views: visitas
-  weeks: semanas
-  less: menos
-  more: mas
-  no_views: Sin visitas
+  activity: Actividad del blog

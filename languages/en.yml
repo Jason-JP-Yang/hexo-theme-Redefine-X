@@ -241,28 +241,61 @@ management:
   a_duration: Visit duration
   a_countries: Countries
   a_pages: Pages
-  a_referrers: Referrers
-  a_browsers: Browsers
-  a_os: Systems
-  a_devices: Devices
-  a_direct: Direct / none
+  a_sources: Sources
+  a_environment: Environment
+  a_location: Location
+  a_traffic_over_time: Traffic
+  a_weekly: Weekly traffic
+  a_weekdays: Sun,Mon,Tue,Wed,Thu,Fri,Sat
+  a_chart: Chart
+  a_activity: Activity
+  a_properties: Properties
+  a_all: All
+  a_type: Type
+  a_event: Event
   a_events_fired: Events
-  a_event_types: Types
-  a_by_name: By name
-  a_recent: Recent sessions
-  a_unknown: Unknown
+  a_event_types: Unique events
+  a_triggered: Event
+  a_viewed: View
+  a_session: Session
+  a_last_seen: Last seen
+  a_when: When
+  a_count: Count
+  a_name: Name
+  a_direct: Direct / none
+  a_samples: Samples
+  a_previous: Previous
+  a_current: Current
+  a_change: Change
+  a_prev_views: Views (previous)
+  a_prev_visitors: Visitors (previous)
+  a_search: Search
+  a_prev: Previous
+  a_next: Next
+  a_now: just now
+  a_f_path: Path
+  a_f_url: URL
+  a_entry: Entry page
+  a_exit: Exit page
+  a_f_referrer: Referrer
+  a_channel: Channel
+  a_f_browser: Browser
+  a_f_os: System
+  a_f_device: Device
+  a_f_screen: Screen
+  a_f_language: Language
+  a_f_country: Country
+  a_f_region: Region
+  a_f_city: City
+  a_f_title: Page title
+  a_f_query: Query
+  a_f_hostname: Hostname
+  a_f_tag: Tag
   a_nodata: Nothing in this range
   a_offline: Umami did not answer.
   a_denied: The analytics credential was refused.
   a_perf_none: No web vitals yet. The tracker collects them only when data-performance is set.
-  a_compare_note: Against the previous period of the same length.
-  a_break_note: Pick up to three dimensions to cross.
-  a_f_path: Path
-  a_f_referrer: Referrer
-  a_f_browser: Browser
-  a_f_os: System
-  a_f_device: Device
-  a_f_country: Country
+  a_break_note: Pick the dimensions to cross. At least one, at most four.
   title: Blog Management
   lede: Announcements, what the notification database still holds, and every follower with the devices hanging off them.
   checking: Checking your session...
@@ -597,9 +630,4 @@ editor:
   pick_served: Served at
   pick_moved: Moving from
 analytics:
-  activity: Activity
-  views: views
-  weeks: weeks
-  less: less
-  more: more
-  no_views: No views
+  activity: Blog Activity

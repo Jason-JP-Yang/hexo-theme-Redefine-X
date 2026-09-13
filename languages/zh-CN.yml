@@ -229,42 +229,75 @@ notifications:
 
 management:
   a_title: 访问分析
-  a_lede: 直接读取 Umami 数据，凭据由 Worker 在每次管理员会话中下发。
-  a_overview: 总览
+  a_lede: 使用 Worker 按会话下发的管理员凭证，直接读取 Umami。
+  a_overview: 概览
   a_events: 事件
   a_sessions: 会话
   a_performance: 性能
   a_compare: 对比
-  a_breakdown: 交叉分析
+  a_breakdown: 拆分
   a_visitors: 访客
   a_visits: 访问
-  a_views: 浏览
+  a_views: 浏览量
   a_bounce: 跳出率
-  a_duration: 停留时长
-  a_countries: 国家/地区
+  a_duration: 访问时长
+  a_countries: 国家和地区
   a_pages: 页面
-  a_referrers: 来源
-  a_browsers: 浏览器
-  a_os: 操作系统
-  a_devices: 设备
-  a_direct: 直接访问
+  a_sources: 来源
+  a_environment: 环境
+  a_location: 地区
+  a_traffic_over_time: 流量
+  a_weekly: 每周流量
+  a_weekdays: 日,一,二,三,四,五,六
+  a_chart: 图表
+  a_activity: 明细
+  a_properties: 属性
+  a_all: 全部
+  a_type: 类型
+  a_event: 事件
   a_events_fired: 事件数
-  a_event_types: 类型数
-  a_by_name: 按名称
-  a_recent: 最近会话
-  a_unknown: 未知
-  a_nodata: 该时间段内没有数据
-  a_offline: Umami 没有响应。
-  a_denied: 分析凭据被拒绝。
-  a_perf_none: 暂无 Web Vitals 数据。只有设置 data-performance 后追踪器才会采集。
-  a_compare_note: 与上一个等长周期对比。
-  a_break_note: 最多选择三个维度进行交叉。
+  a_event_types: 事件种类
+  a_triggered: 事件
+  a_viewed: 浏览
+  a_session: 会话
+  a_last_seen: 最近活动
+  a_when: 时间
+  a_count: 次数
+  a_name: 名称
+  a_direct: 直接访问
+  a_samples: 样本数
+  a_previous: 上一周期
+  a_current: 当前周期
+  a_change: 变化
+  a_prev_views: 浏览量（上一周期）
+  a_prev_visitors: 访客（上一周期）
+  a_search: 搜索
+  a_prev: 上一页
+  a_next: 下一页
+  a_now: 刚刚
   a_f_path: 路径
-  a_f_referrer: 来源
+  a_f_url: 完整地址
+  a_entry: 入口页
+  a_exit: 退出页
+  a_f_referrer: 引荐来源
+  a_channel: 渠道
   a_f_browser: 浏览器
-  a_f_os: 系统
+  a_f_os: 操作系统
   a_f_device: 设备
-  a_f_country: 国家/地区
+  a_f_screen: 分辨率
+  a_f_language: 语言
+  a_f_country: 国家和地区
+  a_f_region: 省份
+  a_f_city: 城市
+  a_f_title: 页面标题
+  a_f_query: 查询参数
+  a_f_hostname: 主机名
+  a_f_tag: 标签
+  a_nodata: 该区间内没有数据
+  a_offline: Umami 没有响应。
+  a_denied: 分析凭证被拒绝。
+  a_perf_none: 暂无 Web Vitals 数据。只有开启 data-performance 时统计脚本才会采集。
+  a_break_note: 选择要交叉的维度，至少一个，最多四个。
   title: 博客管理
   lede: 发布公告、查看通知数据库中现存的内容，以及每一位关注者与其名下的推送设备。
   checking: 正在检查你的登录状态…
@@ -599,9 +632,4 @@ editor:
   pick_served: 实际路径
   pick_moved: 移动自
 analytics:
-  activity: 访问活动
-  views: 次浏览
-  weeks: 周
-  less: 少
-  more: 多
-  no_views: 无访问
+  activity: 博客活跃度
