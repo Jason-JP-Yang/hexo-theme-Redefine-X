@@ -349,7 +349,7 @@ function hushNeighbours(el, below) {
   };
 }
 
-function measureFlow(el, gone) {
+function measureFlow(el, gone, shed) {
   const parent = el.parentElement;
   const probe = flowProbe(el);
   // Only a SIBLING sits where this box is about to be. A climbed probe is
@@ -387,8 +387,16 @@ function measureFlow(el, gone) {
   // Taken out of the flow rather than hidden. `display: none` blurs whatever is
   // focused inside the box, and a block is very often deleted from the caret
   // that is still sitting in it.
+  //
+  // `shed` adds the class the first/last structural rules are written against,
+  // so this reading is the page WITHOUT this box at all — not merely with it
+  // collapsed. The two differ by a whole paragraph margin at the end of a box,
+  // which is the margin a deletion used to drop in one frame after the
+  // animation had finished.
   el.style.position = "absolute";
+  if (shed) el.classList.add("ed-shed");
   const loose = cost();
+  if (shed) el.classList.remove("ed-shed");
   el.style.position = inFlow;
   const zero = gone == null ? loose : gone;
 
@@ -498,39 +506,26 @@ export async function enter(el, ready, gone) {
 export async function exit(el) {
   if (reduced()) return;
 
-  const parent = el.parentElement;
-  let gone;
-  if (parent) {
-    // `.ed-shed` moves the first/last structural rules onto the neighbour that
-    // is about to inherit them, so this reading is the layout AFTER the
-    // removal. Put back immediately: the travel starts from the layout that is
-    // on screen, and ends at this one, which is what makes the removal itself
-    // move nothing. A class rather than actually taking the element out —
-    // detaching it would blur the caret that is very often still inside it.
-    el.classList.add("ed-shed");
-    const next = el.nextElementSibling;
-    gone = flowCost(parent, next);
-    el.classList.remove("ed-shed");
-  }
+  // `shed` is what makes the travel end at the layout the removal produces
+  // rather than at "the same page with a collapsed box still in it". The two
+  // differ wherever a structural rule moves — `.ed-block:last-of-type .ed-body
+  // > *` zeroes the last block's bottom margin, so the block ABOVE the deleted
+  // one inherits it the instant this element leaves the tree.
+  const flow = measureFlow(el, undefined, true);
 
-  const flow = measureFlow(el, gone);
   el.style.overflow = "clip";
-  const run = el.animate(frames(flow).reverse(), {
-    duration: MORPH_MS,
-    easing: EASE,
-    fill: "forwards",
-  });
+  const run = el.animate(frames(flow).reverse(), { duration: MORPH_MS, easing: EASE });
   await settle(run);
 
-  // The neighbours get their margins back, and this box is pinned at no size
-  // and no margin of its own — which collapses to exactly the gap the two of
-  // them will have once it is gone. Set before the animation's fill is dropped,
-  // so no frame is painted with neither in charge.
+  // In the same task the animation stops owning them: the neighbours get their
+  // margins back and this box is pinned at no size and no margin of its own,
+  // which collapses to exactly the gap those two will have once it is gone.
+  // Removing it then moves nothing.
   flow.restore();
   el.style.height = "0px";
   el.style.marginTop = "0px";
   el.style.marginBottom = "0px";
-  run.cancel();
+  el.style.opacity = "0";
 }
 
 /**

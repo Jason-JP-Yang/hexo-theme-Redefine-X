@@ -1395,7 +1395,22 @@ export function openPicker(ctx, opts = {}) {
 
     function applySplit(fraction) {
       const { prop, key } = axis();
-      const value = Math.max(0.2, Math.min(0.75, fraction));
+      let value = Math.max(0.2, Math.min(0.75, fraction));
+
+      // Stacked, the tree may not take so much that the file's details have
+      // nowhere to be. The ceiling is worked out here rather than left to a
+      // `min-content` track, because a track that reads the pane's contents and
+      // contents that are sized from the track is a loop that bounces.
+      if (stacked() && body.clientHeight) {
+        const cs = getComputedStyle(view);
+        const need =
+          meta.offsetHeight +
+          (parseFloat(cs.paddingTop) || 0) +
+          (parseFloat(cs.paddingBottom) || 0) +
+          grip.offsetHeight;
+        value = Math.min(value, Math.max(0.2, (body.clientHeight - need) / body.clientHeight));
+      }
+
       body.style.setProperty(prop, value);
       try {
         window.localStorage.setItem(key, String(value));

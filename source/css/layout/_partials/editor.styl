@@ -1372,19 +1372,15 @@ $ed-pop-h = 620px
   // degrees. `touch-action: none` on the grip is what lets a finger drag it
   // without the panel scrolling underneath.
   //
-  // THE FACTS ARE THE FLOOR. `minmax(min-content, 1fr)` on the preview row is
-  // the file's details; the tree's row is `minmax(0, …)` so it is the one that
-  // yields when there is not room for both. The picture takes what is left and
-  // no more — and when that is nothing, the row is the details alone, which is
-  // the right answer on a phone. A sliver of a photograph above a scrollbar is
-  // not a preview, and the pane does not scroll: see `.ed-pick-view`.
-  //
-  // The stage contributes nothing to `min-content` because it is `overflow:
-  // hidden`, which is what keeps the floor at the details' height rather than
-  // the photograph's.
+  // Both rows are sized by the splitter and NOTHING ELSE. A `min-content` floor
+  // on the preview row read its own contents, so the row grew when the picture
+  // did and the picture was sized from the row — the pane bounced on every
+  // click and the grip had no free space left to move into. The floor that
+  // keeps the file's details visible is applied to the splitter's own ceiling
+  // instead, where it cannot feed back: see `applySplit`.
   +redefine-tablet()
     grid-template-columns minmax(0, 1fr)
-    grid-template-rows minmax(0, calc(var(--ed-pick-vsplit, 0.42) * 100%)) 11px minmax(min-content, 1fr)
+    grid-template-rows calc(var(--ed-pick-vsplit, 0.42) * 100%) 11px minmax(0, 1fr)
 
 .ed-pick-side
   min-height 0
