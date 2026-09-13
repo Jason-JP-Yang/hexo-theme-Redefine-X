@@ -44,7 +44,7 @@
  */
 
 import { escapeHTML } from "./markdown.js";
-import { loadManifest, manifestRows, setVaultIndex } from "./assets.js";
+import { loadManifest, manifestRows, relockPreviewed, setVaultIndex } from "./assets.js";
 import { sealedIndex } from "./session.js";
 import { EASE, MORPH_MS, createEdgeScroll, pop, setDragImage } from "./motion.js";
 
@@ -140,8 +140,6 @@ function readableSize(bytes) {
  * merges over the top, and ones this session has already committed are in
  * `landed`.
  */
-let treeCache = null;
-
 /**
  * Pictures this session committed that the site has not published yet.
  *
@@ -165,12 +163,16 @@ export function noteCommitted(assets, stage) {
       route: "",
     });
   }
-  treeCache = null;
 }
 
+/**
+ * Rebuilt on every open rather than cached: the two things it reads are the
+ * ones that cache (a static file and a decrypted keyring), and walking 350
+ * paths costs nothing beside them. A cached ARRAY was worse than useless — a
+ * picker opened one moment before the vault keys arrived would have held a tree
+ * with every withheld picture missing from it for the rest of the session.
+ */
 export async function loadTree(force) {
-  if (treeCache && !force) return treeCache;
-
   const [rows, vault] = await Promise.all([
     loadManifest(force).then(() => manifestRows()),
     sealedIndex().catch(() => ({})),
@@ -210,12 +212,10 @@ export async function loadTree(force) {
     }
   }
 
-  treeCache = out;
-  return treeCache;
+  return out;
 }
 
 export function forgetTree() {
-  treeCache = null;
   landed.clear();
 }
 
@@ -865,6 +865,11 @@ export function openPicker(ctx, opts = {}) {
       const known = !!chosen && IMAGE.test(chosen);
       ok.disabled = !known;
 
+      // The picture being left is locked again before the next one is opened,
+      // so one click on a withheld image decrypts that image and nothing else,
+      // and moving off it takes the bytes back.
+      relockPreviewed();
+
       const before = animate === false ? 0 : stage.getBoundingClientRect().height;
 
       if (!known) {
@@ -880,12 +885,6 @@ export function openPicker(ctx, opts = {}) {
       delete stage.dataset.empty;
       if (!shot.isConnected) stage.appendChild(shot);
 
-      // Back to the skeleton before the box is re-shaped, or the picture that is
-      // on its way out is the one stretched into the new picture's shape for a
-      // frame. `bindImage` at the bottom sets `data-ready` again.
-      shot.removeAttribute("src");
-      shot.dataset.ready = "0";
-
       const node = nodes.get(chosen);
       const origin = ctx.stage.origin(chosen);
       const address = siteAddress(chosen);
@@ -896,23 +895,13 @@ export function openPicker(ctx, opts = {}) {
         ctx.naturalSize(address) || (node && node.width ? { width: node.width, height: node.height } : null);
 
       shot.alt = nameOf(chosen);
-      if (size && size.width && size.height) {
-        shot.width = size.width;
-        shot.height = size.height;
-        shot.style.removeProperty("width");
-        shot.style.removeProperty("aspect-ratio");
-        stage.style.setProperty("--shot-w", size.width + "px");
-      } else {
-        // Nothing in the tree should reach this — the build measures every
-        // source image — but a picture staged in this session before it could
-        // be read still can. A neutral 3:2 holds the space rather than letting
-        // the box be nothing until the bytes land.
-        shot.removeAttribute("width");
-        shot.removeAttribute("height");
-        shot.style.width = "100%";
-        shot.style.aspectRatio = "3 / 2";
-        stage.style.setProperty("--shot-w", "100%");
-      }
+      // The shape of the box, in one property, so it is the same before the
+      // bytes, while the placeholder stands in and after the picture decodes.
+      // A neutral 3:2 for the only thing that can be unmeasured — a picture
+      // staged in this session that could not be read.
+      const shape = size && size.width && size.height ? size : null;
+      shot.style.aspectRatio = shape ? `${shape.width} / ${shape.height}` : "3 / 2";
+      stage.style.setProperty("--shot-w", shape ? shape.width + "px" : "100%");
 
       meta.innerHTML =
         metaRow(t("pick_name", "Name"), nameOf(chosen)) +
@@ -1168,6 +1157,10 @@ export function openPicker(ctx, opts = {}) {
       scroller.stop();
       mask.remove();
       unlockPage();
+      // Whatever was being looked at is locked again with the dialogue. A
+      // browser that had been left open on a withheld picture must not leave it
+      // decryptable behind itself.
+      relockPreviewed();
       document.removeEventListener("keydown", onKey, true);
       resolve(value);
     }

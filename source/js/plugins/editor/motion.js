@@ -249,16 +249,39 @@ export async function crossFade(el, mutate) {
  * Between those two the travel is continuous, and the gap under the box stays
  * the gap it will end up being for the whole of it.
  */
+/**
+ * The first box below `el` that a change in `el`'s height actually moves.
+ *
+ * It CLIMBS. A block inserted at the end of the article — or at the end of a
+ * nested block, which is the same shape one level down — has no following
+ * sibling, and this used to give up there and fall back to the parent's own
+ * height. That reading is a lie in exactly the case it was needed: a last
+ * child's bottom margin COLLAPSES THROUGH its parent's bottom edge, so
+ * `parent.offsetHeight` does not change when the margin does. The compensation
+ * computed from it was therefore zero, while the collapsed margin escaped the
+ * parent and shoved everything after the article down by a whole paragraph gap
+ * on the animation's first frame. That is the jolt — and it happened only at a
+ * tail, because anywhere else there is a sibling and the reading is honest.
+ *
+ * Climbing to the parent's next sibling reads a box OUTSIDE the collapsing
+ * chain, which does move, and moves continuously.
+ *
+ * `offsetTop` is 0 on a box that is not rendered, says nothing about what is
+ * above it when the box is out of the flow, and reports where a sticky box is
+ * STUCK rather than where it belongs — so those are skipped. Only differences
+ * between readings of the SAME probe are ever used, so it does not matter that
+ * a climbed probe measures from a different offset parent than `el` does.
+ */
 function flowProbe(el) {
-  let next = el.nextElementSibling;
-  while (next) {
-    // `offsetTop` is 0 on a box that is not rendered, says nothing about what is
-    // above it when the box is out of the flow, and reports where a sticky box
-    // is STUCK rather than where it belongs. The article is followed by nothing
-    // but `.ed-put-away`, so this is the ordinary case, not the exotic one.
-    const style = getComputedStyle(next);
-    if (style.display !== "none" && (style.position === "static" || style.position === "relative")) return next;
-    next = next.nextElementSibling;
+  let at = el;
+  while (at && at !== document.body && at !== document.documentElement) {
+    for (let next = at.nextElementSibling; next; next = next.nextElementSibling) {
+      const style = getComputedStyle(next);
+      if (style.display === "none") continue;
+      if (style.position !== "static" && style.position !== "relative") continue;
+      return next;
+    }
+    at = at.parentElement;
   }
   return null;
 }
@@ -274,12 +297,22 @@ function flowProbe(el) {
  * the new block will be inserted in front of.
  */
 export function flowCost(parent, before) {
-  return before ? before.offsetTop : parent.offsetHeight;
+  if (before) return before.offsetTop;
+  // The same probe `measureFlow` will find once the block is the last child:
+  // no siblings of its own, so the chain starts at the parent. Read the same
+  // way, or the difference the caller hands back means nothing.
+  const probe = flowProbe(parent);
+  return probe ? probe.offsetTop : parent.offsetHeight;
 }
 
 function measureFlow(el, gone) {
   const parent = el.parentElement;
   const probe = flowProbe(el);
+  // Only a SIBLING sits where this box is about to be. A climbed probe is
+  // further down the page and past a margin that collapses, so the whole of the
+  // compensation belongs on the bottom margin — the same as having no probe at
+  // all, which is what this used to be.
+  const beside = !!probe && probe.parentElement === parent;
   // What the box costs, in one number: where the next thing starts, or failing
   // that how tall the parent is.
   const cost = probe ? () => probe.offsetTop : () => (parent ? parent.offsetHeight : 0);
@@ -324,9 +357,9 @@ function measureFlow(el, gone) {
   el.style.height = "0px";
   el.style.marginTop = mt1 + "px";
   el.style.marginBottom = mb1 + "px";
-  // Without a probe there is nothing below to be overlapped, so the whole of the
-  // compensation goes on the bottom margin.
-  const mt0 = probe ? mt1 + (zero - el.offsetTop) : mt1;
+  // Nothing directly below to be overlapped: the whole of the compensation goes
+  // on the bottom margin.
+  const mt0 = beside ? mt1 + (zero - el.offsetTop) : mt1;
   el.style.marginTop = mt0 + "px";
   const mb0 = mb1 + (zero - cost());
 

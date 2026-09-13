@@ -26,8 +26,22 @@
  * question, because a picture on the canvas is loaded from the site.
  */
 
-import { assetURL, dropAssetKeys, registerAssetKey } from "../../tools/vaultCrypto.js";
+import { assetURL, registerAssetKey } from "../../tools/vaultCrypto.js";
+import { relockAsset, unlockAsset } from "./session.js";
 import { blobURL } from "./repo.js";
+
+/**
+ * What an `<img>` points at while it has nothing to show.
+ *
+ * NOT an empty `src` and not a missing one: both make the element a broken
+ * picture, and a broken picture with a width and a height is drawn by the
+ * browser as its own glyph — which is what appeared the instant a sealed image
+ * was clicked, held for as long as the decryption took, and looked exactly like
+ * a failure. A 1×1 transparent GIF is a picture that loaded, so there is
+ * nothing to draw; the box comes from the width/height attributes and the
+ * skeleton underneath is what the author sees.
+ */
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
 let manifest = null;
 let sealed = null;
@@ -60,19 +74,45 @@ export function manifestRows() {
 /**
  * Erase what this module learned, down to the decryption keys.
  *
- * The manifest is public and the sealed maps are not: the vault-wide index
- * carries a key for every withheld picture on the site, and it was registered
- * for the browser's benefit. It goes with the session. The OPEN DOCUMENT's own
- * hashes are left alone — the page behind the editor is still showing that
- * article, and plugins/vault.js registered the same keys for it.
+ * The manifest is public; what the browser unlocked is not.
  */
 export function forgetAssets() {
-  if (vaultIndex) {
-    const mine = new Set(sealed ? Object.values(sealed) : []);
-    dropAssetKeys(Object.values(vaultIndex).map((row) => row.hash).filter((hash) => !mine.has(hash)));
-  }
+  relockPreviewed();
   manifest = null;
   vaultIndex = null;
+}
+
+/* ─── one picture at a time ────────────────────────────────────────────────── */
+
+/**
+ * Which sealed pictures the BROWSER has opened — never the article's own.
+ *
+ * A file manager over an encrypted library must not be a way to decrypt that
+ * library. Nothing is unlocked until the author clicks it, and the previous one
+ * is locked again before the next is opened, so at most one withheld picture is
+ * in the clear at any moment and none of them survive the dialogue closing.
+ */
+const previewed = new Set();
+
+function openSealed(hash) {
+  // The open document's own images were registered by `setVaultAssets` for the
+  // canvas, and are the page's to manage; the browser neither unlocks nor locks
+  // those. Anything else is borrowed for as long as it is being looked at.
+  if (documentOwns(hash)) return assetURL(hash);
+  previewed.add(hash);
+  return unlockAsset(hash);
+}
+
+function documentOwns(hash) {
+  if (!sealed) return false;
+  for (const value of Object.values(sealed)) if (value === hash) return true;
+  return false;
+}
+
+/** Give back every key the browser borrowed, and the bytes opened with them. */
+export function relockPreviewed() {
+  if (previewed.size) relockAsset([...previewed]);
+  previewed.clear();
 }
 
 /**
@@ -306,44 +346,52 @@ export function bindImage(img, src, list) {
   if (!img) return;
   const value = String(src || "");
 
+  // Waiting, not broken: `BLANK` keeps a real resource in the element so the
+  // browser has no glyph to draw while the answer is being found.
+  img.onload = null;
+  img.onerror = null;
   img.dataset.ready = "0";
-  img.onload = () => (img.dataset.ready = "1");
+  img.src = BLANK;
   delete img.dataset.edSealed;
   delete img.dataset.edSrc;
 
   if (!value) {
-    img.onerror = null;
-    img.removeAttribute("src");
     img.dataset.ready = "err";
     return;
   }
 
+  const settle = (url) => {
+    if (!url) return void (img.dataset.ready = "err");
+    img.onload = () => (img.dataset.ready = "1");
+    img.src = url;
+  };
+
   const hash = sealedHash(value, list);
 
-  if (!hash) {
-    img.dataset.edSrc = value;
-    img.onerror = () => {
-      img.onerror = null;
-      img.removeAttribute("src");
-      repoURL(value, list).then((url) => {
-        if (img.dataset.edSrc !== value) return;
-        if (url) img.src = url;
-        else img.dataset.ready = "err";
-      });
-    };
-    img.src = resolveAsset(value, list);
+  if (hash) {
+    img.dataset.edSealed = hash;
+    openSealed(hash).then((url) => {
+      // The element may have been re-pointed at something else while we waited.
+      if (img.dataset.edSealed === hash) settle(url);
+    });
     return;
   }
 
-  img.onerror = null;
-  img.removeAttribute("src");
-  img.dataset.edSealed = hash;
-  assetURL(hash).then((url) => {
-    // The element may have been re-pointed at something else while we waited.
-    if (img.dataset.edSealed !== hash) return;
-    if (url) img.src = url;
-    else img.dataset.ready = "err";
-  });
+  img.dataset.edSrc = value;
+  img.onerror = () => {
+    img.onerror = null;
+    img.onload = null;
+    // Back to the placeholder while the repository is asked, for the same
+    // reason: a 404 leaves a glyph in the box otherwise.
+    img.src = BLANK;
+    repoURL(value, list).then((url) => {
+      if (img.dataset.edSrc === value) settle(url);
+    });
+  };
+  // Through `settle` too, in the same task, so the placeholder's own load event
+  // is cancelled by this assignment rather than arriving later and reporting
+  // the blank as the picture.
+  settle(resolveAsset(value, list));
 }
 
 /**

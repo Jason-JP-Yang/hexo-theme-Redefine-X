@@ -1364,9 +1364,20 @@ $ed-pop-h = 620px
   // question about how much tree and how much picture, just turned ninety
   // degrees. `touch-action: none` on the grip is what lets a finger drag it
   // without the panel scrolling underneath.
+  //
+  // THE FACTS ARE THE FLOOR. `minmax(min-content, 1fr)` on the preview row is
+  // the file's details; the tree's row is `minmax(0, …)` so it is the one that
+  // yields when there is not room for both. The picture takes what is left and
+  // no more — and when that is nothing, the row is the details alone, which is
+  // the right answer on a phone. A sliver of a photograph above a scrollbar is
+  // not a preview, and the pane does not scroll: see `.ed-pick-view`.
+  //
+  // The stage contributes nothing to `min-content` because it is `overflow:
+  // hidden`, which is what keeps the floor at the details' height rather than
+  // the photograph's.
   +redefine-tablet()
     grid-template-columns minmax(0, 1fr)
-    grid-template-rows calc(var(--ed-pick-vsplit, 0.42) * 100%) 11px minmax(0, 1fr)
+    grid-template-rows minmax(0, calc(var(--ed-pick-vsplit, 0.42) * 100%)) 11px minmax(min-content, 1fr)
 
 .ed-pick-side
   min-height 0
@@ -1601,6 +1612,13 @@ $ed-pop-h = 620px
   overscroll-behavior contain
   ed-scroll()
 
+  // Stacked, this pane never scrolls. Its row is already floored at the height
+  // of the details and the picture is capped at whatever is left, so a
+  // scrollbar here could only mean the picture had been allowed to overflow —
+  // which is the bug, not the fix for it.
+  +redefine-tablet()
+    overflow hidden
+
 // One picture, at its own shape and its own size, with the facts under it.
 //
 // The picture is the ONLY thing here: no frame, no plate, no panel behind it.
@@ -1625,23 +1643,30 @@ $ed-pop-h = 620px
 // quietly became `none`, the row took the picture's full 925px, and `overflow:
 // hidden` cropped it. Both times the picture stood taller than the pane.
 //
-// `width`/`height` attributes carry the intrinsic ratio, so the box is the
-// right shape before the bytes arrive; `--shot-w` stops a 200px thumbnail being
-// blown up across a 600px pane.
+// ── The box is `aspect-ratio`, and nothing else ─────────────────────────────
 //
-// ── Why the attributes are NOT overridden with `auto` ───────────────────────
+// Three arrangements were tried here and each broke a different way.
 //
-// They used to be, and that is what made every click look like a fresh
-// skeleton being inserted: `width: auto` on an element with no `src` yet is
-// ZERO, so the box the attributes describe did not exist while the picture was
-// being fetched — and for a sealed one, which cannot even be requested until
-// its bytes are decrypted, that was the whole wait. The pane stood collapsed
-// and then the picture arrived all at once.
+//   width/height ATTRIBUTES with `width: auto; height: auto`
+//     The ratio is right once the picture decodes, and the box is ZERO before
+//     it does — `auto` on a replaced element with nothing loaded is nothing —
+//     so every click inserted a skeleton with no height and the pane jumped
+//     when the bytes landed. For a sealed picture, which cannot even be
+//     REQUESTED until it is decrypted, that was the whole wait.
 //
-// Left alone, the attributes give the element a definite box in every state,
-// decoded or not, and CSS 2.1 §10.4 shrinks a replaced element's width and
-// height TOGETHER against the two caps below — so the box the skeleton holds is
-// the box the picture lands in, to the pixel.
+//   the attributes with `auto` REMOVED, so they size the box
+//     A box before the bytes, but the wrong one under pressure: with both
+//     `width` and `height` specified, `max-width` and `max-height` clamp
+//     INDEPENDENTLY, and a picture in a short pane came out squashed.
+//
+//   `aspect-ratio`, set inline from the size the build measured
+//     What is here. `width: 100%` under the two caps, `height` from the ratio,
+//     and min/max clamping transfers THROUGH the ratio, so the box is the
+//     picture's shape at every width and every height — before the bytes,
+//     while the placeholder stands in, and after it decodes. `object-fit`
+//     makes that structural rather than a promise.
+//
+// `--shot-w` stops a 200px thumbnail being blown up across a 600px pane.
 .ed-pick-stage
   display flex
   justify-content center
@@ -1653,8 +1678,11 @@ $ed-pop-h = 620px
 
   > img
     display block
+    width 100%
+    height auto
     max-width css-min(100%, var(--shot-w, 100%))
     max-height 100%
+    object-fit contain
     border-radius 10px
     transition opacity $ed-fade
 

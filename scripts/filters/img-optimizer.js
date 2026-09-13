@@ -586,6 +586,9 @@ const weights = new Map();
 // key as the site's. They are published and usable, but they are not in the
 // content repository, so the editor's browser must not offer to rename them.
 const themeOwned = new Set();
+// Extensions the encoder has no work for but the manifest must still name,
+// because the manifest is what the editor's picture browser lists.
+const LISTED = /^\.(avif|gif|webp|bmp)$/i;
 
 /**
  * The source image's own pixels, read from its header.
@@ -899,8 +902,13 @@ async function processFile(absPath, config) {
   const ext = path.extname(absPath).toLowerCase();
   const isBitmap = PathManager.isSupportedBitmap(ext);
   const isSvg = PathManager.isSupportedSvg(ext);
+  // Not a transcode candidate, but still a picture the browser renders and the
+  // author can put in a post — an AVIF committed as the source, say. It is
+  // published untouched, and the manifest is the editor's file tree, so leaving
+  // before it is named is what made it invisible in the picture browser.
+  const listable = isBitmap || isSvg || LISTED.test(ext);
 
-  if (!isBitmap && !isSvg) return;
+  if (!listable) return;
 
   let relPath;
   let fromTheme = false;
@@ -930,6 +938,8 @@ async function processFile(absPath, config) {
   } catch (e) {
     /* unreadable is the scan's problem, not this check's */
   }
+
+  if (!isBitmap && !isSvg) return;
 
   if ((isBitmap && !config.ENABLE_AVIF) || (isSvg && !config.ENABLE_SVG)) {
     uncompressed.push({ rel: relPath, why: "encoder disabled" });

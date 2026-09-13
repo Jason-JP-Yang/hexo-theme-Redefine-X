@@ -49,6 +49,7 @@
  */
 
 import * as repo from "./repo.js";
+import { dropAssetCache } from "../../tools/vaultCrypto.js";
 import { forgetAssets } from "./assets.js";
 import { forgetGrants } from "./session.js";
 import { forgetTree } from "./picker.js";
@@ -95,7 +96,14 @@ function wire() {
     } catch (err) {
       /* unreadable is as good as gone */
     }
-    if (!session || !session.token) drop();
+    if (session && session.token) return;
+    drop();
+    // Signed out is not the same as merely finished. `drop` leaves the OPEN
+    // DOCUMENT's images alone because the page behind the editor is usually
+    // still showing that article — but there is no session to be showing it
+    // to any more, and on a page where plugins/vault.js is not loaded nothing
+    // else would ever take those bytes back.
+    dropAssetCache();
   });
 
   window.addEventListener("pagehide", drop);

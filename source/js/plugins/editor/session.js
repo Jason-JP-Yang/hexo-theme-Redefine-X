@@ -27,7 +27,9 @@
 import * as repo from "./repo.js";
 import { docToMarkdown, markdownToDoc, parseFrontMatter, setFrontMatterKey } from "./markdown.js";
 import {
+  assetURL,
   b64urlToBytes,
+  dropAssetKeys,
   importAesKey,
   openText,
   openJSON,
@@ -58,6 +60,9 @@ function repoPath(p) {
 
 let grants = null;
 let sealedAll = null;
+// hash -> the grant that opens it. Held here and handed to nobody: the browser
+// asks for one picture at a time and gets a URL, never a key.
+let owners = null;
 
 /* ─── grants ───────────────────────────────────────────────────────────────── */
 
@@ -116,9 +121,16 @@ async function metaOf(grant) {
  *
  * It costs NO requests. `listDocuments` has already fetched every grant and
  * opened every `c.bin`, and both are cached on the grant objects; this walks
- * what is already in hand. Registering the key for each hash is what lets
- * `assetURL` open a picture belonging to a post other than the open one, which
- * is the whole point of a browser over the whole library.
+ * what is already in hand.
+ *
+ * ── What this deliberately does NOT do ──────────────────────────────────────
+ *
+ * It does not register a single decryption key. An earlier version registered
+ * all of them here, which quietly made every withheld picture on the site
+ * openable by anything holding a hash, for as long as the page lived — a
+ * listing is not permission to decrypt. Keys are handed to `vaultCrypto` one
+ * picture at a time, by `unlockAsset` below, when the author clicks that
+ * picture, and taken back when they click away from it.
  *
  * Keyed by published route AND source path, the two spellings `noteAsset`
  * writes, so a caller with either one finds it.
@@ -128,9 +140,16 @@ async function metaOf(grant) {
 export async function sealedIndex() {
   if (sealedAll) return sealedAll;
 
-  const granted = await loadGrants(false);
-  const metas = await Promise.all(granted.map(metaOf));
+  // FORCED when there are no grants in hand. `loadGrants` returns an empty
+  // array — which is truthy — for every reason the session was not ready yet:
+  // no `blogAuth` on the page, no token, a Worker that did not answer. Asking
+  // it again without `force` hands the same empty array back for the rest of
+  // the page's life, and the picture browser is then permanently missing every
+  // withheld picture with nothing to say it went wrong.
+  const granted = await loadGrants(!grants || !grants.length);
+  const metas = await Promise.all(granted.map((grant) => metaOf(grant)));
   const out = {};
+  const map = new Map();
 
   granted.forEach((grant, i) => {
     const meta = metas[i];
@@ -140,11 +159,38 @@ export async function sealedIndex() {
       if (!hash) continue;
       const wh = sizes[name] || [];
       out[name] = { hash, width: wh[0] || 0, height: wh[1] || 0 };
-      registerAssetKey(hash, grant.raw);
+      map.set(hash, grant);
     }
   });
 
+  if (!granted.length) return out; // nothing to cache, and nothing to unlock
+
+  owners = map;
   return (sealedAll = out);
+}
+
+/**
+ * Open ONE sealed picture, now, because the author asked to look at it.
+ *
+ * The key is registered for this hash alone and only at this moment; the caller
+ * gets a blob URL back and never the key. `relockAsset` takes it away again.
+ * Nothing is unlocked ahead of a click, so a browser left open on a folder of
+ * withheld pictures holds none of them in the clear.
+ *
+ * Returns "" when this hash belongs to no grant — including before the index
+ * has ever been built, which is the ordinary case for the open document's own
+ * images: those are registered by `setVaultAssets`, and `assetURL` finds them.
+ */
+export async function unlockAsset(hash) {
+  if (!hash) return "";
+  const grant = owners && owners.get(hash);
+  if (grant) registerAssetKey(hash, grant.raw);
+  return assetURL(hash);
+}
+
+/** Take the key and the decrypted bytes back. */
+export function relockAsset(hashes) {
+  dropAssetKeys(hashes);
 }
 
 /**
@@ -157,6 +203,7 @@ export async function sealedIndex() {
 export function forgetGrants() {
   grants = null;
   sealedAll = null;
+  owners = null;
 }
 
 /* ─── the document list ────────────────────────────────────────────────────── */
