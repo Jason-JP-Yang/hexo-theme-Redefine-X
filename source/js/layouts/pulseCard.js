@@ -3,7 +3,7 @@
  *
  * It FILLS THE CARD. The column height decides the cell size, the cell size
  * decides how many rows fit in a column, and the width then decides how many
- * columns — so the number of days fetched is a result of the measurement rather
+ * columns — so the number of days drawn is a result of the measurement rather
  * than a setting, and the grid lands on the card's box exactly.
  *
  * The rows are NOT weekdays. A seven-row calendar can only ever be as tall as
@@ -22,17 +22,17 @@
  *   The grid is therefore ABSOLUTELY POSITIONED inside the plot: it is sized
  *   down into the box it is given and contributes no height at all.
  *
- *   ONE FETCH PER SHAPE. The days the solver asks for are fetched once and kept
- *   in module state, so a resize that needs no more days re-draws from what is
- *   already in hand — and so does a page turn, which replaces the card's node
- *   but not the series behind it.
+ *   IT ASKS FOR NOTHING. The days travel with the page, as finished daily counts
+ *   the build read out of source/_data/analytics.json. This card used to fetch two
+ *   years of daily buckets from Umami in every reader's browser, which made the
+ *   analytics instance re-aggregate a year that had not changed since the last
+ *   visitor asked for it. Nothing here is async any more, so the calendar is on
+ *   screen in the first frame that has a measured box.
  *
  *   IT SURVIVES A PAGE TURN. The home paginator swaps the entire article list,
  *   the card included, so this runs again after every turn. The entrance
  *   animation does not: it belongs to the first arrival, not to every page.
  */
-
-import { analyticsReady, analyticsConfig, dailyViews } from "../tools/analytics.js";
 
 const GAP = 3;
 const CELL_MIN = 7;
@@ -46,8 +46,6 @@ const LEVELS = 5;
 let observer = null;
 let card = null;
 let series = null;
-let fetched = 0;
-let pending = 0;
 let shape = null;
 let entered = false;
 
@@ -108,6 +106,16 @@ function parseKey(key) {
   return new Date(y, m - 1, d);
 }
 
+const pad = (n) => String(n).padStart(2, "0");
+
+/**
+ * The archive's dates are UTC days, and they are drawn as the labels they are
+ * rather than converted into the reader's calendar — a count for the 13th belongs
+ * on the 13th wherever it is read.
+ */
+const dayKey = (date) =>
+  date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+
 function locale() {
   return (window.config && window.config.language) || document.documentElement.lang || undefined;
 }
@@ -129,7 +137,8 @@ function paint(fit) {
 
   const cells = fit.rows * fit.cols;
   const slice = series.slice(Math.max(0, series.length - cells));
-  // A short series is padded at the FRONT, so the last cell is still today.
+  // A short series is padded at the FRONT, so the last cell is still the most
+  // recent day the archive holds — which is yesterday, today being unfinished.
   const lead = cells - slice.length;
 
   const values = slice.map((d) => d.value);
@@ -196,16 +205,37 @@ function paint(fit) {
 
 /* ─── run ─────────────────────────────────────────────────────────────────── */
 
-function load(days) {
-  if (days <= fetched || days <= pending) return;
-  pending = days;
-  dailyViews(days).then((rows) => {
-    pending = 0;
-    if (!rows || !rows.length || !card) return;
-    series = rows;
-    fetched = rows.length;
-    if (shape) paint(shape);
-  });
+/**
+ * The days the page is carrying: `{ from: "2024-09-14", views: [0, 3, 12, …] }`,
+ * one count per day from `from` onwards with no gaps, ending yesterday.
+ *
+ * Read once and kept: a page turn replaces the card's node, and re-parsing what
+ * has not changed would be the only cost in this file.
+ */
+function readSeries() {
+  if (series) return series;
+  const node = card && card.querySelector("[data-pulse-series]");
+  if (!node) return null;
+
+  let data;
+  try {
+    data = JSON.parse(node.textContent || "null");
+  } catch {
+    return null;
+  }
+  if (!data || !Array.isArray(data.views) || !data.views.length) return null;
+
+  const start = parseKey(data.from);
+  if (isNaN(start)) return null;
+
+  const out = [];
+  for (let i = 0; i < data.views.length; i++) {
+    const at = new Date(start);
+    at.setDate(at.getDate() + i);
+    out.push({ date: dayKey(at), value: Number(data.views[i]) || 0 });
+  }
+  series = out.slice(Math.max(0, out.length - MAX_DAYS));
+  return series;
 }
 
 function measure() {
@@ -222,10 +252,7 @@ function measure() {
     return;
   }
   shape = fit;
-
-  const days = fit.rows * fit.cols;
-  if (days > fetched) load(days);
-  if (series && series.length) paint(fit);
+  if (readSeries()) paint(fit);
 }
 
 export default function initPulseCard() {
@@ -235,12 +262,15 @@ export default function initPulseCard() {
   }
   card = document.querySelector("[data-pulse]");
   shape = null;
-  if (!card || !analyticsReady() || !analyticsConfig().pulse) return;
+  // The card is only in the page at all when the build had numbers to put in it,
+  // so its presence is the whole test — no config read, no credential, nothing
+  // to be ready for.
+  if (!card) return;
 
-  // Only until the first paint, and only when there is nothing held over from
-  // before — a page turn redraws from the series already in hand, so the card
-  // must not flash empty on the way.
-  if (!series || !series.length) card.classList.add("is-blank");
+  if (!readSeries()) {
+    card.classList.add("is-blank");
+    return;
+  }
 
   const plot = card.querySelector("[data-pulse-plot]");
   if (plot && typeof ResizeObserver !== "undefined") {

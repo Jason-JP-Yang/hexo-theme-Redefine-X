@@ -34,6 +34,7 @@
  * actually produced, at `after_post_render`.
  */
 
+const path = require("path");
 const { spawnSync } = require("child_process");
 const { applyMoves, rewriteDeep } = require("../lib/image-moves");
 const { setRunMode, skipAvif, skipReason } = require("../lib/build-index");
@@ -105,6 +106,55 @@ hexo.extend.filter.register(
     pictureMoves(this);
   },
   1
+);
+
+/**
+ * The activity archive, brought up to yesterday.
+ *
+ * `after_init` and not `before_generate`, because the file it writes lives in
+ * `source/_data` — which `hexo.load()` reads immediately after this, so the days
+ * fetched here are in `site.data` for the page that ships them. One build, one
+ * read, and no reader ever asks Umami anything.
+ *
+ * Never fatal, and never destructive: no credential, no network or an instance
+ * that is down all leave the stored archive exactly as it is. See
+ * scripts/lib/analytics-archive.js.
+ */
+hexo.extend.filter.register(
+  "after_init",
+  async function () {
+    const cmd = command(this);
+    if (cmd !== "generate" && cmd !== "server" && cmd !== "deploy") return;
+
+    const theme = (this.theme && this.theme.config) || {};
+    const site = (this.config && this.config.theme_config) || {};
+    const a = theme.analytics || site.analytics || {};
+    if (a.enable !== true || a.pulse === false) return;
+
+    const { refresh } = require("../lib/analytics-archive");
+    const file = path.join(this.source_dir, "_data", "analytics.json");
+
+    let result;
+    try {
+      result = await refresh({
+        file,
+        host: a.host,
+        websiteId: a.website_id,
+        log: (line) => this.log.info(`[analytics] ${line}`),
+      });
+    } catch (err) {
+      this.log.warn(`[analytics] archive untouched: ${err.message}`);
+      return;
+    }
+
+    if (!result.ok) {
+      this.log.warn(`[analytics] archive untouched: ${result.why}`);
+    } else if (result.added) {
+      this.log.info(`[analytics] archive +${result.added} day(s), through ${result.through}.`);
+      if (result.why) this.log.warn(`[analytics] ${result.why}`);
+    }
+  },
+  5
 );
 
 /**

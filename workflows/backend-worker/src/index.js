@@ -1855,19 +1855,169 @@ app.post("/api/hooks/github", async (c) => {
 // ─── Health root (no front-end; just a liveness probe) ─────
 app.get("/", (c) => c.json({ service: "redefine-x backend worker", ok: true }));
 
+// ─── The nightly build ──────────────────────────────────────
+//
+// The site's activity card is drawn from days the BUILD read out of Umami and
+// committed, so a day only reaches the page once something rebuilds the site
+// after it has finished. Nothing else guarantees that: a week with no post is a
+// week with no build. This is what wakes it up.
+//
+// ── Which side builds it ────────────────────────────────────
+//
+// The same rule the editor uses, for the same reason: REACHABILITY and then WHO
+// IS AHEAD, never speed. A home runner's queue has nothing to do with how fast
+// its API answers, so latency picks the wrong side confidently. Diverged is
+// surfaced and nothing is dispatched — guessing there would publish one history
+// and strand the other.
+//
+// Five subrequests at the very most, against a budget of fifty.
+//
+// ── Two tokens, each where it is already contained ──────────
+//
+// Reading a branch head needs `Contents: read`, which the editor's PAT has and
+// the sync PAT deliberately does not; starting a workflow needs `Actions:
+// write`, which is the sync PAT's whole purpose. So the probe and the dispatch
+// use different credentials, and neither gains a capability it did not have.
+const GH = {
+  Accept: "application/vnd.github+json",
+  "X-GitHub-Api-Version": "2022-11-28",
+  "User-Agent": "backend-blog",
+};
+
+async function json(url, headers) {
+  const res = await fetch(url, { headers });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+function sides(env) {
+  const gitea = (() => {
+    const api = String(env.GITEA_API_URL || "").replace(/\/+$/, "");
+    const [owner, repo] = String(env.GITEA_REPO || "").split("/");
+    if (!api || !owner || !repo || !env.GITEA_TOKEN) return null;
+    const auth = { Authorization: `token ${env.GITEA_TOKEN}` };
+    const base = `${api}/repos/${owner}/${repo}`;
+    return {
+      id: "gitea",
+      head: () => json(`${base}/branches/${env.GITEA_BRANCH || "main"}`, auth)
+        .then((b) => (b && b.commit && (b.commit.id || b.commit.sha)) || null),
+      holds: (sha) => json(`${base}/git/commits/${sha}`, auth).then(Boolean),
+      start: () =>
+        fetch(
+          `${base}/actions/workflows/${env.GITEA_DEPLOY_WORKFLOW || "deploy.yml"}/dispatches`,
+          {
+            method: "POST",
+            headers: { ...auth, "Content-Type": "application/json" },
+            body: JSON.stringify({ ref: env.GITEA_BRANCH || "main" }),
+          }
+        ),
+    };
+  })();
+
+  const github = (() => {
+    const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+    const [owner, repo] = String(env.GITHUB_REPO || "").split("/");
+    if (!api || !owner || !repo) return null;
+    const base = `${api}/repos/${owner}/${repo}`;
+    const read = { ...GH, Authorization: `Bearer ${env.GITHUB_EDITOR_TOKEN}` };
+    if (!env.GITHUB_EDITOR_TOKEN || !env.GITHUB_SYNC_TOKEN) return null;
+    return {
+      id: "github",
+      head: () => json(`${base}/branches/${env.GITHUB_BRANCH || "main"}`, read)
+        .then((b) => (b && b.commit && b.commit.sha) || null),
+      holds: (sha) => json(`${base}/commits/${sha}`, read).then(Boolean),
+      start: () =>
+        fetch(
+          `${base}/actions/workflows/${env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml"}/dispatches`,
+          {
+            method: "POST",
+            headers: {
+              ...GH,
+              Authorization: `Bearer ${env.GITHUB_SYNC_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ref: env.GITHUB_BRANCH || "main" }),
+          }
+        ),
+    };
+  })();
+
+  return { gitea, github };
+}
+
+async function nightlyBuild(env) {
+  const { gitea, github } = sides(env);
+  if (!gitea && !github) return { ok: false, why: "no backend is configured" };
+
+  const [giteaHead, githubHead] = await Promise.all([
+    gitea ? gitea.head().catch(() => null) : null,
+    github ? github.head().catch(() => null) : null,
+  ]);
+
+  const up = [];
+  if (giteaHead) up.push(gitea);
+  if (githubHead) up.push(github);
+  if (!up.length) return { ok: false, why: "neither backend answered" };
+
+  let pick;
+  if (up.length === 1) {
+    pick = up[0];
+  } else if (giteaHead === githubHead) {
+    pick = (env.REPO_PREFER || "gitea") === "github" ? github : gitea;
+  } else {
+    // One request each, and it cannot be wrong: the side that HOLDS the other's
+    // commit is the side that is ahead.
+    const [giteaHasGithub, githubHasGitea] = await Promise.all([
+      gitea.holds(githubHead).catch(() => false),
+      github.holds(giteaHead).catch(() => false),
+    ]);
+    if (giteaHasGithub && !githubHasGitea) pick = gitea;
+    else if (githubHasGitea && !giteaHasGithub) pick = github;
+    else {
+      return {
+        ok: false,
+        why: `diverged: gitea ${String(giteaHead).slice(0, 7)} vs github ${String(githubHead).slice(0, 7)} — nothing dispatched`,
+      };
+    }
+  }
+
+  const res = await pick.start();
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    return { ok: false, on: pick.id, why: `dispatch ${res.status} ${detail.slice(0, 160)}` };
+  }
+  return { ok: true, on: pick.id };
+}
+
 /**
- * Cron entry point — retention only, once a day.
+ * Cron entry point — once a day, 03:40 UTC. ONE trigger, two jobs.
  *
  * It used to run every five minutes because it owned the second half of
  * SENDING: a fan-out too large for one invocation, and the retry for a push
  * service that was down. Queues owns both of those now, and owns them better —
  * it starts within seconds instead of on the next tick, and it scales out
- * instead of draining a fixed batch — so what is left here is housekeeping, and
- * housekeeping has no reason to wake up 288 times a day to find nothing to do.
+ * instead of draining a fixed batch.
+ *
+ * What is left is the inbox retention sweep and the nightly build. The build
+ * shares the trigger rather than adding one, because the hour it needs is the
+ * same hour this already runs at: safely past UTC midnight, which is the moment
+ * yesterday's analytics stopped moving and became something worth committing.
+ *
+ * Neither half can fail the other — a build dispatch that does not land is a day
+ * the archive picks up tomorrow, since the next build fetches every day it is
+ * missing rather than just the last one.
  */
 async function scheduled(event, env, ctx) {
   const stats = await pruneInboxes(env.DB);
   console.log("[notify] prune", JSON.stringify(stats));
+
+  let build;
+  try {
+    build = await nightlyBuild(env);
+  } catch (err) {
+    build = { ok: false, why: String((err && err.message) || err) };
+  }
+  console.log("[build] nightly", JSON.stringify(build));
 }
 
 /**

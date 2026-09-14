@@ -29,7 +29,13 @@
  *   NOTHING IS WIPED TO BE REDRAWN. A repaint diffs the new markup against what
  *   is on screen by key and touches only the parts that actually changed, so
  *   picking a tab does not blank the page and a chart that did not change is
- *   never redrawn.
+ *   never redrawn. Nothing is disabled while it waits either: the wait is drawn
+ *   on the panel that is waiting, and every other control stays live.
+ *
+ *   NOTHING IS ASKED FOR TWICE. Both the answers and the markup built from them
+ *   are kept for the session, so a tab, a range or a sort already looked at comes
+ *   back with no request and no frame in between. Memory only — it goes when the
+ *   session does.
  */
 
 import { escapeHTML } from "./notifications-inbox.js";
@@ -134,6 +140,15 @@ const PAGE_SIZE = 10;
 const LIST_LIMIT = 10;
 const LIST_MORE = 30;
 
+// Rendered views kept for the session. Sixty is more than a reader reaches in one
+// sitting and small enough that the whole thing is a few hundred kilobytes.
+const CACHE_MAX = 60;
+
+// Traffic and the weekly grid open on a log axis, where one outlying day does not
+// flatten the other twenty-nine. A count of events has no decades to spread, so
+// that chart has no scale picker at all.
+const SCALES = { traffic: "log", weekly: "log", events: "linear", vitals: "linear" };
+
 // Umami's own CHART_COLORS, in Umami's own order. A chart palette is not a brand
 // palette: these twelve are picked to stay apart from each other at a two-pixel
 // bar width, which is a different job from matching the site accent, and mixing
@@ -152,7 +167,13 @@ let t = (k, f) => f;
 let state = null;
 let charts = new Map();
 let chartObserver = null;
+let scrollObserver = null;
 let geo = { map: null, region: null, asked: false };
+
+// Renders in flight, so the wait can be drawn where it belongs: `bodyRuns` for a
+// change that moves the whole view, `panelRuns` keyed by the panel that asked.
+let bodyRuns = 0;
+let panelRuns = new Map();
 
 /* ─── formatting ──────────────────────────────────────────────────────────── */
 
@@ -588,8 +609,14 @@ function failure(res) {
 
 const blank = (m) => `<p class="bm-blank">${escapeHTML(m)}</p>`;
 
+/**
+ * A picker. The signature is the group and what is chosen in it — nothing else —
+ * so a repaint keeps the box, and the press that is marked on it the instant it
+ * happens is not taken back and re-applied when the answer lands.
+ */
 function seg(group, items, active, extra = "") {
-  return `<div class="bm-seg bma-seg${extra}" data-seg="${group}" role="group">${items
+  return `<div class="bm-seg bma-seg${extra}" data-seg="${group}" data-k="seg:${group}"
+    data-sig="seg:${group}|${escapeHTML(String(active))}" role="group">${items
     .map(
       ([id, text]) =>
         `<button type="button" data-seg-id="${escapeHTML(String(id))}"${
@@ -649,7 +676,9 @@ const grid = (key, inner, extra = "") =>
   `<div class="bma-grid${extra}" data-k="${key}">${inner}</div>`;
 
 function tabsOf(group, items, active) {
-  return `<div class="bma-tabs" data-k="tabs:${group}" data-tabs="${group}" role="tablist">${items
+  return `<div class="bma-tabs" data-k="tabs:${group}" data-sig="tabs:${group}|${escapeHTML(
+    String(active),
+  )}" data-tabs="${group}" role="tablist">${items
     .map(
       ([id, text]) =>
         `<button type="button" role="tab" data-tab-id="${id}"${
@@ -704,8 +733,11 @@ function listTable(items, options = {}) {
          </button>`
       : "";
 
+  // The head and every row are separate grids, so they only line up while they
+  // are told the SAME track sizes — two `auto` columns size to their own content
+  // and leave each header floating somewhere over the middle of its column.
   return `
-    <div class="bma-list">
+    <div class="bma-list${options.share === false ? " is-2" : ""}" data-k="list">
       <div class="bma-list-head">
         <span>${escapeHTML(options.head || t("a_name", "Name"))}</span>
         <span>${escapeHTML(options.metric || t("a_visitors", "Visitors"))}</span>
@@ -714,6 +746,53 @@ function listTable(items, options = {}) {
       <ol class="bma-rows">${body}</ol>
       ${more}
     </div>`;
+}
+
+const alignOf = (c) => c.align || (c.num ? "right" : "left");
+
+/**
+ * A sideways scroller with a fade at each end — the same hint a display equation
+ * gets when it runs off the side of the page, drawn in the surface's own colour so
+ * it reads as the table running out rather than as a shadow.
+ *
+ * The fades live on the OUTER box, which does not scroll, so they stay at the
+ * edges instead of travelling with the content, and each one is only shown while
+ * there is something past it. The box is keyed and SIGNED on the table's markup,
+ * so a repaint that did not change the table keeps the node — which is what keeps
+ * both the reader's scroll position and the two edge classes written onto it.
+ */
+function scrollBox(key, inner) {
+  return `<div class="bma-scrollbox" data-k="${key}" data-sig="${sign(inner)}" data-scrollbox>
+    <div class="bma-scroll" data-scroller>${inner}</div>
+    <span class="bma-scroll-fade is-left" aria-hidden="true"></span>
+    <span class="bma-scroll-fade is-right" aria-hidden="true"></span>
+  </div>`;
+}
+
+/** Which end has something past it. Two reads, no writes unless it changed. */
+function edges(box) {
+  const scroller = box.querySelector("[data-scroller]");
+  if (!scroller) return;
+  const max = scroller.scrollWidth - scroller.clientWidth;
+  const at = scroller.scrollLeft;
+  box.classList.toggle("has-left", max > 2 && at > 2);
+  box.classList.toggle("has-right", max > 2 && max - at > 2);
+}
+
+function wireScrollers() {
+  const boxes = section.querySelectorAll("[data-scrollbox]");
+  if (scrollObserver) scrollObserver.disconnect();
+  if (!boxes.length) return;
+
+  if (!scrollObserver && typeof ResizeObserver !== "undefined") {
+    scrollObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) edges(entry.target);
+    });
+  }
+  boxes.forEach((box) => {
+    edges(box);
+    if (scrollObserver) scrollObserver.observe(box);
+  });
 }
 
 /**
@@ -726,6 +805,10 @@ function listTable(items, options = {}) {
  *
  * `min` is the width below which the columns stop being readable; under it the
  * table scrolls sideways rather than crushing every column to an ellipsis.
+ *
+ * A column's alignment is decided ONCE, by `align` or by `num`, and written onto
+ * the header and the cells from the same call — a heading that sits over a column
+ * it is not aligned with is a heading for the column next to it.
  */
 function dataTable(name, cols, list, options = {}) {
   if (!list || !list.length) return blank(t("a_nodata", "Nothing in this range"));
@@ -749,7 +832,9 @@ function dataTable(name, cols, list, options = {}) {
     .map((c) => {
       const on = sort && sort.key === c.key;
       const arrow = on && sort.dir === "asc" ? "up" : "down";
-      return `<th class="bma-sortable${c.num ? " bma-num" : ""}${on ? " is-on" : ""}"
+      return `<th class="bma-sortable bma-a-${alignOf(c)}${c.num ? " bma-num" : ""}${
+        on ? " is-on" : ""
+      }"
         data-sort="${name}" data-sort-key="${escapeHTML(c.key)}"${c.num ? ' data-num="1"' : ""}
         tabindex="0" role="button" aria-sort="${
           on ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
@@ -763,28 +848,30 @@ function dataTable(name, cols, list, options = {}) {
         `<tr>${cols
           .map(
             (c) =>
-              `<td class="${c.num ? "bma-num" : ""}${c.strong ? " bma-strong" : ""}${
-                c.wide ? " is-wide" : ""
-              }">${(r[c.key] && r[c.key].html) || ""}</td>`,
+              `<td class="bma-a-${alignOf(c)}${c.num ? " bma-num" : ""}${
+                c.strong ? " bma-strong" : ""
+              }${c.wide ? " is-wide" : ""}">${(r[c.key] && r[c.key].html) || ""}</td>`,
           )
           .join("")}</tr>`,
     )
     .join("");
 
-  return `
-    <div class="bma-scroll">
-      <table class="bma-table" style="--bma-tmin:${options.min || 640}px">
-        <thead><tr>${head}</tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>`;
+  return scrollBox(
+    "tbl:" + name,
+    `<table class="bma-table" style="--bma-tmin:${options.min || 640}px">
+       <thead><tr>${head}</tr></thead>
+       <tbody>${body}</tbody>
+     </table>`,
+  );
 }
 
 function pager(name, page, count) {
   const pages = Math.max(1, Math.ceil(num(count) / PAGE_SIZE));
   if (pages <= 1 && page <= 1) return "";
   return `
-    <div class="bma-pager" data-pager="${name}">
+    <div class="bma-pager" data-k="pager:${name}" data-sig="${page}/${pages}/${num(
+      count,
+    )}" data-pager="${name}">
       <button type="button" data-step="-1"${page <= 1 ? " disabled" : ""} aria-label="${escapeHTML(
         t("a_prev", "Previous"),
       )}"><i class="fa-solid fa-chevron-left"></i></button>
@@ -809,21 +896,28 @@ function search(name, value) {
   </label>`;
 }
 
-const scaleSeg = (extra = "") =>
+/**
+ * The axis is per plot, not per page: traffic and the weekly grid want the log
+ * axis they open on, and the reader who switched one of them to linear did not
+ * ask for the other one to follow.
+ */
+const scaleOf = (id) => (state.scale[id] === "log" ? "log" : "linear");
+
+const scaleSeg = (id, extra = "") =>
   seg(
-    "scale",
+    "scale:" + id,
     [["linear", t("a_linear", "Linear")], ["log", t("a_log", "Log")]],
-    state.scale,
+    scaleOf(id),
     extra,
   );
 
 /** The unit and scale pickers a chart panel carries in its head. */
-function chartControls(options = {}) {
+function chartControls(id, options = {}) {
   const units = allowedUnits().map((u) => [u, t("a_u_" + u, u)]);
   return (
     `<div class="bma-controls">` +
     (options.unit === false || units.length < 2 ? "" : seg("unit", units, unitFor())) +
-    scaleSeg() +
+    (options.scale === false ? "" : scaleSeg(id)) +
     `</div>`
   );
 }
@@ -846,7 +940,7 @@ function chart(id, spec) {
   const sig = sign(
     id +
       "|" +
-      state.scale +
+      scaleOf(id) +
       "|" +
       (spec.unit || "") +
       "|" +
@@ -902,7 +996,7 @@ function drawChart(host, spec) {
   const off = hiddenOf(spec.id);
   const series = all.filter((s) => !off.has(s.name));
 
-  const log = state.scale === "log" && spec.log !== false;
+  const log = scaleOf(spec.id) === "log" && spec.log !== false;
   const points = all.reduce((m, s) => Math.max(m, s.data.length), 0);
 
   // The box is drawn at its measured pixel size, so its HEIGHT has to follow the
@@ -1213,7 +1307,7 @@ async function viewOverview() {
     "traffic",
     t("a_traffic_over_time", "Traffic"),
     chart("traffic", { series, unit, height: 340, label: t("a_views", "Views") }),
-    { aside: chartControls() },
+    { aside: chartControls("traffic") },
   );
 
   const [panels, compare, geoRow] = await Promise.all([
@@ -1259,7 +1353,7 @@ async function geoPanels() {
     "geo",
     panel("map", t("a_map", "Visitors by country"), worldMapPanel(rows(map)), { span: 2 }) +
       panel("weekly", t("a_weekly", "Weekly traffic"), weeklyGrid(weekly.ok ? weekly.data : null), {
-        aside: scaleSeg(" is-mini"),
+        aside: scaleSeg("weekly", " is-mini"),
       }),
     " is-two-one",
   );
@@ -1295,8 +1389,10 @@ function worldMapPanel(list) {
     })
     .join("");
 
+  // Signed, so the 174 shapes are parsed once and then left alone — and the
+  // read-out stays up while the panel beside it repaints.
   return `
-    <div class="bma-map" data-map>
+    <div class="bma-map" data-k="mapshapes" data-sig="${sign(shapes)}" data-map>
       <svg viewBox="${geo.map.VIEWBOX}" preserveAspectRatio="xMidYMid meet"
            role="img" aria-label="${escapeHTML(t("a_map", "Visitors by country"))}">${shapes}</svg>
       <div class="bma-map-tip" data-map-tip></div>
@@ -1364,7 +1460,7 @@ function weeklyGrid(data) {
   let peak = 0;
   data.forEach((day) => day.forEach((v) => (peak = Math.max(peak, num(v)))));
 
-  const log = state.scale === "log";
+  const log = scaleOf("weekly") === "log";
   const ratio = (v) => {
     const n = num(v);
     if (!n || !peak) return 0;
@@ -1392,7 +1488,7 @@ function weeklyGrid(data) {
     return `<div class="bma-week-row"><span>${h % 3 ? "" : hour(h)}</span>${cells}</div>`;
   }).join("");
 
-  return `<div class="bma-week">${head}${body}</div>`;
+  return `<div class="bma-week" data-k="weekgrid" data-sig="${sign(body)}">${head}${body}</div>`;
 }
 
 /* ─── compare ─────────────────────────────────────────────────────────────── */
@@ -1497,7 +1593,7 @@ async function viewEvents() {
   else if (tab === "properties") body = await eventProperties();
   else {
     body = await eventsChart();
-    aside = chartControls();
+    aside = chartControls("events", { scale: false });
   }
 
   return bar + panel("events", t("a_events", "Events"), head + body, { aside });
@@ -1537,7 +1633,13 @@ async function eventsChart() {
   );
 
   return (
-    chart("events", { series: stacks, unit, height: 320, label: t("a_events_fired", "Events") }) +
+    chart("events", {
+      series: stacks,
+      unit,
+      height: 320,
+      log: false,
+      label: t("a_events_fired", "Events"),
+    }) +
     listTable(rows(totals), {
       type: "event",
       head: t("a_event", "Event"),
@@ -1808,7 +1910,7 @@ async function viewPerformance() {
       "percentile",
       PERCENTILES.map((x) => [x, x]),
       p,
-    )}<span class="bm-hint">${escapeHTML(
+    )}<span class="bm-hint" data-k="samples">${escapeHTML(
       t("a_samples", "Samples") + ": " + full(summary.count),
     )}</span></div>` +
     cards +
@@ -1816,7 +1918,7 @@ async function viewPerformance() {
       "vitals",
       VITAL_NAMES[state.metric] || spec[1],
       chart("vitals", { series, unit, height: 320, format, label: spec[1] }),
-      { aside: chartControls() },
+      { aside: chartControls("vitals") },
     ) +
     grid(
       "perf",
@@ -1850,7 +1952,9 @@ async function viewBreakdown() {
 
   const list = Array.isArray(res.data) ? res.data : (res.data && res.data.data) || [];
 
-  const picker = `<div class="bma-fields">${BREAKDOWN_FIELDS.map(
+  const picker = `<div class="bma-fields" data-k="fields" data-sig="${escapeHTML(
+    state.fields.join(","),
+  )}">${BREAKDOWN_FIELDS.map(
     ([f, key]) =>
       `<button type="button" data-field="${f}"${
         state.fields.includes(f) ? ' class="is-on"' : ""
@@ -1894,7 +1998,7 @@ async function viewBreakdown() {
     "breakdown",
     t("a_breakdown", "Breakdown"),
     picker +
-      `<p class="bm-hint">${escapeHTML(
+      `<p class="bm-hint" data-k="breakNote">${escapeHTML(
         t("a_break_note", "Pick the dimensions to cross. At least one, at most four."),
       )}</p>` +
       dataTable("breakdown", cols, table, { min: 260 + cols.length * 110 }),
@@ -2046,36 +2150,84 @@ function patch(host, html) {
   }
 }
 
-async function paint() {
-  const body = section.querySelector("[data-a-body]");
-  if (!body) return;
+/**
+ * Everything a view's render reads, in one string.
+ *
+ * The clock is in it through the range's end, so the 24-hour view — whose buckets
+ * move every minute — misses rather than serving an hour that has gone, while a
+ * range of a day or more is stable until midnight.
+ */
+function renderKey() {
+  return JSON.stringify([
+    state.view,
+    state.days,
+    rangeOf(state.days).endAt,
+    unitFor(),
+    state.scale,
+    state.metric,
+    state.percentile,
+    state.compareField,
+    state.fields,
+    state.tab,
+    state.page,
+    state.search,
+    state.more,
+    state.sort,
+    !!geo.map,
+  ]);
+}
 
-  const token = ++state.seq;
-
-  // A view change has nothing on screen worth keeping, so its frames go up
-  // immediately and the answer fills them in; a change WITHIN a view keeps what
-  // is there and only dims it.
-  if (body.dataset.view !== state.view) {
-    body.dataset.view = state.view;
-    charts = new Map();
-    if (chartObserver) {
-      chartObserver.disconnect();
-      chartObserver = null;
-    }
-    patch(body, skeleton(state.view));
+/** The chart specs this markup needs, so a cached view can still draw its plots. */
+function snapshotCharts(html) {
+  const out = new Map();
+  const find = /data-chart="([^"]+)"/g;
+  let hit;
+  while ((hit = find.exec(html))) {
+    const spec = charts.get(hit[1]);
+    if (spec) out.set(hit[1], spec);
   }
-  body.classList.add("is-busy");
+  return out;
+}
 
-  let html;
-  try {
-    html = await RENDER[state.view]();
-  } catch {
-    html = failure({ status: 0 });
-  }
+function remember(key, entry) {
+  state.html.delete(key);
+  state.html.set(key, entry);
+  while (state.html.size > CACHE_MAX) state.html.delete(state.html.keys().next().value);
+}
 
-  // A slower earlier request must not paint over a faster later one.
-  if (token !== state.seq) return;
+/** Session-scoped and in memory only: a reader's dashboard is not left on disk. */
+function forget() {
+  if (!state) return;
+  state.cache.clear();
+  state.html.clear();
+}
 
+/** The part of the page a control belongs to, or null when it moves all of it. */
+function scopeOf(origin) {
+  if (!origin || !origin.closest) return null;
+  const box = origin.closest(".bma-panel") || origin.closest(".bma-bar, .bma-metrics");
+  return box && box.getAttribute("data-k") && section.contains(box) ? box : null;
+}
+
+/**
+ * Draw the wait where it is being waited for.
+ *
+ * Nothing is disabled and nothing is dimmed: the panel that asked carries a
+ * hairline of its own until its answer lands, every other panel is untouched, and
+ * every control — including the one just pressed — stays live throughout.
+ */
+function applyBusy(body) {
+  body.classList.toggle("is-busy", bodyRuns > 0);
+  body.querySelectorAll(".is-loading").forEach((node) => {
+    if (!panelRuns.has(node.getAttribute("data-k"))) node.classList.remove("is-loading");
+  });
+  panelRuns.forEach((_, key) => {
+    const box = body.querySelector(`[data-k="${key}"]`);
+    if (box) box.classList.add("is-loading");
+  });
+}
+
+function settle(body, html) {
   // A search box repaints its own view, so without this a reader loses the
   // caret on the first keystroke and types the rest of the word into nothing.
   const focused = document.activeElement;
@@ -2084,9 +2236,15 @@ async function paint() {
       ? { name: focused.getAttribute("data-search"), at: focused.selectionStart }
       : null;
 
+  // Off before the diff and back on after it: a panel still carrying the class
+  // would not match its own incoming markup, and would be rebuilt rather than
+  // recognised. `applyBusy` puts it back on whatever is still waiting.
+  body.querySelectorAll(".is-loading").forEach((node) => node.classList.remove("is-loading"));
+
   patch(body, html);
-  body.classList.remove("is-busy");
+  applyBusy(body);
   paintCharts();
+  wireScrollers();
 
   if (keep) {
     const input = body.querySelector(`[data-search="${keep.name}"]`);
@@ -2103,12 +2261,81 @@ async function paint() {
   } catch {}
 }
 
-/** The head pickers live outside the body, so their state is not repainted. */
-function markOn(group, button) {
-  section.querySelectorAll(`[data-seg="${group}"]`).forEach((box) => {
-    box.querySelectorAll("button").forEach((b) => b.classList.remove("is-on"));
+/** @param {Element} [origin] the control that asked, if one did. */
+async function paint(origin) {
+  const body = section.querySelector("[data-a-body]");
+  if (!body) return;
+
+  const key = renderKey();
+  const hit = state.html.get(key);
+  const token = ++state.seq;
+
+  // A view change has nothing on screen worth keeping, so its frames go up
+  // immediately and the answer fills them in — unless the answer is already
+  // here, in which case there is no moment to cover.
+  if (body.dataset.view !== state.view) {
+    body.dataset.view = state.view;
+    charts = new Map();
+    if (chartObserver) {
+      chartObserver.disconnect();
+      chartObserver = null;
+    }
+    if (!hit) patch(body, skeleton(state.view));
+  }
+
+  if (hit) {
+    for (const [id, spec] of hit.specs) charts.set(id, spec);
+    settle(body, hit.html);
+    return;
+  }
+
+  const scope = scopeOf(origin);
+  const scopeKey = scope && scope.getAttribute("data-k");
+  if (scopeKey) panelRuns.set(scopeKey, (panelRuns.get(scopeKey) || 0) + 1);
+  else bodyRuns += 1;
+  applyBusy(body);
+
+  let html;
+  try {
+    html = await RENDER[state.view]();
+  } catch {
+    html = failure({ status: 0 });
+  } finally {
+    if (scopeKey) {
+      const left = (panelRuns.get(scopeKey) || 1) - 1;
+      if (left > 0) panelRuns.set(scopeKey, left);
+      else panelRuns.delete(scopeKey);
+    } else bodyRuns = Math.max(0, bodyRuns - 1);
+  }
+
+  // A slower earlier request must not paint over a faster later one.
+  if (token !== state.seq) {
+    applyBusy(body);
+    return;
+  }
+
+  remember(key, { html, specs: snapshotCharts(html) });
+  settle(body, html);
+}
+
+/**
+ * Mark the press NOW, not when the answer arrives.
+ *
+ * A picker that only lights up once its data lands reads as a control that
+ * ignored the first press, which is what makes a reader press it again. The
+ * box's signature is moved with it, so the repaint recognises the box and keeps
+ * it rather than replacing what was just marked.
+ */
+function markOn(box, button, active) {
+  box.querySelectorAll("button").forEach((b) => {
+    const on = b === button;
+    b.classList.toggle("is-on", on);
+    if (!box.hasAttribute("data-tabs")) return;
+    if (on) b.setAttribute("aria-selected", "true");
+    else b.removeAttribute("aria-selected");
   });
-  button.classList.add("is-on");
+  const sig = box.getAttribute("data-sig");
+  if (sig) box.setAttribute("data-sig", sig.split("|")[0] + "|" + active);
 }
 
 function wire() {
@@ -2145,42 +2372,52 @@ function wire() {
         current && current.key === col
           ? { key: col, dir: current.dir === "asc" ? "desc" : "asc" }
           : { key: col, dir: sortTh.hasAttribute("data-num") ? "desc" : "asc" };
-      paint();
+      paint(sortTh);
       return;
     }
 
     const segBtn = target.closest("[data-seg] [data-seg-id]");
     if (segBtn) {
-      const group = segBtn.closest("[data-seg]").getAttribute("data-seg");
+      const box = segBtn.closest("[data-seg]");
+      const group = box.getAttribute("data-seg");
       const value = segBtn.getAttribute("data-seg-id");
+      // The view and the range move everything; the rest move one panel.
+      let whole = false;
+
       if (group === "view") {
         state.view = value;
-        markOn(group, segBtn);
+        whole = true;
       } else if (group === "days") {
         state.days = Number(value);
-        // The range moves every series, and it can move the unit out from under
-        // the picker as well.
-        state.cache.clear();
+        // The range can move the unit out from under its own picker. The answers
+        // are NOT dropped: they are keyed by the span they were asked for, so
+        // coming back to a range already looked at costs nothing.
         if (!allowedUnits().includes(state.unit)) state.unit = null;
-        markOn(group, segBtn);
+        whole = true;
       } else if (group === "unit") state.unit = value;
-      else if (group === "scale") state.scale = value;
-      else if (group === "percentile") state.percentile = value;
-      else if (group === "compareField") state.compareField = value;
+      else if (group.startsWith("scale:")) state.scale[group.slice(6)] = value;
+      else if (group === "percentile") {
+        state.percentile = value;
+        whole = true;
+      } else if (group === "compareField") state.compareField = value;
       else {
         state.tab[group] = value;
         if (group === "propEvent") state.tab.propName = null;
         if (group === "eventsView") state.page.events = 1;
       }
-      paint();
+
+      markOn(box, segBtn, value);
+      paint(whole ? null : segBtn);
       return;
     }
 
     const tab = target.closest("[data-tabs] [data-tab-id]");
     if (tab) {
-      state.tab[tab.closest("[data-tabs]").getAttribute("data-tabs")] =
-        tab.getAttribute("data-tab-id");
-      paint();
+      const box = tab.closest("[data-tabs]");
+      const value = tab.getAttribute("data-tab-id");
+      state.tab[box.getAttribute("data-tabs")] = value;
+      markOn(box, tab, value);
+      paint(tab);
       return;
     }
 
@@ -2188,7 +2425,7 @@ function wire() {
     if (more) {
       const name = more.getAttribute("data-more");
       state.more[name] = !state.more[name];
-      paint();
+      paint(more);
       return;
     }
 
@@ -2208,7 +2445,7 @@ function wire() {
       // Crossing nothing is not a breakdown; keep the last dimension standing.
       state.fields = next.length ? next : state.fields;
       state.sort.breakdown = null;
-      paint();
+      paint(field);
       return;
     }
 
@@ -2219,7 +2456,7 @@ function wire() {
         1,
         (state.page[name] || 1) + Number(step.getAttribute("data-step")),
       );
-      paint();
+      paint(step);
     }
   });
 
@@ -2234,6 +2471,18 @@ function wire() {
 
   section.addEventListener("pointermove", wireMap);
 
+  // A scroll event does not bubble, but it IS seen on the way down, so one
+  // capturing listener serves every table without touching a single node — and
+  // attributes written onto a scroller would make the next diff replace it.
+  section.addEventListener(
+    "scroll",
+    (event) => {
+      const box = event.target.closest && event.target.closest("[data-scrollbox]");
+      if (box) edges(box);
+    },
+    true,
+  );
+
   // Typed search, settled: one request when the typing stops, not one per key.
   let timer = null;
   section.addEventListener("input", (event) => {
@@ -2244,7 +2493,7 @@ function wire() {
     timer = setTimeout(() => {
       state.search[name] = input.value.trim();
       state.page[name] = 1;
-      paint();
+      paint(input);
     }, 350);
   });
 }
@@ -2281,7 +2530,7 @@ export function initManagementAnalytics(host, consoleEl, translate) {
     view: "overview",
     days: 30,
     unit: null,
-    scale: "linear",
+    scale: { ...SCALES },
     metric: "lcp",
     percentile: "p75",
     compareField: "path",
@@ -2293,12 +2542,19 @@ export function initManagementAnalytics(host, consoleEl, translate) {
     sort: {},
     hidden: {},
     cache: new Map(),
+    html: new Map(),
     seq: 0,
   };
   charts = new Map();
+  bodyRuns = 0;
+  panelRuns = new Map();
   if (chartObserver) {
     chartObserver.disconnect();
     chartObserver = null;
+  }
+  if (scrollObserver) {
+    scrollObserver.disconnect();
+    scrollObserver = null;
   }
 
   // The credential is asked for once, ahead of the first view, so several
@@ -2309,4 +2565,13 @@ export function initManagementAnalytics(host, consoleEl, translate) {
   wire();
   paint();
   loadGeo(host);
+}
+
+// The session's own answers, and they leave with the session: the page going
+// away, or the credential behind them being given up.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", forget);
+  window.addEventListener("blog:auth-change", () => {
+    if (!window.blogAuth || !window.blogAuth.isAdmin) forget();
+  });
 }

@@ -17,11 +17,17 @@ keep_vars = true
 pattern = "backend.example.com"
 custom_domain = true
 
-# ─── Cron: retention only ───────────────────────────────────
-# Once a day, 03:40 UTC. This used to run every five minutes because it carried
-# the second half of SENDING; Queues does that now, and does it within seconds
-# instead of on the next tick. What is left is the inbox retention sweep, which
-# has no reason to wake up 288 times a day to find nothing expired.
+# ─── Cron: retention, and the nightly build ─────────────────
+# ONE trigger, once a day, 03:40 UTC — not two. It used to run every five minutes
+# because it carried the second half of SENDING; Queues does that now, and within
+# seconds instead of on the next tick.
+#
+# What is left is the inbox retention sweep and the nightly site build. The build
+# wants exactly this hour anyway: safely past UTC midnight, which is when
+# yesterday's analytics stopped moving and became a day worth committing. The site
+# is rebuilt so that day reaches the home page's activity card, which is drawn
+# from what the build committed and not from a reader's request. Which side builds
+# it is decided the way the editor decides — reachability, then who is ahead.
 [triggers]
 crons = ["40 3 * * *"]
 
@@ -110,6 +116,16 @@ SITE_URL = "https://blog.example.com"
 # byte-identical to `notifications.vapid_public_key` in the theme config; a
 # mismatch makes every push fail with 401/403 at the push service.
 VAPID_PUBLIC_KEY = ""
+
+# ─── The nightly build ──────────────────────────────────────
+# Which workflow the daily cron starts on each backend, and which side wins when
+# both are reachable at the same commit. The editor's repository variables
+# (GITEA_API_URL, GITEA_REPO, GITEA_BRANCH and the GITHUB_* pair) are what say
+# WHERE; these two say WHAT to start. Leave them out and both default to
+# "deploy.yml".
+GITEA_DEPLOY_WORKFLOW = "deploy.yml"
+GITHUB_DEPLOY_WORKFLOW = "deploy.yml"
+REPO_PREFER = "gitea"
 
 # ─── Secrets (do NOT put values here; set via Wrangler) ─────
 # HMAC signing key for session tokens. Any long random value:

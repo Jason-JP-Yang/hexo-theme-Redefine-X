@@ -1505,8 +1505,9 @@ $ed-pop-h = 620px
     background var(--primary-color)
     color $ed-on-primary
 
-    i,
-    .ed-pick-icon,
+    // `i` stays on this line: a nested list that OPENS with a bare element name
+    // and a comma is lexed as a property, and the whole rule was being dropped.
+    i, .ed-pick-icon,
     .ed-pick-twist,
     .ed-pick-name
       color $ed-on-primary

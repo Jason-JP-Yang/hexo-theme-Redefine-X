@@ -1,14 +1,22 @@
 <%#
     The activity card — one cell of the home grid's furniture row.
 
-    The frame, the month rule's empty track and the legend are rendered here;
-    the calendar is not, because it cannot know its own shape until the row has
-    been measured. The cell size comes from the height the row hands the card,
-    the row count from the cell size and the column count from the width
+    THE NUMBERS TRAVEL WITH THE PAGE. They are finished days out of
+    source/_data/analytics.json, written by the build (scripts/lib/analytics-archive.js),
+    so the card costs a reader no analytics request at all — it used to ask Umami
+    for two years of daily buckets from every browser that opened the home page.
+    One start date and a dense run of counts, ending YESTERDAY: today is still
+    being counted and is not stored.
+
+    The frame, the month rule's empty track and the legend are rendered here; the
+    calendar is not, because it cannot know its own shape until the row has been
+    measured. The cell size comes from the height the row hands the card, the row
+    count from the cell size and the column count from the width
     (layouts/pulseCard.js).
 %>
 <div class="sidebar-pulse" data-pulse data-l-title="<%= __('analytics.activity') %>"
      data-ux="bento" data-ux-card="activity">
+    <script type="application/json" data-pulse-series><%- pulseSeries() %></script>
     <div class="pulse-head">
         <span class="pulse-title"><%= __('analytics.activity') %></span>
         <span class="pulse-legend" aria-hidden="true">

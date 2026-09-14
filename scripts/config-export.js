@@ -38,9 +38,10 @@ hexo.extend.helper.register("export_config", function () {
     // point every Worker call at `wrangler dev`. No secret is ever in here —
     // GISCUS_AUTHOR_PAT and VAULT_MASTER live in .env and never leave Node.
     backend: this.theme.backend,
-    // Umami's host, website id and PUBLIC share slug. Everything here is already
-    // visible to anyone who opens the tracker script; the admin credential is a
-    // Worker secret and never travels through this file.
+    // Umami's host and website id — already visible to anyone who opens the
+    // tracker script. No credential travels through here: the admin bearer is a
+    // Worker secret, and the activity card's numbers are written into
+    // source/_data/analytics.json at build time rather than fetched by a reader.
     analytics: this.theme.analytics,
     developer: this.theme.developer,
 

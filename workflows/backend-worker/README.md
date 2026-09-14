@@ -537,7 +537,12 @@ read them, never what any of them is called.
 Retires a draft's key when the draft is published or deleted, and returns the
 re-sealed keyring so the same commit that removes the file removes the key.
 
-### Retention (cron, 03:40 UTC daily)
+### The daily cron (03:40 UTC) — two jobs, one trigger
+
+The hour is not arbitrary and it is shared deliberately: 03:40 UTC is safely past
+UTC midnight, which is the moment yesterday's analytics stopped moving.
+
+#### Retention
 
 One round trip, four statements, in this order because each depends on what the
 previous left behind:
@@ -552,6 +557,36 @@ previous left behind:
 4. **Delete orphan devices** — subscriptions whose owner unfollowed, **except
    banned ones**. Those stay: it is why unfollow leaves them behind, and a sweep
    that removed them would hand back the one-click escape the ban closes.
+
+#### The nightly build
+
+The site's activity card is drawn from days the BUILD read out of Umami and
+committed to `source/_data/analytics.json` — no reader ever asks the analytics
+instance anything. A day therefore only reaches the page once something rebuilds
+the site after that day has finished, and nothing else guarantees that: a week
+with no post is a week with no build. This is what wakes it up.
+
+Which side builds it follows the editor's rule, for the editor's reason —
+**reachability, then who is ahead, never speed**. A home runner's queue has
+nothing to do with how fast its API answers.
+
+1. Read both branch heads. Neither answering ends it.
+2. One reachable → that one. Both reachable and level → `REPO_PREFER`.
+3. Both reachable and different → ask each side whether it holds the other's
+   commit. The one that does is ahead and builds.
+4. Neither holds the other → **diverged**; nothing is dispatched and the log says
+   both heads. Guessing there would publish one history and strand the other.
+
+Then `POST …/actions/workflows/<deploy workflow>/dispatches`. Both `deploy.yml`
+files already accept `workflow_dispatch`, and the run's reseal commit carries
+`Build-on: done`, so it cannot start a second build on the other side.
+
+Two tokens, each where it is already contained: reading a branch head needs
+`Contents: read` (`GITHUB_EDITOR_TOKEN`), starting a workflow needs `Actions:
+write` (`GITHUB_SYNC_TOKEN`). Neither gains a capability it did not have.
+
+A dispatch that does not land costs one day of latency, not a day of data: the
+next build fetches **every** day the archive is missing, not just the last one.
 
 ### Webhook
 
@@ -702,7 +737,7 @@ with `blogAuth.backend` in the console.
 | Instant notes admin | **yes** | Writes land in the local D1. |
 | Masonry likes | **yes**, via production | They only use the stateless giscus proxy, so they stay on the deployed Worker. Nothing is written there. |
 | Queue consumer | **yes** | `wrangler dev` runs the consumer locally against the same process, so a local ingest really does send. |
-| Cron sweep | **no** | `wrangler dev` does not fire triggers. Use `wrangler dev --test-scheduled` and hit `/__scheduled`. It is retention only — nothing is sent from it. |
+| Cron sweep | **no** | `wrangler dev` does not fire triggers. Use `wrangler dev --test-scheduled` and hit `/__scheduled`. Nothing is *sent* from it, but it does **dispatch a real build** — unset `GITEA_TOKEN`/`GITHUB_SYNC_TOKEN` locally unless that is what you are testing. |
 | GitHub webhook | **no** | GitHub cannot reach localhost. `POST /api/admin/notify/ingest` runs the same ingest. |
 
 ### A full local round trip
