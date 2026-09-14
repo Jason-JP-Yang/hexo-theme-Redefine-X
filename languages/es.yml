@@ -273,6 +273,7 @@ management:
   a_log: Log
   a_less: Menos
   a_more: Más
+  a_sort: Ordenar por
   a_u_hour: Hora
   a_u_day: Día
   a_u_month: Mes
@@ -424,3 +425,5 @@ vault:
   view_draft: Ver el borrador
 analytics:
   activity: Actividad del blog
+  less: Menos
+  more: Más

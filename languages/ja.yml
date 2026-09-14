@@ -273,6 +273,7 @@ management:
   a_log: 対数
   a_less: 閉じる
   a_more: もっと見る
+  a_sort: 並べ替え
   a_u_hour: 時間
   a_u_day: 日
   a_u_month: 月
@@ -424,3 +425,5 @@ vault:
   view_draft: 下書きを見る
 analytics:
   activity: ブログの活動
+  less: 少
+  more: 多

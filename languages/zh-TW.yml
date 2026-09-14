@@ -275,6 +275,7 @@ management:
   a_log: 對數
   a_less: 收合
   a_more: 展開
+  a_sort: 排序方式
   a_u_hour: 小時
   a_u_day: 天
   a_u_month: 月
@@ -426,3 +427,5 @@ vault:
   view_draft: 查看草稿
 analytics:
   activity: 部落格活躍度
+  less: 少
+  more: 多

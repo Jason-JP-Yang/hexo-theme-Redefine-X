@@ -274,6 +274,7 @@ management:
   a_log: Log
   a_less: Less
   a_more: More
+  a_sort: Sort by
   a_u_hour: Hour
   a_u_day: Day
   a_u_month: Month
@@ -648,3 +649,5 @@ editor:
   pick_moved: Moving from
 analytics:
   activity: Blog Activity
+  less: Less
+  more: More

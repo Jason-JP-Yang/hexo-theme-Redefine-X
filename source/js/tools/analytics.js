@@ -318,7 +318,9 @@ async function dayChunk(from, to) {
  * weeks and every date after the first gap would be wrong.
  */
 export async function dailyViews(days) {
-  const span = Math.max(1, Math.min(400, days | 0));
+  // Two years, in 180-day pieces. The ceiling is only there so a mis-measured
+  // card cannot ask for a decade; the card itself asks for what it can draw.
+  const span = Math.max(1, Math.min(760, days | 0));
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 

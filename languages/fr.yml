@@ -273,6 +273,7 @@ management:
   a_log: Log
   a_less: Moins
   a_more: Plus
+  a_sort: Trier par
   a_u_hour: Heure
   a_u_day: Jour
   a_u_month: Mois
@@ -424,3 +425,5 @@ vault:
   view_draft: Voir le brouillon
 analytics:
   activity: Activité du blog
+  less: Moins
+  more: Plus

@@ -276,6 +276,7 @@ management:
   a_log: 对数
   a_less: 收起
   a_more: 展开
+  a_sort: 排序方式
   a_u_hour: 小时
   a_u_day: 天
   a_u_month: 月
@@ -650,3 +651,5 @@ editor:
   pick_moved: 移动自
 analytics:
   activity: 博客活跃度
+  less: 少
+  more: 多

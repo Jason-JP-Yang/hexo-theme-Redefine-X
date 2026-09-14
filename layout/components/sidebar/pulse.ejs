@@ -1,18 +1,27 @@
 <%#
     The activity card — one cell of the home grid's furniture row.
 
-    Nothing is rendered here but the frame and its one label. The calendar is
-    drawn by layouts/pulseCard.js, which cannot know its own shape until the row
-    has been measured: the cell size comes from the height the row hands it and
-    the day count from the width, so neither is expressible here.
+    The frame, the month rule's empty track and the legend are rendered here;
+    the calendar is not, because it cannot know its own shape until the row has
+    been measured. The cell size comes from the height the row hands the card,
+    the row count from the cell size and the column count from the width
+    (layouts/pulseCard.js).
 %>
 <div class="sidebar-pulse" data-pulse data-l-title="<%= __('analytics.activity') %>"
      data-ux="bento" data-ux-card="activity">
     <div class="pulse-head">
         <span class="pulse-title"><%= __('analytics.activity') %></span>
+        <span class="pulse-legend" aria-hidden="true">
+            <em><%= __('analytics.less') %></em>
+            <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><i class="l5"></i>
+            <em><%= __('analytics.more') %></em>
+        </span>
     </div>
     <div class="pulse-plot" data-pulse-plot>
-        <div class="pulse-grid" data-pulse-grid role="img"
-             aria-label="<%= __('analytics.activity') %>"></div>
+        <div class="pulse-canvas">
+            <div class="pulse-months" data-pulse-months aria-hidden="true"></div>
+            <div class="pulse-grid" data-pulse-grid role="img"
+                 aria-label="<%= __('analytics.activity') %>"></div>
+        </div>
     </div>
 </div>

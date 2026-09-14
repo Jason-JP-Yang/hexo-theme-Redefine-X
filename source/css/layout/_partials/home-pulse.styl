@@ -3,12 +3,19 @@
 // ── The activity card ────────────────────────────────────────────────────────
 //
 // The third card of the home grid's furniture row, and the only one whose
-// contents are decided at runtime — the cell size is the height the row hands it
-// divided by seven, and how many days fit is what is left of the width
+// contents are decided at runtime — the cell size is what the card's height
+// affords under a fifteen-pixel ceiling, the row count follows from the cell
+// size, and how many columns fit is what is left of the width
 // (layouts/pulseCard.js).
 //
 // Written at the top level for the same reason the other two are: the cards have
 // two homes, the classic rail and a grid cell, and they are identical in both.
+//
+// THE CALENDAR IS ABSOLUTELY POSITIONED. It has to be: the furniture row is
+// pinned to the tallest card in it, so a grid that contributed its own height
+// would stretch the row, and the stretched row would hand the card a taller box
+// to solve against, which would stretch it again. Out of flow, the grid can only
+// ever be sized DOWN into the box it is given.
 //
 // Every colour on this card is mixed from --primary-color against the card's own
 // ground, so the five levels follow the accent, light and dark, without a single
@@ -26,7 +33,7 @@
 
   display flex
   flex-direction column
-  gap 10px
+  gap 8px
   min-height 0
   overflow hidden
 
@@ -49,9 +56,11 @@
 
 .pulse-head
   display flex
-  align-items baseline
+  align-items center
+  justify-content space-between
   gap 10px
   flex 0 0 auto
+  min-width 0
 
 .pulse-title
   font-size 0.74rem
@@ -60,10 +69,43 @@
   text-transform uppercase
   color var(--third-text-color)
   white-space nowrap
+  overflow hidden
+  text-overflow ellipsis
+  padding 3px 0 0 8px
 
-// The plot owns every pixel left between the label and the card's own padding,
-// and hands all of it to the calendar: seven rows fill the height exactly, and
-// the day count is whatever the width then allows.
+// The key to the ramp. Without it the card shows five shades of the accent and
+// never says which end is which.
+.pulse-legend
+  display flex
+  align-items center
+  gap 3px
+  flex 0 0 auto
+  padding 3px 0 0 5px
+
+  em
+    font-style normal
+    font-size 0.6rem
+    letter-spacing 0.02em
+    color var(--third-text-color)
+
+  i
+    width 9px
+    height 9px
+    border-radius 2px
+    background var(--pulse-empty)
+
+    &.l1
+      background var(--pulse-1)
+    &.l2
+      background var(--pulse-2)
+    &.l3
+      background var(--pulse-3)
+    &.l4
+      background var(--pulse-4)
+    &.l5
+      background var(--pulse-5)
+
+// The plot owns every pixel left between the head and the card's own padding.
 //
 // `min-height` is not a nicety: in the wide grid the tile's row gives this box
 // its height, but in the one-column layout the tile is content-sized and a pure
@@ -71,21 +113,47 @@
 .pulse-plot
   position relative
   flex 1 1 auto
-  display flex
-  align-items center
-  justify-content center
-  min-height 92px
+  min-height 96px
   overflow hidden
 
-// Weeks run across, weekdays down — seven rows, and as many columns as the
-// measured width allows. The track sizes come from the solver as custom
-// properties so the grid itself needs no inline styles per cell.
+// Out of flow and centred on the plot. Shrink-to-fit, so its width is the
+// grid's own and the month rule above it lines up with the columns.
+.pulse-canvas
+  position absolute
+  top 50%
+  left 50%
+  transform translate(-50%, -50%)
+  display flex
+  flex-direction column
+  gap 3px
+
+// A month label marks the column its month begins in and runs to the right of
+// it; the labels are placed by the solver, which is the only thing that knows
+// how wide a column is.
+.pulse-months
+  position relative
+  height 12px
+  overflow visible
+
+  span
+    position absolute
+    top 0
+    font-size 0.58rem
+    font-weight 600
+    letter-spacing 0.03em
+    line-height 12px
+    color var(--third-text-color)
+    white-space nowrap
+
+// Columns run across, days down each column — as many rows as the height takes,
+// and as many columns as the measured width allows. The track sizes are written
+// inline by the solver.
 .pulse-grid
   display grid
   grid-auto-flow column
   grid-template-rows repeat(7, var(--pulse-cell, 10px))
   grid-auto-columns var(--pulse-cell, 10px)
-  gap var(--pulse-gap, 2px)
+  gap var(--pulse-gap, 3px)
 
 .pulse-day
   position relative
@@ -104,17 +172,17 @@
   &.l5
     background var(--pulse-5)
 
-  // Days after today. They hold their cell so the weekday rows stay aligned, and
-  // show nothing at all — an empty-looking day that has not happened yet reads as
-  // a quiet day, which is a lie.
-  &.is-future
+  // Padding at the front, when the series is shorter than the grid. It holds its
+  // cell so the columns stay aligned and shows nothing at all — an empty-looking
+  // day that was never measured reads as a quiet day, which is a lie.
+  &.is-empty
     background none
 
   // No tooltip: the cell lifting is the whole feedback. The outline is what lets
   // a grown cell clear its neighbours when the gap alone cannot.
-  &:not(.is-future):hover
+  &:not(.is-empty):hover
     z-index 2
-    transform scale(1.22)
+    transform scale(1.28)
     outline 2px solid var(--pulse-ground)
 
 // The grid paints in one wave on first fill. Column-staggered rather than
@@ -122,7 +190,7 @@
 // independent dots.
 .pulse-grid.is-entering .pulse-day
   animation pulse-day-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both
-  animation-delay calc(var(--pulse-col, 0) * 9ms)
+  animation-delay calc(var(--pulse-col, 0) * 7ms)
 
 @keyframes pulse-day-in
   from

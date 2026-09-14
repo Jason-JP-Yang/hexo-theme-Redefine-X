@@ -1,31 +1,46 @@
 /**
  * The activity card's calendar.
  *
- * Weeks across, weekdays down, and it FILLS THE CARD: seven rows are sized to
- * consume the whole height the row hands this cell, and the number of weeks is
- * then whatever the width allows. So the cell size is a function of the height
- * and the day count a function of the width — neither is a setting, and the
- * number of days fetched is decided by the measurement rather than the other way
- * round.
+ * It FILLS THE CARD. The column height decides the cell size, the cell size
+ * decides how many rows fit in a column, and the width then decides how many
+ * columns — so the number of days fetched is a result of the measurement rather
+ * than a setting, and the grid lands on the card's box exactly.
  *
- * Two things this file is careful about:
+ * The rows are NOT weekdays. A seven-row calendar can only ever be as tall as
+ * seven cells allow, which on a card this shape means either a stubby grid or
+ * cells the size of buttons; letting the column run to whatever length the
+ * height affords keeps the cells small and the card full at any size. The price
+ * is that a column is not a week — which costs nothing here, because the reading
+ * this card offers is the shape of a year, and the month rule along the top is
+ * what carries the dates.
  *
- *   IT MUST NOT GROW THE ROW. bentoFit.js pins the furniture row to the tallest
- *   card in it. If the calendar set this card's height, the card would win that
- *   comparison and stretch the row. So the grid is sized DOWN into the box it is
- *   given (the stylesheet's `min-height 0` / `overflow hidden` do the clamping)
- *   and never reported upwards.
+ * Three things this file is careful about:
  *
- *   ONE FETCH PER SHAPE. The days the solver asks for are fetched once and kept;
- *   a resize that needs no more days re-draws from what is already in hand.
+ *   IT MUST NOT GROW THE CARD. bentoFit.js pins the furniture row to the tallest
+ *   card in it, so a calendar that set its own card's height would stretch the
+ *   whole row — and the row it stretched would re-measure and stretch it again.
+ *   The grid is therefore ABSOLUTELY POSITIONED inside the plot: it is sized
+ *   down into the box it is given and contributes no height at all.
+ *
+ *   ONE FETCH PER SHAPE. The days the solver asks for are fetched once and kept
+ *   in module state, so a resize that needs no more days re-draws from what is
+ *   already in hand — and so does a page turn, which replaces the card's node
+ *   but not the series behind it.
+ *
+ *   IT SURVIVES A PAGE TURN. The home paginator swaps the entire article list,
+ *   the card included, so this runs again after every turn. The entrance
+ *   animation does not: it belongs to the first arrival, not to every page.
  */
 
 import { analyticsReady, analyticsConfig, dailyViews } from "../tools/analytics.js";
 
-const ROWS = 7;
-const MAX_WEEKS = 53;
-const CELL_MIN = 6;
-const CELL_MAX = 40;
+const GAP = 3;
+const CELL_MIN = 7;
+const CELL_MAX = 15;
+const ROWS_MIN = 5;
+const ROWS_MAX = 16;
+const MAX_DAYS = 730;
+const MONTH_ROW = 15;
 const LEVELS = 5;
 
 let observer = null;
@@ -39,28 +54,29 @@ let entered = false;
 /* ─── geometry ────────────────────────────────────────────────────────────── */
 
 /**
- * Seven rows to the height, then as many columns as the width takes.
+ * As many rows as the height takes at no more than a fifteen-pixel cell, then as
+ * many columns as the width takes.
  *
- * The gap is derived from the cell rather than fixed, so a card that gets a
- * 30px cell does not wear the 2px gutter a 8px cell needs — and the cell is
- * re-derived once the gap is known, so the seven rows land on the height
- * exactly rather than a gutter short of it.
+ * The cell ceiling is the point of the exercise: without it a tall card
+ * produces a grid of seven fat tiles, which says nothing a number could not
+ * have said in less space.
  */
 function solve(width, height) {
-  let cell = Math.floor(height / ROWS);
-  if (cell < CELL_MIN) return null;
+  const box = height - MONTH_ROW - GAP;
+  if (box < CELL_MIN) return null;
 
-  let gap = Math.max(2, Math.min(6, Math.round(cell * 0.16)));
-  cell = Math.floor((height - (ROWS - 1) * gap) / ROWS);
-  if (cell < CELL_MIN) {
-    gap = 2;
-    cell = Math.floor((height - (ROWS - 1) * gap) / ROWS);
+  let rows = Math.max(ROWS_MIN, Math.min(ROWS_MAX, Math.round((box + GAP) / (CELL_MAX + GAP))));
+  let cell = Math.floor((box - (rows - 1) * GAP) / rows);
+  while (cell < CELL_MIN && rows > ROWS_MIN) {
+    rows -= 1;
+    cell = Math.floor((box - (rows - 1) * GAP) / rows);
   }
   if (cell < CELL_MIN) return null;
   cell = Math.min(cell, CELL_MAX);
 
-  const weeks = Math.max(1, Math.min(MAX_WEEKS, Math.floor((width + gap) / (cell + gap))));
-  return { cell, gap, weeks };
+  const cols = Math.max(1, Math.floor((width + GAP) / (cell + GAP)));
+  const capped = Math.min(cols, Math.floor(MAX_DAYS / rows));
+  return { cell, rows, cols: Math.max(1, capped) };
 }
 
 /* ─── colour scale ────────────────────────────────────────────────────────── */
@@ -87,11 +103,8 @@ function scale(values) {
 
 /* ─── dates ───────────────────────────────────────────────────────────────── */
 
-/** Monday-first weekday index, which is the order the rows are drawn in. */
-const weekdayIndex = (date) => (date.getDay() + 6) % 7;
-
 function parseKey(key) {
-  const [y, m, d] = key.split("-").map(Number);
+  const [y, m, d] = String(key).split("-").map(Number);
   return new Date(y, m - 1, d);
 }
 
@@ -99,58 +112,80 @@ function locale() {
   return (window.config && window.config.language) || document.documentElement.lang || undefined;
 }
 
-/** How many days a grid of `weeks` columns ending on today actually shows. */
-function daysFor(weeks) {
-  const today = new Date();
-  return weeks * ROWS - (6 - weekdayIndex(today));
-}
+const monthName = (date) => {
+  try {
+    return date.toLocaleDateString(locale(), { month: "short" });
+  } catch {
+    return String(date.getMonth() + 1);
+  }
+};
 
 /* ─── paint ───────────────────────────────────────────────────────────────── */
 
 function paint(fit) {
   const grid = card.querySelector("[data-pulse-grid]");
+  const months = card.querySelector("[data-pulse-months]");
   if (!grid || !series || !series.length) return;
 
-  // The last column is the current week, so the grid ends on today and the days
-  // after it in that column are drawn as future rather than as quiet.
-  const today = parseKey(series[series.length - 1].date);
-  const trailing = 6 - weekdayIndex(today);
-  const cells = fit.weeks * ROWS;
-  const slice = series.slice(Math.max(0, series.length - (cells - trailing)));
+  const cells = fit.rows * fit.cols;
+  const slice = series.slice(Math.max(0, series.length - cells));
+  // A short series is padded at the FRONT, so the last cell is still today.
+  const lead = cells - slice.length;
 
   const values = slice.map((d) => d.value);
   const level = scale(values);
   const total = values.reduce((a, b) => a + b, 0);
 
   card.style.setProperty("--pulse-cell", fit.cell + "px");
-  card.style.setProperty("--pulse-gap", fit.gap + "px");
+  card.style.setProperty("--pulse-gap", GAP + "px");
+
+  // The track list is written here rather than through a custom property: a
+  // `repeat()` count is the one place a var() is not worth betting the layout on.
+  grid.style.gridTemplateRows = `repeat(${fit.rows}, ${fit.cell}px)`;
+  grid.style.gridAutoColumns = fit.cell + "px";
+  grid.style.gap = GAP + "px";
 
   // One string, one reflow. Rebuilding hundreds of nodes with the DOM API costs
   // more than the parse does, and this runs on every resize step.
-  const lead = cells - trailing - slice.length;
   const html = [];
   for (let i = 0; i < lead; i++) {
-    html.push('<span class="pulse-day is-future" style="--pulse-col:0"></span>');
+    html.push('<span class="pulse-day is-empty" style="--pulse-col:0"></span>');
   }
   slice.forEach((day, i) => {
-    const col = Math.floor((lead + i) / ROWS);
-    html.push(
-      `<span class="pulse-day l${level(day.value)}" style="--pulse-col:${col}"></span>`,
-    );
+    const col = Math.floor((lead + i) / fit.rows);
+    html.push(`<span class="pulse-day l${level(day.value)}" style="--pulse-col:${col}"></span>`);
   });
-  for (let i = 0; i < trailing; i++) {
-    html.push(`<span class="pulse-day is-future" style="--pulse-col:${fit.weeks - 1}"></span>`);
-  }
   grid.innerHTML = html.join("");
+
+  // The month rule. A column is not a week, so a label marks the column its
+  // month BEGINS in — and the last two columns are skipped, because a label
+  // that starts there is clipped by the card rather than read.
+  if (months) {
+    const step = fit.cell + GAP;
+    const marks = [];
+    let last = -1;
+    for (let c = 0; c < fit.cols - 2; c++) {
+      const day = slice[c * fit.rows - lead];
+      if (!day) continue;
+      const date = parseKey(day.date);
+      const key = date.getFullYear() * 12 + date.getMonth();
+      if (key === last) continue;
+      // Two labels closer together than four columns collide.
+      if (last >= 0 && marks.length && c - marks[marks.length - 1].col < 4) continue;
+      last = key;
+      marks.push({ col: c, text: monthName(date) });
+    }
+    months.style.width = fit.cols * step - GAP + "px";
+    months.innerHTML = marks
+      .map((m) => `<span style="left:${m.col * step}px">${m.text}</span>`)
+      .join("");
+  }
 
   card.classList.remove("is-blank");
   // The card shows no numbers, so the reading has to live somewhere: this is the
   // only place the total and the span are still said out loud.
   const title = card.getAttribute("data-l-title") || "Activity";
-  grid.setAttribute(
-    "aria-label",
-    `${title}: ${total.toLocaleString(locale())} (${slice.length}d)`,
-  );
+  grid.setAttribute("aria-label", `${title}: ${total.toLocaleString(locale())} (${slice.length}d)`);
 
   if (!entered && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     entered = true;
@@ -183,12 +218,12 @@ function measure() {
 
   const fit = solve(width, height);
   if (!fit) return;
-  if (shape && shape.cell === fit.cell && shape.gap === fit.gap && shape.weeks === fit.weeks) {
+  if (shape && shape.cell === fit.cell && shape.rows === fit.rows && shape.cols === fit.cols) {
     return;
   }
   shape = fit;
 
-  const days = daysFor(fit.weeks);
+  const days = fit.rows * fit.cols;
   if (days > fetched) load(days);
   if (series && series.length) paint(fit);
 }
@@ -200,10 +235,12 @@ export default function initPulseCard() {
   }
   card = document.querySelector("[data-pulse]");
   shape = null;
-  entered = false;
   if (!card || !analyticsReady() || !analyticsConfig().pulse) return;
 
-  card.classList.add("is-blank");
+  // Only until the first paint, and only when there is nothing held over from
+  // before — a page turn redraws from the series already in hand, so the card
+  // must not flash empty on the way.
+  if (!series || !series.length) card.classList.add("is-blank");
 
   const plot = card.querySelector("[data-pulse-plot]");
   if (plot && typeof ResizeObserver !== "undefined") {
