@@ -316,7 +316,9 @@ export function markState(root) {
   const collapsed = sel.isCollapsed;
   const nodes = collapsed ? [sel.anchorNode] : touched(range, root);
   const live = nodes.filter((n) => n && root.contains(n));
-  if (!live.length) return { collapsed, active: new Set(), partial: new Set(), literal: "", colour: "", href: "" };
+  if (!live.length) {
+    return { collapsed, active: new Set(), partial: new Set(), literal: "", math: false, colour: "", href: "" };
+  }
 
   const active = new Set();
   const partial = new Set();
@@ -335,9 +337,90 @@ export function markState(root) {
     active,
     partial,
     literal: literalAround(live[0], root),
+    // Asked of the DOCUMENT rather than of `root`: a chip that has been opened
+    // for editing IS the rich root, so a search that stopped at the root would
+    // answer "no" standing inside the one thing being asked about.
+    math: !!mathAround(live[0]),
     colour: anchorBox ? anchorBox.getAttribute("data-box-color") || "default" : "",
     href: anchorLink ? anchorLink.getAttribute("href") || "" : "",
   };
+}
+
+/* ─── inline equations ─────────────────────────────────────────────────────── */
+
+/**
+ * An equation in a sentence is a CHIP, not a mark.
+ *
+ * `$x^2$` renders to an inert span holding an SVG — there is no text node to
+ * carve and no tag to nest, so none of the machinery above applies to it. It
+ * gets one control of its own instead, and that control is a toggle: over words,
+ * it makes them the equation; standing in one, it gives the LaTeX back as
+ * ordinary text. The second half is the half that was missing — an equation
+ * written by accident could be edited but never undone.
+ */
+function mathAround(node) {
+  const el = node && node.nodeType === 3 ? node.parentElement : node;
+  return el && el.closest ? el.closest(".ed-math") : null;
+}
+
+function makeMath(tex) {
+  const chip = document.createElement("span");
+  chip.className = "mathjax-inline ed-math";
+  chip.setAttribute("data-md", "math");
+  chip.setAttribute("data-mathjax", "inline");
+  chip.setAttribute("data-tex", tex);
+  chip.contentEditable = "false";
+  const src = document.createElement("span");
+  src.className = "ed-math-src";
+  src.textContent = tex;
+  chip.appendChild(src);
+  return chip;
+}
+
+/**
+ * @returns {Element|null} the chip that was just made, so the caller can typeset
+ *   it. Null when one was taken apart, or when there was nothing to act on.
+ */
+export function toggleMath(root) {
+  const sel = selection();
+  if (!root || !sel || !sel.rangeCount) return null;
+
+  // Standing in one — including inside one that is open for editing, where the
+  // chip is the caret's own ancestor rather than something inside `root`.
+  const held = mathAround(sel.anchorNode) || (root.closest && root.closest(".ed-math"));
+  if (held) {
+    const text = document.createTextNode(held.getAttribute("data-tex") || held.textContent || "");
+    held.replaceWith(text);
+    const back = document.createRange();
+    back.setStart(text, 0);
+    back.setEnd(text, text.nodeValue.length);
+    sel.removeAllRanges();
+    sel.addRange(back);
+    return null;
+  }
+
+  if (sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) return null;
+
+  const tex = range.toString().replace(/​/g, "").trim();
+  if (!tex) return null;
+
+  range.deleteContents();
+  const chip = makeMath(tex);
+  range.insertNode(chip);
+
+  // Somewhere for the caret to stand after an element it cannot enter.
+  const tail = document.createTextNode(ZWSP);
+  chip.parentNode.insertBefore(tail, chip.nextSibling);
+  const after = document.createRange();
+  after.setStart(tail, 1);
+  after.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(after);
+
+  anchorMarks(root);
+  return chip;
 }
 
 /* ─── the one entry point ──────────────────────────────────────────────────── */

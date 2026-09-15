@@ -98,6 +98,9 @@ export const CATALOGUE = [
  * SOURCE is not a tab either. Showing a block's markdown is a way of LOOKING at
  * the block, so it is a switch inside Block.
  */
+/** The modifier this keyboard actually spells the shortcuts with. */
+const MOD = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "") ? "⌘" : "Ctrl+";
+
 const TAB_FORMAT = { key: "format", icon: "fa-highlighter", label: "Format" };
 const TAB_BLOCK = { key: "block", icon: "fa-cube", label: "Block" };
 const TAB_INSERT = { key: "insert", icon: "fa-plus", label: "Insert" };
@@ -167,13 +170,30 @@ export function createToolbar(ctx) {
   const el = document.createElement("div");
   el.className = "ed-toolbar";
   el.dataset.tab = "block";
+  // The two steps sit BESIDE the tab strip rather than in a row of controls,
+  // because they are the only pair here that acts on the document as a whole:
+  // every other button belongs to a selection, a block or an insertion point,
+  // and burying "undo" among them would make the one control you reach for in a
+  // hurry the one you have to go looking for. Left of the tabs, always in the
+  // same place, whichever face the toolbar is wearing.
   el.innerHTML = `
     <div class="ed-toolbar-card">
-      <div class="ed-toolbar-tabs" role="tablist"></div>
+      <div class="ed-toolbar-head">
+        <div class="ed-toolbar-steps">
+          <button type="button" class="ed-step" data-step="undo" disabled>
+            <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="ed-step" data-step="redo" disabled>
+            <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="ed-toolbar-tabs" role="tablist"></div>
+      </div>
       <div class="ed-toolbar-row" data-row="main"></div>
       <div class="ed-toolbar-row ed-toolbar-sub" data-row="sub" hidden></div>
     </div>`;
 
+  const steps = el.querySelector(".ed-toolbar-steps");
   const tabs = el.querySelector(".ed-toolbar-tabs");
   const main = el.querySelector('[data-row="main"]');
   const sub = el.querySelector('[data-row="sub"]');
@@ -210,6 +230,21 @@ export function createToolbar(ctx) {
       mixed: s.partial.has(mark.key),
       disabled: dead || (locked && mark.key !== "code"),
     }));
+
+    // Beside inline code, because the two are the same idea — a run of
+    // characters markdown stops reading as markdown. It is the one button here
+    // that stays live with the caret collapsed: standing inside an equation is
+    // how you ask for it back as ordinary text.
+    const codeAt = items.findIndex((item) => item.arg === "code");
+    items.splice(codeAt < 0 ? items.length : codeAt + 1, 0, {
+      kind: "btn",
+      act: "math",
+      icon: "fa-square-root-variable",
+      label: "Inline equation",
+      tt: "m_math",
+      on: !!s.math,
+      disabled: s.math ? false : dead || locked,
+    });
 
     items.push(
       { kind: "sep" },
@@ -613,6 +648,34 @@ export function createToolbar(ctx) {
     render(true);
   }
 
+  /**
+   * How far back and forward there is to go, reported on the buttons.
+   *
+   * A disabled step is the only honest way to say "there is nothing before
+   * this" — the alternative is a button that answers a press by doing nothing,
+   * which reads as the editor having lost the change rather than as there being
+   * none. The shortcut rides in the tooltip, because that is the way this pair
+   * is actually reached once the post is long.
+   */
+  function history(can) {
+    const left = can || { undo: false, redo: false };
+    for (const button of steps.children) {
+      const key = button.dataset.step;
+      button.disabled = !(key === "redo" ? left.redo : left.undo);
+      button.title =
+        key === "redo"
+          ? `${t("redo", "Redo")} (${MOD}Y)`
+          : `${t("undo", "Undo")} (${MOD}Z)`;
+    }
+  }
+
+  steps.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-step]");
+    if (!button || button.disabled) return;
+    e.preventDefault();
+    if (ctx.onStep) ctx.onStep(button.dataset.step);
+  });
+
   el.addEventListener("mousedown", (e) => e.preventDefault());
 
   tabs.addEventListener("click", (e) => {
@@ -651,6 +714,13 @@ export function createToolbar(ctx) {
         applyMark(root, arg, {});
       }
       ctx.onMarked();
+      return void sync();
+    }
+
+    // Owned by the editor, not by this file: the chip it makes has to be
+    // typeset, and MathJax is the editor's to load.
+    if (act === "math") {
+      if (ctx.onMath) ctx.onMath(root);
       return void sync();
     }
 
@@ -701,12 +771,14 @@ export function createToolbar(ctx) {
     render(true);
   });
 
+  history(null);
   render(false);
 
   return {
     el,
     sync,
     reset,
+    history,
     /** Re-read the focused block's own options without touching the tab. */
     refresh: () => render(true),
     openSub,

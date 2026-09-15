@@ -447,6 +447,8 @@ editor:
   edit_post: Edit this post
   new_post: New post
   close: Stop editing
+  undo: Undo
+  redo: Redo
   untitled: Untitled
   draft: Draft
   encrypted: Encrypted
@@ -567,6 +569,7 @@ editor:
   m_em: Italic
   m_strike: Strikethrough
   m_code: Inline code
+  m_math: Inline equation
   m_mark: Highlight
   m_link: Link
   m_clear: Clear formatting

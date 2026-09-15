@@ -416,6 +416,7 @@ function probeCard(icon, text) {
 export function closeDialogs() {
   const open = document.querySelectorAll(".ed-picker-mask");
   for (const mask of open) mask.remove();
+  live = null;
   if (open.length) {
     locks = 0;
     document.documentElement.style.overflow = "";
@@ -575,6 +576,21 @@ function searchScore(path, query) {
  * @param {object} opts  { current }
  * @returns {Promise<{path: string, site: string} | null>}
  */
+/**
+ * The browser that is open, if one is.
+ *
+ * Undo has to be able to put a staged rename back WHERE IT HAPPENED, and where
+ * it happened is a row in this tree. Rather than teach the editor how to draw a
+ * file manager, the open one publishes the three things a step needs: rebuild
+ * yourself from the stage as it now stands, hand me the row for this path, and
+ * close. Null whenever no browser is up.
+ */
+let live = null;
+
+export function pickerLive() {
+  return live;
+}
+
 export function openPicker(ctx, opts = {}) {
   const t = ctx.t;
 
@@ -1014,6 +1030,10 @@ export function openPicker(ctx, opts = {}) {
     /* ─── renaming, in place ───────────────────────────────────────────── */
 
     let renaming = "";
+    // The live rename, callable from outside it. A name being typed is part of
+    // what "use this picture" means, and waiting for the field's own blur left
+    // that to the order two events happened to fire in.
+    let settleName = null;
 
     function beginRename(path) {
       const node = nodes.get(path);
@@ -1030,6 +1050,7 @@ export function openPicker(ctx, opts = {}) {
       const stop = (commit) => {
         if (renaming !== path) return;
         renaming = "";
+        settleName = null;
         node.label.contentEditable = "false";
         delete node.row.dataset.editing;
         node.label.removeEventListener("keydown", onKeys);
@@ -1055,8 +1076,14 @@ export function openPicker(ctx, opts = {}) {
       };
       const onBlur = () => stop(true);
 
+      settleName = () => stop(true);
       node.label.addEventListener("keydown", onKeys);
       node.label.addEventListener("blur", onBlur);
+    }
+
+    /** Land any name being typed, before acting on what it names. */
+    function settleRename() {
+      if (settleName) settleName();
     }
 
     /* ─── moving, which is also what a rename is ───────────────────────── */
@@ -1082,6 +1109,10 @@ export function openPicker(ctx, opts = {}) {
         const held = nodes.get(path);
         if (held && held.type === "file") ctx.stage.move(path, to + path.slice(from.length));
       }
+      // Recorded where it happens rather than when the browser closes: a tidy-up
+      // is half a dozen moves, and an author who undoes one of them means that
+      // one, not the whole afternoon.
+      if (ctx.onStageChange) ctx.onStageChange(to);
 
       const moved = new Map();
       for (const path of affected) {
@@ -1122,6 +1153,7 @@ export function openPicker(ctx, opts = {}) {
     }
 
     async function onAct(act) {
+      if (act !== "rename") settleRename();
       if (act === "close") return finish(null);
 
       if (act === "upload") {
@@ -1142,6 +1174,7 @@ export function openPicker(ctx, opts = {}) {
         while (nodes.has(`${base}/${name}`)) name = `${t("pick_folder", "New folder")} ${n++}`;
         const path = `${base}/${name}`;
         ctx.stage.folder(path);
+        if (ctx.onStageChange) ctx.onStageChange(path);
         addNode({ path, type: "dir", fresh: true });
         reveal(path);
         select(path);
@@ -1172,6 +1205,7 @@ export function openPicker(ctx, opts = {}) {
     function finish(value) {
       if (done) return;
       done = true;
+      if (live && live.owner === mask) live = null;
       scroller.stop();
       refit.disconnect();
       mask.remove();
@@ -1226,13 +1260,17 @@ export function openPicker(ctx, opts = {}) {
 
     side.addEventListener("dblclick", (e) => {
       const row = e.target.closest(".ed-pick-row");
-      if (!row) return;
+      if (!row || opts.browse) return;
+      settleRename();
       const path = row.parentElement.dataset.path;
       const node = nodes.get(path);
       if (node && node.type === "file") finish({ path, site: siteAddress(path) });
     });
 
     ok.addEventListener("click", () => {
+      // Before `chosen` is read: committing the name is what moves the selection
+      // onto the file's new address, so reading first answers with the old one.
+      settleRename();
       if (!chosen || !IMAGE.test(chosen)) return;
       finish({ path: chosen, site: siteAddress(chosen) });
     });
@@ -1464,6 +1502,42 @@ export function openPicker(ctx, opts = {}) {
 
     /* ─── open ─────────────────────────────────────────────────────────── */
 
+    // Browsing rather than choosing. Opened by an undo that put a staged rename
+    // back, it is a window onto the folders, not a question — so the one button
+    // that would answer a question it was never asked is not drawn.
+    if (opts.browse) {
+      card.dataset.browse = "1";
+      ok.hidden = true;
+    }
+
+    // The folders have been read and drawn. A step that lands before this would
+    // rebuild the tree from a stage the restore is about to replace.
+    let drawn = null;
+    const ready = new Promise((done) => (drawn = done));
+
+    live = {
+      owner: mask,
+      ready,
+      /** Rebuild from the stage as it now stands, and stand on `path`. */
+      goto(path) {
+        mount();
+        if (path && nodes.has(path)) {
+          reveal(path);
+          select(path, false);
+        } else {
+          chosen = "";
+          for (const root of ROOTS) open(root, true);
+          paintPath(false);
+          paintPreview(false);
+        }
+      },
+      row: (path) => {
+        const node = nodes.get(path);
+        return node ? node.row : null;
+      },
+      close: () => finish(null),
+    };
+
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
     lockPage();
@@ -1475,7 +1549,9 @@ export function openPicker(ctx, opts = {}) {
     side.innerHTML = probeCard("fa-folder-tree", t("pick_loading", "Reading the file tree"));
     paintPreview(false);
 
-    loadTree(false).then((loaded) => {
+    // A tree that cannot be read falls back to what this session has staged,
+    // rather than leaving the probe card up and `ready` unsettled for good.
+    loadTree(false).catch(() => []).then((loaded) => {
       rows = loaded;
       mount();
       if (chosen && nodes.has(chosen)) {
@@ -1486,6 +1562,7 @@ export function openPicker(ctx, opts = {}) {
         for (const root of ROOTS) open(root, true);
         paintPath(false);
       }
+      drawn();
     });
   });
 }

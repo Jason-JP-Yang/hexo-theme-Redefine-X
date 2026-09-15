@@ -449,6 +449,8 @@ editor:
   edit_post: 编辑这篇文章
   new_post: 新建文章
   close: 结束编辑
+  undo: 撤销
+  redo: 重做
   untitled: 未命名
   draft: 草稿
   encrypted: 已加密
@@ -569,6 +571,7 @@ editor:
   m_em: 斜体
   m_strike: 删除线
   m_code: 行内代码
+  m_math: 行内公式
   m_mark: 高亮
   m_link: 链接
   m_clear: 清除格式

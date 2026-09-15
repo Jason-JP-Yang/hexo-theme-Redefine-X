@@ -40,6 +40,14 @@ $ed-docbar-top = ($navbar-height + 12px)
 $ed-docbar-top-tablet = ($navbar-height * 0.9 + 10px)
 $ed-docbar-top-mobile = ($navbar-height * 0.8 + 8px)
 $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
+// The gold a stepped-back change is lit in.
+//
+// One colour for every theme, and translucent rather than opaque: what it lands
+// on is a paragraph, a field or a row in a file tree, and a wash that lets the
+// surface through reads the same on white, on near-black and over a picture.
+// Nothing here ever recolours TEXT — the words keep whatever contrast they had,
+// which is the only way a highlight can be guaranteed legible everywhere.
+$ed-gold = #F5B316
 
 // The theme's own thin scrollbar, from the instant-notes field: 6px, a rounded
 // thumb on a transparent track, no arrows, and the Firefox pair beside it. Every
@@ -85,6 +93,66 @@ css-min(a, b)
   to
     opacity 1
     transform none
+
+// ─── where a step landed ────────────────────────────────────
+// In, hold, out. One continuous pass and no blink: the job is to let the eye
+// find a place, and something that switches on and off twice reads as an error
+// being reported rather than as a pointer.
+@keyframes ed-flash
+  0%
+    background-color rgba($ed-gold, 0)
+    outline-color rgba($ed-gold, 0)
+  16%, 62%
+    background-color rgba($ed-gold, 0.26)
+    outline-color rgba($ed-gold, 0.85)
+  100%
+    background-color rgba($ed-gold, 0)
+    outline-color rgba($ed-gold, 0)
+
+// A row inside the picture browser's tree — the one target that lives in a
+// scrolling panel of its own, where a mark painted in page coordinates could
+// not follow it. Everything on the page itself is drawn by `.ed-spot` below.
+.ed-flash
+  border-radius 8px
+  outline 2px solid transparent
+  outline-offset 1px
+  animation ed-flash 1250ms cubic-bezier(0.32, 0.72, 0, 1) both
+
+// The layer the marks are painted on: at the document origin, above the article
+// and under the toolbar, and never in the way of a pointer. Its children carry
+// their own coordinates — see plugins/editor/spotlight.js.
+.ed-spot
+  position absolute
+  top 0
+  left 0
+  width 100%
+  height 0
+  z-index $z-index-3
+  pointer-events none
+
+.ed-spot-mark
+  position absolute
+  border-radius 4px
+  background rgba($ed-gold, 0.28)
+  box-shadow 0 0 0 1px rgba($ed-gold, 0.75), 0 0 14px 1px rgba($ed-gold, 0.30)
+  pointer-events none
+  will-change opacity, transform
+
+  // A whole block is a large area, so it is lit by its EDGE rather than by a
+  // wash the words would have to be read through.
+  &.is-block,
+  &.is-move,
+  &.is-field
+    border-radius 9px
+    background rgba($ed-gold, 0.13)
+    box-shadow 0 0 0 2px rgba($ed-gold, 0.80), 0 0 20px 2px rgba($ed-gold, 0.28)
+
+  // The gap a block left. Solid, because there is nothing underneath it to
+  // show through, and it is the one mark that stands for something absent.
+  &.is-seam
+    border-radius 2px
+    background rgba($ed-gold, 0.92)
+    box-shadow 0 0 12px 1px rgba($ed-gold, 0.45)
 
 // ─── the pencil ─────────────────────────────────────────────
 // One more tool in the article's own rail; `.blog-admin-only` already decides
@@ -741,10 +809,65 @@ textarea.ed-f-input
   overflow hidden
   pointer-events none
 
+// ─── stepping back and forward ──────────────────────────────
+// Left of the tab strip and OUTSIDE it, in a group of their own.
+//
+// They are the only two controls in this toolbar that act on the document as a
+// whole — everything else belongs to a selection, to a block, or to the caret —
+// and they are the pair reached for in a hurry. So they get the one position
+// that never changes under the author: the strip repaints whenever Format takes
+// Block's slot, and the rows repaint on every caret move, but this corner is the
+// same corner in all four faces of the toolbar.
+.ed-toolbar-head
+  display flex
+  align-items stretch
+  gap 6px
+  min-width 0
+
+.ed-toolbar-steps
+  display flex
+  flex 0 0 auto
+  align-items center
+  gap 2px
+  padding 2px
+  border-radius 10px
+  background var(--background-color-transparent-40)
+  box-shadow inset 0 0 0 1px var(--border-color)
+
+.ed-step
+  display inline-flex
+  align-items center
+  justify-content center
+  width 26px
+  height 26px
+  padding 0
+  border none
+  border-radius 8px
+  background transparent
+  color var(--second-text-color)
+  font-size 0.76rem
+  cursor pointer
+  transition background $ed-fade, color $ed-fade, transform $ed-fade
+
+  &:hover:not(:disabled)
+    background var(--primary-color)
+    color $ed-on-primary
+
+  &:active:not(:disabled)
+    transform scale(0.9)
+
+  // Nothing to go back to. Dimmed rather than removed: a control that comes and
+  // goes moves the one beside it, and these two must never move.
+  &:disabled
+    color var(--third-text-color)
+    opacity 0.35
+    cursor default
+
 .ed-toolbar-tabs
   position relative
   display flex
-  flex 0 0 auto
+  flex 1 1 auto
+  min-width 0
   gap 3px
 
   // ONE lit shape that travels between the two tabs, rather than a background
@@ -1201,22 +1324,32 @@ textarea.ed-f-input
 .ed-math
   border-radius 4px
   cursor pointer
-  transition background $ed-fade
+  transition background $ed-fade, color $ed-fade
 
-  &:hover
-    background var(--second-background-color)
+  // Both halves of the pair, never one. A highlight box paints near-white ink on
+  // its own dark slate, and those are literal colours in box.styl rather than
+  // theme tokens — so a chip inside one that changed only its BACKGROUND put
+  // near-white text on a near-white field the moment it was opened, in light
+  // mode, which is an equation you cannot see while you edit it.
+  &:hover,
+  &[data-editing="1"]
+    background var(--background-color)
+    color var(--first-text-color)
 
   &[data-editing="1"]
-    background var(--second-background-color)
     cursor text
-
-    .ed-math-src
-      font-family $ed-mono
-      font-size 0.86em
-      outline none
+    box-shadow inset 0 0 0 1px var(--border-color)
 
 .ed-math[data-editing="1"] .ed-math-src
   padding 0 3px
+  font-family $ed-mono
+  // The LaTeX reads at the size of the sentence it sits in. At 0.86em it was
+  // smaller than the equation it stands in for AND smaller than the words either
+  // side of it, which is the one thing a source view must not be.
+  font-size 1em
+  line-height inherit
+  color var(--first-text-color)
+  outline none
 
 .ed-math-error
   color var(--box-red-text)
@@ -1523,10 +1656,30 @@ $ed-pop-h = 620px
   &[data-carry="1"]
     opacity 0.45
 
+  // Renaming happens on the row that is SELECTED, and a selected row is white
+  // ink on the primary colour — so a field that only changes the background
+  // leaves the name being typed white on near-white. The three tokens the
+  // selected state overrode are handed back, one rule each: a list opening with
+  // a bare element name is lexed as a property by Stylus.
   &[data-editing="1"]
-    background var(--second-background-color)
+    background var(--background-color)
     box-shadow inset 0 0 0 1px var(--primary-color)
     cursor text
+    color var(--first-text-color)
+
+    .ed-pick-name
+      color var(--first-text-color)
+      outline none
+
+    .ed-pick-icon
+      color var(--third-text-color)
+
+    .ed-pick-twist
+      color var(--third-text-color)
+
+    .ed-pick-flag
+      background var(--second-background-color)
+      color var(--third-text-color)
 
 // The insertion line, the article canvas's own: same bar, same halo, same
 // entrance. One gesture, one visual language.

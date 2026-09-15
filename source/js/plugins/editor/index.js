@@ -38,10 +38,13 @@ import {
   parseFrontMatter,
   setFrontMatterKey,
 } from "./markdown.js";
-import { closeDialogs, createStage, forgetTree, noteCommitted, openAsk, openPicker, openSheet, siteAddress } from "./picker.js";
+import { closeDialogs, createStage, forgetTree, noteCommitted, openAsk, openPicker, openSheet, pickerLive, siteAddress } from "./picker.js";
+import { charSpan, createHistory, signature } from "./history.js";
+import { domRange, domText, spotClear, spotElement, spotRange, spotSeam } from "./spotlight.js";
+import { toggleMath } from "./inline.js";
 import { holdTOC, releaseTOC, scheduleTOC } from "./toc.js";
 import { createFrontCard } from "./frontmatter.js";
-import { loadComponents } from "./render.js";
+import { loadComponents, typesetMath } from "./render.js";
 import { vaultPrefix } from "../../tools/vaultCrypto.js";
 import {
   bindImage,
@@ -64,7 +67,7 @@ import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
-import { contentChanged, crossFade, enter, exit, flip, flowCost, pop, toolbarIn, toolbarOut } from "./motion.js";
+import { contentChanged, crossFade, enter, exit, flip, flowCost, pop, reduced, toolbarIn, toolbarOut } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -545,6 +548,8 @@ async function activate(host) {
       if (state.focused && state.focused.act) state.focused.act(act, arg);
     },
     onMarked: commitInline,
+    onMath: (root) => applyMath(root),
+    onStep: (dir) => (dir === "redo" ? history.redo() : history.undo()),
     ask: (kind, current) => askFor(ui.toolbar.el, { t }, kind, current),
     ownsSelection: (sel) => state.canvas.contains(sel.anchorNode),
   };
@@ -571,6 +576,13 @@ async function activate(host) {
   ui.toolbar.sync();
   contentChanged();
   holdTOC(state.canvas);
+
+  // The post as it was opened — or as it was recovered, which is the same
+  // thing to somebody who has not typed yet — becomes the step there is no
+  // going back beyond. Nothing above this point was the author's doing.
+  // A post opened on a recovered local copy is already ahead of the file, so it
+  // has no clean step to compare against.
+  history.start(!state.dirty);
 
   // Shown on the way in whatever the scroll position is — the toolbar arriving
   // IS the editor opening — and only then handed over to the perch rule below.
@@ -685,6 +697,12 @@ async function deactivate() {
 
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
+  // The steps belong to the session, not to the post: reopening the editor on
+  // the same article starts from what is committed, not from where somebody
+  // left off half an hour ago.
+  history.reset();
+  spotClear();
+  litRow(null);
   unwire();
   if (state.perchOff) state.perchOff();
 
@@ -782,7 +800,7 @@ function notice(kind, text) {
 const COVER_KEYS = ["cover", "banner", "thumbnail"];
 
 function onFrontChange(key, value) {
-  markDirty();
+  markDirty("front", key);
 
   // Remembered because publishing has to tell the author's decision apart from
   // the `vault: true` the draft machinery writes on every fork.
@@ -812,7 +830,7 @@ function onFrontChange(key, value) {
 function writeFront(key, value) {
   state.doc.front = setFrontMatterKey(state.doc.front, key, value);
   state.doc.frontDirty = true;
-  markDirty();
+  markDirty("front", key);
 }
 
 /* ─── blocks ───────────────────────────────────────────────────────────────── */
@@ -823,8 +841,12 @@ function blockCtx(box) {
     t,
     box: home,
     onChange: (view) => {
-      writeBox(home);
-      markDirty();
+      // The box the view is in NOW, not the one it was built in. A block dragged
+      // between a note and the article keeps its view — rebuilding it there is
+      // what re-fetched its picture and made the page jump — so the only thing
+      // that has to follow it across is which box its edits are written back to.
+      writeBox((view && view.box) || home);
+      markDirty("text", view && view.block ? view.block.id : "");
       if (view && view.block && view.block.type === "heading") refreshTOC();
     },
     onFocus: (view) => {
@@ -1223,7 +1245,7 @@ function insertBlock(block, anchorId, focus, box, where) {
   // afterwards is a height the animation has already finished arriving at.
   renumberFigures();
   writeBox(home);
-  markDirty();
+  markDirty("insert", block.id);
 
   // `view.ready` is the block's own first paint where it has one — a diagram or
   // an equation renders asynchronously, and measuring before that finished is
@@ -1261,7 +1283,7 @@ async function deleteBlock(id, move) {
 
   renumberFigures();
   writeBox(box);
-  markDirty();
+  markDirty("delete", id);
   contentChanged();
   refreshTOC();
 }
@@ -1307,7 +1329,7 @@ function convertBlock(id, type, fields) {
 
   if (view.focus) view.focus("end");
   writeBox(box);
-  markDirty();
+  markDirty("convert", id);
   contentChanged();
   refreshTOC();
 }
@@ -1355,6 +1377,27 @@ function commitInline() {
   if (state.focused) {
     state.focused.touch();
     state.focused.read();
+  }
+}
+
+/**
+ * Words ⇄ equation.
+ *
+ * The chip is typeset here rather than in inline.js because MathJax is the
+ * editor's to load, and the block is committed through its OWN editable rather
+ * than through `commitInline` — taking a chip apart removes the element the
+ * caret was in, so the rich root the toolbar was holding is detached by the time
+ * the change needs reporting.
+ */
+function applyMath(root) {
+  const view = state.focused;
+  const host = (view && view.editable) || root;
+  const made = toggleMath(root || host);
+  if (made) typesetMath(made);
+  if (host && host.isConnected) host.dispatchEvent(new Event("input", { bubbles: true }));
+  if (view) {
+    view.touch();
+    view.read();
   }
 }
 
@@ -1477,7 +1520,7 @@ function applyRaw(id, text) {
   box.views.splice(index, 1, ...views);
 
   writeBox(box);
-  markDirty();
+  markDirty("raw", id);
   renumberFigures();
   contentChanged();
   if (views[0].focus) views[0].focus("end");
@@ -1521,7 +1564,7 @@ function moveFocused(delta) {
   });
 
   writeBox(box);
-  markDirty();
+  markDirty("move", view.block.id);
   renumberFigures();
 }
 
@@ -1719,18 +1762,16 @@ async function onDocDrop(e) {
     const index = Math.max(0, Math.min(at, arriving.views.length));
     arriving.views.splice(index, 0, held.view);
     arriving.blocks.splice(index, 0, block);
+    // The one thing that has to change when a block changes homes. It used to be
+    // rebuilt instead, which threw away a decoded picture, a rendered equation
+    // and an open tab pane — and paid for them again with a skeleton, a refetch
+    // and a page that jumped under the pointer as the height came back.
+    held.view.box = arriving;
 
     const before = arriving.views[index + 1];
     if (before) before.el.before(held.view.el);
     else arriving.el.insertBefore(held.view.el, arriving.tail || null);
   });
-
-  // The view's ctx is bound to the box it was built in, so a block that changed
-  // homes is rebuilt into the one it landed in.
-  if (leaving !== arriving) {
-    held.view.box = arriving;
-    remountBlock(dragId);
-  }
 
   // Order is the one thing a moved block cannot carry in `src`: its trailing
   // separator belonged to the position it left.
@@ -1740,7 +1781,9 @@ async function onDocDrop(e) {
   if (emptying) leaving.onEmpty();
 
   renumberFigures();
-  markDirty();
+  contentChanged();
+  refreshTOC();
+  markDirty("move", dragId);
 }
 
 function onCanvasDragOver(e) {
@@ -1828,13 +1871,17 @@ function applyStagedMoves() {
  * come through here, so there is one place that knows what the repository holds
  * and one place that knows how to add to it.
  */
-async function pickImage(current) {
+async function pickImage(current, browse) {
+  const opened = history.mark();
   const picked = await openPicker(
     {
       t,
       stage: state.stage,
       pending: state.pending,
       upload: stageImage,
+      // A tidy-up is half a dozen separate decisions, so each one is a step of
+      // its own rather than one lump recorded when the browser closes.
+      onStageChange: (path) => markDirty("assets", path),
       // The article's own measurements and the article's own resolution rules —
       // a staged blob, a sealed image's decrypted bytes, the repository fallback
       // — on a plain `<img>`. The preview is one picture the author just asked
@@ -1842,13 +1889,21 @@ async function pickImage(current) {
       naturalSize: (src) => naturalSize(src, state.pending),
       bindImage: (img, src) => bindImage(img, src, state.pending),
     },
-    { current }
+    { current, browse }
   );
   // Tidying is a change to the post even when nothing was chosen: the renames
   // travel in this document's commit, and leaving the save button disabled is
   // how a folder someone had just reorganised was thrown away on close.
-  if (state.stage.dirty) markDirty();
+  if (!browse && state.stage.dirty) markDirty("assets", "");
   if (!picked) return null;
+
+  // Renaming a picture and then choosing it is ONE decision — it is the same
+  // picture either way — so whatever the caller is about to point at the new
+  // name folds into the rename rather than standing as a second step. Undoing
+  // used to put the old address back and leave the rename staged, which is a
+  // state the author never created.
+  if (history.mark() !== opened) history.fold();
+
   const staged = state.pending.find((a) => state.stage.resolve(a.path) === picked.path);
   return staged || { path: picked.path, site: picked.site };
 }
@@ -1877,13 +1932,437 @@ async function stageImage(file, dir) {
   if (size && size.width) Object.assign(asset, size);
 
   state.pending.push(asset);
-  markDirty();
+  markDirty("assets", asset.path);
   return asset;
+}
+
+/* ─── stepping back and forward ────────────────────────────────────────────── */
+
+/**
+ * Undo and redo.
+ *
+ * The store (history.js) holds the document; everything here is what a step
+ * LOOKS like. Three jobs, in this order, because that is the order the author
+ * reads them in:
+ *
+ *   1. go to where the change is about to be — the block, the front-matter row,
+ *      the title, or the picture browser, which is opened if the step happened
+ *      inside it and closed if it did not;
+ *   2. put the document back, reusing every block whose signature is unchanged
+ *      so that a one-word undo redraws one paragraph rather than the article;
+ *   3. light the place up, once, after the last press of a run rather than once
+ *      per press.
+ *
+ * Changing the text first and scrolling afterwards was the obvious order and the
+ * wrong one: what the author saw was the page jumping to somewhere that had
+ * ALREADY changed, which says nothing about what the step did.
+ */
+// Two characters either side of the change, so a one-letter edit is still
+// something the eye can land on rather than a sliver.
+const SPOT_PAD = 2;
+
+const history = createHistory({
+  read: () => readAll(),
+  doc: () => state.doc,
+  stage: () => state.stage,
+  pending: () => state.pending,
+  apply: (plan) => applyStep(plan),
+  changed: syncSteps,
+});
+
+/**
+ * What the step store reports, drawn on the chrome.
+ *
+ * The unsaved marker is decided HERE and not by whoever made the change: a
+ * document stepped all the way back to what is committed has nothing to save,
+ * and leaving the dot amber there was the editor claiming work that no longer
+ * exists.
+ */
+function syncSteps() {
+  if (!ui) return;
+  if (ui.toolbar && ui.toolbar.history) ui.toolbar.history(history.can());
+
+  const want = history.dirtyState();
+  if (want !== null && state.on && state.doc && state.dirty !== want) {
+    state.dirty = want;
+    syncHeader();
+  }
+}
+
+/** Where the pinned chrome ends, measured rather than assumed. */
+function headroom() {
+  let y = 0;
+  if (ui && ui.bar && ui.bar.isConnected) y = Math.max(y, ui.bar.getBoundingClientRect().bottom);
+  const tool = ui && ui.toolbar && ui.toolbar.el;
+  if (tool && tool.isConnected && tool.dataset.perch !== "hide") {
+    y = Math.max(y, tool.getBoundingClientRect().bottom);
+  }
+  return Math.max(0, y) + 16;
+}
+
+/** Scroll only when the thing is not already somewhere it can be read. */
+function bringIntoView(el, quick) {
+  if (!el || !el.isConnected) return;
+  const rect = el.getBoundingClientRect();
+  const top = headroom();
+  const foot = window.innerHeight - 24;
+  if (rect.top >= top && (rect.bottom <= foot || rect.height > foot - top)) return;
+  window.scrollTo({
+    top: Math.max(0, window.scrollY + rect.top - top - 12),
+    // A run of presses travels once, at the end. Smooth-scrolling each step of a
+    // held Ctrl-Z is a page that never arrives anywhere.
+    behavior: quick || reduced() ? "auto" : "smooth",
+  });
+}
+
+let rowLit = null;
+let rowOff = 0;
+
+/** The one target that is not on the page: a row inside the browser's tree. */
+function litRow(row) {
+  clearTimeout(rowOff);
+  if (rowLit && rowLit !== row) rowLit.classList.remove("ed-flash");
+  rowLit = row || null;
+  if (!rowLit) return;
+  rowLit.classList.remove("ed-flash");
+  void rowLit.offsetWidth;
+  rowLit.classList.add("ed-flash");
+  const node = rowLit;
+  rowOff = setTimeout(() => {
+    node.classList.remove("ed-flash");
+    if (rowLit === node) rowLit = null;
+  }, 1400);
+}
+
+const KEY_NAME = /^[A-Za-z_][\w-]*$/;
+
+/** The one element a step is about, as it stands right now. */
+function targetNode(target) {
+  if (!target || !state.on) return null;
+
+  if (target.kind === "asset") {
+    const held = pickerLive();
+    return held ? held.row(target.path) : null;
+  }
+  if (target.kind === "block") {
+    const at = locate(target.id);
+    return at ? at.view.el : null;
+  }
+  if (target.kind === "cover" || target.kind === "title") {
+    if (!state.titleHost) return null;
+    return (
+      (target.kind === "cover" && state.titleHost.querySelector(".article-cover-frame")) ||
+      state.titleHost.querySelector(".ed-title") ||
+      state.titleHost
+    );
+  }
+  if (target.kind === "front") {
+    if (!ui || !ui.front) return null;
+    const row = KEY_NAME.test(target.key || "")
+      ? ui.front.el.querySelector(`[data-key="${target.key}"]`)
+      : null;
+    return row || ui.front.el;
+  }
+  return null;
+}
+
+function closeBrowser() {
+  const held = pickerLive();
+  if (held) held.close();
+}
+
+/**
+ * The picture browser, standing on the file this step is about.
+ *
+ * Not awaited as a dialogue — it stays up until the author closes it — but its
+ * tree IS awaited, because a step that lands before the folders have been read
+ * would rebuild them from a stage that is about to be replaced.
+ */
+async function openBrowserAt(path) {
+  let held = pickerLive();
+  if (!held) {
+    // `openPicker` builds and mounts its dialogue synchronously, so the handle
+    // is there the moment this returns; what is NOT waited on is the author
+    // eventually closing it.
+    pickImage(path ? siteAddress(path) : "", true).catch(() => {});
+    held = pickerLive();
+  }
+  if (held && held.ready) await held.ready;
+}
+
+async function goToStep(target, quick) {
+  if (target.kind === "asset") return void (await openBrowserAt(target.path));
+  // Any other step is somewhere else entirely, and a modal over the article is
+  // the one thing that would hide it.
+  closeBrowser();
+  if (target.kind === "seam") return;
+  bringIntoView(targetNode(target), quick);
+}
+
+/**
+ * What the block said before the step, so the characters that changed can be
+ * worked out from what it says after it. Read before anything moves; a block
+ * that is about to arrive has nothing to read and says so by being null.
+ */
+function textBefore(target) {
+  if (!target || target.kind !== "block" || target.how !== "edit") return null;
+  const at = locate(target.id);
+  return at ? domText(at.view.body) : null;
+}
+
+/**
+ * Light the change, as precisely as the change allows.
+ *
+ * Four different things, because they are four different events:
+ *
+ *   edited  the characters that differ, plus two either side
+ *   arrived the block, because the block IS what changed
+ *   moved   the block, at the place it moved to
+ *   left    the seam it left between the two blocks that remain — never the
+ *           neighbour itself, which is the reading that made a delete look like
+ *           an edit to something the author had not touched
+ */
+function spotlight(target, was, quick) {
+  if (target.kind === "asset") {
+    const held = pickerLive();
+    if (!held) return;
+    // Re-read from the stage as it now stands: the tree was drawn before.
+    held.goto(target.path);
+    return void litRow(held.row(target.path));
+  }
+
+  if (target.kind === "seam") {
+    const above = target.above ? locate(target.above) : null;
+    const below = target.below ? locate(target.below) : null;
+    const anchor = (below && below.view.el) || (above && above.view.el);
+    if (!anchor) return;
+    bringIntoView(anchor, quick);
+    return void spotSeam(above && above.view.el, below && below.view.el);
+  }
+
+  if (target.kind === "block") {
+    const at = locate(target.id);
+    if (!at) return;
+    bringIntoView(at.view.el, quick);
+
+    if (was != null) {
+      const now = domText(at.view.body);
+      const span = charSpan(was, now);
+      const from = Math.max(0, span.head - SPOT_PAD);
+      const to = Math.min(now.length, Math.max(span.endB, span.head + 1) + SPOT_PAD);
+      const range = domRange(at.view.body, from, to);
+      if (range) return void spotRange(range);
+    }
+    return void spotElement(at.view.el, target.how === "move" ? "move" : "block");
+  }
+
+  const el = targetNode(target);
+  if (!el) return;
+  bringIntoView(el, quick);
+  spotElement(el, "field");
+}
+
+/** Put the caret back at the end of a field that was rewritten under it. */
+function caretToEnd(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  if (!sel) return;
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+const COVER_OF = (front) => front.cover || front.banner || front.thumbnail || "";
+
+/**
+ * The canvas, made to match a list of blocks.
+ *
+ * A block whose signature is unchanged keeps its view — its caret, its decoded
+ * picture, its open tab pane, its rendered equation — and only its position may
+ * move. Everything else is rebuilt. Rebuilding the whole canvas would have been
+ * four lines and would have made every undo cost a full re-render and a fresh
+ * request for every image in the post.
+ */
+async function reconcile(wanted, quick) {
+  const box = state.root;
+  if (!box) return [];
+
+  const held = new Map(box.views.map((view) => [view.block.id, view]));
+  const rows = [];
+  for (const block of wanted) {
+    const view = held.get(block.id);
+    const same = view && signature(view.block) === signature(block);
+    if (view) held.delete(block.id);
+    rows.push({ block, view: same ? view : null, gone: same ? null : view });
+  }
+
+  // Measured before anything moves; the survivors are what travels.
+  const travelling = rows.filter((row) => row.view).map((row) => row.view.el);
+  if (box.tail) travelling.push(box.tail);
+
+  const mutate = () => {
+    // `dropBoxesIn` is what releases a view being discarded, here as everywhere
+    // else in this file — it forgets the boxes drawn inside the element AND the
+    // view the element belongs to, and it can only do the second while the old
+    // list is still the list.
+    for (const row of rows) {
+      if (row.gone) {
+        dropBoxesIn(row.gone.el);
+        row.gone.el.remove();
+      }
+      if (row.view) continue;
+      row.view = createView(row.block, blockCtx(box));
+      row.view.box = box;
+      row.fresh = true;
+    }
+    for (const view of held.values()) {
+      dropBoxesIn(view.el);
+      view.el.remove();
+    }
+
+    box.blocks.length = 0;
+    box.views.length = 0;
+    for (const row of rows) {
+      // The view's OWN block, not the snapshot's copy of it. A reused view is
+      // still bound to the object it was built around — `view.read()` writes
+      // into that one — and a list holding a different object with the same
+      // contents would be a document that stopped hearing what was typed into
+      // it. Equal signatures mean the two are interchangeable, so the live one
+      // wins and the copy is discarded.
+      box.blocks.push(row.view.block);
+      box.views.push(row.view);
+    }
+    // The root box and the document hold ONE array between them; said out loud
+    // because everything downstream reads `state.doc.blocks`.
+    state.doc.blocks = box.blocks;
+
+    let anchor = box.tail || null;
+    for (let i = box.views.length - 1; i >= 0; i--) {
+      const el = box.views[i].el;
+      if (el.parentNode !== box.el || el.nextSibling !== anchor) box.el.insertBefore(el, anchor);
+      anchor = el;
+    }
+  };
+
+  // Every step but the last of a run skips its animation: presses are being
+  // counted, and a queue that animates each one arrives seconds after the hand
+  // stopped.
+  if (quick) mutate();
+  else await flip(travelling, mutate);
+
+  return rows.filter((row) => row.fresh).map((row) => row.view);
+}
+
+async function applyStep(plan) {
+  if (!state.on || !state.doc || !ui) return;
+  const doc = state.doc;
+  const chrome = ui;
+  const target = plan.target || { kind: "canvas" };
+
+  // Two awaits below, and the editor can be closed across either of them — by
+  // the author, by a navigation, by a teardown. Each one is re-tested against
+  // the chrome this step started under rather than against a flag alone.
+  await goToStep(target, plan.quick);
+  if (!state.on || !state.doc || ui !== chrome) return;
+
+  // Read while the block still says what it said: the characters to light up are
+  // the ones that differ between this and what it says once the step has landed.
+  const was = textBefore(target);
+  const wasFront = doc.front;
+  // `painting` is the editor's own word for "this is a repaint, not an edit":
+  // every listener a restore trips would otherwise report work the author did
+  // not do, and the step store would record its own undo.
+  state.painting = true;
+  try {
+    doc.front = plan.front;
+    doc.frontRaw = plan.frontRaw;
+    doc.frontDirty = plan.frontDirty;
+    doc.lead = plan.lead;
+
+    if (state.stage) {
+      state.stage.moves.length = 0;
+      for (const move of plan.moves) state.stage.moves.push(move);
+      state.stage.folders.clear();
+      for (const path of plan.folders) state.stage.folders.add(path);
+    }
+    state.pending.length = 0;
+    for (const asset of plan.pending) state.pending.push(asset);
+
+    const fresh = await reconcile(plan.blocks, plan.quick);
+    if (!state.on || ui !== chrome) return;
+
+    if (wasFront !== plan.front) {
+      const before = parseFrontMatter(wasFront);
+      const after = parseFrontMatter(plan.front);
+      if (ui.front) {
+        ui.front.resync();
+        ui.front.paint();
+      }
+      // Gaining or losing a cover is a different template; anything else is a
+      // value, and rebuilding the heading for one would take the caret out of
+      // the field the author is standing in.
+      if (!COVER_OF(before) !== !COVER_OF(after)) {
+        paintTitle();
+      } else {
+        const img = state.titleHost.querySelector(".article-cover-image");
+        if (img && COVER_OF(before) !== COVER_OF(after)) bindImage(img, COVER_OF(after), state.pending);
+        const heading = state.titleHost.querySelector(".ed-title");
+        if (heading && heading.textContent !== (after.title || "")) {
+          const live = document.activeElement === heading;
+          heading.textContent = after.title || "";
+          if (live) caretToEnd(heading);
+        }
+      }
+      ui.path.textContent = pathLabel();
+    }
+
+    // The focused view may have been one of the ones just replaced, and a
+    // toolbar drawing a released view's options is a toolbar acting on nothing.
+    if (state.focused && !allViews().includes(state.focused)) state.focused = null;
+    if (!state.focused && target.kind === "block") {
+      const at = locate(target.id);
+      if (at) state.focused = at.view;
+    }
+    for (const view of allViews()) view.el.dataset.on = view === state.focused ? "1" : "0";
+
+    renumberFigures();
+    observeImages();
+    refreshTOC();
+    contentChanged();
+    if (ui.toolbar) ui.toolbar.sync();
+
+    // A block that has just arrived has nothing to travel from, so it fades in
+    // where it landed rather than sliding from an origin it never had.
+    if (!reduced() && !plan.quick) {
+      for (const view of fresh) {
+        view.el.animate(
+          [{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
+          { duration: 220, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+        );
+      }
+    }
+  } finally {
+    state.painting = false;
+  }
+
+  // Whether anything is left to commit is the step store's answer, given the
+  // moment `index` moves — see `syncSteps`. This only redraws the bar around it.
+  syncHeader();
+  spotlight(target, was, plan.quick);
 }
 
 /* ─── dirty / save ─────────────────────────────────────────────────────────── */
 
-function markDirty() {
+/**
+ * Something changed.
+ *
+ * `kind` and `target` are what the step store collapses on: two edits that name
+ * the same pair are the same piece of work continuing and merge into one step,
+ * anything else starts a new one. Only typing merges — see history.js — so a
+ * structural change may pass whatever names it best.
+ */
+function markDirty(kind, target) {
   // A repaint is not an edit. `ui.front.paint()` rebuilds the front-matter
   // fields from the values just committed, and the input events that rebuild
   // fires are indistinguishable here from typing — so a post went back to
@@ -1891,6 +2370,7 @@ function markDirty() {
   if (state.painting) return;
   state.dirty = true;
   syncHeader();
+  history.record(kind, target);
 
   clearTimeout(state.stashTimer);
   state.stashTimer = setTimeout(() => {
@@ -1911,6 +2391,9 @@ function readAll() {
 
 async function doSave(mode) {
   if (!state.doc || state.saving) return;
+  // The burst being typed when Save was pressed is part of what is committed,
+  // so it becomes a step before the commit rather than after it.
+  history.flush();
   readAll();
 
   if (!parseFrontMatter(state.doc.front).title) {
@@ -1940,6 +2423,10 @@ async function doSave(mode) {
     // moved by the build, so the mapping is still the only thing that knows
     // where the bytes are until that build lands.
     state.stage.settle();
+    // Every step still on the stack now describes a document whose pictures are
+    // already in the repository, so stepping back through one must not queue
+    // those bytes again or re-ask for a rename the build has been told about.
+    history.settle();
     state.dirty = false;
 
     // Edited blocks STAY dirty. Their `src` is the text they were parsed from
@@ -2314,6 +2801,16 @@ function onSelectionChange() {
   if (state.canvas.contains(document.activeElement)) ui.toolbar.sync();
 }
 
+/**
+ * A field that is not the document: a prompt, the browser's search box, a file
+ * being renamed in place. Nothing typed there is in the post yet, so the
+ * browser's own undo is the right one and this one must keep its hands off.
+ */
+function typing() {
+  const node = document.activeElement;
+  return !!(node && node.closest && node.closest(".ed-ask, .ed-pick-field, .ed-pick-row"));
+}
+
 function onKey(e) {
   if (!state.on) return;
   if (ui.slash && ui.slash.key(e)) return;
@@ -2335,6 +2832,21 @@ function onKey(e) {
     e.preventDefault();
     return void doSave("draft");
   }
+
+  // Before the canvas test, because a step is about the DOCUMENT: the caret may
+  // be in the front-matter card or in the picture browser and the shortcut still
+  // means the same thing. Held rather than passed on, in every one of those
+  // places — the browser's own undo would put text back into a field without
+  // telling the document, and the two would be different files from then on.
+  const step = e.key === "z" || e.key === "Z" ? (e.shiftKey ? "redo" : "undo") : e.key === "y" || e.key === "Y" ? "redo" : "";
+  if (step) {
+    if (typing()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (state.saving) return;
+    return void (step === "redo" ? history.redo() : history.undo());
+  }
+
   if (!state.canvas.contains(document.activeElement)) return;
 
   if (e.key === "k") {
@@ -2457,6 +2969,9 @@ function onPencil(e) {
 export function teardownEditor() {
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
+  history.reset();
+  spotClear();
+  litRow(null);
   stopEdgeScroll();
 
   for (const node of pencils) node.removeEventListener("click", onPencil);

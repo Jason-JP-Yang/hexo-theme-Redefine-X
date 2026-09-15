@@ -340,6 +340,20 @@ export function createFrontCard(doc, ctx) {
     if (input && input !== document.activeElement) input.value = value == null ? "" : value;
   }
 
+  /**
+   * Which keys the file spells out, re-read from the file.
+   *
+   * Maintained a key at a time by `write`, which is right while the card is the
+   * only thing editing the front matter. An undo replaces that text wholesale,
+   * so the tally has to be taken again — otherwise a toggle that agreed with its
+   * default would stay written, or stop being written, on the strength of a key
+   * the document no longer has.
+   */
+  function resync() {
+    present.clear();
+    for (const key of Object.keys(parseFrontMatter(doc.front))) present.add(key);
+  }
+
   paint();
-  return { el, paint, set };
+  return { el, paint, set, resync };
 }
