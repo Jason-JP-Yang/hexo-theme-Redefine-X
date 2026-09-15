@@ -212,6 +212,23 @@ function richHTML(block) {
   return inlineToHTML(block.text);
 }
 
+/**
+ * Take on another block's fields, in place.
+ *
+ * Every view is bound to ONE block object — its listeners write into it, its
+ * `read` writes into it — so a block arriving from the step store has to be
+ * absorbed rather than swapped in. `id` is the one field that never moves: it
+ * is what said the two were the same block in the first place.
+ */
+function absorb(block, next) {
+  for (const key of Object.keys(block)) {
+    if (key !== "id" && !(key in next)) delete block[key];
+  }
+  for (const key of Object.keys(next)) {
+    if (key !== "id") block[key] = next[key];
+  }
+}
+
 function mountRich(view) {
   const { block } = view;
   const host = document.createElement(richTag(block));
@@ -260,6 +277,36 @@ function mountRich(view) {
   // The boundary anchors are the editor's, not the author's: a line holding
   // nothing but them is an empty line, and Backspace has to delete it.
   view.isEmpty = () => isBlankText(host.textContent);
+
+  /**
+   * The same block, saying something else — an undo, a redo.
+   *
+   * Rewriting the host's contents keeps the ELEMENT, and keeping the element is
+   * what keeps the focus, and keeping the focus is what keeps a phone's keyboard
+   * up and the page from bouncing as it closes and reopens. Rebuilding the view
+   * instead did all three every time a step landed.
+   *
+   * Refused when the tag itself would change — an H2 becoming an H3, bullets
+   * becoming numbers — because that is a different element, not different words.
+   */
+  view.patch = (next, dry) => {
+    // The TYPE first, and not merely the tag it would render as. `richTag`
+    // answers "p" for everything it does not recognise — including a picture, a
+    // table, a code listing — so a paragraph view cheerfully accepted an image
+    // block, absorbed its fields, and drew `inlineToHTML(undefined)`: an empty
+    // paragraph where the picture had been, gone for good.
+    if (!RICH_TYPES.has(next.type)) return false;
+    if (richTag(next) !== host.tagName.toLowerCase()) return false;
+    if (dry) return true;
+    const held = caret.caretMark(host);
+    absorb(block, next);
+    host.innerHTML = richHTML(block);
+    anchorMarks(host);
+    typesetMath(host);
+    view.touched = !!block.dirty;
+    if (held != null) caret.placeAt(host, held);
+    return true;
+  };
 
   // No heading control here. The toolbar owns the one Heading button and the
   // levels behind it — see `headingControl` in toolbar.js. This used to add a
@@ -653,6 +700,24 @@ function mountSource(view) {
   view.isEmpty = () => !source.value.trim();
   view.refresh = paint;
 
+  // A textarea keeps its focus and its scroll when its value is assigned, so a
+  // step that lands on a code block leaves the caret where it was rather than
+  // closing the keyboard and rebuilding the field.
+  view.patch = (next, dry) => {
+    if (next.type !== block.type) return false;
+    if (dry) return true;
+    const at = source.selectionStart;
+    const to = source.selectionEnd;
+    const live = document.activeElement === source;
+    absorb(block, next);
+    source.value = block[field] || "";
+    view.touched = !!block.dirty;
+    if (live) source.setSelectionRange(Math.min(at, source.value.length), Math.min(to, source.value.length));
+    if (wrap.dataset.mode === "source") grow();
+    else paint();
+    return true;
+  };
+
   // A diagram's palette is written INTO its SVG, so it does not follow the
   // site's light/dark switch — it has to be drawn again under the other theme.
   // The published page does this for its own diagrams in plugins/mermaid.js;
@@ -774,6 +839,32 @@ function mountImage(view) {
   view.focus = () => caret.focusEnd(caption);
   view.isEmpty = () => false;
   view.editable = caption;
+
+  /**
+   * A step landing on a picture, without the figure leaving the page.
+   *
+   * A caption or an EXIF field is redrawn in place; the ADDRESS goes back
+   * through `paint`, which is the only thing that knows how to hand a picture to
+   * the site's own preloader. Re-pointing the `<img>` inside one directly was
+   * faster and wrong: that element belongs to the lazyload observer, which has
+   * its own record of what it is loading, and blanking its `src` behind its back
+   * left the picture gone for good.
+   */
+  view.patch = (next, dry) => {
+    if (next.type !== "image") return false;
+    if (dry) return true;
+    const wasExif = hasExif();
+    const wasUrl = block.url;
+    const held = caret.caretMark(caption);
+    absorb(block, next);
+    view.touched = !!block.dirty;
+
+    if (hasExif() !== wasExif || block.url !== wasUrl) paint();
+    else paintCaption();
+
+    if (held != null) caret.placeAt(caption, held);
+    return true;
+  };
 
   view.options = () => [
     { kind: "btn", act: "folder", icon: "fa-folder-open", label: "Open folder", tt: "open_folder", wide: true },
@@ -1090,7 +1181,11 @@ function mountComponent(view) {
       inner.classList.add("ed-nest");
       inner.innerHTML = "";
       nested = ctx.nest(inner, block.body || "", {
+        // A box writes itself back every time it is READ, and reading happens on
+        // a timer. Without this the note was marked dirty, and the post edited,
+        // by nothing at all.
         write: (text) => {
+          if (block.body === text) return;
           block.body = text;
           view.touch();
         },
@@ -1113,6 +1208,37 @@ function mountComponent(view) {
   // and `enter` measures this when the block is inserted.
   view.ready = paint();
   view.nests = nests;
+
+  /**
+   * A step landing on the note, without the note coming apart.
+   *
+   * `paint()` unnests the box, rewrites the note's markup and nests a NEW box —
+   * so every block inside is destroyed and rebuilt, and a picture three lines
+   * below the line that changed re-fetches itself. When only the body moved the
+   * body is handed to the box it already has, which reconciles it; only a change
+   * to the note ITSELF — its colour, its icon, its title — repaints the shell.
+   */
+  view.patch = (next, dry) => {
+    if (next.type !== "component" || next.name !== block.name) return false;
+    if (dry) return true;
+
+    const sameShell = next.args === block.args;
+    absorb(block, next);
+    view.touched = !!block.dirty;
+
+    if (sameShell && nested && ctx.fillBox) {
+      nested.ready = ctx.fillBox(nested, block.body || "");
+      return true;
+    }
+    view.ready = paint();
+    return true;
+  };
+
+  // A folding that is closed is a step the author cannot see land.
+  view.reveal = () => {
+    const details = host.querySelector("details");
+    if (details && !details.open) details.open = true;
+  };
 
   view.read = () => {
     if (nested && ctx.writeBox) ctx.writeBox(nested);
@@ -1250,9 +1376,12 @@ function mountTabs(view, wrap) {
   };
 
   const writeBody = () => {
-    block.body = panes
+    const text = panes
       .map((p) => `<!-- tab ${p.caption} -->\n\n${p.body}\n\n<!-- endtab -->`)
       .join("\n\n");
+    // Same reason as the note's: a pane written back unchanged is not an edit.
+    if (block.body === text) return;
+    block.body = text;
     view.touch();
   };
 
@@ -1312,7 +1441,8 @@ function mountTabs(view, wrap) {
     pane.classList.add("ed-nest");
     nested = ctx.nest(pane, panes[open] ? panes[open].body : "", {
       write: (text) => {
-        if (panes[open]) panes[open].body = text;
+        if (!panes[open] || panes[open].body === text) return;
+        panes[open].body = text;
         writeBody();
       },
       onEmpty: dropPane,
@@ -1326,12 +1456,13 @@ function mountTabs(view, wrap) {
   };
 
   const show = (i) => {
-    if (i === open) return;
+    if (i === open) return null;
     readPane();
     open = Math.max(0, Math.min(panes.length - 1, i));
     paintNav();
-    morphHeight(wrap, paintPane);
+    const done = morphHeight(wrap, paintPane);
     ctx.onOptionsChanged();
+    return done;
   };
 
   nav.addEventListener("click", (e) => {
@@ -1351,6 +1482,48 @@ function mountTabs(view, wrap) {
 
   paintNav();
   view.ready = paintPane();
+
+  /**
+   * A step landing in a tab group.
+   *
+   * Only the OPEN pane is on the page — the others are strings until they are
+   * shown — so the open one is reconciled through its own box and the rest are
+   * simply the new captions and bodies. `reveal` runs before the step lands and
+   * is what opens the pane the change is in; without it a step could change a
+   * pane nobody was looking at and appear to have done nothing at all.
+   */
+  view.patch = (next, dry) => {
+    if (next.type !== "component" || next.name !== block.name) return false;
+    if (dry) return true;
+
+    absorb(block, next);
+    view.touched = !!block.dirty;
+
+    const rows = readPanes(block.body);
+    const sameNav =
+      rows.length === panes.length && rows.every((row, i) => row.caption === panes[i].caption);
+    panes.length = 0;
+    panes.push(...rows);
+    if (!panes.length) panes.push({ caption: "Tab 1", body: "" });
+    open = Math.max(0, Math.min(panes.length - 1, open));
+    if (!sameNav) paintNav();
+
+    if (nested && ctx.fillBox) nested.ready = ctx.fillBox(nested, panes[open] ? panes[open].body : "");
+    else view.ready = paintPane();
+    return true;
+  };
+
+  view.reveal = (next) => {
+    if (!next || next.type !== "component") return null;
+    const rows = readPanes(next.body || "");
+    for (let i = 0; i < Math.max(rows.length, panes.length); i++) {
+      const a = panes[i];
+      const b = rows[i];
+      if (a && b && a.body === b.body && a.caption === b.caption) continue;
+      return show(Math.min(i, Math.max(0, rows.length - 1)));
+    }
+    return null;
+  };
 
   view.nests = true;
   view.read = readPane;
@@ -1550,6 +1723,12 @@ function mountRule(view) {
   view.read = () => {};
   view.focus = () => view.el.scrollIntoView({ block: "nearest" });
   view.isEmpty = () => false;
+  // A rule has no contents, so a step that lands on one has nothing to redraw.
+  view.patch = (next, dry) => {
+    if (next.type !== view.block.type) return false;
+    if (!dry) absorb(view.block, next);
+    return true;
+  };
 }
 
 /* ─── factory for new blocks ───────────────────────────────────────────────── */

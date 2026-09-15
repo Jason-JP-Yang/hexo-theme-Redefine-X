@@ -30,11 +30,20 @@
  * rather than stacking a flash per step.
  */
 
-const WAIT = 90;
-const FADE_IN = 190;
-const HOLD = 620;
-const FADE_OUT = 420;
+// The mark has to be THERE, not on its way: a step is over by the time it is
+// drawn, and a slow arrival reads as the editor still thinking.
+const WAIT = 40;
+const FADE_IN = 130;
+// Long enough to still be there once the eye has travelled to it and read the
+// line it is on. It costs nothing to leave up: the layer takes no pointer events
+// and the caret is somewhere else entirely, so typing over a lit range is
+// exactly as possible as typing anywhere else.
+const HOLD = 1500;
+const FADE_OUT = 520;
 const SPAN = FADE_IN + HOLD + FADE_OUT;
+// Interrupted: the old place goes at once so the new one is the only one on
+// screen, but not so abruptly that it looks like a dropped frame.
+const CUT_MS = 110;
 
 // A text range is lit a little proud of the glyphs; a whole block is lit on its
 // own edge and needs no padding.
@@ -55,14 +64,36 @@ function ensure() {
   return layer;
 }
 
-/** Take down whatever is showing, and cancel whatever was about to show. */
-export function spotClear() {
+/**
+ * Take down whatever is showing, and cancel whatever was about to show.
+ *
+ * `now` tears it out of the page — teardown, a closed editor. Everything else is
+ * one place being replaced by another, and there the old mark fades in a tenth
+ * of a second WHILE the new one arrives: it is the only way two consecutive
+ * steps read as two steps rather than as one mark teleporting.
+ */
+export function spotClear(now) {
   clearTimeout(pending);
   clearTimeout(clearing);
   pending = 0;
   clearing = 0;
-  for (const node of live) node.remove();
+
+  const going = live;
   live = [];
+  if (!going.length) return;
+
+  if (now) {
+    for (const node of going) node.remove();
+    return;
+  }
+  for (const node of going) {
+    const out = node.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: CUT_MS,
+      easing: "ease-out",
+      fill: "forwards",
+    });
+    out.finished.catch(() => {}).then(() => node.remove());
+  }
 }
 
 function paint(rects, kind) {
@@ -95,7 +126,8 @@ function paint(rects, kind) {
     );
   }
 
-  clearing = setTimeout(spotClear, SPAN + 40);
+  // Already faded to nothing by its own last keyframe, so this only tidies up.
+  clearing = setTimeout(() => spotClear(true), SPAN + 40);
 }
 
 function schedule(read, kind) {
@@ -107,10 +139,91 @@ function schedule(read, kind) {
   }, WAIT);
 }
 
-/** The characters themselves — one mark per line the range wraps onto. */
-export function spotRange(range) {
+/* ─── what a range is actually worth drawing ───────────────────────────────── */
+
+function usable(rect) {
+  return !!rect && rect.width >= 1.5 && rect.height >= 1.5;
+}
+
+function box(rect) {
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+/**
+ * `getClientRects()` is not a list of places — it is a list of FRAGMENTS.
+ *
+ * One rectangle per text node, per inline element, per line box, and a
+ * zero-width one wherever a boundary anchor sits. Drawn as they come, a range
+ * over four words in a sentence carrying a link and a bold word produced six
+ * bars, several of them stacked on each other. They are merged back into one bar
+ * per line, and anything with no area is dropped.
+ */
+function tidy(rects) {
+  const kept = [];
+
+  for (const raw of rects) {
+    if (!usable(raw)) continue;
+    const rect = box(raw);
+    let merged = false;
+
+    for (let i = 0; i < kept.length; i++) {
+      const held = kept[i];
+      const sameLine = Math.abs(held.top - rect.top) <= 2 && Math.abs(held.bottom - rect.bottom) <= 2;
+      const touching = rect.left <= held.right + 2 && rect.right >= held.left - 2;
+
+      if (sameLine && touching) {
+        held.left = Math.min(held.left, rect.left);
+        held.top = Math.min(held.top, rect.top);
+        held.right = Math.max(held.right, rect.right);
+        held.bottom = Math.max(held.bottom, rect.bottom);
+        held.width = held.right - held.left;
+        held.height = held.bottom - held.top;
+        merged = true;
+        break;
+      }
+      if (
+        rect.left >= held.left - 0.5 &&
+        rect.right <= held.right + 0.5 &&
+        rect.top >= held.top - 0.5 &&
+        rect.bottom <= held.bottom + 0.5
+      ) {
+        merged = true;
+        break;
+      }
+    }
+
+    if (!merged) kept.push(rect);
+  }
+
+  return kept;
+}
+
+/**
+ * The characters themselves — one mark per line the range wraps onto.
+ *
+ * `core` is the range WITHOUT the two characters of padding either side. The
+ * padding is there so a one-letter change is still something the eye can land
+ * on, and at the end of a line it reaches onto the next one — where it drew a
+ * bar over a line break that nothing had happened to. Padding may widen a line
+ * the change is on; it may not add a line of its own.
+ */
+export function spotRange(range, core) {
   if (!range) return;
-  schedule(() => Array.from(range.getClientRects()), "text");
+  schedule(() => {
+    const lines = core ? Array.from(core.getClientRects()).filter(usable) : null;
+    let rects = Array.from(range.getClientRects());
+    if (lines && lines.length) {
+      rects = rects.filter((rect) => lines.some((line) => rect.top < line.bottom - 1 && rect.bottom > line.top + 1));
+    }
+    return tidy(rects);
+  }, "text");
 }
 
 /** A whole block, when the block IS the change: one arrived, or one moved. */

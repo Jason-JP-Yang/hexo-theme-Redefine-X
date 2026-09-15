@@ -160,19 +160,63 @@ function frontKey(from, to) {
   return "";
 }
 
-function assetPath(from, to) {
+/**
+ * A staged rename, move or new folder: something done IN the picture browser.
+ *
+ * Kept apart from `pending` on purpose. Staged moves and folders only ever come
+ * from the browser, so a step carrying one belongs there and should open it;
+ * `pending` grows whenever a picture is dropped or pasted into the article,
+ * which is a block edit that happens to upload a file, and opening a file
+ * manager over that would be answering a question nobody asked.
+ */
+function filedPath(from, to) {
   const steps = Math.max(from.moves.length, to.moves.length);
   for (let i = 0; i < steps; i++) {
     const a = from.moves[i];
     const b = to.moves[i];
-    if (!a || !b || a.from !== b.from || a.to !== b.to) return (b || a).to;
+    if (a && b && a.from === b.from && a.to === b.to) continue;
+    // Where the file will BE once the step has landed — which for an undo of a
+    // rename is the name it had before it, not the name being taken away. The
+    // browser is opened on the answer, so it has to be the destination and not
+    // the place the file is leaving.
+    return { path: b ? b.to : (a ? a.from : ""), was: a ? a.to : (b ? b.from : "") };
   }
 
   const had = new Set(from.folders);
-  for (const path of to.folders) if (!had.has(path)) return path;
+  for (const path of to.folders) if (!had.has(path)) return { path, was: path };
   const has = new Set(to.folders);
-  for (const path of from.folders) if (!has.has(path)) return path;
+  for (const path of from.folders) if (!has.has(path)) return { path, was: path };
+  return null;
+}
 
+/**
+ * Which block MOVED, when the two lists hold the same blocks in a different
+ * order.
+ *
+ * "The first position they differ at" is the obvious answer and the wrong one:
+ * dragging the first paragraph to the end makes position zero differ, and what
+ * is standing there is the paragraph that did NOT move. The one that moved is
+ * the one whose removal leaves the two orders identical.
+ */
+function movedId(from, to) {
+  const a = from.map((block) => block.id);
+  const b = to.map((block) => block.id);
+  const without = (id) => {
+    const x = a.filter((held) => held !== id);
+    const y = b.filter((held) => held !== id);
+    return x.length === y.length && x.every((held, i) => held === y[i]);
+  };
+
+  for (let i = 0; i < b.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (without(b[i])) return b[i];
+    if (a[i] && without(a[i])) return a[i];
+    return b[i];
+  }
+  return "";
+}
+
+function uploadPath(from, to) {
   const before = new Set(from.pending.map((asset) => asset.path));
   for (const asset of to.pending) if (!before.has(asset.path)) return asset.path;
   const after = new Set(to.pending.map((asset) => asset.path));
@@ -189,10 +233,33 @@ function assetPath(from, to) {
  * LEFT has nothing left to light — lighting its neighbour instead says the
  * neighbour changed, which is the misleading thing this used to do. That case
  * becomes a `seam`: the gap it left, marked between the two blocks that remain.
+ *
+ * The picture browser is read FIRST, before any of that. Renaming a picture and
+ * then choosing it is one step — see `fold` — and that step changes a staged
+ * move AND the block that points at it. Naming the block would take the author
+ * to a paragraph whose address changed for a reason they could not see; naming
+ * the file opens the browser on the file they renamed, which is where the work
+ * actually happened.
  */
-function aim(from, to) {
+function aim(from, to, cause) {
+  const filed = filedPath(from, to);
+  if (filed) return { kind: "asset", path: filed.path, was: filed.was };
+
   const now = new Map(from.blocks.map((block) => [block.id, block]));
   const want = new Map(to.blocks.map((block) => [block.id, block]));
+
+  // What the author actually DID, taken from the edit that made the step rather
+  // than worked out from its result.
+  //
+  // Two orderings of the same blocks cannot say which block was dragged. Given a
+  // heading and a paragraph swapped, removing EITHER leaves the other in the
+  // same order, so the diff has no way to prefer one — and it kept naming the
+  // heading, which is the block that stood still. The drag knew; it said so at
+  // the time; this is simply reading it back.
+  const named = cause && cause.target ? String(cause.target) : "";
+  if (cause && cause.kind === "move" && named && want.has(named)) {
+    return { kind: "block", id: named, how: "move" };
+  }
 
   for (const block of to.blocks) {
     const here = now.get(block.id);
@@ -219,11 +286,8 @@ function aim(from, to) {
     return { kind: "seam", above, below };
   }
 
-  for (let i = 0; i < to.blocks.length; i++) {
-    if (from.blocks[i] && from.blocks[i].id !== to.blocks[i].id) {
-      return { kind: "block", id: to.blocks[i].id, how: "move" };
-    }
-  }
+  const moved = movedId(from.blocks, to.blocks);
+  if (moved) return { kind: "block", id: moved, how: "move" };
 
   if (from.front !== to.front || from.frontDirty !== to.frontDirty) {
     const key = frontKey(from.front, to.front);
@@ -231,8 +295,8 @@ function aim(from, to) {
     return COVER.has(key) ? { kind: "cover", key } : { kind: "front", key };
   }
 
-  const path = assetPath(from, to);
-  if (path) return { kind: "asset", path };
+  const path = uploadPath(from, to);
+  if (path) return { kind: "asset", path, was: path };
   return { kind: "canvas" };
 }
 
@@ -339,6 +403,10 @@ export function createHistory(ctx) {
 
     foldUntil = 0;
 
+    // What made this step, kept with it. `aim` reads it back when the shape of
+    // the change cannot say on its own which block the author acted on.
+    snap.by = { kind: asked.kind, target: asked.target };
+
     if (merge) {
       stack[index] = snap;
       run = { kind: asked.kind, target: asked.target, at: now };
@@ -389,7 +457,10 @@ export function createHistory(ctx) {
         }
         queue -= dir;
 
-        const job = plan(stack[to], aim(stack[index], stack[to]));
+        // Undoing takes back the edit that made the step we are ON; redoing
+        // re-applies the one that made the step we are going TO.
+        const cause = dir < 0 ? stack[index].by : stack[to].by;
+        const job = plan(stack[to], aim(stack[index], stack[to], cause));
         job.quick = queue !== 0;
         shut = true;
         try {
@@ -409,6 +480,9 @@ export function createHistory(ctx) {
 
   function drive(dir) {
     flush();
+    // A fold that was offered and never taken must not attach itself to the next
+    // thing the author does after stepping.
+    foldUntil = 0;
     if (index < 0) return Promise.resolve(false);
     queue += dir;
     if (running) return Promise.resolve(true);

@@ -1518,9 +1518,23 @@ export function openPicker(ctx, opts = {}) {
     live = {
       owner: mask,
       ready,
-      /** Rebuild from the stage as it now stands, and stand on `path`. */
+      /**
+       * Rebuild from the stage as it now stands, and stand on `path`.
+       *
+       * The tree has to be rebuilt — a rename changes the key every node is
+       * held under — but which branches were OPEN is the author's, not the
+       * tree's. Carried across, because a tree that expands and then collapses
+       * a frame later is not a tree anybody can follow.
+       */
       goto(path) {
+        const open = new Set();
+        for (const [held, node] of nodes) {
+          if (node.type === "dir" && node.el.dataset.open === "1") open.add(held);
+        }
         mount();
+        for (const [held, node] of nodes) {
+          if (node.type === "dir" && open.has(held)) node.el.dataset.open = "1";
+        }
         if (path && nodes.has(path)) {
           reveal(path);
           select(path, false);

@@ -67,7 +67,7 @@ import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
-import { contentChanged, crossFade, enter, exit, flip, flowCost, pop, reduced, toolbarIn, toolbarOut } from "./motion.js";
+import { EASE, contentChanged, crossFade, enter, exit, flip, flowCost, pop, reduced, toolbarIn, toolbarOut } from "./motion.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -701,7 +701,7 @@ async function deactivate() {
   // the same article starts from what is committed, not from where somebody
   // left off half an hour ago.
   history.reset();
-  spotClear();
+  spotClear(true);
   litRow(null);
   unwire();
   if (state.perchOff) state.perchOff();
@@ -1149,7 +1149,27 @@ function writeBox(box) {
   box.writing = true;
   try {
     for (const view of box.views) view.read();
-    box.write(blocksToBody(box.blocks, "").replace(/\s+$/, ""));
+
+    // A box nothing has been typed into emits the text it was BUILT from, not a
+    // reconstruction of it.
+    //
+    // `blocksToBody` cannot reproduce a body exactly: it is handed `""` as the
+    // lead, so the blank lines before the first block are gone, and the caller
+    // trims the separator after the last. So merely READING a note came back a
+    // few whitespace characters different from the note in the file — and that
+    // difference reached the document as an edit, with a step of its own, aimed
+    // at whichever block the re-parse had shifted. Every four seconds, because
+    // that is when the recovery stash reads.
+    // "Nothing has been typed into it" is not enough on its own: a block dragged
+    // OUT of a note leaves every block that remains untouched, and emitting the
+    // text the box was built from would put the departed block back. The list of
+    // ids is what says the box still holds what it held.
+    const stamp = box.blocks.map((block) => block.id).join(",");
+    const clean = box.source != null && box.stamp === stamp && !box.blocks.some((block) => block.dirty);
+    const text = clean ? box.source : blocksToBody(box.blocks, "").replace(/\s+$/, "");
+    box.source = text;
+    box.stamp = stamp;
+    box.write(text);
   } finally {
     box.writing = false;
   }
@@ -1180,31 +1200,157 @@ function refreshTOC() {
 }
 
 /**
- * Fill a box with the blocks its markdown parses to.
+ * Fill a box with the blocks its markdown parses to — reusing what is there.
  *
- * Called by a nesting component when it mounts, and again whenever the body it
- * holds is replaced from outside — switching tab panes, for instance.
+ * Called by a nesting component when it mounts, whenever the body it holds is
+ * replaced from outside — a tab pane switching — and now on every step that
+ * lands inside one.
+ *
+ * Nothing here can be matched by identity: `parseBlocks` mints a fresh id every
+ * time it runs, so the same paragraph is a different id on the way back in. The
+ * alignment is by SIGNATURE from both ends inwards, and only the middle is
+ * rebuilt. That is the whole reason undoing one line of a note no longer makes
+ * an unrelated picture two lines below it fetch itself again.
  *
  * @returns {Promise} the box's first paint. A pane that holds a diagram, an
  *   equation or a code listing is not its final height in the tick it is built,
  *   and the component animating open around it has to know that.
  */
+/**
+ * What a block SAYS, with no account of what follows it.
+ *
+ * `signature` includes the separator, which is right for the document — two
+ * paragraphs a blank line apart are not the same file as two that are not — and
+ * wrong for deciding whether a block changed. A nested box writes itself back
+ * with its last separator trimmed, so re-parsing gives the final block a
+ * different `after` every other pass: matched on `signature`, that read as an
+ * edit to a block nobody had touched.
+ */
+function shapeOf(block) {
+  return block.type + " " + (block.dirty ? emitBlock(block) : block.src || "");
+}
+
 function fillBox(box, markdown) {
-  for (const view of box.views) {
+  // What this box is to emit while nothing in it has been typed into. See
+  // `writeBox`: the round-trip law applies to a note's body as much as to a post.
+  box.source = String(markdown == null ? "" : markdown);
+  const wanted = parseBlocks(box.source);
+  if (!wanted.length) wanted.push(makeBlock("paragraph"));
+
+  const old = box.views.slice();
+  const was = old.map((view) => shapeOf(view.block));
+  const now = wanted.map((block) => shapeOf(block));
+
+  let head = 0;
+  while (head < old.length && head < wanted.length && was[head] === now[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < old.length - head &&
+    tail < wanted.length - head &&
+    was[old.length - 1 - tail] === now[wanted.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+
+  const midOld = old.slice(head, old.length - tail);
+  const midNew = wanted.slice(head, wanted.length - tail);
+
+  const views = old.slice(0, head);
+  const fresh = [];
+  const patched = [];
+  const painting = [];
+
+  // A block that matched keeps its view and takes the separator that came with
+  // the new text. `after` belongs to the POSITION, not to the words, and a box
+  // writes itself back with its last separator trimmed — so a block that had
+  // said "\n\n" said "" the next time round, and every pass through here found
+  // a difference nobody had typed.
+  for (let i = 0; i < head; i++) old[i].block.after = wanted[i].after;
+  for (let i = 1; i <= tail; i++) {
+    old[old.length - i].block.after = wanted[wanted.length - i].after;
+  }
+
+  /**
+   * Pair the middle by CONTENT, then by type, and only then give up.
+   *
+   * Pairing by position was the bug behind a picture vanishing: swap a
+   * paragraph and an image inside a note and position 0 offers the image view
+   * the paragraph's words and position 1 offers the paragraph view the image's.
+   * A block that has only changed PLACES keeps the view it had, so a reorder
+   * inside a note travels rather than being rebuilt around the author.
+   */
+  const spare = midOld.slice();
+  const claim = (want) => {
+    const same = spare.findIndex((view) => view && shapeOf(view.block) === shapeOf(want));
+    if (same >= 0) {
+      const view = spare[same];
+      spare[same] = null;
+      return { view, same: true };
+    }
+    const kin = spare.findIndex((view) => view && view.patch && view.patch(want, true));
+    if (kin >= 0) {
+      const view = spare[kin];
+      spare[kin] = null;
+      return { view, same: false };
+    }
+    return null;
+  };
+
+  for (const want of midNew) {
+    const got = claim(want);
+
+    if (got && got.same) {
+      // Same words, different separator: take the separator and leave the block
+      // alone. Rewriting it would be a repaint, a caret restore and a report of
+      // a change, for something nobody typed.
+      got.view.block.after = want.after;
+      views.push(got.view);
+      continue;
+    }
+    if (got) {
+      const text = domText(got.view.body);
+      got.view.patch(want);
+      patched.push({ view: got.view, was: text });
+      views.push(got.view);
+      continue;
+    }
+
+    const view = createView(want, blockCtx(box));
+    view.box = box;
+    views.push(view);
+    fresh.push(view);
+    if (view.ready) painting.push(Promise.resolve(view.ready).catch(() => {}));
+  }
+
+  for (const view of spare) {
+    if (!view) continue;
     dropBoxesIn(view.el);
     view.el.remove();
   }
-  box.views.length = 0;
-  box.blocks.length = 0;
+  views.push(...old.slice(old.length - tail));
 
-  const parsed = parseBlocks(String(markdown == null ? "" : markdown));
-  if (!parsed.length) parsed.push(makeBlock("paragraph"));
-  const painting = [];
-  for (const block of parsed) {
-    box.blocks.push(block);
-    const view = mountBlock(block, box);
-    if (view.ready) painting.push(Promise.resolve(view.ready).catch(() => {}));
+  box.blocks.length = 0;
+  box.views.length = 0;
+  for (const view of views) {
+    box.blocks.push(view.block);
+    box.views.push(view);
   }
+
+  let anchor = box.tail || null;
+  for (let i = views.length - 1; i >= 0; i--) {
+    const el = views[i].el;
+    if (el.parentNode !== box.el || el.nextSibling !== anchor) box.el.insertBefore(el, anchor);
+    anchor = el;
+  }
+
+  // What `writeBox` compares against to know the box still holds what it was
+  // built from. Taken after the reconcile, not before it.
+  box.stamp = box.blocks.map((block) => block.id).join(",");
+
+  // Left for `harvest` to pick up: what a step actually did to this box is what
+  // decides where the spotlight goes, and a box does not know it is in a step.
+  box.lastFresh = fresh;
+  box.lastPatched = patched;
   renumberFigures();
   return painting.length ? Promise.all(painting) : null;
 }
@@ -2000,19 +2146,65 @@ function headroom() {
   return Math.max(0, y) + 16;
 }
 
-/** Scroll only when the thing is not already somewhere it can be read. */
+/**
+ * Scroll only when the thing is not already somewhere it can be read.
+ *
+ * @returns {boolean} whether it actually asked the page to travel.
+ */
 function bringIntoView(el, quick) {
-  if (!el || !el.isConnected) return;
+  if (!el || !el.isConnected) return false;
   const rect = el.getBoundingClientRect();
   const top = headroom();
   const foot = window.innerHeight - 24;
-  if (rect.top >= top && (rect.bottom <= foot || rect.height > foot - top)) return;
+  if (rect.top >= top && (rect.bottom <= foot || rect.height > foot - top)) return false;
   window.scrollTo({
     top: Math.max(0, window.scrollY + rect.top - top - 12),
     // A run of presses travels once, at the end. Smooth-scrolling each step of a
     // held Ctrl-Z is a page that never arrives anywhere.
     behavior: quick || reduced() ? "auto" : "smooth",
   });
+  return true;
+}
+
+/** Resolve once the page has stopped moving, or once it has had long enough. */
+function scrollSettled(cap) {
+  return new Promise((done) => {
+    const until = Date.now() + (cap || 700);
+    let last = window.scrollY;
+    let still = 0;
+    const tick = () => {
+      if (Date.now() > until) return done();
+      const y = window.scrollY;
+      if (Math.abs(y - last) < 0.5) {
+        still += 1;
+        if (still >= 3) return done();
+      } else {
+        still = 0;
+      }
+      last = y;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+/**
+ * Hold one element still on screen across whatever `fn` does to the article.
+ *
+ * Opening a folding, switching a tab pane and landing a step all change heights,
+ * and a height that changes ABOVE the viewport slides everything under it. The
+ * element the step is about is measured, the change happens, and the page is
+ * scrolled by exactly the difference — so the only thing that ever moves the
+ * reader's view is the deliberate travel that happens before any of this.
+ */
+async function anchored(el, fn) {
+  const top = el && el.isConnected ? el.getBoundingClientRect().top : null;
+  const out = await fn();
+  if (top != null && el.isConnected) {
+    const drift = el.getBoundingClientRect().top - top;
+    if (Math.abs(drift) > 0.5) window.scrollBy(0, drift);
+  }
+  return out;
 }
 
 let rowLit = null;
@@ -2088,47 +2280,376 @@ async function openBrowserAt(path) {
     held = pickerLive();
   }
   if (held && held.ready) await held.ready;
+  // Already open, on something else: walk it to the file this step is about
+  // before the step lands, so what changes is a name and not the whole panel.
+  if (held && path) held.goto(path);
 }
 
-async function goToStep(target, quick) {
-  if (target.kind === "asset") return void (await openBrowserAt(target.path));
+/**
+ * Get to where the step happens, before it happens.
+ *
+ * Opening the file tree on the right folder, opening a folding, switching to the
+ * tab the change is in — a step that lands behind a closed disclosure is a step
+ * the author watched do nothing. All of it is awaited, so the article is already
+ * showing the right place when the words change; a run of presses skips it,
+ * because five reveals in a row is five animations nobody asked for.
+ *
+ * The travel here is coarse ON PURPOSE. This knows only the block the document
+ * named, which for anything inside a note IS the note — and stopping at the top
+ * of a long note is how the change itself ended up off screen. So the page only
+ * moves when the note is not on screen at all; the precise journey happens in
+ * `spotlight`, once there is a real element to travel to.
+ */
+async function goToStep(target, plan) {
+  // The browser opens on the name the file has RIGHT NOW — `target.path` is
+  // where the step is about to put it, and a tree drawn from the stage as it
+  // stands cannot hold that name yet. Standing on the old one first is what
+  // makes the rename visible as a rename.
+  if (target.kind === "asset") return void (await openBrowserAt(target.was || target.path));
   // Any other step is somewhere else entirely, and a modal over the article is
   // the one thing that would hide it.
   closeBrowser();
-  if (target.kind === "seam") return;
-  bringIntoView(targetNode(target), quick);
-}
+  if (target.kind !== "block") return;
 
-/**
- * What the block said before the step, so the characters that changed can be
- * worked out from what it says after it. Read before anything moves; a block
- * that is about to arrive has nothing to read and says so by being null.
- */
-function textBefore(target) {
-  if (!target || target.kind !== "block" || target.how !== "edit") return null;
   const at = locate(target.id);
-  return at ? domText(at.view.body) : null;
+  if (!at) return;
+  const next = plan.blocks.find((block) => block.id === target.id);
+
+  if (plan.quick) {
+    if (at.view.reveal) at.view.reveal(next);
+    return;
+  }
+
+  // One. Travel, and WAIT for it. Opening a folding while the page is still
+  // moving is two motions at once, and the pair reads as a stutter rather than
+  // as two things happening in an order.
+  if (offScreen(at.view.el) && bringIntoView(at.view.el)) await scrollSettled();
+
+  // Two. Open what the change is behind, holding the block still while it grows.
+  if (at.view.reveal) await anchored(at.view.el, () => at.view.reveal(next));
+}
+
+/** Not a pixel of it is in the readable band. */
+function offScreen(el) {
+  if (!el || !el.isConnected) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.bottom <= headroom() || rect.top >= window.innerHeight - 24;
 }
 
 /**
- * Light the change, as precisely as the change allows.
+ * Every box's account of what the step did to it, collected once.
  *
- * Four different things, because they are four different events:
- *
- *   edited  the characters that differ, plus two either side
- *   arrived the block, because the block IS what changed
- *   moved   the block, at the place it moved to
- *   left    the seam it left between the two blocks that remain — never the
- *           neighbour itself, which is the reading that made a delete look like
- *           an edit to something the author had not touched
+ * A box records what it created and what it patched as it reconciles, because
+ * only the box knows — the step store works on the document, and the document
+ * cannot tell a paragraph inside a note from the note itself.
  */
-function spotlight(target, was, quick) {
+function harvest() {
+  const fresh = [];
+  const patched = [];
+  for (const box of state.boxes) {
+    if (box.lastFresh && box.lastFresh.length) fresh.push(...box.lastFresh);
+    if (box.lastPatched && box.lastPatched.length) patched.push(...box.lastPatched);
+    box.lastFresh = null;
+    box.lastPatched = null;
+  }
+  return { fresh, patched };
+}
+
+/** The same account, read without taking it: `shift` needs it mid-flight. */
+function touched() {
+  const spots = [];
+  for (const box of state.boxes) {
+    for (const view of box.lastFresh || []) spots.push({ view, was: null });
+    for (const spot of box.lastPatched || []) spots.push(spot);
+  }
+  return spots.filter((spot) => spot.view.el.isConnected);
+}
+
+/**
+ * The DEEPEST thing that changed, and only when there is exactly one.
+ *
+ * A paragraph edited inside a note reaches this as two changes — the note,
+ * because its body is a string that now reads differently, and the paragraph
+ * itself. The note CONTAINS the paragraph, so it is not the answer: taking the
+ * ancestor is what pinned a step to the top of a note and lit the whole of it.
+ */
+function onlyLeaf(spots) {
+  const leaves = spots.filter(
+    (spot) => !spots.some((other) => other !== spot && spot.view.el.contains(other.view.el))
+  );
+  return leaves.length === 1 ? leaves[0] : null;
+}
+
+function changedLeaf() {
+  const only = onlyLeaf(touched());
+  return only ? only.view.el : null;
+}
+
+// A touch slower than the toolbar's own morph, deliberately: this is the whole
+// article rearranging itself, and at 280ms it read as a snap rather than a move.
+const STEP_MS = 380;
+
+function canvasNodes() {
+  return state.canvas ? Array.from(state.canvas.querySelectorAll(".ed-block, .ed-tail")) : [];
+}
+
+/**
+ * What a block says, in the one spelling both sides of a move agree on.
+ *
+ * A block dragged out of a note is the SAME words in two different states: in
+ * the article it is a live block that has been edited, so it emits from its
+ * fields, and inside the note it is a slice of the note's body, so it emits its
+ * source. `signature` tells those apart — which is right for the document and
+ * wrong here, where the question is "is this the block that just left?".
+ * `emitBlock` reads both from the fields, so the two match.
+ */
+function saysWhat(block) {
+  try {
+    return block.type + " " + emitBlock(block);
+  } catch (err) {
+    return block.type + " " + (block.src || "");
+  }
+}
+
+/** Where every block on the canvas stood, keyed by what it said. */
+function ghosts() {
+  const map = new Map();
+  for (const box of state.boxes) {
+    for (const view of box.views) {
+      if (!view.el.isConnected) continue;
+      const key = saysWhat(view.block);
+      if (!map.has(key)) map.set(key, { el: view.el, rect: view.el.getBoundingClientRect() });
+    }
+  }
+  return map;
+}
+
+/**
+ * What the reader is looking at, when the step itself has nothing to offer.
+ *
+ * A step that CREATES a block has no element to hold still — the block did not
+ * exist when the measuring happened — so the page is held by the first block
+ * still on screen instead. Without it, restoring a paragraph above the fold slid
+ * everything the reader was reading down by its height.
+ */
+function steadyAnchor() {
+  const top = headroom();
+  for (const node of canvasNodes()) {
+    if (node.getBoundingClientRect().bottom > top + 1) return node;
+  }
+  return null;
+}
+
+function viewsByEl() {
+  const map = new Map();
+  for (const box of state.boxes) for (const view of box.views) map.set(view.el, view);
+  return map;
+}
+
+/**
+ * One FLIP over the WHOLE canvas, with the page pinned to an anchor.
+ *
+ * Three things were wrong with doing this per box. The root box's survivors
+ * travelled and a note's did not, so half the article slid and the other half
+ * jumped. A block LEAVING a note for the article is a different view with a
+ * different id, so it was not a survivor anywhere and had to be animated
+ * separately — after the first animation had already finished, which is two
+ * motions in sequence where there is one movement. And nothing held the page
+ * still, so a height change above the fold slid everything under it.
+ *
+ * Here every block and every `+` row in the canvas is measured, the change
+ * happens, the page is scrolled by exactly what the anchor moved, and everything
+ * travels from where it was in ONE pass. A block with no old position of its own
+ * borrows the one its ghost left — same words, same place to look.
+ */
+async function shift(fallback, before, mutate) {
+  if (reduced()) return void mutate();
+
+  const nodes = canvasNodes();
+  const was = new Map();
+  for (const node of nodes) was.set(node, node.getBoundingClientRect());
+
+  mutate();
+
+  const owner = viewsByEl();
+
+  // The anchor is chosen HERE, not by the caller, because only now is it known
+  // what changed. The caller can name the block the DOCUMENT is about, and for
+  // anything inside a note that is the note — pinning its top let the change
+  // slide within it, which is the one thing the pinning exists to stop. The
+  // boxes have just said which block actually took the edit.
+  //
+  // A block that moved INTO a note is new here and has no old rectangle of its
+  // own, but it has a ghost: the row it occupied a moment ago, in the article it
+  // came from. Pinning it there is what makes a block cross a boundary without
+  // the page appearing to lurch — the block stays under the eye and everything
+  // else slides around it.
+  const leaf = changedLeaf();
+  let anchor = null;
+  let top = null;
+
+  if (leaf && was.has(leaf)) {
+    anchor = leaf;
+    top = was.get(leaf).top;
+  } else if (leaf) {
+    const view = owner.get(leaf);
+    const ghost = view && before ? before.get(saysWhat(view.block)) : null;
+    if (ghost) {
+      anchor = leaf;
+      top = ghost.rect.top;
+    }
+  }
+  if (!anchor && fallback && was.has(fallback)) {
+    anchor = fallback;
+    top = was.get(fallback).top;
+  }
+
+  // Pinned BEFORE anything is measured, so every delta below is read in the
+  // viewport the reader is actually looking at.
+  if (top != null && anchor.isConnected) {
+    const drift = anchor.getBoundingClientRect().top - top;
+    if (Math.abs(drift) > 0.5) window.scrollBy(0, drift);
+  }
+
+  const runs = [];
+
+  for (const node of canvasNodes()) {
+    const now = node.getBoundingClientRect();
+    let from = was.get(node);
+    let arriving = false;
+
+    if (!from) {
+      const view = owner.get(node);
+      const ghost = view && before ? before.get(saysWhat(view.block)) : null;
+      if (ghost && !ghost.el.isConnected) {
+        from = ghost.rect;
+        arriving = true;
+      }
+    }
+
+    if (!from) {
+      // Genuinely new, with nowhere to come from: it fades in where it landed.
+      runs.push(
+        node.animate(
+          [{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
+          { duration: Math.round(STEP_MS * 0.6), easing: EASE }
+        )
+      );
+      continue;
+    }
+
+    const dx = from.left - now.left;
+    const dy = from.top - now.top;
+    if (!dx && !dy) continue;
+
+    runs.push(
+      node.animate(
+        arriving
+          ? [
+              { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.45 },
+              { transform: "none", opacity: 1 },
+            ]
+          : [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
+        { duration: STEP_MS, easing: EASE }
+      )
+    );
+  }
+
+  await Promise.all(runs.map((run) => run.finished.catch(() => {})));
+}
+
+// A range that wraps onto more lines than this is not a place any more, it is a
+// paragraph — and a dozen bars stacked down one is the "overlapping boxes" that
+// made a moved block unreadable.
+const SPOT_LINES = 6;
+
+/**
+ * Is the change a PART of this block, or the whole of it?
+ *
+ * Lighting a range only says something when there is unlit text either side of
+ * it. A block that was replaced outright has none, and drawing its every line as
+ * a separate bar is the same picture as lighting every character in it — which
+ * is exactly how a block that had been moved was being shown. Whole-block
+ * changes get the block.
+ */
+function subRange(was, now) {
+  const span = charSpan(was, now);
+  const width = Math.max(span.endA - span.head, span.endB - span.head);
+  const whole = Math.max(was.length, now.length);
+  return whole > 0 && width < whole * 0.75;
+}
+
+/**
+ * Light what the step actually did, read from the canvas rather than guessed
+ * from the document.
+ *
+ * The document cannot tell these four apart — a paragraph moving out of a note
+ * reaches it as "the note's text changed", which is how a move came to be drawn
+ * as a character range over the whole note. The boxes know, because they are the
+ * ones that did it:
+ *
+ *   moved    the block, where it landed
+ *   edited   the characters that differ inside the ONE view that took them
+ *   arrived  the block, because the block is the change
+ *   left     the seam between the two blocks that remain
+ */
+function spotlight(target, report, quick) {
   if (target.kind === "asset") {
     const held = pickerLive();
     if (!held) return;
-    // Re-read from the stage as it now stands: the tree was drawn before.
+    // Re-read from the stage as it now stands: the tree was drawn before the
+    // step, under the names the step has just taken away.
     held.goto(target.path);
     return void litRow(held.row(target.path));
+  }
+
+  // A block that MOVED, first and before anything is compared as text. The same
+  // words in a new place reach every other test here as "this block's text is
+  // completely different", and a wholesale text difference drawn as a character
+  // range is a bar per word — which is what a moved block was being lit as.
+  const drift = (report && report.drift) || [];
+  const travelled = drift.find((view) => view.el.isConnected);
+  if (travelled) {
+    bringIntoView(travelled.el, quick);
+    return void spotElement(travelled.el, "move");
+  }
+
+  const spots = [
+    ...((report && report.fresh) || []).map((view) => ({ view, was: null })),
+    ...((report && report.patched) || []),
+  ].filter((spot) => spot.view.el.isConnected);
+
+  // A block that ARRIVED outranks one that was merely rewritten: a note whose
+  // body gained a paragraph reports both, and the paragraph is the event.
+  const only = onlyLeaf(spots.filter((spot) => spot.was == null)) || onlyLeaf(spots);
+
+  if (only) {
+    const { view, was } = only;
+    bringIntoView(view.el, quick);
+
+    const now = was == null ? null : domText(view.body);
+    // Equal text means the step changed something the reader cannot see — a
+    // separator, a source spelling — and there is no range to point at.
+    if (now != null && now !== was && subRange(was, now)) {
+      const span = charSpan(was, now);
+      const from = Math.max(0, span.head - SPOT_PAD);
+      const to = Math.min(now.length, Math.max(span.endB, span.head + 1) + SPOT_PAD);
+      // The change itself, and the change with two characters of air around it.
+      // The first decides which LINES are worth marking, the second how wide
+      // the mark is on them — padding that reaches onto the next line marks a
+      // line break, which is a thing nobody changed.
+      const core = domRange(view.body, span.head, Math.max(span.endB, span.head + 1));
+      const range = domRange(view.body, from, to);
+      if (range && core && core.getClientRects().length <= SPOT_LINES) {
+        // The caret follows the step. Undoing a word three paragraphs up and
+        // then typing has to continue THERE, and a caret left behind in the
+        // block the author happened to be standing in would put the next letter
+        // somewhere the step said nothing about.
+        followCaret(view, core);
+        return void spotRange(range, core);
+      }
+    }
+    return void spotElement(view.el, "block");
   }
 
   if (target.kind === "seam") {
@@ -2144,15 +2665,6 @@ function spotlight(target, was, quick) {
     const at = locate(target.id);
     if (!at) return;
     bringIntoView(at.view.el, quick);
-
-    if (was != null) {
-      const now = domText(at.view.body);
-      const span = charSpan(was, now);
-      const from = Math.max(0, span.head - SPOT_PAD);
-      const to = Math.min(now.length, Math.max(span.endB, span.head + 1) + SPOT_PAD);
-      const range = domRange(at.view.body, from, to);
-      if (range) return void spotRange(range);
-    }
     return void spotElement(at.view.el, target.how === "move" ? "move" : "block");
   }
 
@@ -2160,6 +2672,32 @@ function spotlight(target, was, quick) {
   if (!el) return;
   bringIntoView(el, quick);
   spotElement(el, "field");
+}
+
+/**
+ * Put the caret at the end of what the step changed.
+ *
+ * Only when the canvas already had it. A step asked for from the front-matter
+ * card, or from a button with nothing focused, must not pull the focus into the
+ * article — that is the same "editing mode changed under me" the caret loss
+ * used to cause, wearing the opposite sign.
+ */
+function followCaret(view, range) {
+  const host = view && view.editable;
+  if (!host || !range || !host.contains(range.startContainer)) return;
+
+  const live = document.activeElement;
+  if (live && live !== document.body && !state.canvas.contains(live)) return;
+
+  const at = range.cloneRange();
+  at.collapse(false);
+  // Without `preventScroll` the browser scrolls the block to its own idea of
+  // centre, which on a phone fights the editor's scrolling and bounces the page.
+  host.focus({ preventScroll: true });
+  const sel = window.getSelection();
+  if (!sel) return;
+  sel.removeAllRanges();
+  sel.addRange(at);
 }
 
 /** Put the caret back at the end of a field that was rewritten under it. */
@@ -2184,22 +2722,32 @@ const COVER_OF = (front) => front.cover || front.banner || front.thumbnail || ""
  * four lines and would have made every undo cost a full re-render and a fresh
  * request for every image in the post.
  */
-async function reconcile(wanted, quick) {
+async function reconcile(wanted, quick, before, anchor) {
   const box = state.root;
-  if (!box) return [];
+  if (!box) return;
 
   const held = new Map(box.views.map((view) => [view.block.id, view]));
   const rows = [];
   for (const block of wanted) {
     const view = held.get(block.id);
-    const same = view && signature(view.block) === signature(block);
     if (view) held.delete(block.id);
-    rows.push({ block, view: same ? view : null, gone: same ? null : view });
-  }
 
-  // Measured before anything moves; the survivors are what travels.
-  const travelling = rows.filter((row) => row.view).map((row) => row.view.el);
-  if (box.tail) travelling.push(box.tail);
+    if (view && signature(view.block) === signature(block)) {
+      rows.push({ block, view, gone: null });
+      continue;
+    }
+    // The same block saying something else. Handing the words to the view it
+    // already has keeps the element, and keeping the element keeps the caret,
+    // the keyboard, the decoded picture and the rendered equation — all four of
+    // which a rebuild threw away on every press. Asked here and DONE inside the
+    // mutation below, so the height it changes is one the FLIP has measured
+    // against; a view that cannot take the change says so and is rebuilt.
+    if (view && view.patch && view.patch(block, true)) {
+      rows.push({ block, view, gone: null, patch: true });
+      continue;
+    }
+    rows.push({ block, view: null, gone: view || null });
+  }
 
   const mutate = () => {
     // `dropBoxesIn` is what releases a view being discarded, here as everywhere
@@ -2207,6 +2755,11 @@ async function reconcile(wanted, quick) {
     // view the element belongs to, and it can only do the second while the old
     // list is still the list.
     for (const row of rows) {
+      if (row.patch) {
+        row.was = domText(row.view.body);
+        row.view.patch(row.block);
+        continue;
+      }
       if (row.gone) {
         dropBoxesIn(row.gone.el);
         row.gone.el.remove();
@@ -2243,15 +2796,19 @@ async function reconcile(wanted, quick) {
       if (el.parentNode !== box.el || el.nextSibling !== anchor) box.el.insertBefore(el, anchor);
       anchor = el;
     }
+
+    // Left the way every other box leaves it, so `harvest` can read the whole
+    // canvas the same way whether the step landed in the article or in a note.
+    box.lastFresh = rows.filter((row) => row.fresh).map((row) => row.view);
+    box.lastPatched = rows.filter((row) => row.patch).map((row) => ({ view: row.view, was: row.was }));
   };
 
   // Every step but the last of a run skips its animation: presses are being
   // counted, and a queue that animates each one arrives seconds after the hand
-  // stopped.
-  if (quick) mutate();
-  else await flip(travelling, mutate);
-
-  return rows.filter((row) => row.fresh).map((row) => row.view);
+  // stopped. It is still anchored — a queue that drifts is a queue that ends
+  // somewhere the author was not looking.
+  if (quick) await anchored(anchor, mutate);
+  else await shift(anchor, before, mutate);
 }
 
 async function applyStep(plan) {
@@ -2263,13 +2820,18 @@ async function applyStep(plan) {
   // Two awaits below, and the editor can be closed across either of them — by
   // the author, by a navigation, by a teardown. Each one is re-tested against
   // the chrome this step started under rather than against a flag alone.
-  await goToStep(target, plan.quick);
+  await goToStep(target, plan);
   if (!state.on || !state.doc || ui !== chrome) return;
 
-  // Read while the block still says what it said: the characters to light up are
-  // the ones that differ between this and what it says once the step has landed.
-  const was = textBefore(target);
+  // Measured while everything still stands where it stood: a block that leaves a
+  // note for the article is a new view with a new id, and this is the only
+  // record that it used to be somewhere.
+  const before = plan.quick ? null : ghosts();
+  // Drained first: `fillBox` records for every caller, including a tab switch
+  // nobody is stepping through, and a stale entry would be read as this step's.
+  harvest();
   const wasFront = doc.front;
+  let report = { fresh: [], patched: [], drift: [] };
   // `painting` is the editor's own word for "this is a repaint, not an edit":
   // every listener a restore trips would otherwise report work the author did
   // not do, and the step store would record its own undo.
@@ -2289,8 +2851,23 @@ async function applyStep(plan) {
     state.pending.length = 0;
     for (const asset of plan.pending) state.pending.push(asset);
 
-    const fresh = await reconcile(plan.blocks, plan.quick);
+    // The block the step is about is what the page is held still by: it is the
+    // one thing the author is looking at, and everything else may move around it.
+    const held = target.kind === "block" ? locate(target.id) : null;
+    await reconcile(plan.blocks, plan.quick, before, (held && held.view.el) || steadyAnchor());
     if (!state.on || ui !== chrome) return;
+
+    // Every box's account of what just happened to it, root and nested alike.
+    report = harvest();
+    // Which of the new views came from somewhere rather than from nothing —
+    // `shift` has already travelled them; this is only so the spotlight can name
+    // the block that MOVED rather than the text it left behind.
+    report.drift = before
+      ? report.fresh.filter((view) => {
+          const ghost = before.get(saysWhat(view.block));
+          return !!ghost && !ghost.el.isConnected;
+        })
+      : [];
 
     if (wasFront !== plan.front) {
       const before = parseFrontMatter(wasFront);
@@ -2332,16 +2909,6 @@ async function applyStep(plan) {
     contentChanged();
     if (ui.toolbar) ui.toolbar.sync();
 
-    // A block that has just arrived has nothing to travel from, so it fades in
-    // where it landed rather than sliding from an origin it never had.
-    if (!reduced() && !plan.quick) {
-      for (const view of fresh) {
-        view.el.animate(
-          [{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
-          { duration: 220, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
-        );
-      }
-    }
   } finally {
     state.painting = false;
   }
@@ -2349,7 +2916,7 @@ async function applyStep(plan) {
   // Whether anything is left to commit is the step store's answer, given the
   // moment `index` moves — see `syncSteps`. This only redraws the bar around it.
   syncHeader();
-  spotlight(target, was, plan.quick);
+  spotlight(target, report, plan.quick);
 }
 
 /* ─── dirty / save ─────────────────────────────────────────────────────────── */
@@ -2970,7 +3537,7 @@ export function teardownEditor() {
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
   history.reset();
-  spotClear();
+  spotClear(true);
   litRow(null);
   stopEdgeScroll();
 

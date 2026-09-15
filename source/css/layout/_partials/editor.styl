@@ -109,6 +109,16 @@ css-min(a, b)
     background-color rgba($ed-gold, 0)
     outline-color rgba($ed-gold, 0)
 
+// The same mark with no wash — a ring and a glow, and the surface underneath
+// left exactly as it was.
+@keyframes ed-flash-ring
+  0%, 100%
+    outline-color rgba($ed-gold, 0)
+    box-shadow 0 0 0 0 rgba($ed-gold, 0)
+  16%, 62%
+    outline-color rgba($ed-gold, 0.95)
+    box-shadow 0 0 14px 1px rgba($ed-gold, 0.45)
+
 // A row inside the picture browser's tree — the one target that lives in a
 // scrolling panel of its own, where a mark painted in page coordinates could
 // not follow it. Everything on the page itself is drawn by `.ed-spot` below.
@@ -117,6 +127,13 @@ css-min(a, b)
   outline 2px solid transparent
   outline-offset 1px
   animation ed-flash 1250ms cubic-bezier(0.32, 0.72, 0, 1) both
+
+// The SELECTED row is white ink on the primary colour, and an animation beats a
+// plain declaration — so washing it gold repainted the background out from under
+// white text and left the name, the folder icon and the chevron unreadable. The
+// tree gets the ring alone.
+.ed-pick-row.ed-flash
+  animation ed-flash-ring 1250ms cubic-bezier(0.32, 0.72, 0, 1) both
 
 // The layer the marks are painted on: at the document origin, above the article
 // and under the toolbar, and never in the way of a pointer. Its children carry
