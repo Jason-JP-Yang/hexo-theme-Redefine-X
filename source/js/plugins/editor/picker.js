@@ -55,6 +55,10 @@ import { EASE, MORPH_MS, createEdgeScroll, pop, setDragImage } from "./motion.js
 const ROOTS = ["source/images", "source/masonry"];
 const isRoot = (path) => ROOTS.includes(path);
 
+// How long a stepped-to row wears the mark — the length of `ed-flash`, which is
+// what decides when the selected row gets its own colours back.
+const FLASH_MS = 1250;
+
 /** Which root this path lives under, or "" when it is outside all of them. */
 function rootOf(path) {
   const value = String(path || "");
@@ -802,7 +806,55 @@ export function openPicker(ctx, opts = {}) {
     }
 
     function paintSelection() {
-      for (const [path, node] of nodes) node.row.dataset.on = path === chosen ? "1" : "0";
+      for (const [path, node] of nodes) {
+        node.row.dataset.on = path === chosen ? "1" : "0";
+        // Choosing anything takes the step's mark down. The author has moved on,
+        // and a row wearing the mark's colours is a row not wearing the ones that
+        // say it is selected.
+        unlight(node.row);
+      }
+    }
+
+    let lit = null;
+    let litOff = 0;
+
+    function unlight(row) {
+      if (!row) return;
+      row.classList.remove("ed-flash");
+      delete row.dataset.lit;
+      if (lit === row) lit = null;
+    }
+
+    /**
+     * Where a step landed, marked on a row in the tree.
+     *
+     * The mark WASHES the row gold, and a selected row is white ink on the
+     * primary colour — two backgrounds on one element, with the animation beating
+     * the declaration, which left white text on pale gold. So the selected state
+     * stands down for as long as the mark is up (`data-lit`) and comes back the
+     * moment it is over; choosing something else takes it down early, because by
+     * then the author is telling us where they are rather than being told.
+     *
+     * A file the step has just taken away has no row left, so the folder it was
+     * in is marked instead — which is the place being shown.
+     */
+    function flash(path) {
+      clearTimeout(litOff);
+      if (lit) unlight(lit);
+
+      let here = path;
+      while (here && !nodes.has(here) && rootOf(here)) here = parentOf(here);
+      const node = here && nodes.get(here);
+      if (!node) return;
+
+      reveal(here);
+      const row = node.row;
+      row.dataset.lit = "1";
+      row.classList.remove("ed-flash");
+      void row.offsetWidth;
+      row.classList.add("ed-flash");
+      lit = row;
+      litOff = setTimeout(() => unlight(row), FLASH_MS);
     }
 
     function paintPath(animate) {
@@ -820,17 +872,25 @@ export function openPicker(ctx, opts = {}) {
     }
 
     /**
-     * The preview: one `<img>`, built once and re-pointed on every selection.
+     * The preview, built the way the ARTICLE builds a picture.
      *
-     * Rebuilding it per click is what put a fresh skeleton into the layout each
-     * time — the old box left, a new one arrived at a different height, and the
-     * details under it jumped. The element never leaves, so the skeleton is
-     * already standing when the next picture is chosen.
+     * A `.img-preloader` handed to the site's own lazyload observer — the same
+     * skeleton, the same cross-fade, the same repository fallback, the same
+     * decryption for a withheld file. Never a bare `<img>` re-pointed at the next
+     * selection: an `<img>` keeps painting the picture it already has until the
+     * next one decodes, and the box around it has already been resized to the new
+     * picture's shape, so what the author sees between two clicks is the LAST
+     * photograph stretched out of shape. A preloader has nothing to show yet, so
+     * it shows the skeleton — at exactly the shape the picture will arrive at.
+     *
+     * A new one per selection, because the one standing here belongs to the
+     * observer and to the file it has already loaded.
      *
      * Its size is arithmetic, not CSS: see `fitShot` and `.ed-pick-stage`.
      */
-    const shot = document.createElement("img");
-    shot.decoding = "async";
+    function shotNode() {
+      return stage.querySelector(".img-preloader, img");
+    }
 
     const blank = document.createElement("p");
     blank.className = "ed-pick-blank";
@@ -858,7 +918,7 @@ export function openPicker(ctx, opts = {}) {
      * Never above 1: a 200px thumbnail is 200px, not blown up across the pane.
      */
     function fitShot() {
-      if (!shape) return 0;
+      if (!shape || !shotNode()) return 0;
 
       const cs = getComputedStyle(view);
       const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
@@ -875,9 +935,12 @@ export function openPicker(ctx, opts = {}) {
       }
       stage.hidden = false;
 
+      // Published as two custom properties rather than written onto the element:
+      // the preloader is REPLACED by the `<img>` it becomes, and a size living on
+      // the box that survives both is a size neither of them can lose.
       const scale = Math.min(1, wide / shape.width, room / shape.height);
-      shot.style.width = Math.max(1, Math.round(shape.width * scale)) + "px";
-      shot.style.height = Math.max(1, Math.round(shape.height * scale)) + "px";
+      stage.style.setProperty("--ed-shot-w", Math.max(1, Math.round(shape.width * scale)) + "px");
+      stage.style.setProperty("--ed-shot-h", Math.max(1, Math.round(shape.height * scale)) + "px");
       return 1;
     }
 
@@ -906,10 +969,11 @@ export function openPicker(ctx, opts = {}) {
       relockPreviewed();
 
       const before = animate === false || stage.hidden ? 0 : stage.getBoundingClientRect().height;
+      const old = shotNode();
 
       if (!known) {
         shape = null;
-        shot.remove();
+        if (old) old.remove();
         stage.hidden = false;
         if (!blank.isConnected) stage.appendChild(blank);
         stage.dataset.empty = "1";
@@ -919,7 +983,6 @@ export function openPicker(ctx, opts = {}) {
 
       blank.remove();
       delete stage.dataset.empty;
-      if (!shot.isConnected) stage.appendChild(shot);
 
       const node = nodes.get(chosen);
       const origin = ctx.stage.origin(chosen);
@@ -930,7 +993,6 @@ export function openPicker(ctx, opts = {}) {
       const size =
         ctx.naturalSize(address) || (node && node.width ? { width: node.width, height: node.height } : null);
 
-      shot.alt = nameOf(chosen);
       // A nominal 3:2 for the only thing that can be unmeasured — a picture
       // staged in this session that could not be read.
       shape = size && size.width && size.height ? size : { width: 1200, height: 800 };
@@ -944,9 +1006,17 @@ export function openPicker(ctx, opts = {}) {
         metaRow(t("pick_served", "Served at"), servedAt(node)) +
         (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
 
+      const shot = ctx.buildPreloader(address, nameOf(chosen));
+      // A click here chooses the file; the lightbox belongs to the article.
+      shot.setAttribute("data-no-viewer", "");
+      if (old) old.replaceWith(shot);
+      else stage.appendChild(shot);
+
       fitShot();
       travel(before);
-      ctx.bindImage(shot, address);
+      // Nothing to defer: this is one picture, in a modal, that was just asked
+      // for by name.
+      ctx.loadPreview(shot);
     }
 
     /**
@@ -1549,6 +1619,7 @@ export function openPicker(ctx, opts = {}) {
         const node = nodes.get(path);
         return node ? node.row : null;
       },
+      flash,
       close: () => finish(null),
     };
 

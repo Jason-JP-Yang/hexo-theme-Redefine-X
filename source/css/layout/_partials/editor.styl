@@ -109,16 +109,6 @@ css-min(a, b)
     background-color rgba($ed-gold, 0)
     outline-color rgba($ed-gold, 0)
 
-// The same mark with no wash — a ring and a glow, and the surface underneath
-// left exactly as it was.
-@keyframes ed-flash-ring
-  0%, 100%
-    outline-color rgba($ed-gold, 0)
-    box-shadow 0 0 0 0 rgba($ed-gold, 0)
-  16%, 62%
-    outline-color rgba($ed-gold, 0.95)
-    box-shadow 0 0 14px 1px rgba($ed-gold, 0.45)
-
 // A row inside the picture browser's tree — the one target that lives in a
 // scrolling panel of its own, where a mark painted in page coordinates could
 // not follow it. Everything on the page itself is drawn by `.ed-spot` below.
@@ -129,11 +119,29 @@ css-min(a, b)
   animation ed-flash 1250ms cubic-bezier(0.32, 0.72, 0, 1) both
 
 // The SELECTED row is white ink on the primary colour, and an animation beats a
-// plain declaration — so washing it gold repainted the background out from under
-// white text and left the name, the folder icon and the chevron unreadable. The
-// tree gets the ring alone.
-.ed-pick-row.ed-flash
-  animation ed-flash-ring 1250ms cubic-bezier(0.32, 0.72, 0, 1) both
+// plain declaration — so washing a selected row gold repainted that colour out
+// from under white text and left the name, the folder icon and the chevron
+// unreadable. Dropping the wash instead made the mark the faintest thing in the
+// panel, which is the opposite failure.
+//
+// So the selection stands DOWN while the mark is up. `data-lit` is set by the
+// browser that draws the row, for exactly as long as the animation runs, and
+// removed the moment the author chooses anything — by then they are telling us
+// where they are rather than being shown. The row is its ordinary self under a
+// gold wash, which is the one combination legible in every theme.
+.ed-pick-row[data-lit="1"][data-on="1"]
+  background transparent
+  color var(--second-text-color)
+
+.ed-pick-row[data-lit="1"][data-on="1"] i
+  color var(--third-text-color)
+
+.ed-pick-row[data-lit="1"][data-on="1"] .ed-pick-name
+  color var(--first-text-color)
+
+.ed-pick-row[data-lit="1"][data-on="1"] .ed-pick-flag
+  background var(--second-background-color)
+  color var(--third-text-color)
 
 // The layer the marks are painted on: at the document origin, above the article
 // and under the toolbar, and never in the way of a pointer. Its children carry
@@ -276,6 +284,8 @@ html.blog-editing .post-page-container
   // two are one object in two rows and a difference between them would be read
   // as a difference in what they do.
   box-shadow 0 0 0 1px var(--shadow-color-1), 0 16px 34px -20px var(--shadow-color-2), 0 4px 12px -8px var(--shadow-color-1), inset 0 1px 0 0 var(--background-color)
+  // Both directions of the keyboard rule below, which asks it to step aside.
+  transition opacity $ed-fade, transform $ed-morph
 
   @media (min-width 640px)
     margin 24px 24px 16px
@@ -794,6 +804,50 @@ textarea.ed-f-input
 
   +redefine-mobile()
     top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
+
+// ─── composing with a keyboard up ─────────────────────────
+// A soft keyboard takes half the screen and the browser answers it by scrolling
+// the document until the caret clears it — which on a short post scrolls past
+// the end, leaving a screen of blank under the paragraph and the navigation, the
+// document bar and the toolbar all shoved off the top.
+//
+// So the two bars that are no use mid-word step aside, and the toolbar moves to
+// the top of what is actually VISIBLE. `plugins/editor/index.js` publishes
+// `--ed-vv-top` from the visual viewport and does the scrolling itself, once the
+// keyboard has stopped arriving; see `watchViewport`.
+//
+// Nothing here changes a height, so nothing reflows: the document bar keeps its
+// place in the flow and only stops being drawn, which is what makes this a
+// transition rather than a jump.
+html[data-ed-compose="1"] .main-content-header
+  // The navigation's OWN way of getting out of the way, transition included.
+  transform translateY(-105%)
+  pointer-events none
+
+html[data-ed-compose="1"] .ed-docbar
+  opacity 0
+  transform translateY(-10px)
+  pointer-events none
+
+// A `position: fixed` element is laid out against the LAYOUT viewport, most of
+// which is behind the keyboard. `--ed-vv-top` is where the band somebody can
+// actually see begins.
+html[data-ed-compose="1"] .ed-toolbar
+  top unquote('calc(var(--ed-vv-top, 0px) + 8px)')
+
+// Perch is about a page at rest. While the keyboard is up this is the only
+// chrome left, and it stays whatever the scroll position says.
+html[data-ed-compose="1"] .ed-toolbar[data-perch="hide"]
+  opacity 1
+  transform none
+
+// Room to scroll INTO. A short post cannot put its last paragraph at the top of
+// the band, so the browser answers the keyboard by over-scrolling and leaving a
+// screen of blank under it. The room is reserved deliberately instead — below
+// everything, where nothing visible moves when it appears and nothing is left
+// behind when it goes.
+html[data-ed-compose="1"] .article-content-container.is-editing
+  padding-bottom var(--ed-vv-h, 60vh)
 
 // `position: relative` is what the outgoing row is placed against while it
 // slides away; see `snapshot` in plugins/editor/toolbar.js.
@@ -1844,32 +1898,29 @@ $ed-pop-h = 620px
   &[hidden]
     display none
 
+  // Two elements, one box. The preloader is REPLACED by the picture it becomes,
+  // so the size `fitShot` worked out is published on the stage rather than
+  // written onto either of them — the box is the thing that survives the swap,
+  // which is what makes the skeleton and the picture the same rectangle.
+  //
+  // The article's margin and height cap are dropped here and only here: the room
+  // this picture may have was already subtracted from the pane's, and a second
+  // opinion about it is how the file's details got pushed out.
+  > .img-preloader,
   > img
     display block
+    width var(--ed-shot-w, auto)
+    height var(--ed-shot-h, auto)
+    max-width 100%
+    max-height none
+    margin 0
     border-radius 10px
-
-  // Until it decodes, the box it already occupies IS the skeleton — the theme's
-  // own shimmer, on the element that is about to hold the picture.
-  > img[data-ready="0"]
-    background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
-    animation ed-shot-wait 1.5s ease-in-out infinite
-
-  // Every route has been tried. A flat plate rather than the browser's
-  // broken-picture glyph, which `assets.js` keeps out of the box entirely.
-  > img[data-ready="err"]
-    background var(--third-background-color)
 
 // Nothing chosen: the hint is the whole pane rather than one line pinned to
 // the top of it.
 .ed-pick-stage[data-empty]
   flex 1 1 auto
   align-items center
-
-@keyframes ed-shot-wait
-  from
-    background-position 100% 0
-  to
-    background-position -100% 0
 
 .ed-pick-blank
   display flex

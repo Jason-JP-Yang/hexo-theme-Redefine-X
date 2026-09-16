@@ -241,7 +241,7 @@ function uploadPath(from, to) {
  * the file opens the browser on the file they renamed, which is where the work
  * actually happened.
  */
-function aim(from, to, cause) {
+function decide(from, to, cause) {
   const filed = filedPath(from, to);
   if (filed) return { kind: "asset", path: filed.path, was: filed.was };
 
@@ -259,6 +259,15 @@ function aim(from, to, cause) {
   const named = cause && cause.target ? String(cause.target) : "";
   if (cause && cause.kind === "move" && named && want.has(named)) {
     return { kind: "block", id: named, how: "move" };
+  }
+
+  // A picture ADDED to the repository. It is not a block edit even though a
+  // block usually points at it a moment later — the two are separate steps (see
+  // `pickImage`), and this one happened in the browser, on a file, which is
+  // where it has to be shown.
+  if (cause && cause.kind === "assets") {
+    const added = uploadPath(from, to);
+    if (added) return { kind: "asset", path: added, was: added };
   }
 
   for (const block of to.blocks) {
@@ -298,6 +307,23 @@ function aim(from, to, cause) {
   const path = uploadPath(from, to);
   if (path) return { kind: "asset", path, was: path };
   return { kind: "canvas" };
+}
+
+/**
+ * The same answer, plus the block the author had hold of.
+ *
+ * A block dragged INTO a note leaves the document's list entirely — it is a
+ * slice of the note's body now — so every answer above rightly names the note,
+ * which is the thing whose text changed. But the note may be a screen tall, and
+ * "go to the note" is how the block that actually moved ended up off screen with
+ * the page scrolled to something that had not visibly changed. `lead` is what the
+ * canvas still calls that block, for the travel that happens before the step.
+ */
+function aim(from, to, cause) {
+  const spot = decide(from, to, cause);
+  const named = cause && cause.kind === "move" && cause.target ? String(cause.target) : "";
+  if (named && !(spot.kind === "block" && spot.id === named)) spot.lead = named;
+  return spot;
 }
 
 /* ─── the store ────────────────────────────────────────────────────────────── */

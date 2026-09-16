@@ -42,7 +42,8 @@ import { closeDialogs, createStage, forgetTree, noteCommitted, openAsk, openPick
 import { charSpan, createHistory, signature } from "./history.js";
 import { domRange, domText, spotClear, spotElement, spotRange, spotSeam } from "./spotlight.js";
 import { toggleMath } from "./inline.js";
-import { holdTOC, releaseTOC, scheduleTOC } from "./toc.js";
+import { holdTOC, holdTOCActive, releaseTOC, scheduleTOC } from "./toc.js";
+import { getTOC, refreshTOC as measureTOC } from "../../layouts/toc.js";
 import { createFrontCard } from "./frontmatter.js";
 import { loadComponents, typesetMath } from "./render.js";
 import { vaultPrefix } from "../../tools/vaultCrypto.js";
@@ -59,6 +60,7 @@ import {
 } from "./assets.js";
 import initLazyLoad, {
   forceLoadAllPreloaders,
+  loadPreloaderNow,
   registerSrcFallback,
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
@@ -116,6 +118,8 @@ const state = {
   pointerY: 0,
   leaving: false,
   perchOff: null,
+  viewportOff: null,
+  composing: false,
   // Opened on /blog-management/write/ rather than on an article. There is no
   // page under this editor to go back to or to reload, so both exits are
   // somewhere else: the console, or the site.
@@ -589,6 +593,7 @@ async function activate(host) {
   ui.toolbar.el.dataset.perch = "show";
   await toolbarIn(ui.toolbar.el);
   state.perchOff = watchPerch(ui.toolbar.el);
+  state.viewportOff = watchViewport();
 
   if (identity.fresh) state.titleHost.querySelector(".ed-title").focus();
 }
@@ -614,10 +619,147 @@ function watchPerch(el) {
       want = (m ? m.scrollY : window.scrollY) > PERCH_AT ? "show" : "hide";
     },
     () => {
-      if (el.dataset.perch !== want) el.dataset.perch = want;
+      // While the keyboard is up this is the only chrome left on screen, and the
+      // rule it would be hidden by — "the document bar is not pinned yet" — is
+      // about a page at rest, which this is not.
+      const perch = state.composing ? "show" : want;
+      if (el.dataset.perch !== perch) el.dataset.perch = perch;
     },
     "editor toolbar perch"
   );
+}
+
+/* ─── composing on a phone ────────────────────────────────────────────── */
+
+/**
+ * The keyboard, and what the page is allowed to do about it.
+ *
+ * A soft keyboard does not push a page up — the browser scrolls the DOCUMENT
+ * until the caret clears it, and on a short post that means scrolling past the
+ * end: a screen of blank under the paragraph, with the navigation, the document
+ * bar and the toolbar all shoved off the top. Everything the author needs while
+ * typing ends up somewhere they can only reach by dismissing the keyboard they
+ * are typing on.
+ *
+ * So the editor takes the decision back. The two bars that are no use mid-word
+ * step aside — through the transition the navigation already owns, so it reads
+ * as chrome making room rather than as a repaint — the toolbar is pinned to the
+ * top of what is actually VISIBLE rather than to the top of a viewport half of
+ * which is behind the keyboard, and the page is scrolled ONCE, by us, so the
+ * line being typed comes to rest a fifth of the way down the band that is left.
+ *
+ * Nothing above the fold is pushed. The one height that changes is a band of
+ * padding at the END of the article — without it a short post has nothing to
+ * scroll INTO, which is exactly why the browser was over-scrolling and leaving
+ * blank under the paragraph.
+ */
+const KB_WIDE = 820;    // above this, a soft keyboard is not what is happening
+const KB_SHRINK = 140;  // the viewport has to lose this much to BE a keyboard
+const KB_SETTLE = 120;  // the keyboard's own animation, roughly
+const KB_BAND = 0.2;    // where in the band the line being typed comes to rest
+
+function keyboardUp() {
+  const vv = window.visualViewport;
+  return !!vv && window.innerHeight - vv.height > KB_SHRINK;
+}
+
+/** Is this the editor's own field — a block, the title, a front-matter row? */
+function editing(el) {
+  if (!el || el === document.body) return false;
+  return !!(
+    (state.canvas && state.canvas.contains(el)) ||
+    (state.titleHost && state.titleHost.contains(el)) ||
+    (ui && ui.front && ui.front.el && ui.front.el.contains(el))
+  );
+}
+
+/** The line being typed, which on a long paragraph is nowhere near its top. */
+function caretRect() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0).cloneRange();
+  range.collapse(true);
+  const rects = range.getClientRects();
+  if (rects.length && rects[0].height) return rects[0];
+  // A collapsed range on a boundary has no rectangle of its own.
+  const node = range.startContainer;
+  const el = node.nodeType === 1 ? node : node.parentElement;
+  return el ? el.getBoundingClientRect() : null;
+}
+
+function composeScroll() {
+  if (!state.composing || !state.on) return;
+  const at = caretRect();
+  if (!at) return;
+
+  const top = headroom();
+  const foot = viewBottom();
+  // Already somewhere it can be read. Correcting a few pixels on every viewport
+  // event is a page that never settles under the hand.
+  if (at.top >= top + 8 && at.bottom <= foot - 8) return;
+
+  const band = Math.max(140, foot - top);
+  const drift = Math.round(at.top - (top + band * KB_BAND));
+  if (!drift) return;
+  window.scrollBy({ top: drift, left: 0, behavior: "auto" });
+}
+
+function setCompose(on) {
+  if (!!state.composing === !!on) return;
+  state.composing = !!on;
+  if (on) document.documentElement.dataset.edCompose = "1";
+  else delete document.documentElement.dataset.edCompose;
+}
+
+/**
+ * Follow the visual viewport.
+ *
+ * `--ed-vv-top` is where the visible band starts inside the layout viewport,
+ * which is what a `position: fixed` toolbar has to be offset by to stay on
+ * screen: fixed elements are laid out against the LAYOUT viewport, and with a
+ * keyboard up that is a rectangle most of which nobody can see.
+ */
+function watchViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return () => {};
+  let timer = 0;
+
+  // Where the band is, republished on every viewport event. Cheap, and it is all
+  // a panning gesture needs — panning is the author looking at something, and
+  // scrolling the page back under them would be the editor arguing.
+  const publish = () => {
+    const root = document.documentElement.style;
+    root.setProperty("--ed-vv-top", Math.round(vv.offsetTop) + "px");
+    root.setProperty("--ed-vv-h", Math.round(vv.height) + "px");
+  };
+
+  // The keyboard arriving, leaving or changing height — the only events that
+  // change what "readable" means, and the only ones worth re-aiming for.
+  const react = () => {
+    publish();
+    const want = keyboardUp() && window.innerWidth <= KB_WIDE && editing(document.activeElement);
+    setCompose(want);
+
+    clearTimeout(timer);
+    // After the keyboard has finished arriving, never while it is on its way: a
+    // scroll worked out against a band that is still shrinking is a scroll that
+    // has to be worked out again.
+    if (want) timer = setTimeout(composeScroll, KB_SETTLE);
+  };
+
+  vv.addEventListener("resize", react);
+  vv.addEventListener("scroll", publish);
+  react();
+
+  return () => {
+    clearTimeout(timer);
+    vv.removeEventListener("resize", react);
+    vv.removeEventListener("scroll", publish);
+    setCompose(false);
+    const root = document.documentElement.style;
+    root.removeProperty("--ed-vv-top");
+    root.removeProperty("--ed-vv-h");
+  };
 }
 
 /* ─── letting go of unsaved work ───────────────────────────────────────────── */
@@ -701,10 +843,10 @@ async function deactivate() {
   // the same article starts from what is committed, not from where somebody
   // left off half an hour ago.
   history.reset();
-  spotClear(true);
-  litRow(null);
+  spotClear();
   unwire();
   if (state.perchOff) state.perchOff();
+  if (state.viewportOff) state.viewportOff();
 
   // The toolbar leaves FIRST, and `releaseDocbar` comes after it.
   //
@@ -759,7 +901,7 @@ async function deactivate() {
   Object.assign(state, {
     on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
     put: [], doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null, vaultChoice: undefined,
-    perchOff: null, fresh: false,
+    perchOff: null, viewportOff: null, composing: false, fresh: false,
   });
   ui = null;
   contentChanged();
@@ -2019,6 +2161,7 @@ function applyStagedMoves() {
  */
 async function pickImage(current, browse) {
   const opened = history.mark();
+  const had = state.pending.length;
   const picked = await openPicker(
     {
       t,
@@ -2028,12 +2171,14 @@ async function pickImage(current, browse) {
       // A tidy-up is half a dozen separate decisions, so each one is a step of
       // its own rather than one lump recorded when the browser closes.
       onStageChange: (path) => markDirty("assets", path),
-      // The article's own measurements and the article's own resolution rules —
-      // a staged blob, a sealed image's decrypted bytes, the repository fallback
-      // — on a plain `<img>`. The preview is one picture the author just asked
-      // for; there is nothing to lazy-load.
+      // The article's own picture pipeline, on the browser's preview: the same
+      // preloader, the same skeleton, the same staged blob, the same decryption
+      // for a withheld file and the same repository fallback. The preview is one
+      // picture the author just asked for, so it is loaded at once rather than
+      // waited for by an observer that has no reason to watch a modal.
       naturalSize: (src) => naturalSize(src, state.pending),
-      bindImage: (img, src) => bindImage(img, src, state.pending),
+      buildPreloader: (src, alt) => buildPreloader(src, alt, state.pending),
+      loadPreview: (node) => loadPreloaderNow(node),
     },
     { current, browse }
   );
@@ -2048,7 +2193,12 @@ async function pickImage(current, browse) {
   // name folds into the rename rather than standing as a second step. Undoing
   // used to put the old address back and leave the rename staged, which is a
   // state the author never created.
-  if (history.mark() !== opened) history.fold();
+  //
+  // ADDING a picture is not that. The file arriving in the repository and a
+  // paragraph coming to point at it are two things the author did, and folding
+  // them made one undo take back both — with no way to keep the picture and drop
+  // the reference. So a session that staged an upload never folds.
+  if (history.mark() !== opened && state.pending.length === had) history.fold();
 
   const staged = state.pending.find((a) => state.stage.resolve(a.path) === picked.path);
   return staged || { path: picked.path, site: picked.site };
@@ -2138,7 +2288,12 @@ function syncSteps() {
 /** Where the pinned chrome ends, measured rather than assumed. */
 function headroom() {
   let y = 0;
-  if (ui && ui.bar && ui.bar.isConnected) y = Math.max(y, ui.bar.getBoundingClientRect().bottom);
+  // The document bar has stepped aside while the keyboard is up. It is still in
+  // the flow, so it still has a box, and counting that box would reserve a band
+  // of nothing above the line being typed.
+  if (!state.composing && ui && ui.bar && ui.bar.isConnected) {
+    y = Math.max(y, ui.bar.getBoundingClientRect().bottom);
+  }
   const tool = ui && ui.toolbar && ui.toolbar.el;
   if (tool && tool.isConnected && tool.dataset.perch !== "hide") {
     y = Math.max(y, tool.getBoundingClientRect().bottom);
@@ -2147,45 +2302,88 @@ function headroom() {
 }
 
 /**
- * Scroll only when the thing is not already somewhere it can be read.
+ * The bottom of the band somebody can actually read.
  *
- * @returns {boolean} whether it actually asked the page to travel.
+ * On a phone with the keyboard up that is not the bottom of the window: the
+ * visual viewport is half the size of the layout one, and a block "brought into
+ * view" against `innerHeight` was brought in behind the keyboard.
  */
-function bringIntoView(el, quick) {
-  if (!el || !el.isConnected) return false;
-  const rect = el.getBoundingClientRect();
-  const top = headroom();
-  const foot = window.innerHeight - 24;
-  if (rect.top >= top && (rect.bottom <= foot || rect.height > foot - top)) return false;
-  window.scrollTo({
-    top: Math.max(0, window.scrollY + rect.top - top - 12),
-    // A run of presses travels once, at the end. Smooth-scrolling each step of a
-    // held Ctrl-Z is a page that never arrives anywhere.
-    behavior: quick || reduced() ? "auto" : "smooth",
-  });
-  return true;
+function viewBottom() {
+  const vv = window.visualViewport;
+  const seen = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  return Math.max(120, Math.min(window.innerHeight, seen)) - 24;
 }
 
-/** Resolve once the page has stopped moving, or once it has had long enough. */
-function scrollSettled(cap) {
+/** Where `el` should come to rest: just under the pinned chrome, with air. */
+function restingY(el) {
+  const rect = el.getBoundingClientRect();
+  const most = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  return Math.min(most, Math.max(0, window.scrollY + rect.top - headroom() - 12));
+}
+
+/** Readable, and not by a sliver. Something taller than the band needs its top. */
+function readable(el) {
+  if (!el || !el.isConnected) return true;
+  const rect = el.getBoundingClientRect();
+  const top = headroom();
+  const foot = viewBottom();
+  if (rect.height > foot - top) return rect.top <= top + 8 && rect.bottom >= top + 96;
+  return rect.top >= top - 1 && rect.bottom <= foot + 1;
+}
+
+// Long enough to be followed by the eye, short enough that a step does not feel
+// like it is being waited on. Proportional to the distance between the two.
+const TRAVEL_MIN = 240;
+const TRAVEL_MAX = 620;
+
+/**
+ * Take the page somewhere, and KNOW when it has arrived.
+ *
+ * `scrollTo({ behavior: "smooth" })` cannot be awaited: the old code watched for
+ * the page to go still and gave up after 700ms, which a long journey routinely
+ * outlasts — so the step landed, the FLIP measured, and the pin scrolled all
+ * while the page was still flying. Every rectangle in that pass was taken in a
+ * viewport that had already moved, which is the reordering animation "going
+ * completely wrong" when the block was off screen.
+ *
+ * Driven here instead: one known duration, one promise, and a scroll position
+ * written every frame — which also cancels any native smooth scroll the browser
+ * started underneath us (a focus, a fragment link).
+ */
+function scrollTween(to) {
   return new Promise((done) => {
-    const until = Date.now() + (cap || 700);
-    let last = window.scrollY;
-    let still = 0;
-    const tick = () => {
-      if (Date.now() > until) return done();
-      const y = window.scrollY;
-      if (Math.abs(y - last) < 0.5) {
-        still += 1;
-        if (still >= 3) return done();
-      } else {
-        still = 0;
-      }
-      last = y;
-      requestAnimationFrame(tick);
+    const from = window.scrollY;
+    const delta = to - from;
+    if (Math.abs(delta) < 1) return void done(false);
+
+    const span = Math.min(TRAVEL_MAX, Math.max(TRAVEL_MIN, Math.abs(delta) * 0.55));
+    const began = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - began) / span);
+      const eased = 1 - Math.pow(1 - k, 3);
+      window.scrollTo({ top: Math.round(from + delta * eased), left: window.scrollX, behavior: "auto" });
+      if (k < 1) requestAnimationFrame(step);
+      else done(true);
     };
-    requestAnimationFrame(tick);
+    requestAnimationFrame(step);
   });
+}
+
+/**
+ * Bring `el` somewhere it can be read, and wait for it.
+ *
+ * @returns {Promise<boolean>} whether it actually asked the page to travel.
+ */
+function travelTo(el, quick) {
+  if (!el || !el.isConnected || readable(el)) return Promise.resolve(false);
+  const to = restingY(el);
+  // A run of presses travels once, at the end. Animating each step of a held
+  // Ctrl-Z is a page that never arrives anywhere.
+  if (quick || reduced()) {
+    window.scrollTo({ top: to, left: window.scrollX, behavior: "auto" });
+    return Promise.resolve(true);
+  }
+  return scrollTween(to);
 }
 
 /**
@@ -2205,25 +2403,6 @@ async function anchored(el, fn) {
     if (Math.abs(drift) > 0.5) window.scrollBy(0, drift);
   }
   return out;
-}
-
-let rowLit = null;
-let rowOff = 0;
-
-/** The one target that is not on the page: a row inside the browser's tree. */
-function litRow(row) {
-  clearTimeout(rowOff);
-  if (rowLit && rowLit !== row) rowLit.classList.remove("ed-flash");
-  rowLit = row || null;
-  if (!rowLit) return;
-  rowLit.classList.remove("ed-flash");
-  void rowLit.offsetWidth;
-  rowLit.classList.add("ed-flash");
-  const node = rowLit;
-  rowOff = setTimeout(() => {
-    node.classList.remove("ed-flash");
-    if (rowLit === node) rowLit = null;
-  }, 1400);
 }
 
 const KEY_NAME = /^[A-Za-z_][\w-]*$/;
@@ -2311,29 +2490,43 @@ async function goToStep(target, plan) {
   closeBrowser();
   if (target.kind !== "block") return;
 
-  const at = locate(target.id);
+  const home = locate(target.id);
+  // The block the author had hold of, when the document names something else: one
+  // that crossed into a note is a slice of that note's body as far as the
+  // document is concerned, and travelling to the note is how the block that
+  // actually moved ended up off screen. See `aim` in history.js.
+  const lead = target.lead ? locate(target.lead) : null;
+  const at = lead || home;
   if (!at) return;
-  const next = plan.blocks.find((block) => block.id === target.id);
+  const next = home ? plan.blocks.find((block) => block.id === target.id) : null;
 
   if (plan.quick) {
-    if (at.view.reveal) at.view.reveal(next);
+    if (home && home.view.reveal) home.view.reveal(next);
     return;
   }
 
   // One. Travel, and WAIT for it. Opening a folding while the page is still
   // moving is two motions at once, and the pair reads as a stutter rather than
   // as two things happening in an order.
-  if (offScreen(at.view.el) && bringIntoView(at.view.el)) await scrollSettled();
+  //
+  // A block the step MOVES is the element itself, and the whole of the step is
+  // about where it goes — so it is brought properly into view first and the
+  // rearrangement then happens around it. For anything else the block the
+  // DOCUMENT names may only be the note the change is inside, so the page moves
+  // only when none of it is readable and `spotlight` does the precise journey
+  // once there is a real element to travel to.
+  const precise = !!lead || target.how === "move" || target.how === "add";
+  if (precise ? !readable(at.view.el) : offScreen(at.view.el)) await travelTo(at.view.el);
 
   // Two. Open what the change is behind, holding the block still while it grows.
-  if (at.view.reveal) await anchored(at.view.el, () => at.view.reveal(next));
+  if (home && home.view.reveal) await anchored(at.view.el, () => home.view.reveal(next));
 }
 
 /** Not a pixel of it is in the readable band. */
 function offScreen(el) {
   if (!el || !el.isConnected) return false;
   const rect = el.getBoundingClientRect();
-  return rect.bottom <= headroom() || rect.top >= window.innerHeight - 24;
+  return rect.bottom <= headroom() || rect.top >= viewBottom();
 }
 
 /**
@@ -2528,6 +2721,10 @@ async function shift(fallback, before, mutate) {
     }
 
     if (!from) {
+      // The one block the step is ABOUT is lit a moment later, deliberately, by
+      // the spotlight. Fading it in as well is two entrances for one change, at
+      // two different sizes — which is what reads as the mark flashing twice.
+      if (node === leaf) continue;
       // Genuinely new, with nowhere to come from: it fades in where it landed.
       runs.push(
         node.animate(
@@ -2593,14 +2790,16 @@ function subRange(was, now) {
  *   arrived  the block, because the block is the change
  *   left     the seam between the two blocks that remain
  */
-function spotlight(target, report, quick) {
+async function spotlight(target, report, quick) {
   if (target.kind === "asset") {
     const held = pickerLive();
     if (!held) return;
     // Re-read from the stage as it now stands: the tree was drawn before the
-    // step, under the names the step has just taken away.
+    // step, under the names the step has just taken away. A file the step has
+    // just taken away has no row of its own any more, so the folder it was in is
+    // marked instead — which is the place the author is being shown.
     held.goto(target.path);
-    return void litRow(held.row(target.path));
+    return void held.flash(target.path);
   }
 
   // A block that MOVED, first and before anything is compared as text. The same
@@ -2610,7 +2809,7 @@ function spotlight(target, report, quick) {
   const drift = (report && report.drift) || [];
   const travelled = drift.find((view) => view.el.isConnected);
   if (travelled) {
-    bringIntoView(travelled.el, quick);
+    await travelTo(travelled.el, quick);
     return void spotElement(travelled.el, "move");
   }
 
@@ -2625,7 +2824,7 @@ function spotlight(target, report, quick) {
 
   if (only) {
     const { view, was } = only;
-    bringIntoView(view.el, quick);
+    await travelTo(view.el, quick);
 
     const now = was == null ? null : domText(view.body);
     // Equal text means the step changed something the reader cannot see — a
@@ -2657,20 +2856,20 @@ function spotlight(target, report, quick) {
     const below = target.below ? locate(target.below) : null;
     const anchor = (below && below.view.el) || (above && above.view.el);
     if (!anchor) return;
-    bringIntoView(anchor, quick);
+    await travelTo(anchor, quick);
     return void spotSeam(above && above.view.el, below && below.view.el);
   }
 
   if (target.kind === "block") {
     const at = locate(target.id);
     if (!at) return;
-    bringIntoView(at.view.el, quick);
+    await travelTo(at.view.el, quick);
     return void spotElement(at.view.el, target.how === "move" ? "move" : "block");
   }
 
   const el = targetNode(target);
   if (!el) return;
-  bringIntoView(el, quick);
+  await travelTo(el, quick);
   spotElement(el, "field");
 }
 
@@ -2817,106 +3016,129 @@ async function applyStep(plan) {
   const chrome = ui;
   const target = plan.target || { kind: "canvas" };
 
-  // Two awaits below, and the editor can be closed across either of them — by
-  // the author, by a navigation, by a teardown. Each one is re-tested against
-  // the chrome this step started under rather than against a flag alone.
-  await goToStep(target, plan);
-  if (!state.on || !state.doc || ui !== chrome) return;
-
-  // Measured while everything still stands where it stood: a block that leaves a
-  // note for the article is a new view with a new id, and this is the only
-  // record that it used to be somewhere.
-  const before = plan.quick ? null : ghosts();
-  // Drained first: `fillBox` records for every caller, including a tab switch
-  // nobody is stepping through, and a stale entry would be read as this step's.
-  harvest();
-  const wasFront = doc.front;
-  let report = { fresh: [], patched: [], drift: [] };
-  // `painting` is the editor's own word for "this is a repaint, not an edit":
-  // every listener a restore trips would otherwise report work the author did
-  // not do, and the step store would record its own undo.
-  state.painting = true;
-  try {
-    doc.front = plan.front;
-    doc.frontRaw = plan.frontRaw;
-    doc.frontDirty = plan.frontDirty;
-    doc.lead = plan.lead;
-
-    if (state.stage) {
-      state.stage.moves.length = 0;
-      for (const move of plan.moves) state.stage.moves.push(move);
-      state.stage.folders.clear();
-      for (const path of plan.folders) state.stage.folders.add(path);
-    }
-    state.pending.length = 0;
-    for (const asset of plan.pending) state.pending.push(asset);
-
-    // The block the step is about is what the page is held still by: it is the
-    // one thing the author is looking at, and everything else may move around it.
-    const held = target.kind === "block" ? locate(target.id) : null;
-    await reconcile(plan.blocks, plan.quick, before, (held && held.view.el) || steadyAnchor());
-    if (!state.on || ui !== chrome) return;
-
-    // Every box's account of what just happened to it, root and nested alike.
-    report = harvest();
-    // Which of the new views came from somewhere rather than from nothing —
-    // `shift` has already travelled them; this is only so the spotlight can name
-    // the block that MOVED rather than the text it left behind.
-    report.drift = before
-      ? report.fresh.filter((view) => {
-          const ghost = before.get(saysWhat(view.block));
-          return !!ghost && !ghost.el.isConnected;
-        })
-      : [];
-
-    if (wasFront !== plan.front) {
-      const before = parseFrontMatter(wasFront);
-      const after = parseFrontMatter(plan.front);
-      if (ui.front) {
-        ui.front.resync();
-        ui.front.paint();
-      }
-      // Gaining or losing a cover is a different template; anything else is a
-      // value, and rebuilding the heading for one would take the caret out of
-      // the field the author is standing in.
-      if (!COVER_OF(before) !== !COVER_OF(after)) {
-        paintTitle();
-      } else {
-        const img = state.titleHost.querySelector(".article-cover-image");
-        if (img && COVER_OF(before) !== COVER_OF(after)) bindImage(img, COVER_OF(after), state.pending);
-        const heading = state.titleHost.querySelector(".ed-title");
-        if (heading && heading.textContent !== (after.title || "")) {
-          const live = document.activeElement === heading;
-          heading.textContent = after.title || "";
-          if (live) caretToEnd(heading);
-        }
-      }
-      ui.path.textContent = pathLabel();
-    }
-
-    // The focused view may have been one of the ones just replaced, and a
-    // toolbar drawing a released view's options is a toolbar acting on nothing.
-    if (state.focused && !allViews().includes(state.focused)) state.focused = null;
-    if (!state.focused && target.kind === "block") {
-      const at = locate(target.id);
-      if (at) state.focused = at.view;
-    }
-    for (const view of allViews()) view.el.dataset.on = view === state.focused ? "1" : "0";
-
-    renumberFigures();
-    observeImages();
+  // The contents rail is held still for the length of the step. It is driven by
+  // the scroll pass, and a step scrolls three times — the travel, the pin, the
+  // spotlight's own journey — over an article that is being rearranged between
+  // them. Lit from those offsets it named a different heading on every frame.
+  // One activation at the end, against the offsets that survived.
+  holdTOCActive(true);
+  let rail = true;
+  const release = () => {
+    if (!rail) return;
+    rail = false;
+    holdTOCActive(false);
+    // The rail's ENTRIES, in case the step rewrote a heading, and then its
+    // offsets and the one entry that should be lit — against the article as it
+    // finally stands rather than as it was mid-rearrangement.
     refreshTOC();
-    contentChanged();
-    if (ui.toolbar) ui.toolbar.sync();
+    measureTOC();
+    const toc = getTOC();
+    if (toc) toc.updateActiveTOCLink();
+  };
 
+  try {
+    // Two awaits below, and the editor can be closed across either of them — by
+    // the author, by a navigation, by a teardown. Each one is re-tested against
+    // the chrome this step started under rather than against a flag alone.
+    await goToStep(target, plan);
+    if (!state.on || !state.doc || ui !== chrome) return;
+
+    // Measured while everything still stands where it stood: a block that leaves a
+    // note for the article is a new view with a new id, and this is the only
+    // record that it used to be somewhere.
+    const before = plan.quick ? null : ghosts();
+    // Drained first: `fillBox` records for every caller, including a tab switch
+    // nobody is stepping through, and a stale entry would be read as this step's.
+    harvest();
+    const wasFront = doc.front;
+    let report = { fresh: [], patched: [], drift: [] };
+    // `painting` is the editor's own word for "this is a repaint, not an edit":
+    // every listener a restore trips would otherwise report work the author did
+    // not do, and the step store would record its own undo.
+    state.painting = true;
+    try {
+      doc.front = plan.front;
+      doc.frontRaw = plan.frontRaw;
+      doc.frontDirty = plan.frontDirty;
+      doc.lead = plan.lead;
+
+      if (state.stage) {
+        state.stage.moves.length = 0;
+        for (const move of plan.moves) state.stage.moves.push(move);
+        state.stage.folders.clear();
+        for (const path of plan.folders) state.stage.folders.add(path);
+      }
+      state.pending.length = 0;
+      for (const asset of plan.pending) state.pending.push(asset);
+
+      // The block the step is about is what the page is held still by: it is the
+      // one thing the author is looking at, and everything else may move around it.
+      const held = target.kind === "block" ? locate(target.id) : null;
+      await reconcile(plan.blocks, plan.quick, before, (held && held.view.el) || steadyAnchor());
+      if (!state.on || ui !== chrome) return;
+
+      // Every box's account of what just happened to it, root and nested alike.
+      report = harvest();
+      // Which of the new views came from somewhere rather than from nothing —
+      // `shift` has already travelled them; this is only so the spotlight can name
+      // the block that MOVED rather than the text it left behind.
+      report.drift = before
+        ? report.fresh.filter((view) => {
+            const ghost = before.get(saysWhat(view.block));
+            return !!ghost && !ghost.el.isConnected;
+          })
+        : [];
+
+      if (wasFront !== plan.front) {
+        const before = parseFrontMatter(wasFront);
+        const after = parseFrontMatter(plan.front);
+        if (ui.front) {
+          ui.front.resync();
+          ui.front.paint();
+        }
+        // Gaining or losing a cover is a different template; anything else is a
+        // value, and rebuilding the heading for one would take the caret out of
+        // the field the author is standing in.
+        if (!COVER_OF(before) !== !COVER_OF(after)) {
+          paintTitle();
+        } else {
+          const img = state.titleHost.querySelector(".article-cover-image");
+          if (img && COVER_OF(before) !== COVER_OF(after)) bindImage(img, COVER_OF(after), state.pending);
+          const heading = state.titleHost.querySelector(".ed-title");
+          if (heading && heading.textContent !== (after.title || "")) {
+            const live = document.activeElement === heading;
+            heading.textContent = after.title || "";
+            if (live) caretToEnd(heading);
+          }
+        }
+        ui.path.textContent = pathLabel();
+      }
+
+      // The focused view may have been one of the ones just replaced, and a
+      // toolbar drawing a released view's options is a toolbar acting on nothing.
+      if (state.focused && !allViews().includes(state.focused)) state.focused = null;
+      if (!state.focused && target.kind === "block") {
+        const at = locate(target.id);
+        if (at) state.focused = at.view;
+      }
+      for (const view of allViews()) view.el.dataset.on = view === state.focused ? "1" : "0";
+
+      renumberFigures();
+      observeImages();
+      contentChanged();
+      if (ui.toolbar) ui.toolbar.sync();
+
+    } finally {
+      state.painting = false;
+    }
+
+    // Whether anything is left to commit is the step store's answer, given the
+    // moment `index` moves — see `syncSteps`. This only redraws the bar around it.
+    syncHeader();
+    await spotlight(target, report, plan.quick);
   } finally {
-    state.painting = false;
+    release();
   }
-
-  // Whether anything is left to commit is the step store's answer, given the
-  // moment `index` moves — see `syncSteps`. This only redraws the bar around it.
-  syncHeader();
-  spotlight(target, report, plan.quick);
 }
 
 /* ─── dirty / save ─────────────────────────────────────────────────────────── */
@@ -3353,8 +3575,18 @@ async function onCanvasPaste(e) {
 }
 
 /** The caret left the article: no block is being edited, so nothing is shown. */
+let composeAim = 0;
+
 function onFocusIn(e) {
   if (!state.on || !ui || !ui.toolbar) return;
+
+  // The caret has moved to another field and the keyboard has not moved at all,
+  // so the viewport has nothing to say; the page still has to be re-aimed.
+  if (state.composing && editing(e.target)) {
+    clearTimeout(composeAim);
+    composeAim = setTimeout(composeScroll, KB_SETTLE);
+  }
+
   if (state.canvas.contains(e.target) || ui.toolbar.el.contains(e.target)) return;
   if (e.target.closest && e.target.closest(".ed-ask, .ed-slash, .ed-picker-mask")) return;
 
@@ -3537,8 +3769,7 @@ export function teardownEditor() {
   clearInterval(progressTimer);
   clearTimeout(state.stashTimer);
   history.reset();
-  spotClear(true);
-  litRow(null);
+  spotClear();
   stopEdgeScroll();
 
   for (const node of pencils) node.removeEventListener("click", onPencil);
@@ -3547,6 +3778,7 @@ export function teardownEditor() {
 
   unwire();
   if (state.perchOff) state.perchOff();
+  if (state.viewportOff) state.viewportOff();
   releaseDocbar();
   releaseTOC();
   for (const box of state.boxes) for (const view of box.views) releaseView(view);
@@ -3558,7 +3790,7 @@ export function teardownEditor() {
   registerRewind(null);
   state.boxes.clear();
   Object.assign(state, {
-    on: false, host: null, canvas: null, titleHost: null, put: [], perchOff: null,
+    on: false, host: null, canvas: null, titleHost: null, put: [], perchOff: null, viewportOff: null, composing: false,
     doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null,
   });
   ui = null;

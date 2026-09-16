@@ -25,14 +25,18 @@
  *
  * ── One run, one mark ───────────────────────────────────────────────────────
  *
- * Presses come in runs. Every call replaces what is on screen and the paint is
- * deferred by `WAIT`, so holding Ctrl-Z lights the place it FINISHES at, once,
- * rather than stacking a flash per step.
+ * Presses come in runs. Every call takes down what is on screen INSTANTLY and
+ * paints once the article has settled, so holding Ctrl-Z lights the place it
+ * finishes at, once, rather than stacking a flash per step — and two marks are
+ * never up together at two different sizes, which is what reads as a mark
+ * flashing twice.
  */
 
-// The mark has to be THERE, not on its way: a step is over by the time it is
-// drawn, and a slow arrival reads as the editor still thinking.
-const WAIT = 40;
+// The mark is read on the frame the step has finished settling on, not on a
+// timer: a block that was just rebuilt, a picture that has just decoded and a
+// pinning scroll all land within a frame or two of each other, and a rectangle
+// measured before them is a rectangle drawn in the wrong place.
+const SETTLE_FRAMES = 2;
 const FADE_IN = 130;
 // Long enough to still be there once the eye has travelled to it and read the
 // line it is on. It costs nothing to leave up: the layer takes no pointer events
@@ -41,9 +45,6 @@ const FADE_IN = 130;
 const HOLD = 1500;
 const FADE_OUT = 520;
 const SPAN = FADE_IN + HOLD + FADE_OUT;
-// Interrupted: the old place goes at once so the new one is the only one on
-// screen, but not so abruptly that it looks like a dropped frame.
-const CUT_MS = 110;
 
 // A text range is lit a little proud of the glyphs; a whole block is lit on its
 // own edge and needs no padding.
@@ -51,8 +52,9 @@ const TEXT_PAD_X = 2;
 const TEXT_PAD_Y = 1;
 
 let layer = null;
-let pending = 0;
+let token = 0;
 let clearing = 0;
+let following = 0;
 let live = [];
 
 function ensure() {
@@ -67,49 +69,72 @@ function ensure() {
 /**
  * Take down whatever is showing, and cancel whatever was about to show.
  *
- * `now` tears it out of the page — teardown, a closed editor. Everything else is
- * one place being replaced by another, and there the old mark fades in a tenth
- * of a second WHILE the new one arrives: it is the only way two consecutive
- * steps read as two steps rather than as one mark teleporting.
+ * Instantly, always. A mark fading out WHILE its replacement fades in is two
+ * marks on screen at two different sizes, which is exactly what "it flashed
+ * twice" describes — and the pair is worse than the cut, because the eye reads
+ * the wrong one first. One place is lit at a time; being interrupted means the
+ * old place is gone before the new one arrives.
  */
-export function spotClear(now) {
-  clearTimeout(pending);
+export function spotClear() {
+  token += 1;
   clearTimeout(clearing);
-  pending = 0;
+  cancelAnimationFrame(following);
   clearing = 0;
+  following = 0;
 
-  const going = live;
+  for (const node of live) node.remove();
   live = [];
-  if (!going.length) return;
-
-  if (now) {
-    for (const node of going) node.remove();
-    return;
-  }
-  for (const node of going) {
-    const out = node.animate([{ opacity: 1 }, { opacity: 0 }], {
-      duration: CUT_MS,
-      easing: "ease-out",
-      fill: "forwards",
-    });
-    out.finished.catch(() => {}).then(() => node.remove());
-  }
 }
 
-function paint(rects, kind) {
+function geometry(mark, rect, pad, base) {
+  mark.style.left = rect.left - base.left - (pad ? TEXT_PAD_X : 0) + "px";
+  mark.style.top = rect.top - base.top - (pad ? TEXT_PAD_Y : 0) + "px";
+  mark.style.width = Math.max(2, rect.width + (pad ? TEXT_PAD_X * 2 : 0)) + "px";
+  mark.style.height = Math.max(2, rect.height + (pad ? TEXT_PAD_Y * 2 : 0)) + "px";
+}
+
+/**
+ * Keep the mark ON the thing it is marking, for as long as it is up.
+ *
+ * The article is not still while a mark is showing: a picture decodes, an
+ * equation is typeset, a folding finishes opening, the page is pinned by a
+ * pixel. Measuring once and leaving the rectangle where it was is how a mark
+ * came to sit beside the words it was pointing at, at the size they used to be.
+ * One rect read per frame, for one element, for as long as the mark is lit.
+ */
+function follow(read, pad, mine, until) {
+  following = requestAnimationFrame(() => {
+    following = 0;
+    if (mine !== token || !live.length) return;
+    const rects = read();
+    // A different number of rectangles is a different shape, not a moved one —
+    // re-anchoring one of them would be a guess. The mark stays where it is and
+    // the watch stops.
+    if (rects && rects.length === live.length) {
+      // Every read before any write: the layer's own box is the same for all of
+      // them, and asking for it between two style writes is a forced reflow per
+      // mark per frame.
+      const base = live[0].parentNode.getBoundingClientRect();
+      for (let i = 0; i < live.length; i++) geometry(live[i], rects[i], pad, base);
+    }
+    if (Date.now() < until) follow(read, pad, mine, until);
+  });
+}
+
+function paint(read, kind, mine) {
+  const rects = read();
+  if (!rects || !rects.length) return;
+
   const host = ensure();
-  const base = host.getBoundingClientRect();
   const pad = kind === "text";
+  const base = host.getBoundingClientRect();
 
   for (const rect of rects) {
     if (!rect || (!rect.width && !rect.height)) continue;
     const mark = document.createElement("span");
     mark.className = "ed-spot-mark is-" + kind;
-    mark.style.left = rect.left - base.left - (pad ? TEXT_PAD_X : 0) + "px";
-    mark.style.top = rect.top - base.top - (pad ? TEXT_PAD_Y : 0) + "px";
-    mark.style.width = Math.max(2, rect.width + (pad ? TEXT_PAD_X * 2 : 0)) + "px";
-    mark.style.height = Math.max(2, rect.height + (pad ? TEXT_PAD_Y * 2 : 0)) + "px";
     host.appendChild(mark);
+    geometry(mark, rect, pad, base);
     live.push(mark);
 
     // In, hold, out. One continuous pass rather than a blink: the point is to
@@ -126,17 +151,23 @@ function paint(rects, kind) {
     );
   }
 
+  if (!live.length) return;
+  follow(read, pad, mine, Date.now() + FADE_IN + HOLD);
   // Already faded to nothing by its own last keyframe, so this only tidies up.
-  clearing = setTimeout(() => spotClear(true), SPAN + 40);
+  clearing = setTimeout(spotClear, SPAN + 40);
 }
 
+/** Wait for the article to stop moving, then light the place once. */
 function schedule(read, kind) {
   spotClear();
-  pending = setTimeout(() => {
-    pending = 0;
-    const rects = read();
-    if (rects && rects.length) paint(rects, kind);
-  }, WAIT);
+  const mine = token;
+  let left = SETTLE_FRAMES;
+  const tick = () => {
+    if (mine !== token) return;
+    if (left-- > 0) return void requestAnimationFrame(tick);
+    paint(read, kind, mine);
+  };
+  requestAnimationFrame(tick);
 }
 
 /* ─── what a range is actually worth drawing ───────────────────────────────── */

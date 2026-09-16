@@ -19,6 +19,21 @@ import { invalidateMetrics } from "../tools/scrollScheduler.js";
 // activate it (only when the answer changed).
 let controller = null;
 
+/**
+ * Activation, suspended.
+ *
+ * An undo or a redo rearranges the article, pins the page by a pixel or two and
+ * re-measures — and every one of those fires the scroll pass. Run against
+ * offsets taken mid-rearrangement, the rail lit a different heading on each
+ * frame of the step. The editor holds activation across a step and asks for one
+ * activation at the end, against the offsets that survived it.
+ */
+let holds = 0;
+
+export function holdTOCActive(on) {
+  holds = Math.max(0, holds + (on ? 1 : -1));
+}
+
 export function getTOC() {
   return controller;
 }
@@ -82,7 +97,7 @@ function buildController() {
 
     activateTOCLink(index) {
       const target = utils.navLinks[index];
-      if (!target || target === utils.activeLink) return;
+      if (holds || !target || target === utils.activeLink) return;
 
       // Only the previously-active link needs clearing — no document-wide
       // querySelectorAll on every change.
@@ -191,6 +206,15 @@ export function refreshTOC() {
   const utils = buildController();
   const has = utils.navItems.length > 0;
   const first = has && wasEmpty;
+  // The link that is lit RIGHT NOW, carried into the new controller. A fresh one
+  // starts with `activeLink: null`, so the next activation could not tell "the
+  // active heading changed" from "I have only just been built" — it cleared every
+  // active class and smooth-scrolled the rail to a heading that was already
+  // showing, on every rebuild. The editor rebuilds on every keystroke in a
+  // heading, which is how the rail came to flicker while a post was being typed.
+  utils.activeLink = has
+    ? document.querySelector(".post-toc li a.nav-link.active-current")
+    : null;
   controller = has ? utils : null;
   setEmpty(!has);
   // The aside's OPEN state is decided once, when a post first has something to
