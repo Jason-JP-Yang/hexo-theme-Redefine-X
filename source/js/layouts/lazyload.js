@@ -555,17 +555,6 @@ export default function initLazyLoad(config = {}) {
 }
 
 /**
- * Load ONE preloader right now, wherever it is.
- *
- * For the editor's picture browser, which shows a single picture and shows the
- * one that was just asked for — there is nothing to defer, and the preview sits
- * in a modal the intersection observer has no reason to watch.
- */
-export function loadPreloaderNow(preloader) {
-  if (preloader) processPreloader(preloader);
-}
-
-/**
  * Force load all preloaders (for encrypted content)
  */
 export function forceLoadAllPreloaders() {

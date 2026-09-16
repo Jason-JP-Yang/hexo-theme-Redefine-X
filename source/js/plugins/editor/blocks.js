@@ -240,7 +240,7 @@ function mountRich(view) {
   // Boundary anchors from the first frame: the caret has to be able to stand
   // either side of a mark before anything has been applied to it.
   anchorMarks(host);
-  typesetMath(host);
+  view.ready = typesetMath(host);
   wireInlineMath(host, view);
 
   view.body.appendChild(host);
@@ -302,7 +302,7 @@ function mountRich(view) {
     absorb(block, next);
     host.innerHTML = richHTML(block);
     anchorMarks(host);
-    typesetMath(host);
+    view.ready = typesetMath(host);
     view.touched = !!block.dirty;
     if (held != null) caret.placeAt(host, held);
     return true;
@@ -690,13 +690,13 @@ function mountSource(view) {
   }
 
   preview.addEventListener("click", () => {
-    view.showSource().then(() => source.focus());
+    view.showSource().then(() => source.focus({ preventScroll: true }));
   });
 
   source.addEventListener("focus", () => ctx.onFocus(view));
 
   view.read = () => {};
-  view.focus = () => view.showSource().then(() => source.focus());
+  view.focus = () => view.showSource().then(() => source.focus({ preventScroll: true }));
   view.isEmpty = () => !source.value.trim();
   view.refresh = paint;
 
@@ -713,8 +713,12 @@ function mountSource(view) {
     source.value = block[field] || "";
     view.touched = !!block.dirty;
     if (live) source.setSelectionRange(Math.min(at, source.value.length), Math.min(to, source.value.length));
+    // A diagram, an equation and a highlighted listing all paint ASYNCHRONOUSLY,
+    // so this block's height is not knowable in the tick the step lands. Kept on
+    // `ready` for the step to wait on — measuring before it resolves is what
+    // animated the wrong height and then lit a mark that resized under the eye.
     if (wrap.dataset.mode === "source") grow();
-    else paint();
+    else view.ready = paint();
     return true;
   };
 

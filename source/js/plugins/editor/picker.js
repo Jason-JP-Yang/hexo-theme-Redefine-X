@@ -795,14 +795,15 @@ export function openPicker(ctx, opts = {}) {
       if (node && node.type === "dir") node.el.dataset.open = on ? "1" : "0";
     }
 
-    function reveal(path) {
+    function reveal(path, travelling) {
       let cur = parentOf(path);
       while (cur && rootOf(cur)) {
         open(cur, true);
         cur = parentOf(cur);
       }
       const node = nodes.get(path);
-      if (node) node.row.scrollIntoView({ block: "nearest" });
+      if (!node) return;
+      node.row.scrollIntoView(travelling ? { block: "center", behavior: "smooth" } : { block: "nearest" });
     }
 
     function paintSelection() {
@@ -857,6 +858,44 @@ export function openPicker(ctx, opts = {}) {
       litOff = setTimeout(() => unlight(row), FLASH_MS);
     }
 
+    /**
+     * Rebuild the tree from the stage as it now stands, and stand on `path`.
+     *
+     * Synchronous on purpose. A step opens this, lands, and rebuilds again; an
+     * animated rebuild ran twice per step and held the whole step up while it did.
+     *
+     * The destination may no longer exist — undoing an upload takes the file away
+     * — and then the folder it was in is opened instead. Collapsing back to the
+     * roots is what left a step with nothing to show, and that branch also called
+     * `open()` while a local `const open = new Set()` shadowed it, so it threw
+     * before revealing anything: the tree never opened at all.
+     */
+    function restage(path) {
+      const unfolded = new Set();
+      for (const [held, node] of nodes) {
+        if (node.type === "dir" && node.el.dataset.open === "1") unfolded.add(held);
+      }
+      mount();
+      for (const [held, node] of nodes) {
+        if (node.type === "dir" && unfolded.has(held)) node.el.dataset.open = "1";
+      }
+
+      if (path && nodes.has(path)) {
+        reveal(path, true);
+        return void select(path, false);
+      }
+
+      let here = path;
+      while (here && !nodes.has(here) && rootOf(here)) here = parentOf(here);
+      if (here && nodes.has(here)) reveal(here, true);
+      else for (const root of ROOTS) open(root, true);
+
+      if (chosen && !nodes.has(chosen)) chosen = "";
+      paintSelection();
+      paintPath(false);
+      paintPreview(false);
+    }
+
     function paintPath(animate) {
       if (document.activeElement === input && searching) return;
       input.value = chosen ? siteAddress(chosen) : "";
@@ -872,24 +911,26 @@ export function openPicker(ctx, opts = {}) {
     }
 
     /**
-     * The preview, built the way the ARTICLE builds a picture.
+     * The preview: a NEW `<img>` per selection, bound through `bindImage`.
      *
-     * A `.img-preloader` handed to the site's own lazyload observer — the same
-     * skeleton, the same cross-fade, the same repository fallback, the same
-     * decryption for a withheld file. Never a bare `<img>` re-pointed at the next
-     * selection: an `<img>` keeps painting the picture it already has until the
-     * next one decodes, and the box around it has already been resized to the new
-     * picture's shape, so what the author sees between two clicks is the LAST
-     * photograph stretched out of shape. A preloader has nothing to show yet, so
-     * it shows the skeleton — at exactly the shape the picture will arrive at.
+     * Two things it must not be. Not ONE element re-pointed at each file — an
+     * `<img>` keeps painting what it already has until the next picture decodes,
+     * and the box around it has been resized to the new picture's shape by then,
+     * so between two clicks the author sees the LAST photograph stretched out of
+     * shape. And not a `.img-preloader` handed to the lazyload observer either:
+     * that observer opens a withheld picture through the page's key ring, which
+     * holds the OPEN post's images and nothing else, so every encrypted picture
+     * belonging to another post came back blank or as an error card at the wrong
+     * ratio. `bindImage` borrows the key for exactly as long as the file is being
+     * looked at — `openSealed` in assets.js — which is what a browser over the
+     * whole library needs.
      *
-     * A new one per selection, because the one standing here belongs to the
-     * observer and to the file it has already loaded.
-     *
-     * Its size is arithmetic, not CSS: see `fitShot` and `.ed-pick-stage`.
+     * A fresh element has nothing to paint, so what shows is the skeleton, at the
+     * size the picture will arrive at. That size is arithmetic, not CSS: see
+     * `fitShot` and `.ed-pick-stage`.
      */
     function shotNode() {
-      return stage.querySelector(".img-preloader, img");
+      return stage.querySelector("img");
     }
 
     const blank = document.createElement("p");
@@ -1006,17 +1047,15 @@ export function openPicker(ctx, opts = {}) {
         metaRow(t("pick_served", "Served at"), servedAt(node)) +
         (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
 
-      const shot = ctx.buildPreloader(address, nameOf(chosen));
-      // A click here chooses the file; the lightbox belongs to the article.
-      shot.setAttribute("data-no-viewer", "");
+      const shot = document.createElement("img");
+      shot.decoding = "async";
+      shot.alt = nameOf(chosen);
       if (old) old.replaceWith(shot);
       else stage.appendChild(shot);
 
       fitShot();
       travel(before);
-      // Nothing to defer: this is one picture, in a modal, that was just asked
-      // for by name.
-      ctx.loadPreview(shot);
+      ctx.bindImage(shot, address);
     }
 
     /**
@@ -1596,25 +1635,7 @@ export function openPicker(ctx, opts = {}) {
        * tree's. Carried across, because a tree that expands and then collapses
        * a frame later is not a tree anybody can follow.
        */
-      goto(path) {
-        const open = new Set();
-        for (const [held, node] of nodes) {
-          if (node.type === "dir" && node.el.dataset.open === "1") open.add(held);
-        }
-        mount();
-        for (const [held, node] of nodes) {
-          if (node.type === "dir" && open.has(held)) node.el.dataset.open = "1";
-        }
-        if (path && nodes.has(path)) {
-          reveal(path);
-          select(path, false);
-        } else {
-          chosen = "";
-          for (const root of ROOTS) open(root, true);
-          paintPath(false);
-          paintPreview(false);
-        }
-      },
+      goto: (path) => restage(path),
       row: (path) => {
         const node = nodes.get(path);
         return node ? node.row : null;

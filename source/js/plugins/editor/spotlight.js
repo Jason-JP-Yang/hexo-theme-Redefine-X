@@ -257,10 +257,28 @@ export function spotRange(range, core) {
   }, "text");
 }
 
-/** A whole block, when the block IS the change: one arrived, or one moved. */
-export function spotElement(el, kind) {
+/**
+ * A whole block, when the block IS the change: one arrived, or one moved.
+ *
+ * `skip` is a strip at the top that is not part of it — the gutter, which out on
+ * a desktop sits in the margin beside the block and on a phone takes a row of its
+ * own ABOVE the text. Trimmed only when it is actually inside the block's own
+ * width, which is exactly the difference between the two.
+ */
+export function spotElement(el, kind, skip) {
   if (!el) return;
-  schedule(() => (el.isConnected ? [el.getBoundingClientRect()] : []), kind || "block");
+  schedule(() => {
+    if (!el.isConnected) return [];
+    const rect = el.getBoundingClientRect();
+    if (!skip || !skip.isConnected) return [rect];
+
+    const cut = skip.getBoundingClientRect();
+    const inside = cut.height > 0 && cut.right > rect.left + 1 && cut.left < rect.right - 1;
+    if (!inside || cut.bottom >= rect.bottom - 4) return [rect];
+
+    const top = cut.bottom;
+    return [{ left: rect.left, top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.bottom - top }];
+  }, kind || "block");
 }
 
 /**

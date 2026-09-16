@@ -60,7 +60,6 @@ import {
 } from "./assets.js";
 import initLazyLoad, {
   forceLoadAllPreloaders,
-  loadPreloaderNow,
   registerSrcFallback,
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
@@ -644,9 +643,23 @@ function watchPerch(el) {
  * So the editor takes the decision back. The two bars that are no use mid-word
  * step aside — through the transition the navigation already owns, so it reads
  * as chrome making room rather than as a repaint — the toolbar is pinned to the
- * top of what is actually VISIBLE rather than to the top of a viewport half of
- * which is behind the keyboard, and the page is scrolled ONCE, by us, so the
+ * top of what is actually VISIBLE, and the page is scrolled ONCE, by us, so the
  * line being typed comes to rest a fifth of the way down the band that is left.
+ *
+ * ── What says the keyboard is up ────────────────────────────────────────────
+ *
+ * The FOCUS, and nothing else. Asking the visual viewport — "has it lost 140px?"
+ * — was the obvious test and it never once fired: Chrome on Android answers the
+ * keyboard by shrinking the LAYOUT viewport, so `innerHeight` falls by exactly as
+ * much as `visualViewport.height` does and the difference stays zero. Safari
+ * offsets the visual viewport instead and the same test does fire. One behaviour
+ * per browser, none of it reliable; a caret in a field on a touch screen means a
+ * keyboard, in every one of them.
+ *
+ * `interactive-widget=resizes-content` is set on the viewport for as long as the
+ * editor is open, which is what makes the fixed toolbar land ABOVE the keyboard
+ * on Chrome rather than behind it; `--ed-vv-top` covers the browsers that offset
+ * instead of resizing.
  *
  * Nothing above the fold is pushed. The one height that changes is a band of
  * padding at the END of the article — without it a short post has nothing to
@@ -654,13 +667,26 @@ function watchPerch(el) {
  * blank under the paragraph.
  */
 const KB_WIDE = 820;    // above this, a soft keyboard is not what is happening
-const KB_SHRINK = 140;  // the viewport has to lose this much to BE a keyboard
 const KB_SETTLE = 120;  // the keyboard's own animation, roughly
 const KB_BAND = 0.2;    // where in the band the line being typed comes to rest
+const KB_TRAVEL = 220;  // taking the line there, rather than arriving at it
+// Long enough to survive the caret being handed from one block to the next — an
+// insert blurs and refocuses, and treating that as "the keyboard closed" is what
+// made it close and reopen.
+const KB_LINGER = 180;
 
-function keyboardUp() {
-  const vv = window.visualViewport;
-  return !!vv && window.innerHeight - vv.height > KB_SHRINK;
+const VIEWPORT_TAG = "width=device-width, initial-scale=1";
+const VIEWPORT_EDIT = VIEWPORT_TAG + ", interactive-widget=resizes-content";
+
+function setViewport(editing) {
+  const tag = document.querySelector('meta[name="viewport"]');
+  if (!tag) return;
+  const want = editing ? VIEWPORT_EDIT : VIEWPORT_TAG;
+  if (tag.getAttribute("content") !== want) tag.setAttribute("content", want);
+}
+
+function touchy() {
+  return window.matchMedia("(pointer: coarse)").matches && window.innerWidth <= KB_WIDE;
 }
 
 /** Is this the editor's own field — a block, the title, a front-matter row? */
@@ -699,9 +725,9 @@ function composeScroll() {
   if (at.top >= top + 8 && at.bottom <= foot - 8) return;
 
   const band = Math.max(140, foot - top);
-  const drift = Math.round(at.top - (top + band * KB_BAND));
-  if (!drift) return;
-  window.scrollBy({ top: drift, left: 0, behavior: "auto" });
+  const most = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  const want = window.scrollY + at.top - top - band * KB_BAND;
+  scrollTween(Math.min(most, Math.max(0, Math.round(want))), KB_TRAVEL);
 }
 
 function setCompose(on) {
@@ -711,51 +737,92 @@ function setCompose(on) {
   else delete document.documentElement.dataset.edCompose;
 }
 
+/** Take the caret out of the article, which is what closes the keyboard. */
+function dropCaret() {
+  const live = document.activeElement;
+  if (live && live.blur && editing(live)) live.blur();
+  composeAsk(false);
+}
+
+let composeTimer = 0;
+let composeLinger = 0;
+let composeLook = 0;
+
 /**
- * Follow the visual viewport.
+ * Ask for compose mode, or let it go.
  *
- * `--ed-vv-top` is where the visible band starts inside the layout viewport,
- * which is what a `position: fixed` toolbar has to be offset by to stay on
- * screen: fixed elements are laid out against the LAYOUT viewport, and with a
- * keyboard up that is a rectangle most of which nobody can see.
+ * Letting go is delayed: an insert blurs one field and focuses the next, and a
+ * mode that ended in that gap put the keyboard away and brought it back for every
+ * new block.
+ */
+function composeAsk(want) {
+  clearTimeout(composeLinger);
+  if (want) {
+    setCompose(true);
+    clearTimeout(composeTimer);
+    composeTimer = setTimeout(composeScroll, KB_SETTLE);
+    return;
+  }
+  composeLinger = setTimeout(() => {
+    if (!editing(document.activeElement)) setCompose(false);
+  }, KB_LINGER);
+}
+
+/**
+ * The caret landed somewhere, or left. Re-asked on both — after the tick, because
+ * `focusout` fires while `document.activeElement` is still the field being left.
+ */
+function composeCheck() {
+  if (!state.on) return;
+  clearTimeout(composeLook);
+  composeLook = setTimeout(() => composeAsk(touchy() && editing(document.activeElement)), 0);
+}
+
+/**
+ * Publish where the visible band is.
+ *
+ * `--ed-vv-top` is where it starts inside the layout viewport, which is what a
+ * `position: fixed` toolbar has to be offset by on the browsers that answer a
+ * keyboard by offsetting the visual viewport rather than resizing the page.
  */
 function watchViewport() {
   const vv = window.visualViewport;
-  if (!vv) return () => {};
-  let timer = 0;
-
-  // Where the band is, republished on every viewport event. Cheap, and it is all
-  // a panning gesture needs — panning is the author looking at something, and
-  // scrolling the page back under them would be the editor arguing.
   const publish = () => {
     const root = document.documentElement.style;
-    root.setProperty("--ed-vv-top", Math.round(vv.offsetTop) + "px");
-    root.setProperty("--ed-vv-h", Math.round(vv.height) + "px");
+    root.setProperty("--ed-vv-top", Math.round(vv ? vv.offsetTop : 0) + "px");
+    root.setProperty("--ed-vv-h", Math.round(vv ? vv.height : window.innerHeight) + "px");
   };
 
-  // The keyboard arriving, leaving or changing height — the only events that
-  // change what "readable" means, and the only ones worth re-aiming for.
+  // The keyboard arriving or changing height is the only thing that changes what
+  // "readable" means. Panning is left alone: that is the author looking at
+  // something, and scrolling the page back under them would be the editor arguing.
   const react = () => {
     publish();
-    const want = keyboardUp() && window.innerWidth <= KB_WIDE && editing(document.activeElement);
-    setCompose(want);
-
-    clearTimeout(timer);
-    // After the keyboard has finished arriving, never while it is on its way: a
-    // scroll worked out against a band that is still shrinking is a scroll that
-    // has to be worked out again.
-    if (want) timer = setTimeout(composeScroll, KB_SETTLE);
+    if (state.composing) {
+      clearTimeout(composeTimer);
+      composeTimer = setTimeout(composeScroll, KB_SETTLE);
+    }
   };
 
-  vv.addEventListener("resize", react);
-  vv.addEventListener("scroll", publish);
-  react();
+  setViewport(true);
+  publish();
+  if (vv) {
+    vv.addEventListener("resize", react);
+    vv.addEventListener("scroll", publish);
+  }
+  window.addEventListener("resize", react);
 
   return () => {
-    clearTimeout(timer);
-    vv.removeEventListener("resize", react);
-    vv.removeEventListener("scroll", publish);
+    clearTimeout(composeTimer);
+    clearTimeout(composeLinger);
+    clearTimeout(composeLook);
+    if (vv) {
+      vv.removeEventListener("resize", react);
+      vv.removeEventListener("scroll", publish);
+    }
+    window.removeEventListener("resize", react);
     setCompose(false);
+    setViewport(false);
     const root = document.documentElement.style;
     root.removeProperty("--ed-vv-top");
     root.removeProperty("--ed-vv-h");
@@ -1540,7 +1607,10 @@ function insertBlock(block, anchorId, focus, box, where) {
   // what made a new block at the end of an article stutter and then snap to a
   // different height.
   enter(view.el, view.ready, gone).then(() => {
-    if (focus && view.focus) view.focus("start");
+    // A picture has nothing to type into. Focusing its caption opened the
+    // keyboard over the picture the author had just chosen to look at.
+    if (focus && view.focus && block.type !== "image") view.focus("start");
+    else if (focus && block.type === "image") dropCaret();
     contentChanged();
     refreshTOC();
   });
@@ -1560,14 +1630,21 @@ async function deleteBlock(id, move) {
     return void box.onEmpty();
   }
 
+  // Something still on screen that is NOT what is leaving, held at the pixel it
+  // stands on. `exit` collapses the box and the caret then moves to a neighbour,
+  // and both of those slide the article under the reader.
+  const steady = steadyAnchor(view.el);
   await exit(view.el);
-  dropBoxesIn(view.el);
-  view.el.remove();
-  box.views.splice(index, 1);
-  box.blocks.splice(index, 1);
 
-  const next = box.views[move === "next" ? index : Math.max(0, index - 1)];
-  if (next && next.focus) next.focus("end");
+  await anchored(steady, () => {
+    dropBoxesIn(view.el);
+    view.el.remove();
+    box.views.splice(index, 1);
+    box.blocks.splice(index, 1);
+
+    const next = box.views[move === "next" ? index : Math.max(0, index - 1)];
+    if (next && next.focus) next.focus("end");
+  });
 
   renumberFigures();
   writeBox(box);
@@ -2160,6 +2237,9 @@ function applyStagedMoves() {
  * and one place that knows how to add to it.
  */
 async function pickImage(current, browse) {
+  // The browser is a full-height panel and nothing in it is typed into first. A
+  // keyboard left standing under it covers the file tree.
+  dropCaret();
   const opened = history.mark();
   const had = state.pending.length;
   const picked = await openPicker(
@@ -2171,14 +2251,12 @@ async function pickImage(current, browse) {
       // A tidy-up is half a dozen separate decisions, so each one is a step of
       // its own rather than one lump recorded when the browser closes.
       onStageChange: (path) => markDirty("assets", path),
-      // The article's own picture pipeline, on the browser's preview: the same
-      // preloader, the same skeleton, the same staged blob, the same decryption
-      // for a withheld file and the same repository fallback. The preview is one
-      // picture the author just asked for, so it is loaded at once rather than
-      // waited for by an observer that has no reason to watch a modal.
+      // The article's own measurements and resolution rules — a staged blob, a
+      // withheld picture's borrowed key, the repository fallback — on a plain
+      // `<img>`. NOT the lazyload preloader: that opens a sealed image through the
+      // page's key ring, which holds this post's pictures and no other post's.
       naturalSize: (src) => naturalSize(src, state.pending),
-      buildPreloader: (src, alt) => buildPreloader(src, alt, state.pending),
-      loadPreview: (node) => loadPreloaderNow(node),
+      bindImage: (img, src) => bindImage(img, src, state.pending),
     },
     { current, browse }
   );
@@ -2337,31 +2415,52 @@ const TRAVEL_MIN = 240;
 const TRAVEL_MAX = 620;
 
 /**
+ * `EASE` — cubic-bezier(0.32, 0.72, 0, 1) — evaluated in JS.
+ *
+ * A scroll driven by a different curve from the transforms it travels with is two
+ * motions that happen to overlap. This is what lets them be one.
+ */
+function easeStep(t) {
+  const cx = 3 * 0.32;
+  const bx = 3 * (0 - 0.32) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 3 * 0.72;
+  const by = 3 * (1 - 0.72) - cy;
+  const ay = 1 - cy - by;
+
+  let u = t;
+  for (let i = 0; i < 6; i++) {
+    const off = ((ax * u + bx) * u + cx) * u - t;
+    const slope = (3 * ax * u + 2 * bx) * u + cx;
+    if (Math.abs(slope) < 1e-6) break;
+    u -= off / slope;
+  }
+  u = Math.min(1, Math.max(0, u));
+  return ((ay * u + by) * u + cy) * u;
+}
+
+/**
  * Take the page somewhere, and KNOW when it has arrived.
  *
- * `scrollTo({ behavior: "smooth" })` cannot be awaited: the old code watched for
- * the page to go still and gave up after 700ms, which a long journey routinely
- * outlasts — so the step landed, the FLIP measured, and the pin scrolled all
- * while the page was still flying. Every rectangle in that pass was taken in a
- * viewport that had already moved, which is the reordering animation "going
- * completely wrong" when the block was off screen.
+ * `scrollTo({ behavior: "smooth" })` cannot be awaited: watching for the page to
+ * go still and giving up after 700ms is a bet a long journey routinely wins — and
+ * a FLIP that measures while the viewport is still moving reads every rectangle
+ * in a viewport that has already moved.
  *
- * Driven here instead: one known duration, one promise, and a scroll position
- * written every frame — which also cancels any native smooth scroll the browser
- * started underneath us (a focus, a fragment link).
+ * Driven here instead: one known duration, one promise, one position written per
+ * frame — which also cancels any native smooth scroll started underneath us.
  */
-function scrollTween(to) {
+function scrollTween(to, ms) {
   return new Promise((done) => {
     const from = window.scrollY;
     const delta = to - from;
     if (Math.abs(delta) < 1) return void done(false);
 
-    const span = Math.min(TRAVEL_MAX, Math.max(TRAVEL_MIN, Math.abs(delta) * 0.55));
+    const span = ms || Math.min(TRAVEL_MAX, Math.max(TRAVEL_MIN, Math.abs(delta) * 0.55));
     const began = performance.now();
     const step = (now) => {
       const k = Math.min(1, (now - began) / span);
-      const eased = 1 - Math.pow(1 - k, 3);
-      window.scrollTo({ top: Math.round(from + delta * eased), left: window.scrollX, behavior: "auto" });
+      window.scrollTo({ top: Math.round(from + delta * easeStep(k)), left: window.scrollX, behavior: "auto" });
       if (k < 1) requestAnimationFrame(step);
       else done(true);
     };
@@ -2505,16 +2604,14 @@ async function goToStep(target, plan) {
     return;
   }
 
-  // One. Travel, and WAIT for it. Opening a folding while the page is still
-  // moving is two motions at once, and the pair reads as a stutter rather than
-  // as two things happening in an order.
+  // One. Travel, and WAIT for it. A FLIP measured while the viewport is still
+  // moving reads every rectangle in a viewport that has already moved.
   //
-  // A block the step MOVES is the element itself, and the whole of the step is
-  // about where it goes — so it is brought properly into view first and the
-  // rearrangement then happens around it. For anything else the block the
-  // DOCUMENT names may only be the note the change is inside, so the page moves
-  // only when none of it is readable and `spotlight` does the precise journey
-  // once there is a real element to travel to.
+  // A block the step MOVES is the element itself, so it is brought properly into
+  // view and the rearrangement then happens around it. For anything else the
+  // block the DOCUMENT names may only be the note the change is inside, so the
+  // page moves only when none of it is readable and `spotlight` makes the precise
+  // journey once there is a real element to travel to.
   const precise = !!lead || target.how === "move" || target.how === "add";
   if (precise ? !readable(at.view.el) : offScreen(at.view.el)) await travelTo(at.view.el);
 
@@ -2625,9 +2722,10 @@ function ghosts() {
  * still on screen instead. Without it, restoring a paragraph above the fold slid
  * everything the reader was reading down by its height.
  */
-function steadyAnchor() {
+function steadyAnchor(skip) {
   const top = headroom();
   for (const node of canvasNodes()) {
+    if (skip && (node === skip || skip.contains(node))) continue;
     if (node.getBoundingClientRect().bottom > top + 1) return node;
   }
   return null;
@@ -2642,41 +2740,29 @@ function viewsByEl() {
 /**
  * One FLIP over the WHOLE canvas, with the page pinned to an anchor.
  *
- * Three things were wrong with doing this per box. The root box's survivors
- * travelled and a note's did not, so half the article slid and the other half
- * jumped. A block LEAVING a note for the article is a different view with a
- * different id, so it was not a survivor anywhere and had to be animated
- * separately — after the first animation had already finished, which is two
- * motions in sequence where there is one movement. And nothing held the page
- * still, so a height change above the fold slid everything under it.
+ * Every block and every `+` row is measured, the change happens, the page is
+ * scrolled INSTANTLY by exactly what the anchor moved, and everything then
+ * travels from where it was in one pass. The pin has to be instant and it has to
+ * sit between the two measurements: that is what folds it into the same numbers
+ * the transforms are built from. An animated scroll here, or an `await` of any
+ * kind, lets the browser paint the rearrangement first — and then the article
+ * jumps and the animation travels from a position nobody ever saw.
  *
- * Here every block and every `+` row in the canvas is measured, the change
- * happens, the page is scrolled by exactly what the anchor moved, and everything
- * travels from where it was in ONE pass. A block with no old position of its own
- * borrows the one its ghost left — same words, same place to look.
+ * The anchor is chosen HERE, not by the caller, because only now is it known what
+ * changed. The caller can name the block the DOCUMENT is about, and for anything
+ * inside a note that is the note — pinning its top let the change slide within
+ * it, which is the one thing the pinning exists to stop. A block with no old
+ * rectangle of its own borrows its ghost's: same words, same place to look.
  */
 async function shift(fallback, before, mutate) {
   if (reduced()) return void mutate();
 
-  const nodes = canvasNodes();
   const was = new Map();
-  for (const node of nodes) was.set(node, node.getBoundingClientRect());
+  for (const node of canvasNodes()) was.set(node, node.getBoundingClientRect());
 
   mutate();
 
   const owner = viewsByEl();
-
-  // The anchor is chosen HERE, not by the caller, because only now is it known
-  // what changed. The caller can name the block the DOCUMENT is about, and for
-  // anything inside a note that is the note — pinning its top let the change
-  // slide within it, which is the one thing the pinning exists to stop. The
-  // boxes have just said which block actually took the edit.
-  //
-  // A block that moved INTO a note is new here and has no old rectangle of its
-  // own, but it has a ghost: the row it occupied a moment ago, in the article it
-  // came from. Pinning it there is what makes a block cross a boundary without
-  // the page appearing to lurch — the block stays under the eye and everything
-  // else slides around it.
   const leaf = changedLeaf();
   let anchor = null;
   let top = null;
@@ -2697,8 +2783,6 @@ async function shift(fallback, before, mutate) {
     top = was.get(fallback).top;
   }
 
-  // Pinned BEFORE anything is measured, so every delta below is read in the
-  // viewport the reader is actually looking at.
   if (top != null && anchor.isConnected) {
     const drift = anchor.getBoundingClientRect().top - top;
     if (Math.abs(drift) > 0.5) window.scrollBy(0, drift);
@@ -2722,15 +2806,13 @@ async function shift(fallback, before, mutate) {
 
     if (!from) {
       // The one block the step is ABOUT is lit a moment later, deliberately, by
-      // the spotlight. Fading it in as well is two entrances for one change, at
-      // two different sizes — which is what reads as the mark flashing twice.
+      // the spotlight. Fading it in as well is two entrances for one change.
       if (node === leaf) continue;
-      // Genuinely new, with nowhere to come from: it fades in where it landed.
       runs.push(
-        node.animate(
-          [{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }],
-          { duration: Math.round(STEP_MS * 0.6), easing: EASE }
-        )
+        node.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }], {
+          duration: Math.round(STEP_MS * 0.6),
+          easing: EASE,
+        })
       );
       continue;
     }
@@ -2790,14 +2872,18 @@ function subRange(was, now) {
  *   arrived  the block, because the block is the change
  *   left     the seam between the two blocks that remain
  */
+async /** The `+` and the drag handle, which are not part of what a step changed. */
+function gutterOf(view) {
+  return view && view.el ? view.el.querySelector(":scope > .ed-gutter") : null;
+}
+
 async function spotlight(target, report, quick) {
   if (target.kind === "asset") {
     const held = pickerLive();
     if (!held) return;
-    // Re-read from the stage as it now stands: the tree was drawn before the
-    // step, under the names the step has just taken away. A file the step has
-    // just taken away has no row of its own any more, so the folder it was in is
-    // marked instead — which is the place the author is being shown.
+    // Rebuilt from the stage as it NOW stands: the tree was drawn before the
+    // step, under the names the step has just taken away. A file it removed has
+    // no row left, so the folder it was in is opened and marked instead.
     held.goto(target.path);
     return void held.flash(target.path);
   }
@@ -2810,7 +2896,7 @@ async function spotlight(target, report, quick) {
   const travelled = drift.find((view) => view.el.isConnected);
   if (travelled) {
     await travelTo(travelled.el, quick);
-    return void spotElement(travelled.el, "move");
+    return void spotElement(travelled.el, "move", gutterOf(travelled));
   }
 
   const spots = [
@@ -2848,7 +2934,7 @@ async function spotlight(target, report, quick) {
         return void spotRange(range, core);
       }
     }
-    return void spotElement(view.el, "block");
+    return void spotElement(view.el, "block", gutterOf(view));
   }
 
   if (target.kind === "seam") {
@@ -2864,7 +2950,7 @@ async function spotlight(target, report, quick) {
     const at = locate(target.id);
     if (!at) return;
     await travelTo(at.view.el, quick);
-    return void spotElement(at.view.el, target.how === "move" ? "move" : "block");
+    return void spotElement(at.view.el, target.how === "move" ? "move" : "block", gutterOf(at.view));
   }
 
   const el = targetNode(target);
@@ -2912,6 +2998,18 @@ function caretToEnd(el) {
 
 const COVER_OF = (front) => front.cover || front.banner || front.thumbnail || "";
 
+// Long enough for a typeset to land, short enough that the mark never appears to
+// be waiting on one. The motion is already over by the time this is asked.
+const RENDER_CAP = 300;
+
+function settleViews(views) {
+  const waits = views
+    .filter((view) => view && view.ready)
+    .map((view) => Promise.resolve(view.ready).catch(() => {}));
+  if (!waits.length) return null;
+  return Promise.race([Promise.all(waits), new Promise((done) => setTimeout(done, RENDER_CAP))]);
+}
+
 /**
  * The canvas, made to match a list of blocks.
  *
@@ -2948,6 +3046,11 @@ async function reconcile(wanted, quick, before, anchor) {
     rows.push({ block, view: null, gone: view || null });
   }
 
+  // Synchronous, and it must stay that way. A FLIP is measure, mutate, measure,
+  // animate with no frame between them; awaiting anything here lets the browser
+  // paint the mutation, so the article jumps and the animation then travels from
+  // a position nobody ever saw. Asynchronous paints are waited for AFTER the
+  // motion, in `applyStep`, where only the mark depends on them.
   const mutate = () => {
     // `dropBoxesIn` is what releases a view being discarded, here as everywhere
     // else in this file — it forgets the boxes drawn inside the element AND the
@@ -3135,6 +3238,10 @@ async function applyStep(plan) {
     // Whether anything is left to commit is the step store's answer, given the
     // moment `index` moves — see `syncSteps`. This only redraws the bar around it.
     syncHeader();
+    // A block inside a note renders on the note's own pass, which `reconcile`
+    // never saw. Lighting a listing or an equation before its paint resolves put
+    // the mark on an empty box and then resized it under the eye.
+    await settleViews(report.fresh.concat(report.patched.map((spot) => spot.view)));
     await spotlight(target, report, plan.quick);
   } finally {
     release();
@@ -3543,6 +3650,7 @@ function wire() {
   document.addEventListener("selectionchange", onSelectionChange);
   document.addEventListener("keydown", onKey, true);
   document.addEventListener("focusin", onFocusIn);
+  document.addEventListener("focusout", composeCheck);
   document.addEventListener("click", onNavAway, true);
   window.addEventListener("beforeunload", onLeave);
 }
@@ -3554,6 +3662,7 @@ function unwire() {
   document.removeEventListener("selectionchange", onSelectionChange);
   document.removeEventListener("keydown", onKey, true);
   document.removeEventListener("focusin", onFocusIn);
+  document.removeEventListener("focusout", composeCheck);
   document.removeEventListener("click", onNavAway, true);
   document.removeEventListener("dragover", onDocDragOver);
   document.removeEventListener("drop", onDocDrop);
@@ -3575,17 +3684,11 @@ async function onCanvasPaste(e) {
 }
 
 /** The caret left the article: no block is being edited, so nothing is shown. */
-let composeAim = 0;
-
 function onFocusIn(e) {
   if (!state.on || !ui || !ui.toolbar) return;
 
-  // The caret has moved to another field and the keyboard has not moved at all,
-  // so the viewport has nothing to say; the page still has to be re-aimed.
-  if (state.composing && editing(e.target)) {
-    clearTimeout(composeAim);
-    composeAim = setTimeout(composeScroll, KB_SETTLE);
-  }
+  // Where the caret is IS whether a keyboard is up; see `watchViewport`.
+  composeCheck();
 
   if (state.canvas.contains(e.target) || ui.toolbar.el.contains(e.target)) return;
   if (e.target.closest && e.target.closest(".ed-ask, .ed-slash, .ed-picker-mask")) return;

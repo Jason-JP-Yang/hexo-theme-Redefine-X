@@ -1586,10 +1586,16 @@ $ed-pop-h = 620px
     grid-template-columns minmax(0, 1fr)
     grid-template-rows calc(var(--ed-pick-vsplit, 0.42) * 100%) 11px minmax(0, 1fr)
 
+// The padding is the MARK's, not the tree's. A row carries a 2px ring one pixel
+// proud of itself and a 14px glow around that, and a scrolling panel clips both
+// — so the first row's top edge and every row's left edge lost theirs. The
+// scroll padding is the same promise for a row travelled to rather than merely
+// sitting there: `scrollIntoView` stops short of the edge instead of against it.
 .ed-pick-side
   min-height 0
   min-width 0
-  padding 8px 0 12px
+  padding 12px 0 14px 5px
+  scroll-padding 12px 0 14px
   overflow-y auto
   overscroll-behavior contain
   ed-scroll()
@@ -1898,23 +1904,33 @@ $ed-pop-h = 620px
   &[hidden]
     display none
 
-  // Two elements, one box. The preloader is REPLACED by the picture it becomes,
-  // so the size `fitShot` worked out is published on the stage rather than
-  // written onto either of them — the box is the thing that survives the swap,
-  // which is what makes the skeleton and the picture the same rectangle.
-  //
-  // The article's margin and height cap are dropped here and only here: the room
-  // this picture may have was already subtracted from the pane's, and a second
-  // opinion about it is how the file's details got pushed out.
-  > .img-preloader,
+  // The element is replaced per selection, so the size `fitShot` worked out is
+  // published on the STAGE: the box is the thing that survives, which is what
+  // makes the skeleton and the picture the same rectangle.
   > img
     display block
     width var(--ed-shot-w, auto)
     height var(--ed-shot-h, auto)
     max-width 100%
-    max-height none
     margin 0
     border-radius 10px
+
+  // Until it decodes, the box it already occupies IS the skeleton — the theme's
+  // own shimmer, on the element that is about to hold the picture.
+  > img[data-ready="0"]
+    background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
+    animation ed-shot-wait 1.5s ease-in-out infinite
+
+  // Every route has been tried. A flat plate rather than the browser's
+  // broken-picture glyph, which `assets.js` keeps out of the box entirely.
+  > img[data-ready="err"]
+    background var(--third-background-color)
+
+@keyframes ed-shot-wait
+  from
+    background-position 100% 0
+  to
+    background-position -100% 0
 
 // Nothing chosen: the hint is the whole pane rather than one line pinned to
 // the top of it.

@@ -110,7 +110,11 @@ export function placeAt(el, offset) {
 }
 
 export function focusStart(el) {
-  el.focus();
+  // `preventScroll` throughout: the browser's idea of "in view" is the middle of
+  // the window, and letting it scroll there fights the editor's own travel and
+  // bounces the page — hardest on a phone, where it also fires under the
+  // keyboard. Where the caret should be on screen is decided in index.js.
+  el.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(el);
   range.collapse(true);
@@ -120,7 +124,7 @@ export function focusStart(el) {
 }
 
 export function focusEnd(el) {
-  el.focus();
+  el.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(el);
   range.collapse(false);
