@@ -421,6 +421,7 @@ export function closeDialogs() {
   const open = document.querySelectorAll(".ed-picker-mask");
   for (const mask of open) mask.remove();
   live = null;
+  sheet = null;
   if (open.length) {
     locks = 0;
     document.documentElement.style.overflow = "";
@@ -430,6 +431,43 @@ export function closeDialogs() {
 /* ─── a sheet of fields ────────────────────────────────────────────────────── */
 
 /**
+ * The sheet that is open, if one is — the same bargain as `pickerLive`. A step
+ * that changed a picture's properties opens the sheet on that picture, scrolls
+ * to the field, puts the value back and marks it, rather than changing a caption
+ * behind a closed door.
+ */
+let sheet = null;
+
+export function sheetLive() {
+  return sheet;
+}
+
+/** Scroll one scrolling panel so `el` sits in its middle — the page never moves. */
+function centreIn(panel, el, animate) {
+  const delta =
+    el.getBoundingClientRect().top -
+    panel.getBoundingClientRect().top -
+    Math.max(0, (panel.clientHeight - el.offsetHeight) / 2);
+  const to = Math.max(0, Math.min(panel.scrollHeight - panel.clientHeight, panel.scrollTop + delta));
+  if (Math.abs(to - panel.scrollTop) < 1) return Promise.resolve();
+  if (!animate) {
+    panel.scrollTop = to;
+    return Promise.resolve();
+  }
+  const from = panel.scrollTop;
+  const began = performance.now();
+  return new Promise((done) => {
+    const step = (now) => {
+      const k = Math.min(1, (now - began) / MORPH_MS);
+      panel.scrollTop = from + (to - from) * (1 - Math.pow(1 - k, 3));
+      if (k < 1) requestAnimationFrame(step);
+      else done();
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/**
  * Everything a picture can be told about itself.
  *
  * Seventeen EXIF fields plus a title and a switch is not a toolbar row, and the
@@ -437,11 +475,42 @@ export function closeDialogs() {
  * closed by one. Leaving every field empty is how a picture goes back to being
  * a plain `![alt](path)`.
  *
- * @param {Array} groups  [{ label, fields: [{key, label, kind}] }]
+ * The switch is `.np-switch` and the note is `.bm-notice`: the notification
+ * centre's control and the console's standing note, not a second design of
+ * either.
+ *
+ * @param {object} opts  { id, title, groups: [{ label, fields: [{key, label, kind, wide, text}] }], values }
  * @returns {Promise<object|null>}
  */
-export function openSheet(ctx, title, groups, values) {
+export function openSheet(ctx, opts) {
   const t = ctx.t;
+  const values = opts.values || {};
+
+  const fieldHTML = (field) => {
+    const key = escapeHTML(field.key || "");
+    const label = escapeHTML(field.label || "");
+    if (field.kind === "note") {
+      return `<div class="ed-sheet-note"><p class="bm-notice">
+          <i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>${escapeHTML(field.text)}</span>
+        </p></div>`;
+    }
+    if (field.kind === "toggle") {
+      const on = values[field.key] !== false;
+      return `<div class="np-row ed-f-toggle" data-key="${key}">
+          <span class="np-row-main"><span class="np-row-label">${label}</span></span>
+          <button type="button" class="np-switch${on ? " is-on" : ""}" role="switch"
+            aria-checked="${on ? "true" : "false"}" data-toggle="${key}" aria-label="${label}">
+            <span class="np-switch-knob"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+          </button>
+        </div>`;
+    }
+    const value = values[field.key];
+    return `<label class="ed-f${field.wide ? " is-wide" : ""}" data-key="${key}">
+        <span class="ed-f-label">${label}</span>
+        <input class="ed-f-input" data-key="${key}" spellcheck="false"
+          value="${escapeHTML(value == null ? "" : String(value))}">
+      </label>`;
+  };
 
   return new Promise((resolve) => {
     const mask = document.createElement("div");
@@ -449,37 +518,18 @@ export function openSheet(ctx, title, groups, values) {
     mask.innerHTML = `
       <section class="ed-sheet" role="dialog" aria-modal="true">
         <header class="ed-picker-bar">
-          <span class="ed-picker-name"><i class="fa-solid fa-sliders" aria-hidden="true"></i>${escapeHTML(title)}</span>
+          <span class="ed-picker-name"><i class="fa-solid fa-sliders" aria-hidden="true"></i>${escapeHTML(opts.title || "")}</span>
           <span class="ed-picker-acts">
             <button type="button" data-act="close" title="${escapeHTML(t("close", "Close"))}"><i class="fa-solid fa-xmark"></i></button>
           </span>
         </header>
         <div class="ed-sheet-body">
-          ${groups
+          ${(opts.groups || [])
             .map(
               (group) => `
             <div class="ed-sheet-group">
               <h3 class="ed-front-legend">${escapeHTML(group.label)}</h3>
-              <div class="ed-front-grid">
-                ${group.fields
-                  .map((field) => {
-                    const value = values[field.key];
-                    if (field.kind === "toggle") {
-                      return `<label class="ed-f" data-key="${escapeHTML(field.key)}">
-                          <span class="ed-f-label">${escapeHTML(field.label)}</span>
-                          <button type="button" class="ed-f-toggle${value === false ? "" : " is-on"}"
-                            data-toggle="${escapeHTML(field.key)}" role="switch"
-                            aria-checked="${value === false ? "false" : "true"}"></button>
-                        </label>`;
-                    }
-                    return `<label class="ed-f${field.wide ? " is-wide" : ""}" data-key="${escapeHTML(field.key)}">
-                        <span class="ed-f-label">${escapeHTML(field.label)}</span>
-                        <input class="ed-f-input" data-key="${escapeHTML(field.key)}" spellcheck="false"
-                          value="${escapeHTML(value == null ? "" : String(value))}">
-                      </label>`;
-                  })
-                  .join("")}
-              </div>
+              <div class="ed-front-grid">${group.fields.map(fieldHTML).join("")}</div>
             </div>`
             )
             .join("")}
@@ -492,10 +542,21 @@ export function openSheet(ctx, title, groups, values) {
         </footer>
       </section>`;
 
+    const body = mask.querySelector(".ed-sheet-body");
+    const rowOf = (key) => {
+      for (const row of body.querySelectorAll("[data-key]")) {
+        if (row.dataset.key === key && !row.matches("input")) return row;
+      }
+      return null;
+    };
+
     let done = false;
+    let litOff = 0;
     const finish = (value) => {
       if (done) return;
       done = true;
+      clearTimeout(litOff);
+      if (sheet && sheet.owner === mask) sheet = null;
       mask.remove();
       unlockPage();
       document.removeEventListener("keydown", onKey, true);
@@ -528,12 +589,47 @@ export function openSheet(ctx, title, groups, values) {
       finish(out);
     });
 
+    sheet = {
+      owner: mask,
+      id: opts.id || "",
+      /** Every field, from the document as it now stands. */
+      set(next) {
+        for (const input of body.querySelectorAll(".ed-f-input")) {
+          const value = next[input.dataset.key];
+          input.value = value == null ? "" : String(value);
+        }
+        for (const toggle of body.querySelectorAll("[data-toggle]")) {
+          const on = next[toggle.dataset.toggle] !== false;
+          toggle.classList.toggle("is-on", on);
+          toggle.setAttribute("aria-checked", on ? "true" : "false");
+        }
+      },
+      reveal(key, animate) {
+        const row = rowOf(key);
+        return row ? centreIn(body, row, animate) : Promise.resolve();
+      },
+      flash(key) {
+        const row = rowOf(key);
+        if (!row) return;
+        clearTimeout(litOff);
+        for (const held of body.querySelectorAll(".ed-flash")) held.classList.remove("ed-flash");
+        void row.offsetWidth;
+        row.classList.add("ed-flash");
+        litOff = setTimeout(() => row.classList.remove("ed-flash"), FLASH_MS);
+      },
+      close: () => finish(null),
+    };
+
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
     lockPage();
     pop(mask.querySelector(".ed-sheet"));
-    const first = mask.querySelector(".ed-f-input");
-    if (first) first.focus();
+    // Opened by a step, the sheet is a window onto the change and the caret stays
+    // out of it; opened by the author, the first field is where typing starts.
+    if (!opts.quiet) {
+      const first = mask.querySelector(".ed-f-input");
+      if (first) first.focus({ preventScroll: true });
+    }
   });
 }
 

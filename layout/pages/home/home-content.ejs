@@ -52,9 +52,8 @@
     // the card is drawn from the archive the build wrote, so a site whose archive
     // is empty — no credential, a first build, an instance that was down — places
     // no card at all rather than an empty one that will never fill in.
-    const withPulse =
-        !!(theme.analytics && theme.analytics.enable === true &&
-           theme.analytics.pulse !== false && pulseSeries());
+    const analytics = backend_config().analytics;
+    const withPulse = !!(analytics.enable && analytics.pulse && pulseSeries());
 
     // The classic list is one cell wide by one cell's worth of text: it clamps at
     // three lines and has no grid to place anything in.

@@ -75,7 +75,7 @@ let restoreTried = false;
 // ─── config ──────────────────────────────────────────────────
 function readConfig() {
   const theme = window.theme || {};
-  const n = theme.notifications;
+  const n = theme.backend && theme.backend.notifications;
   if (!n || !n.enable) return null;
 
   // Resolve THROUGH blogAuth, never straight from the config: on localhost it
@@ -871,24 +871,6 @@ export function initNotifications() {
   setBadge(state.unread);
   syncControls();
   refresh({ quiet: true });
-
-  // The admin surface — the console and the composer — is sealed, so the page
-  // in front of us is a probe and nothing more. The gate decides whether there
-  // is anything to mount, and pulls in the console or the editor only once it
-  // holds a key that opens one: no reader ever downloads either.
-  if (document.querySelector("[data-admin-gate]")) {
-    import("./admin-gate.js").then((module) => module.default()).catch(() => {});
-  }
-
-  // The editor also opens on any article, where the trigger is the pencil
-  // rather than a page. `blog-admin` is written before the first paint from the
-  // cached session, so a reader never fetches it at all.
-  if (
-    document.documentElement.classList.contains("blog-admin") &&
-    document.querySelector(".tool-edit-post")
-  ) {
-    import("./editor/index.js").then((module) => module.initEditor()).catch(() => {});
-  }
 }
 
 document.addEventListener("DOMContentLoaded", initNotifications);

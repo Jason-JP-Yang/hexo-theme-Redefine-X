@@ -16,10 +16,10 @@
     a visit and inflates the numbers it is drawing.
 %>
 <%
-    const a = theme.analytics || {};
-    const host = String(a.host || "").replace(/\/+$/, "");
+    const a = backend_config().analytics;
+    const host = a.host;
 %>
-<% if (a.enable === true && host && a.website_id) { %>
+<% if (a.enable) { %>
 <script>
     (function () {
         // `--frame-vh` is the visitor's viewport height, handed to us by the
@@ -40,9 +40,9 @@
 </script>
 <script defer src="<%= host %>/script.js"
         data-website-id="<%= a.website_id %>"
-        <% if (a.performance !== false) { %>data-performance="true"<% } %>
+        <% if (a.performance) { %>data-performance="true"<% } %>
         data-before-send="umamiGate"></script>
-<% if (a.recorder !== false) { %>
+<% if (a.recorder) { %>
 <script defer src="<%= host %>/recorder.js" data-website-id="<%= a.website_id %>"></script>
 <% } %>
 <% } %>

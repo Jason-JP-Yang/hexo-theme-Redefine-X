@@ -21,9 +21,10 @@ const store = require("../lib/vault-store");
 const state = require("../lib/vault-state");
 const vc = require("../lib/vault-crypto");
 const inventory = require("../lib/post-inventory");
+const backend = require("../lib/backend");
 
 function vaultEnabled() {
-  return hexo.theme.config?.backend?.vault_enable === true;
+  return backend.resolve(hexo.theme.config).encryption.enable;
 }
 
 /**
@@ -39,8 +40,7 @@ function vaultEnabled() {
  * Posts Management offers this one to anybody.
  */
 function adminPageId() {
-  const theme = hexo.theme.config || {};
-  if (!vaultEnabled() || !theme.notifications || theme.notifications.enable !== true) return null;
+  if (!backend.resolve(hexo.theme.config).management) return null;
   return vc.pageId("admin");
 }
 
@@ -219,8 +219,9 @@ hexo.extend.filter.register(
 
     if (!vaultEnabled()) {
       store.fail(
-        `${marked.length + albums.length} item(s) carry \`vault:\` but backend.vault_enable is false. ` +
-          `Refusing to build them in the clear — set backend.vault_enable: true, or remove the flag.`
+        `${marked.length + albums.length} item(s) carry \`vault:\` but backend encryption is off. ` +
+          `Refusing to build them in the clear — set backend.encryption.enable: true (with backend.api_url ` +
+          `and giscus comments), or remove the flag.`
       );
     }
 
@@ -481,7 +482,7 @@ hexo.extend.filter.register(
       state.sorted().filter((entry) => entry.post.draft === true).map((entry) => entry.id)
     );
 
-    const api = String(hexo.theme.config.backend?.api_url || "");
+    const api = backend.resolve(hexo.theme.config).api_url;
     try {
       const done = await store.sync(api, drafts);
       if (done) {

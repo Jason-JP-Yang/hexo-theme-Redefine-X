@@ -1407,7 +1407,7 @@ let wired = false;
 
 export default async function initVault() {
   if (!window.crypto?.subtle) return;
-  if (!window.theme?.backend?.vault_enable) return;
+  if (!window.theme?.backend?.encryption?.enable) return;
 
   if (!wired) {
     wired = true;

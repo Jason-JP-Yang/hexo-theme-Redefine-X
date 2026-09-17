@@ -147,16 +147,22 @@ export function scheduleTOC(canvas) {
  * ones the anchors in that article already use.
  */
 let held = null;
+// Whether a session took the rail at all. One that failed to open never did,
+// and releasing on its behalf removed the list of whatever page came next.
+let holding = false;
 
 export function holdTOC(canvas) {
   const host = document.querySelector(".post-toc-wrap .post-toc");
   held = host ? host.querySelector("ol.nav") : null;
+  holding = true;
   paintTOC(canvas);
 }
 
 export function releaseTOC() {
   clearTimeout(timer);
   timer = 0;
+  if (!holding) return;
+  holding = false;
 
   const host = document.querySelector(".post-toc-wrap .post-toc");
   if (host) {

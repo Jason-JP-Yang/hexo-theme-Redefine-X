@@ -27,7 +27,7 @@ let adminPromise = null;
 /* ─── config ──────────────────────────────────────────────────────────────── */
 
 export function analyticsConfig() {
-  const a = (window.theme && window.theme.analytics) || {};
+  const a = (window.theme && window.theme.backend && window.theme.backend.analytics) || {};
   return {
     enable: a.enable === true,
     host: String(a.host || "").replace(/\/+$/, ""),

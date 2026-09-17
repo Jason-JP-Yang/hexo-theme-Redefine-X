@@ -1,10 +1,15 @@
 /**
  * The repository layer — one façade over two build backends.
  *
- * The site's source lives in two places at once: a Gitea instance on Jason's
- * own machine, and a private GitHub mirror. Either can build and publish, and
- * whichever one takes a commit is the one that builds it. This module decides
- * which, and every other part of the editor talks only to it.
+ * The site's source can live in two places at once: a Gitea instance and a
+ * GitHub repository, each configured under `backend.online_editor`. Either can
+ * build and publish, and whichever one takes a commit is the one that builds
+ * it. This module decides which, and every other part of the editor talks only
+ * to it.
+ *
+ * WHERE each repository is comes from the build, sealed under the admin key
+ * (`o.bin`) so a private repository's name is never in a public page; the
+ * TOKEN for it comes from the Worker. A provider needs both.
  *
  * ── Which backend, and why ──────────────────────────────────────────────────
  *
@@ -43,6 +48,7 @@
 
 import * as giteaDriver from "./repo-gitea.js";
 import * as githubDriver from "./repo-github.js";
+import { b64urlToBytes, fetchSealed, importAesKey, openJSON, pageId, vaultPrefix } from "../../tools/vaultCrypto.js";
 
 export { toBase64, fromBase64, decodeText } from "./repo-bytes.js";
 
@@ -71,6 +77,7 @@ let ticketAt = 0;
 let chosen = null;
 let forced = "";
 let idleTimer = 0;
+let providers = null;
 
 /**
  * A ticket nobody has touched for the session bound is ERASED, not merely
@@ -105,26 +112,72 @@ export function checkPath(path) {
 
 /* ─── the ticket ───────────────────────────────────────────────────────────── */
 
+/** The configured providers, opened with the admin key. Held for the session only. */
+async function sealedProviders(base, auth) {
+  if (providers) return providers;
+
+  const res = await fetch(base + "/api/vault/keys", {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (res.status === 401 || res.status === 403) throw new Error("forbidden");
+  if (!res.ok) throw new Error("ticket unavailable");
+
+  const body = await res.json().catch(() => ({}));
+  const wanted = await pageId("admin");
+  const grant = (body.posts || []).find((row) => row.id === wanted);
+  if (!grant) throw new Error("forbidden");
+
+  const sealed = await fetchSealed(`${vaultPrefix()}/${grant.slug}/o.bin`);
+  if (!sealed) throw new Error("ticket unavailable");
+  const opened = await openJSON(await importAesKey(b64urlToBytes(grant.key)), sealed);
+  providers = Array.isArray(opened.providers) ? opened.providers : [];
+  return providers;
+}
+
 async function fetchTicket() {
   if (!window.blogAuth) throw new Error("not signed in");
 
   const session = await window.blogAuth.getSession();
   const base = window.blogAuth.resolveApiBase();
   if (!session || !session.token || !base) throw new Error("not signed in");
+  const auth = { Authorization: "Bearer " + session.token };
 
-  const res = await fetch(base + "/api/admin/repo/ticket", {
-    headers: { Authorization: "Bearer " + session.token },
-  });
+  const [res, wanted] = await Promise.all([
+    fetch(base + "/api/admin/repo/ticket", { headers: auth }),
+    sealedProviders(base, auth),
+  ]);
   if (res.status === 401 || res.status === 403) throw new Error("forbidden");
   if (!res.ok) throw new Error("ticket unavailable");
 
   const body = await res.json();
-  const rows = (body.backends || []).filter((b) => b && b.id && DRIVERS[b.kind || b.id]);
+  const issued = new Map();
+  for (const row of body.backends || []) {
+    if (row && row.token) issued.set(row.kind || row.id, row);
+  }
+
+  const rows = [];
+  for (const provider of wanted) {
+    const credential = issued.get(provider.id);
+    if (!credential || !DRIVERS[provider.id]) continue;
+    const [owner, name] = String(provider.repo || "").split("/");
+    rows.push({
+      ...credential,
+      id: provider.id,
+      kind: provider.id,
+      api: provider.api_url || credential.api || "https://api.github.com",
+      owner,
+      repo: name,
+      branch: provider.branch,
+      driver: DRIVERS[provider.id],
+    });
+  }
   if (!rows.length) throw new Error("ticket unavailable");
 
   return {
-    prefer: body.prefer || rows[0].id,
-    backends: rows.map((b) => ({ ...b, driver: DRIVERS[b.kind || b.id] })),
+    prefer: rows.some((row) => row.id === body.prefer) ? body.prefer : rows[0].id,
+    backends: rows,
   };
 }
 
@@ -275,6 +328,7 @@ export function forget() {
   ticketAt = 0;
   chosen = null;
   forced = "";
+  providers = null;
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = 0;
   forgetBlobs();

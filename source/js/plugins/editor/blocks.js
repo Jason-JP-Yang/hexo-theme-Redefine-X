@@ -71,12 +71,12 @@ export function createView(block, ctx) {
   const view = { el, body, block, ctx, touched: false };
   wireRaw(view, el.querySelector(".ed-raw"));
 
-  view.touch = () => {
+  view.touch = (kind) => {
     view.touched = true;
     block.dirty = true;
     // The view goes with it: the contents rail only has to be rebuilt when the
     // block that changed is a heading, and that is the cheapest place to know.
-    ctx.onChange(view);
+    ctx.onChange(view, typeof kind === "string" ? kind : "");
   };
 
   if (RICH_TYPES.has(block.type)) mountRich(view);
@@ -745,128 +745,93 @@ function mountSource(view) {
 /* ─── image ────────────────────────────────────────────────────────────────── */
 
 /**
- * An image, built the way the published page builds one.
+ * A picture, drawn exactly as the build draws it and typed into nowhere.
  *
- * The page emits a `.img-preloader` that the lazyload observer turns into an
- * `<img>` when it is about to be seen, optionally wrapped in
- * `<figure class="image-caption">` with the ALT text as the caption — see
- * scripts/filters/img-handle.js and scripts/filters/lazyload-handle.js. The
- * editor emits exactly that and lets the same observer, the same skeleton and
- * the same image viewer take it from there. What is added is a small overlay of
- * controls and an editable caption; nothing about the image itself is local.
+ * `img-handle.js`'s `figure.image-caption` with its "Figure N." prefix, or
+ * `{% exifimage %}`'s caption or card — float or block, in the site's own
+ * labels — around the article's own `.img-preloader`, which the lazyload
+ * observer and the image viewer then treat like any other. A caption edited in
+ * place carried the page's figure number inside the text being edited; every
+ * property is the sheet's now (`imageProps` in index.js).
  *
- * The caption edits `alt`, not the markdown title, because alt is what the page
- * prints under the picture. The title never appears anywhere.
+ * The picture node itself survives every repaint of what surrounds it, so a
+ * caption becoming a card never requests the picture again.
  */
 function mountImage(view) {
   const { block, ctx } = view;
   const style = (window.theme && window.theme.articles && window.theme.articles.style) || {};
-  const numbered = style.image_figure_number === true;
   const captioned = style.image_caption !== false;
+  const numbered = captioned && style.image_figure_number === true;
+  const float = style.image_caption === "float";
 
-  const wrap = document.createElement("figure");
-  wrap.className = "image-caption ed-figure";
-  wrap.innerHTML = `
-    <figcaption contenteditable="true" spellcheck="false"
-      data-placeholder="${escapeHTML(ctx.t("caption", "Describe this image"))}"></figcaption>`;
-
-  const caption = wrap.querySelector("figcaption");
-
-  const paintCaption = () => {
-    if (!captioned) return void (caption.hidden = true);
-    const n = numbered ? ctx.figureIndex(block.id) : 0;
-    caption.innerHTML = numbered
-      ? (block.alt ? `<strong>Figure ${n}.</strong> ` : "") + escapeHTML(block.alt || `Figure ${n}`)
-      : escapeHTML(block.alt || "");
-  };
+  const wrap = document.createElement("div");
+  wrap.className = "ed-figure";
 
   const hasExif = () => !!block.exifTitle || Object.keys(block.exif || {}).some((k) => block.exif[k]);
 
-  const paint = () => {
-    const api = window.RedefineComponents;
+  let address = null;
+  let figure = -1;
 
-    // With a caption title or camera data this is an `{% exifimage %}`, and the
-    // card it prints is part of the picture. Rendered through the shared
-    // emitter, so the canvas shows the figure the build will.
-    if (hasExif() && api && api.exifImage) {
-      wrap.className = "ed-figure ed-figure-exif";
+  const media = () => {
+    const held = wrap.querySelector(".img-preloader, img");
+    if (held && address === block.url) return held;
+    address = block.url;
+    const node = ctx.buildPreloader(block.url, block.alt);
+    // A click on the canvas SELECTS a picture; the viewer is the toolbar's.
+    node.setAttribute("data-no-viewer", "");
+    return node;
+  };
+
+  const paint = () => {
+    const exif = hasExif();
+    const node = media();
+    node.remove();
+    ctx.shapeMedia(node, exif);
+    if (node.tagName === "IMG") node.alt = block.alt || "";
+    else node.dataset.alt = block.alt || "";
+
+    figure = numbered ? ctx.figureIndex(block.id) : 0;
+    const api = window.RedefineComponents;
+    const slot = `<i data-ed-media=""></i>`;
+
+    if (exif && api && api.exifImage) {
       wrap.innerHTML = api.exifImage(
-        [block.exifTitle || "", block.autoExif === false ? "auto-exif:false" : ""].filter(Boolean),
+        [block.exifTitle || ""],
         api.buildExifBody({ description: block.alt, path: block.url, info: block.exif || {} }),
         null,
-        { resolve: (p) => ctx.resolveAsset(p) }
+        { float, labels: ctx.exifLabels(), figure, media: slot }
       );
-      const img = wrap.querySelector("img");
-      if (img) {
-        img.setAttribute("data-no-viewer", "");
-        // Through bindImage rather than left as the emitter wrote it: that is
-        // the path that falls back to the repository when the site does not
-        // have this picture yet, which for an EXIF figure is otherwise the one
-        // shape of image with no second chance.
-        ctx.bindImage(img, block.url);
-      }
-      return;
+    } else if (captioned && (block.alt || numbered)) {
+      const text = escapeHTML(block.alt || "");
+      const caption = numbered ? (block.alt ? `<strong>Figure ${figure}.</strong> ${text}` : `Figure ${figure}`) : text;
+      wrap.innerHTML = `<figure class="image-caption">${slot}<figcaption>${caption}</figcaption></figure>`;
+    } else {
+      wrap.innerHTML = `<p>${slot}</p>`;
     }
 
-    wrap.className = "image-caption ed-figure";
-    if (!wrap.contains(caption)) wrap.appendChild(caption);
-    const old = wrap.querySelector(".img-preloader, img");
-    const node = ctx.buildPreloader(block.url, block.alt);
-    // In the editor a click on a picture SELECTS it; the viewer is a button in
-    // the toolbar, because opening a lightbox over the thing you are editing is
-    // not what a click there means.
-    node.setAttribute("data-no-viewer", "");
-    if (old) old.replaceWith(node);
-    else wrap.insertBefore(node, caption);
-    paintCaption();
+    wrap.querySelector("[data-ed-media]").replaceWith(node);
     ctx.observeImages();
+    ctx.settleFigure();
   };
-  paint();
-
-  // Typing in the caption IS typing the alt text; the numbering prefix is the
-  // page's, not the author's, so it is stripped back off on the way out.
-  caption.addEventListener("input", () => {
-    const text = caption.textContent
-      .replace(/​/g, "")
-      .replace(/^\s*Figure\s+\d+\.?\s*/i, "")
-      .trim();
-    block.alt = text;
-    view.touch();
-  });
-  caption.addEventListener("blur", paintCaption);
-
-  caption.addEventListener("focus", () => ctx.onFocus(view));
 
   view.body.appendChild(wrap);
-  view.read = () => {};
-  view.renumber = paintCaption;
-  view.focus = () => caret.focusEnd(caption);
-  view.isEmpty = () => false;
-  view.editable = caption;
+  paint();
 
-  /**
-   * A step landing on a picture, without the figure leaving the page.
-   *
-   * A caption or an EXIF field is redrawn in place; the ADDRESS goes back
-   * through `paint`, which is the only thing that knows how to hand a picture to
-   * the site's own preloader. Re-pointing the `<img>` inside one directly was
-   * faster and wrong: that element belongs to the lazyload observer, which has
-   * its own record of what it is loading, and blanking its `src` behind its back
-   * left the picture gone for good.
-   */
+  view.read = () => {};
+  view.isEmpty = () => false;
+  view.editable = null;
+  view.paint = paint;
+  // Numbers are positional; only a figure whose number actually moved repaints.
+  view.renumber = () => {
+    if (numbered && figure !== ctx.figureIndex(block.id)) paint();
+  };
+
   view.patch = (next, dry) => {
     if (next.type !== "image") return false;
     if (dry) return true;
-    const wasExif = hasExif();
-    const wasUrl = block.url;
-    const held = caret.caretMark(caption);
     absorb(block, next);
     view.touched = !!block.dirty;
-
-    if (hasExif() !== wasExif || block.url !== wasUrl) paint();
-    else paintCaption();
-
-    if (held != null) caret.placeAt(caption, held);
+    paint();
     return true;
   };
 
@@ -877,21 +842,14 @@ function mountImage(view) {
   ];
 
   view.act = async (act) => {
-    if (act === "folder") {
-      // The picker names it. Replacing and addressing were the same act asked
-      // two ways, and one of them was a repository path typed from memory.
-      const picked = await ctx.pickImage(block.url);
-      if (!picked) return;
-      block.url = picked.site;
-    } else if (act === "props") {
-      const next = await ctx.imageProps(block);
-      if (!next) return;
-      Object.assign(block, next);
-    } else if (act === "view") {
-      return void ctx.openViewer(wrap.querySelector("img"));
-    } else {
-      return;
-    }
+    if (act === "props") return void ctx.imageProps(view);
+    if (act === "view") return void ctx.openViewer(wrap.querySelector(".img-preloader, img"));
+    if (act !== "folder") return;
+    // The picker names it. Replacing and addressing were the same act asked
+    // two ways, and one of them was a repository path typed from memory.
+    const picked = await ctx.pickImage(block.url);
+    if (!picked) return;
+    block.url = picked.site;
     view.touch();
     paint();
     ctx.onOptionsChanged();

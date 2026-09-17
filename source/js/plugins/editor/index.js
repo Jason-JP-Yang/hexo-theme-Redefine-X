@@ -38,8 +38,8 @@ import {
   parseFrontMatter,
   setFrontMatterKey,
 } from "./markdown.js";
-import { closeDialogs, createStage, forgetTree, noteCommitted, openAsk, openPicker, openSheet, pickerLive, siteAddress } from "./picker.js";
-import { charSpan, createHistory, signature } from "./history.js";
+import { closeDialogs, createStage, forgetTree, noteCommitted, openAsk, openPicker, openSheet, pickerLive, sheetLive, siteAddress } from "./picker.js";
+import { charSpan, createHistory, propsKey, signature } from "./history.js";
 import { domRange, domText, spotClear, spotElement, spotRange, spotSeam } from "./spotlight.js";
 import { toggleMath } from "./inline.js";
 import { holdTOC, holdTOCActive, releaseTOC, scheduleTOC } from "./toc.js";
@@ -56,6 +56,7 @@ import {
   repoURL,
   resolveAsset,
   setVaultAssets,
+  shapeMedia,
   siteRoot,
 } from "./assets.js";
 import initLazyLoad, {
@@ -92,38 +93,49 @@ const FURNITURE = [
   ".comment-container",
 ];
 
-const state = {
-  on: false,
-  host: null,
-  canvas: null,
-  titleHost: null,
-  snapshot: [],
-  titleSnapshot: [],
-  put: [],
-  doc: null,
-  root: null,
-  boxes: new Set(),
-  focused: null,
-  entry: null,
-  pending: [],
-  dirty: false,
-  saving: false,
-  dragId: null,
-  dropAt: "",
-  vaultChoice: undefined,
-  stage: null,
-  stashTimer: null,
-  scrollRAF: 0,
-  pointerY: 0,
-  leaving: false,
-  perchOff: null,
-  viewportOff: null,
-  composing: false,
-  // Opened on /blog-management/write/ rather than on an article. There is no
-  // page under this editor to go back to or to reload, so both exits are
-  // somewhere else: the console, or the site.
-  fresh: false,
-};
+/**
+ * Everything one editing session holds, as it is before one starts.
+ *
+ * ONE list, used to reset as well as to begin. A reset that named its fields by
+ * hand forgot `snapshot` — for an encrypted post the decrypted article — and
+ * kept it alive behind every page the author went on to read.
+ */
+function blank() {
+  return {
+    on: false,
+    host: null,
+    canvas: null,
+    titleHost: null,
+    snapshot: [],
+    titleSnapshot: [],
+    put: [],
+    doc: null,
+    root: null,
+    focused: null,
+    entry: null,
+    pending: [],
+    dirty: false,
+    saving: false,
+    painting: false,
+    dragId: null,
+    dropAt: "",
+    vaultChoice: undefined,
+    stage: null,
+    stashTimer: null,
+    leaving: false,
+    perchOff: null,
+    viewportOff: null,
+    composing: false,
+    // The author's own choice to put the bars away, for this session only.
+    minimized: false,
+    // Opened on /blog-management/write/ rather than on an article. There is no
+    // page under this editor to go back to or to reload, so both exits are
+    // somewhere else: the console, or the site.
+    fresh: false,
+  };
+}
+
+const state = Object.assign(blank(), { boxes: new Set(), scrollRAF: 0, pointerY: 0 });
 
 let ui = null;
 let strings = null;
@@ -396,8 +408,10 @@ async function activate(host) {
   document.body.appendChild(ui.file);
 
   // Wired before anything can fail: a bar that reports an error must also be
-  // the way out of it.
+  // the way out of it, and a session that never finished opening must still be
+  // closed by the navigation that leaves it.
   ui.close.addEventListener("click", () => deactivate());
+  watchNavigation();
 
   ui.path.textContent = t("opening", "Opening");
   enter(ui.bar);
@@ -553,6 +567,7 @@ async function activate(host) {
     onMarked: commitInline,
     onMath: (root) => applyMath(root),
     onStep: (dir) => (dir === "redo" ? history.redo() : history.undo()),
+    onChrome: () => toggleChrome(),
     ask: (kind, current) => askFor(ui.toolbar.el, { t }, kind, current),
     ownsSelection: (sel) => state.canvas.contains(sel.anchorNode),
   };
@@ -593,6 +608,7 @@ async function activate(host) {
   await toolbarIn(ui.toolbar.el);
   state.perchOff = watchPerch(ui.toolbar.el);
   state.viewportOff = watchViewport();
+  syncChrome();
 
   if (identity.fresh) state.titleHost.querySelector(".ed-title").focus();
 }
@@ -618,10 +634,10 @@ function watchPerch(el) {
       want = (m ? m.scrollY : window.scrollY) > PERCH_AT ? "show" : "hide";
     },
     () => {
-      // While the keyboard is up this is the only chrome left on screen, and the
-      // rule it would be hidden by — "the document bar is not pinned yet" — is
-      // about a page at rest, which this is not.
-      const perch = state.composing ? "show" : want;
+      // While the bars are put away this is the only chrome left on screen, and
+      // the rule it would be hidden by — "the document bar is not pinned yet" —
+      // is about a page at rest, which this is not.
+      const perch = chromeHidden() ? "show" : want;
       if (el.dataset.perch !== perch) el.dataset.perch = perch;
     },
     "editor toolbar perch"
@@ -735,6 +751,49 @@ function setCompose(on) {
   state.composing = !!on;
   if (on) document.documentElement.dataset.edCompose = "1";
   else delete document.documentElement.dataset.edCompose;
+  syncChrome();
+}
+
+/**
+ * Whether the navigation and the document bar are put away.
+ *
+ * Only on a phone-sized touch screen, where the toolbar carries the button that
+ * brings them back: while typing, because the keyboard has taken the room, or
+ * because the author put them away and has not asked for them back.
+ */
+function chromeHidden() {
+  return touchy() && (state.composing || state.minimized);
+}
+
+function syncChrome() {
+  if (!state.on) return;
+  const hidden = chromeHidden();
+  const root = document.documentElement;
+  const was = root.dataset.edChrome === "min";
+  if (hidden) root.dataset.edChrome = "min";
+  else delete root.dataset.edChrome;
+
+  if (!ui || !ui.toolbar) return;
+  ui.toolbar.chrome(hidden);
+  if (hidden) ui.toolbar.el.dataset.perch = "show";
+  else if (was) ui.toolbar.el.dataset.perch = window.scrollY > PERCH_AT ? "show" : "hide";
+}
+
+/** Minimise, or maximise — and bringing the bars back is also how typing ends. */
+function toggleChrome() {
+  if (!chromeHidden()) {
+    state.minimized = true;
+    return void syncChrome();
+  }
+  state.minimized = false;
+  if (state.composing) {
+    clearTimeout(composeLinger);
+    clearTimeout(composeLook);
+    const live = document.activeElement;
+    if (live && live.blur && editing(live)) live.blur();
+    setCompose(false);
+  }
+  syncChrome();
 }
 
 /** Take the caret out of the article, which is what closes the keyboard. */
@@ -798,6 +857,9 @@ function watchViewport() {
   // something, and scrolling the page back under them would be the editor arguing.
   const react = () => {
     publish();
+    // Turning a phone, or a window crossing the width, decides whether there is
+    // a button to bring the bars back — so it decides whether they may be away.
+    syncChrome();
     if (state.composing) {
       clearTimeout(composeTimer);
       composeTimer = setTimeout(composeScroll, KB_SETTLE);
@@ -822,6 +884,7 @@ function watchViewport() {
     }
     window.removeEventListener("resize", react);
     setCompose(false);
+    delete document.documentElement.dataset.edChrome;
     setViewport(false);
     const root = document.documentElement.style;
     root.removeProperty("--ed-vv-top");
@@ -922,9 +985,13 @@ async function deactivate() {
   // inherit, so it snapped out to the full viewport for the length of its own
   // disappearance. `toolbarOut` also freezes the box it measured, so taking the
   // variables away underneath it changes nothing.
-  const bar = ui.bar;
-  const front = ui.front && ui.front.el;
-  const floating = ui.toolbar && ui.toolbar.el;
+  // Held here, not read off `state` after each await: a navigation can close the
+  // session outright while this is still animating it away.
+  const chrome = ui;
+  const { canvas, titleHost, snapshot, titleSnapshot, put, host } = state;
+  const bar = chrome.bar;
+  const front = chrome.front && chrome.front.el;
+  const floating = chrome.toolbar && chrome.toolbar.el;
 
   if (floating) await toolbarOut(floating);
   releaseDocbar();
@@ -933,14 +1000,15 @@ async function deactivate() {
   bar.remove();
   if (front) front.remove();
   if (floating) floating.remove();
-  if (ui.slash) ui.slash.el.remove();
-  if (ui.file) ui.file.remove();
+  if (chrome.slash) chrome.slash.el.remove();
+  if (chrome.file) chrome.file.remove();
   document.querySelectorAll(".ed-ask, .ed-dragshot").forEach((el) => el.remove());
   closeDialogs();
+  if (ui !== chrome) return;
 
-  await crossFade(state.canvas, () => {
-    state.canvas.replaceChildren(...state.snapshot);
-    state.titleHost.replaceChildren(...state.titleSnapshot);
+  await crossFade(canvas, () => {
+    canvas.replaceChildren(...snapshot);
+    titleHost.replaceChildren(...titleSnapshot);
   });
 
   // Anything that was mid-swap when the article was taken apart was released by
@@ -951,34 +1019,111 @@ async function deactivate() {
   // editor blocks would put every heading at infinity.
   releaseTOC();
 
-  for (const node of state.put) node.classList.remove("ed-put-away");
-  state.canvas.classList.remove("ed-no-typeset");
-  state.host.classList.remove("is-editing");
+  for (const node of put) node.classList.remove("ed-put-away");
+  canvas.classList.remove("ed-no-typeset");
+  host.classList.remove("is-editing");
   document.documentElement.classList.remove("blog-editing");
 
-  for (const asset of state.pending) URL.revokeObjectURL(asset.url);
-  repo.forgetBlobs();
-  // Edit mode is over, so the repository tokens have no further business in this
-  // page. `release` erases them unless the console is still holding them for a
-  // commit of its own.
-  credentials.release();
-  forgetTree();
-  registerRewind(null);
-  state.boxes.clear();
-  Object.assign(state, {
-    on: false, host: null, canvas: null, titleHost: null, snapshot: [], titleSnapshot: [], stage: null, root: null,
-    put: [], doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null, vaultChoice: undefined,
-    perchOff: null, viewportOff: null, composing: false, fresh: false,
-  });
-  ui = null;
+  if (ui !== chrome) return;
+  forgetSession();
   contentChanged();
 
   if (composer) location.href = `${siteRoot()}/blog-management/`;
 }
 
+/**
+ * Let go of everything the session was lent: the document and every step of it,
+ * the pictures staged for it, the post's image map, and — unless the console is
+ * holding them for a commit of its own — the repository tokens.
+ */
+function forgetSession() {
+  for (const asset of state.pending) URL.revokeObjectURL(asset.url);
+  repo.forgetBlobs();
+  credentials.release();
+  forgetTree();
+  registerRewind(null);
+  registerSrcFallback(null);
+  setVaultAssets(null);
+  state.boxes.clear();
+  Object.assign(state, blank());
+  ui = null;
+}
+
+/**
+ * Close the editor NOW — no question, no animation.
+ *
+ * For when the page is going away underneath it: a navigation has started, or
+ * the next page is already here. Nothing about the session may outlive that,
+ * and nothing it left on the document may keep acting — a key handler still
+ * wired to a closed session commits that session's document on Ctrl-S from
+ * whatever page the author reads next.
+ *
+ * `leaving` keeps what is inside the article where it is: that page is already
+ * on its way out, and pulling the document bar out of it mid-transition is a
+ * jump in the one animation the author is watching.
+ */
+function abandon(leaving) {
+  clearInterval(progressTimer);
+  clearTimeout(state.stashTimer);
+  history.reset();
+  spotClear();
+  stopEdgeScroll();
+  if (!state.on) return;
+
+  const live = document.activeElement;
+  if (live && live.blur && editing(live)) live.blur();
+
+  unwire();
+  if (state.perchOff) state.perchOff();
+  if (state.viewportOff) state.viewportOff();
+  releaseDocbar();
+  releaseTOC();
+  for (const box of state.boxes) for (const view of box.views) releaseView(view);
+  const floating = ".ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot, .ed-spot";
+  document.querySelectorAll(leaving ? floating : floating + ", .ed-docbar, .ed-front").forEach((el) => el.remove());
+  if (ui && ui.file) ui.file.remove();
+  closeDialogs();
+  document.documentElement.classList.remove("blog-editing");
+  forgetSession();
+}
+
+/**
+ * A navigation has begun. A link or a history step with uncommitted work has
+ * already asked; anything else that navigates still leaves the sealed recovery
+ * copy behind before the session goes.
+ */
+function onVisitStart() {
+  if (!state.on) return;
+  if (state.dirty) {
+    readAll();
+    session.stash(state.doc, state.entry && state.entry.grant).catch(() => {});
+  }
+  abandon(true);
+}
+
+/**
+ * Back or forward, with uncommitted work.
+ *
+ * A history step cannot be held open for a question the way a click can: by the
+ * time it is heard the address bar has already moved. So the step is put back
+ * first and asked about second, and the visit only happens once the work is
+ * committed or deliberately left.
+ */
+function onPopVisit(visit, args, perform) {
+  if (!state.on || !state.dirty) return perform();
+  const to = visit.to.url + (visit.to.hash || "");
+  window.history.go(visit.history.direction === "forwards" ? -1 : 1);
+  confirmLeave().then((go) => {
+    if (!go) return;
+    state.dirty = false;
+    window.location.href = to;
+  });
+}
+
 /* ─── header ───────────────────────────────────────────────────────────────── */
 
 function syncHeader() {
+  if (!ui) return;
   const entry = state.entry || {};
   ui.path.textContent = pathLabel();
   ui.vaultTag.hidden = !entry.encrypted;
@@ -1049,13 +1194,13 @@ function blockCtx(box) {
   return {
     t,
     box: home,
-    onChange: (view) => {
+    onChange: (view, kind) => {
       // The box the view is in NOW, not the one it was built in. A block dragged
       // between a note and the article keeps its view — rebuilding it there is
       // what re-fetched its picture and made the page jump — so the only thing
       // that has to follow it across is which box its edits are written back to.
       writeBox((view && view.box) || home);
-      markDirty("text", view && view.block ? view.block.id : "");
+      markDirty(kind || "text", view && view.block ? view.block.id : "");
       if (view && view.block && view.block.type === "heading") refreshTOC();
     },
     onFocus: (view) => {
@@ -1100,8 +1245,11 @@ function blockCtx(box) {
     onFocusSibling: (id, delta) => {
       const at = locate(id);
       if (!at) return;
-      const view = at.box.views[at.index + delta];
-      if (view && view.focus) view.focus(delta > 0 ? "start" : "end");
+      // Past anything that holds no caret — a picture is typed into nowhere.
+      for (let i = at.index + delta; i >= 0 && i < at.box.views.length; i += delta) {
+        const view = at.box.views[i];
+        if (view.focus) return void view.focus(delta > 0 ? "start" : "end");
+      }
     },
     onSlash: (view) => ui.slash.open(view),
     onPasteMarkdown: (id, text) => pasteMarkdown(id, text),
@@ -1123,6 +1271,9 @@ function blockCtx(box) {
     resolveAsset: (src) => resolveAsset(src, state.pending),
     bindImage: (img, src) => bindImage(img, src, state.pending),
     buildPreloader: (src, alt) => buildPreloader(src, alt, state.pending),
+    shapeMedia,
+    exifLabels: () => (strings && strings.image_exif) || {},
+    settleFigure,
     observeImages,
     figureIndex,
     pickImage,
@@ -1136,69 +1287,118 @@ function blockCtx(box) {
  *
  * The fields ARE the tag's, one for one: a caption title and an auto-exif
  * switch in its arguments, a description in the image line, and the seventeen
- * names scripts/modules/image-exif.js matches inside `<!-- exif-info -->`. The
- * ones left empty are the ones the build fills in from the file itself when
- * auto-exif is on; a field the tag has no idea about is not a field, and
- * offering one is offering the author a way to break their own post — a hover
- * title, for instance, is read by the tag as part of the image's PATH.
+ * names scripts/modules/image-exif.js matches inside `<!-- exif-info -->`. A
+ * field the tag has no idea about is not a field — a hover title, for
+ * instance, is read by the tag as part of the image's PATH, so `title` is never
+ * offered and a plain image keeps whatever it was written with.
  */
-async function imageProps(block) {
-  const api = window.RedefineComponents;
-  const labels = (api && api.EXIF_LABELS) || {};
-  const info = block.exif || {};
+const EXIF_GROUPS = [
+  ["g_camera", "Camera", ["Make", "Model", "DateTimeOriginal"]],
+  ["g_lens", "Lens", ["LensModel", "FocalLength", "FocusMode"]],
+  ["g_exposure", "Exposure", ["ExposureTime", "Aperture", "ISOSpeedRatings", "ExposureProgram", "ExposureBias", "MeteringMode"]],
+  ["g_other", "Other", ["Flash", "WhiteBalance", "GPSLatitude", "GPSLongitude", "GPSAltitude"]],
+];
 
-  const group = (label, keys) => ({
-    label,
-    fields: keys.filter((k) => labels[k]).map((k) => ({ key: k, label: labels[k] })),
-  });
-
-  const answer = await openSheet(
-    { t },
-    t("properties", "Picture properties"),
-    [
-      {
-        label: t("g_caption", "Caption"),
-        fields: [
-          { key: "exifTitle", label: t("f_title", "Title"), wide: true },
-          { key: "alt", label: t("f_description", "Description"), wide: true },
-          { key: "autoExif", label: t("auto_exif", "Read EXIF at build time"), kind: "toggle" },
-        ],
-      },
-      group(t("g_camera", "Camera"), ["Make", "Model", "DateTimeOriginal"]),
-      group(t("g_lens", "Lens"), ["LensModel", "FocalLength", "FocusMode"]),
-      group(t("g_exposure", "Exposure"), [
-        "ExposureTime", "Aperture", "ISOSpeedRatings",
-        "ExposureProgram", "ExposureBias", "MeteringMode",
-      ]),
-      group(t("g_other", "Other"), [
-        "Flash", "WhiteBalance", "GPSLatitude", "GPSLongitude", "GPSAltitude",
-      ]),
-    ],
-    Object.assign(
-      { exifTitle: block.exifTitle || "", alt: block.alt || "", autoExif: block.autoExif !== false },
-      info
-    )
+function propsOf(block) {
+  return Object.assign(
+    { exifTitle: block.exifTitle || "", alt: block.alt || "", autoExif: block.autoExif !== false },
+    block.exif || {}
   );
-  if (!answer) return null;
-
-  const exif = {};
-  for (const key of Object.keys(labels)) if (answer[key]) exif[key] = answer[key];
-  // `title` is deliberately absent: a plain image keeps whatever hover text it
-  // was written with, and this sheet never invents one.
-  return {
-    alt: answer.alt,
-    exifTitle: answer.exifTitle,
-    autoExif: answer.autoExif !== false,
-    exif,
-  };
 }
 
-/** The lightbox, on request. A click on the canvas selects instead. */
-function openViewer(img) {
-  if (!img) return;
-  img.removeAttribute("data-no-viewer");
-  img.click();
-  setTimeout(() => img.setAttribute("data-no-viewer", ""), 0);
+/**
+ * The sheet, on one picture.
+ *
+ * Opened by the Properties button it is a question; opened by a step (`quiet`)
+ * it is a window onto the change, and an Apply from either is ONE step of kind
+ * `props` — which is what brings undoing it back here, to the field, instead of
+ * to a caption on the canvas.
+ *
+ * @returns the live sheet, so a step can stand on a field and mark it
+ */
+function imageProps(view, quiet) {
+  const held = sheetLive();
+  if (held && held.id === view.block.id) return held;
+  if (held) held.close();
+
+  const api = window.RedefineComponents;
+  const labels = (api && api.EXIF_LABELS) || {};
+  const id = view.block.id;
+
+  openSheet(
+    { t },
+    {
+      id,
+      quiet,
+      title: t("properties", "Picture properties"),
+      values: propsOf(view.block),
+      groups: [
+        {
+          label: t("g_caption", "Caption"),
+          fields: [
+            { key: "exifTitle", label: t("f_title", "Title"), wide: true },
+            { key: "alt", label: t("f_description", "Description"), wide: true },
+            {
+              kind: "note",
+              text: t(
+                "exif_note",
+                "With this on, the build reads the camera data out of the picture file, so those values appear on the published page and not here. Any field filled in below replaces the one read from the file."
+              ),
+            },
+            { key: "autoExif", label: t("auto_exif", "Read EXIF at build time"), kind: "toggle" },
+          ],
+        },
+        ...EXIF_GROUPS.map(([key, label, keys]) => ({
+          label: t(key, label),
+          fields: keys.filter((k) => labels[k]).map((k) => ({ key: k, label: labels[k] })),
+        })),
+      ],
+    }
+  ).then((answer) => {
+    const at = answer && state.on ? locate(id) : null;
+    if (!at) return;
+    const exif = {};
+    for (const key of Object.keys(labels)) if (answer[key]) exif[key] = answer[key];
+    const next = { alt: answer.alt, exifTitle: answer.exifTitle, autoExif: answer.autoExif !== false, exif };
+    if (!propsKey(at.view.block, next)) return;
+    Object.assign(at.view.block, next);
+    at.view.touch("props");
+    at.view.paint();
+    if (ui && ui.toolbar) ui.toolbar.refresh();
+  });
+
+  return sheetLive();
+}
+
+function closeSheet() {
+  const held = sheetLive();
+  if (held) held.close();
+}
+
+/**
+ * The lightbox, on request — a click on the canvas selects instead.
+ *
+ * Every picture on the canvas wears `data-no-viewer`, and the viewer builds its
+ * gallery from the pictures that do not, synchronously as it opens. So the mark
+ * comes off all of them for exactly that call: a gallery of one is a viewer
+ * that cannot step to the next picture, and one built from stale nodes shows
+ * the caption the picture had before its properties changed.
+ */
+function openViewer(node) {
+  const viewer = window.__REDEFINE_X_IMAGE_VIEWER__;
+  if (!node || !viewer || !viewer.api || !state.canvas) return;
+  const marked = Array.from(state.canvas.querySelectorAll("[data-no-viewer]"));
+  for (const el of marked) el.removeAttribute("data-no-viewer");
+  try {
+    viewer.api.open(node);
+  } finally {
+    for (const el of marked) el.setAttribute("data-no-viewer", "");
+  }
+}
+
+/** The EXIF card's own collapse and layout, for cards the page never rendered. */
+function settleFigure() {
+  if (window.__redefineExif) window.__redefineExif.init();
 }
 
 /**
@@ -1230,11 +1430,13 @@ function observeImages() {
  */
 function figureIndex(id) {
   let n = 0;
+  if (!state.canvas) return 1;
   for (const el of state.canvas.querySelectorAll('.ed-block[data-type="image"]')) {
     n += 1;
     if (el.dataset.id === id) return n;
   }
-  return n;
+  // Not on the canvas yet: a picture being mounted, which lands after the rest.
+  return n + 1;
 }
 
 /** Figure numbers are positional, so every image restates its own after a move. */
@@ -2366,10 +2568,10 @@ function syncSteps() {
 /** Where the pinned chrome ends, measured rather than assumed. */
 function headroom() {
   let y = 0;
-  // The document bar has stepped aside while the keyboard is up. It is still in
+  // The document bar has stepped aside while the bars are away. It is still in
   // the flow, so it still has a box, and counting that box would reserve a band
   // of nothing above the line being typed.
-  if (!state.composing && ui && ui.bar && ui.bar.isConnected) {
+  if (!chromeHidden() && ui && ui.bar && ui.bar.isConnected) {
     y = Math.max(y, ui.bar.getBoundingClientRect().bottom);
   }
   const tool = ui && ui.toolbar && ui.toolbar.el;
@@ -2583,10 +2785,25 @@ async function goToStep(target, plan) {
   // where the step is about to put it, and a tree drawn from the stage as it
   // stands cannot hold that name yet. Standing on the old one first is what
   // makes the rename visible as a rename.
-  if (target.kind === "asset") return void (await openBrowserAt(target.was || target.path));
+  if (target.kind === "asset") {
+    closeSheet();
+    return void (await openBrowserAt(target.was || target.path));
+  }
   // Any other step is somewhere else entirely, and a modal over the article is
   // the one thing that would hide it.
   closeBrowser();
+
+  // The picture first, then its sheet, then the field — so what changes is a
+  // value the author is already looking at.
+  if (target.kind === "props") {
+    const at = locate(target.id);
+    if (!at) return void closeSheet();
+    if (!plan.quick && !readable(at.view.el)) await travelTo(at.view.el);
+    const held = imageProps(at.view, true);
+    if (held) await held.reveal(target.key, !plan.quick);
+    return;
+  }
+  closeSheet();
   if (target.kind !== "block") return;
 
   const home = locate(target.id);
@@ -2878,6 +3095,14 @@ function gutterOf(view) {
 }
 
 async function spotlight(target, report, quick) {
+  if (target.kind === "props") {
+    const held = sheetLive();
+    const at = locate(target.id);
+    if (!held || !at || held.id !== target.id) return;
+    held.set(propsOf(at.view.block));
+    return void held.flash(target.key);
+  }
+
   if (target.kind === "asset") {
     const held = pickerLive();
     if (!held) return;
@@ -3176,7 +3401,7 @@ async function applyStep(plan) {
 
       // The block the step is about is what the page is held still by: it is the
       // one thing the author is looking at, and everything else may move around it.
-      const held = target.kind === "block" ? locate(target.id) : null;
+      const held = target.kind === "block" || target.kind === "props" ? locate(target.id) : null;
       await reconcile(plan.blocks, plan.quick, before, (held && held.view.el) || steadyAnchor());
       if (!state.on || ui !== chrome) return;
 
@@ -3655,7 +3880,26 @@ function wire() {
   window.addEventListener("beforeunload", onLeave);
 }
 
+let swupOff = [];
+
+function watchNavigation() {
+  if (swupOff.length) return;
+  try {
+    swupOff.push(swup.hooks.on("visit:start", onVisitStart));
+    swupOff.push(swup.hooks.replace("history:popstate", onPopVisit));
+  } catch (err) {
+    /* no swup: every navigation is a full load, and `beforeunload` covers it */
+  }
+}
+
 function unwire() {
+  for (const off of swupOff.splice(0)) {
+    try {
+      off();
+    } catch (err) {
+      /* already gone with the hooks it belonged to */
+    }
+  }
   state.canvas.removeEventListener("paste", onCanvasPaste);
   state.canvas.removeEventListener("dragover", onCanvasDragOver);
   state.canvas.removeEventListener("drop", onCanvasDrop);
@@ -3710,7 +3954,7 @@ function onSelectionChange() {
  */
 function typing() {
   const node = document.activeElement;
-  return !!(node && node.closest && node.closest(".ed-ask, .ed-pick-field, .ed-pick-row"));
+  return !!(node && node.closest && node.closest(".ed-ask, .ed-pick-field, .ed-pick-row, .ed-sheet .ed-f-input"));
 }
 
 function onKey(e) {
@@ -3869,32 +4113,7 @@ function onPencil(e) {
 }
 
 export function teardownEditor() {
-  clearInterval(progressTimer);
-  clearTimeout(state.stashTimer);
-  history.reset();
-  spotClear();
-  stopEdgeScroll();
-
   for (const node of pencils) node.removeEventListener("click", onPencil);
   pencils = [];
-  if (!state.on) return;
-
-  unwire();
-  if (state.perchOff) state.perchOff();
-  if (state.viewportOff) state.viewportOff();
-  releaseDocbar();
-  releaseTOC();
-  for (const box of state.boxes) for (const view of box.views) releaseView(view);
-  document.querySelectorAll(".ed-docbar, .ed-front, .ed-toolbar, .ed-slash, .ed-ask, .ed-dragshot").forEach((el) => el.remove());
-  closeDialogs();
-  document.documentElement.classList.remove("blog-editing");
-  for (const asset of state.pending) URL.revokeObjectURL(asset.url);
-  repo.forgetBlobs();
-  registerRewind(null);
-  state.boxes.clear();
-  Object.assign(state, {
-    on: false, host: null, canvas: null, titleHost: null, put: [], perchOff: null, viewportOff: null, composing: false,
-    doc: null, entry: null, pending: [], dirty: false, leaving: false, focused: null,
-  });
-  ui = null;
+  abandon(false);
 }

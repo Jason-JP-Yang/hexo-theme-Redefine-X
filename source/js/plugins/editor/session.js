@@ -457,9 +457,13 @@ const TRUTHY = /^(true|yes|on|1)$/i;
  * `choice` is that switch, and it is set only when it was actually operated, so
  * it wins over both readings without needing to guess between them.
  */
-function publishEncrypted(doc, entry, choice) {
+function publishEncrypted(doc, entry, choice, published) {
   if (choice !== undefined && choice !== null) return TRUTHY.test(String(choice));
-  if (entry.draft) return false;
+  // A draft's own `vault` is machinery; the post it goes back over decides. A
+  // draft of an encrypted post published in the clear is a leak.
+  if (entry.draft) {
+    return !!published && TRUTHY.test(String(parseFrontMatter(markdownToDoc(published.text).front).vault || ""));
+  }
   return TRUTHY.test(String(parseFrontMatter(doc.front).vault || ""));
 }
 
@@ -560,14 +564,14 @@ export async function save(doc, mode, pending, choice, stage) {
       : entry.draft
         ? findPublishTarget(doc, entry)
         : doc.path;
-    const encrypted = publishEncrypted(doc, entry, choice);
+    const current = await repo.read(target);
+    const encrypted = publishEncrypted(doc, entry, choice, current);
     const clean = withFront(source, {
       vault: encrypted ? "true" : null,
       draft: null,
       supersedes: null,
     });
 
-    const current = await repo.read(target);
     files.push({
       operation: current ? "update" : "create",
       path: target,
@@ -606,8 +610,10 @@ export async function save(doc, mode, pending, choice, stage) {
     minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, { vault: "true", draft: "true" });
-  } else if (!entry.draft && !entry.encrypted) {
-    // First edit of a published post: fork it.
+  } else if (!entry.draft) {
+    // A published post, encrypted or not, is never written by a draft save: it
+    // forks. Testing `encrypted` here is what sent an encrypted post's draft
+    // straight over the published file.
     path = draftPathFor(doc.path);
     sha = "";
     minted = await mintVaultKey(path);

@@ -71,8 +71,8 @@ export function pageId(name) {
 }
 
 export function vaultPrefix() {
-  return String((window.theme && window.theme.backend && window.theme.backend.vault_prefix) || "/v")
-    .replace(/\/+$/, "");
+  const backend = (window.theme && window.theme.backend) || {};
+  return String((backend.encryption && backend.encryption.prefix) || "/v").replace(/\/+$/, "");
 }
 
 export function siteRoot() {

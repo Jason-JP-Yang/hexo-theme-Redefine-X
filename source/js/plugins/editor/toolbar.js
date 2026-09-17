@@ -186,6 +186,9 @@ export function createToolbar(ctx) {
           <button type="button" class="ed-step" data-step="redo" disabled>
             <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
           </button>
+          <button type="button" class="ed-step ed-chrome" data-chrome="shown">
+            <i class="fa-solid fa-down-left-and-up-right-to-center" aria-hidden="true"></i>
+          </button>
         </div>
         <div class="ed-toolbar-tabs" role="tablist"></div>
       </div>
@@ -659,7 +662,7 @@ export function createToolbar(ctx) {
    */
   function history(can) {
     const left = can || { undo: false, redo: false };
-    for (const button of steps.children) {
+    for (const button of steps.querySelectorAll("[data-step]")) {
       const key = button.dataset.step;
       button.disabled = !(key === "redo" ? left.redo : left.undo);
       button.title =
@@ -669,7 +672,29 @@ export function createToolbar(ctx) {
     }
   }
 
+  const chromeButton = steps.querySelector(".ed-chrome");
+
+  /**
+   * The navigation and the document bar: put away (a phone's minimise) or back
+   * (maximise). The icon says what a press will do, the way a window's does.
+   */
+  function chrome(hidden) {
+    const mode = hidden ? "hidden" : "shown";
+    if (chromeButton.dataset.chrome === mode && chromeButton.title) return;
+    chromeButton.dataset.chrome = mode;
+    chromeButton.title = hidden ? t("chrome_max", "Show the bars") : t("chrome_min", "Hide the bars");
+    chromeButton.setAttribute("aria-label", chromeButton.title);
+    chromeButton.firstElementChild.className = hidden
+      ? "fa-solid fa-up-right-and-down-left-from-center"
+      : "fa-solid fa-down-left-and-up-right-to-center";
+  }
+
   steps.addEventListener("click", (e) => {
+    if (e.target.closest(".ed-chrome")) {
+      e.preventDefault();
+      if (ctx.onChrome) ctx.onChrome();
+      return;
+    }
     const button = e.target.closest("[data-step]");
     if (!button || button.disabled) return;
     e.preventDefault();
@@ -772,6 +797,7 @@ export function createToolbar(ctx) {
   });
 
   history(null);
+  chrome(false);
   render(false);
 
   return {
@@ -779,6 +805,7 @@ export function createToolbar(ctx) {
     sync,
     reset,
     history,
+    chrome,
     /** Re-read the focused block's own options without touching the tab. */
     refresh: () => render(true),
     openSub,

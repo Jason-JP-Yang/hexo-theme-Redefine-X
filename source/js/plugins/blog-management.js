@@ -730,10 +730,14 @@ function renderPostsShell(section) {
           )
           .join("")}
       </div>
-      <a class="bm-write" href="${escapeHTML(writeHref())}">
-        <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
-        <span>${e("p_new", "New post")}</span>
-      </a>
+      ${
+        canCommit()
+          ? `<a class="bm-write" href="${escapeHTML(writeHref())}">
+               <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
+               <span>${e("p_new", "New post")}</span>
+             </a>`
+          : ""
+      }
     </div>
 
     <ul class="bm-post-list"></ul>`;
@@ -839,7 +843,7 @@ function postRowHTML(row) {
   // here to open and nothing to take down.
   const queued = state.posts.queue.includes(row.key);
   const actions =
-    row.kind === "album"
+    row.kind === "album" || !canCommit()
       ? ""
       : `<a class="bm-quiet bm-post-edit" href="${escapeHTML(editHref(row))}">
            <i class="fa-solid fa-pen" aria-hidden="true"></i>
@@ -1673,13 +1677,19 @@ function boot() {
   // Owns its own fetching: it is the only section that talks to something other
   // than the Worker, and its six views are asked for one at a time.
   if (sections.analytics) initManagementAnalytics(sections.analytics, root, t);
-  renderCompose(sections.announce);
-  renderNotificationsShell(sections.notifications);
-  renderFollowersShell(sections.followers);
+  if (sections.announce) renderCompose(sections.announce);
+  if (sections.notifications) renderNotificationsShell(sections.notifications);
+  if (sections.followers) renderFollowersShell(sections.followers);
 
   if (sections.posts) loadAudiences();
-  loadNotifications({ reset: true });
-  loadFollowers({ reset: true });
+  if (sections.notifications) loadNotifications({ reset: true });
+  if (sections.followers) loadFollowers({ reset: true });
+}
+
+/** Writing, editing and unpublishing are commits, and commits need an editor provider. */
+function canCommit() {
+  const backend = (window.theme && window.theme.backend) || {};
+  return !!(backend.online_editor && backend.online_editor.enable);
 }
 
 /**

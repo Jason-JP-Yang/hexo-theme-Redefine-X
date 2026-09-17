@@ -237,6 +237,11 @@ hexo.extend.helper.register("buildDate", function () {
   return require("../lib/build-clock").date();
 });
 
+/** `backend:` as it is actually switched on — see scripts/lib/backend.js. */
+hexo.extend.helper.register("backend_config", function () {
+  return require("../lib/backend").resolve(this.theme || hexo.theme.config);
+});
+
 /**
  * The activity card's numbers, for the page to carry.
  *

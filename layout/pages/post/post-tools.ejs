@@ -21,7 +21,7 @@
 
 			Never on the console, which shares this rail for its contents toggle
 			and has no article under it to open. %>
-		<% if (theme.backend && theme.backend.vault_enable && page.type !== "admin-gate") { %>
+		<% if (backend_config().online_editor.enable && page.type !== "admin-gate") { %>
 		<li class="right-bottom-tools tool-edit-post blog-admin-only" title="<%= __('editor.edit_post') %>">
 			<i class="fa-regular fa-pen-to-square"></i>
 		</li>

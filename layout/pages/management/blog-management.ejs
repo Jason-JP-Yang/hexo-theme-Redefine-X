@@ -14,6 +14,7 @@
     this markup for anything the build knew, and from the Worker only for what
     it could not: who may read what, and the notification database.
 %>
+<% const backend = backend_config(); %>
 <div class="post-page-container flex relative justify-between box-border w-full h-full">
     <div class="article-content-container">
         <%# The article's own inset, as the same utility `.article-content`
@@ -30,16 +31,17 @@
 
             <div class="bm-console">
                 <%# Posts first: it is the section this console is opened for, and
-                    the only one whose content the build already knows. %>
-                <% if (theme.backend && theme.backend.vault_enable) { %>
+                    the only one whose content the build already knows. The console
+                    only exists with encryption on, so Posts always does. %>
                 <section class="bm-section" data-part="posts" id="bm-posts"></section>
-                <% } %>
-                <% if (theme.analytics && theme.analytics.enable === true) { %>
+                <% if (backend.analytics.enable) { %>
                 <section class="bm-section" data-part="analytics" id="bm-analytics"></section>
                 <% } %>
+                <% if (backend.notifications.enable) { %>
                 <section class="bm-section" data-part="announce" id="bm-announce"></section>
                 <section class="bm-section" data-part="notifications" id="bm-notifications"></section>
                 <section class="bm-section" data-part="followers" id="bm-followers"></section>
+                <% } %>
             </div>
         </div>
     </div>
@@ -48,12 +50,13 @@
         `page.content` for toc() to read, and its sections are fixed. Same
         markup the helper emits, so layouts/toc.js drives it unchanged. %>
     <% if (theme.articles.toc.enable === true) {
+        const notify = backend.notifications.enable;
         const sections = [
-            theme.backend && theme.backend.vault_enable ? ['bm-posts', __('management.p_title')] : null,
-            theme.analytics && theme.analytics.enable === true ? ['bm-analytics', __('management.a_title')] : null,
-            ['bm-announce', __('management.announce')],
-            ['bm-notifications', __('management.notifications')],
-            ['bm-followers', __('management.followers')],
+            ['bm-posts', __('management.p_title')],
+            backend.analytics.enable ? ['bm-analytics', __('management.a_title')] : null,
+            notify ? ['bm-announce', __('management.announce')] : null,
+            notify ? ['bm-notifications', __('management.notifications')] : null,
+            notify ? ['bm-followers', __('management.followers')] : null,
         ].filter(Boolean);
     %>
     <div class="toc-content-container">

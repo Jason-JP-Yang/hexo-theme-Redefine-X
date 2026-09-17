@@ -536,7 +536,7 @@ html.blog-editing .post-page-container
   min-width 0
 
   &.is-wide
-    grid-column 1 / -1
+    grid-column s('1 / -1')
 
 .ed-f-label
   display flex
@@ -805,26 +805,26 @@ textarea.ed-f-input
   +redefine-mobile()
     top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
 
-// ─── composing with a keyboard up ─────────────────────────
+// ─── the bars put away on a phone ───────────────────────────
 // A soft keyboard takes half the screen and the browser answers it by scrolling
 // the document until the caret clears it — which on a short post scrolls past
 // the end, leaving a screen of blank under the paragraph and the navigation, the
 // document bar and the toolbar all shoved off the top.
 //
-// So the two bars that are no use mid-word step aside, and the toolbar moves to
-// the top of what is actually VISIBLE. `plugins/editor/index.js` publishes
-// `--ed-vv-top` from the visual viewport and does the scrolling itself, once the
-// keyboard has stopped arriving; see `watchViewport`.
+// So the two bars that are no use mid-word step aside while typing, or whenever
+// the author minimised them from the toolbar, and the toolbar moves to the top
+// of what is actually VISIBLE. `plugins/editor/index.js` publishes `--ed-vv-top`
+// from the visual viewport and does the scrolling itself; see `syncChrome`.
 //
 // Nothing here changes a height, so nothing reflows: the document bar keeps its
 // place in the flow and only stops being drawn, which is what makes this a
 // transition rather than a jump.
-html[data-ed-compose="1"] .main-content-header
+html[data-ed-chrome="min"] .main-content-header
   // The navigation's OWN way of getting out of the way, transition included.
   transform translateY(-105%)
   pointer-events none
 
-html[data-ed-compose="1"] .ed-docbar
+html[data-ed-chrome="min"] .ed-docbar
   opacity 0
   transform translateY(-10px)
   pointer-events none
@@ -832,12 +832,12 @@ html[data-ed-compose="1"] .ed-docbar
 // A `position: fixed` element is laid out against the LAYOUT viewport, most of
 // which is behind the keyboard. `--ed-vv-top` is where the band somebody can
 // actually see begins.
-html[data-ed-compose="1"] .ed-toolbar
+html[data-ed-chrome="min"] .ed-toolbar
   top unquote('calc(var(--ed-vv-top, 0px) + 8px)')
 
-// Perch is about a page at rest. While the keyboard is up this is the only
-// chrome left, and it stays whatever the scroll position says.
-html[data-ed-compose="1"] .ed-toolbar[data-perch="hide"]
+// Perch is about a page at rest. With the bars away this is the only chrome
+// left, and it stays whatever the scroll position says.
+html[data-ed-chrome="min"] .ed-toolbar[data-perch="hide"]
   opacity 1
   transform none
 
@@ -933,6 +933,15 @@ html[data-ed-compose="1"] .article-content-container.is-editing
     color var(--third-text-color)
     opacity 0.35
     cursor default
+
+// Minimise / maximise the bars. Only where the editor puts them away for the
+// keyboard — a touch screen of phone or tablet width — which is also the only
+// place bringing them back needs a button.
+.ed-step.ed-chrome
+  display none
+
+  @media (pointer: coarse) and (max-width: 820px)
+    display inline-flex
 
 .ed-toolbar-tabs
   position relative
@@ -2088,6 +2097,10 @@ $ed-pop-h = 620px
   padding-top 14px
   border-top 1px solid var(--border-color)
 
+// The console's own standing note (`.bm-notice`), across the whole grid row.
+.ed-sheet-note
+  grid-column s('1 / -1')
+
 .ed-chip
   display inline-flex
   align-items center
@@ -2146,23 +2159,6 @@ $ed-pop-h = 620px
 .ed-math-inline
   padding 0 1px
   border-bottom 1px dotted var(--fourth-text-color)
-
-// ─── image ──────────────────────────────────────────────────
-// The figure IS the article's own `figure.image-caption`, carrying the article's
-// own `.img-preloader` and caption. Nothing here may restyle either: the only
-// addition is a control overlay and an editable caption, so what is on screen is
-// the picture as published, at the size it will be published at.
-.ed-figure
-  position relative
-
-  figcaption
-    outline none
-    cursor text
-
-    &:empty::before
-      content attr(data-placeholder)
-      color var(--third-text-color)
-      opacity 0.7
 
 // ─── table ──────────────────────────────────────────────────
 // The table draws its own frame — markdown.styl gives `.table-container > table`

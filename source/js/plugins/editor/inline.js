@@ -543,7 +543,7 @@ export function isBlankText(text) {
 /**
  * Give every side of every mark somewhere for the caret to stand.
  *
- * `Hello *World*, Jason` has ONE visual point between `World` and the comma and
+ * `Hello *World*, again` has ONE visual point between `World` and the comma and
  * TWO meanings for it: keep typing inside the italics, or after them. A browser
  * offers whichever it feels like, so the author types `!` and gets `*World!*`
  * when they wanted `*World*!` — with no way to say which.

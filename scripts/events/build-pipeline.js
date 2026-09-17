@@ -128,8 +128,10 @@ hexo.extend.filter.register(
 
     const theme = (this.theme && this.theme.config) || {};
     const site = (this.config && this.config.theme_config) || {};
-    const a = theme.analytics || site.analytics || {};
-    if (a.enable !== true || a.pulse === false) return;
+    // At after_init the theme's own file may not be loaded yet, while the site's
+    // `_config.<theme>.yml` is — so the site's keys win wherever both exist.
+    const a = require("../lib/backend").resolve(Object.assign({}, theme, site)).analytics;
+    if (!a.enable || !a.pulse) return;
 
     const { refresh } = require("../lib/analytics-archive");
     const file = path.join(this.source_dir, "_data", "analytics.json");

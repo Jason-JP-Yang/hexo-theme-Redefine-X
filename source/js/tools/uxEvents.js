@@ -88,7 +88,7 @@ let wired = false;
 /* ─── sending ─────────────────────────────────────────────────────────────── */
 
 function enabled() {
-  const a = (window.theme && window.theme.analytics) || {};
+  const a = (window.theme && window.theme.backend && window.theme.backend.analytics) || {};
   return a.enable === true && a.events !== false && !window.__umamiFramed;
 }
 

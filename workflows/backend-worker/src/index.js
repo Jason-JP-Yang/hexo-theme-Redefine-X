@@ -1685,37 +1685,37 @@ function commitAuthor(env) {
   };
 }
 
+// WHERE the editor commits is the site's `backend.online_editor`, sealed under
+// the admin key by the build; a token is issued on its own. The repository
+// variables are echoed when set, for a page built before that config existed.
+function where(api, repo, branch) {
+  const [owner, name] = String(repo || "").split("/");
+  return api && owner && name ? { api, owner, repo: name, branch: branch || "main" } : {};
+}
+
 function giteaTicket(env) {
-  const api = String(env.GITEA_API_URL || "").replace(/\/+$/, "");
-  const [owner, name] = String(env.GITEA_REPO || "").split("/");
-  if (!api || !owner || !name || !env.GITEA_TOKEN) return null;
+  if (!env.GITEA_TOKEN) return null;
 
   return {
     id: "gitea",
     kind: "gitea",
     label: env.GITEA_LABEL || "Gitea",
-    api,
-    owner,
-    repo: name,
-    branch: env.GITEA_BRANCH || "main",
+    ...where(String(env.GITEA_API_URL || "").replace(/\/+$/, ""), env.GITEA_REPO, env.GITEA_BRANCH),
     token: env.GITEA_TOKEN,
     author: commitAuthor(env),
   };
 }
 
 function githubTicket(env) {
+  if (!env.GITHUB_EDITOR_TOKEN) return null;
   const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
-  const [owner, name] = String(env.GITHUB_REPO || "").split("/");
-  if (!api || !owner || !name || !env.GITHUB_EDITOR_TOKEN) return null;
 
   return {
     id: "github",
     kind: "github",
     label: env.GITHUB_LABEL || "GitHub",
     api,
-    owner,
-    repo: name,
-    branch: env.GITHUB_BRANCH || "main",
+    ...where(api, env.GITHUB_REPO, env.GITHUB_BRANCH),
     token: env.GITHUB_EDITOR_TOKEN,
     // Which workflow's runs answer "where has the build got to". GitHub Actions
     // writes no commit status, so there is nothing else to read.

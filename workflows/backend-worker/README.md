@@ -397,9 +397,9 @@ granted. `vault_posts.draft` is set by every sync, so the rule holds whatever
 client asks.
 
 #### `POST /api/admin/lookup`
-`{ "ids": ["Jason-JP-Yang", 108601445] }` — names the identities typed into an
+`{ "ids": ["octocat", 583231] }` — names the identities typed into an
 audience or blocklist field.
-→ `{ "matched": [{ "id": 108601445, "login": "…", "name": "…", "follower": 1 }],
+→ `{ "matched": [{ "id": 583231, "login": "…", "name": "…", "follower": 1 }],
       "unknown": ["typo"] }`
 
 Resolved against **this blog's own** followers and moderation rows, never
@@ -651,16 +651,17 @@ npm run deploy
 ### Wire the theme to the Worker
 
 ```yaml
-# _config.redefine-x.yml
-home_banner:
-  instant_notes:
-    api_url: https://backend.example.com
-notifications:
+# _config.redefine-x.yml — every backend feature also needs giscus comments
+comment:
   enable: true
+  system: giscus
+backend:
   api_url: https://backend.example.com
-  vapid_public_key: <the public half from step 5>
-  changelog: true
-  topics: posts, announcements, notes
+  notifications:
+    enable: true
+    vapid_public_key: <the public half from step 5>
+    changelog: true
+    topics: posts, announcements, notes
 ```
 
 ### Add the webhook
@@ -688,10 +689,10 @@ npm run vapid:keygen   # print a fresh VAPID key pair
 
 ### Choosing a backend — three permitted combinations
 
-`developer.backend` in the theme config selects it. Exactly three pairings can be
+`backend.mode` in the theme config selects it. Exactly three pairings can be
 expressed; the fourth is rejected in code rather than by convention.
 
-| | Front-end | Backend | `developer.backend` | Reachable | When |
+| | Front-end | Backend | `backend.mode` | Reachable | When |
 | --- | --- | --- | --- | --- | --- |
 | **A** | `localhost:4000` | `localhost:8787` | `local` | yes — `.dev.vars` sets `ALLOWED_ORIGIN=local` | Full-stack work. Everything writes to the **local** D1. |
 | **B** | `localhost:4000` | production | `production` *(default)* | only if `local` is added to the production `ALLOWED_ORIGIN` | Theme work against real data. |
@@ -699,8 +700,8 @@ expressed; the fourth is rejected in code rather than by convention.
 
 Two guards make that enforceable:
 
-- **`backend: local` only applies on a localhost page, and only to a loopback
-  URL.** A stray `backend: local` committed by accident degrades a deployed site
+- **`mode: local` only applies on a localhost page, and only to a loopback
+  URL.** A stray `mode: local` committed by accident degrades a deployed site
   to C instead of breaking it, and `local_api_url` cannot be repointed at an
   arbitrary host — otherwise one config line would turn the developer hook into
   a redirect for every authenticated API call, session token included.

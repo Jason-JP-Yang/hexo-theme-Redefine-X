@@ -498,7 +498,6 @@ editor:
   arguments: arguments
   remove_block: Remove
   replace: Replace
-  caption: Caption
   icon: Icon
   title: Title
   more: More
@@ -625,6 +624,9 @@ editor:
   open_folder: Open folder
   open_viewer: Open viewer
   auto_exif: Read EXIF at build time
+  exif_note: With this on, the build reads the camera data out of the picture file, so those values appear on the published page and not here. Any field filled in below replaces the one read from the file.
+  chrome_min: Hide the bars
+  chrome_max: Show the bars
   no_deeper: A note, folding or tab group cannot go inside another one.
   sheet_hint: Leave everything empty for a plain picture.
   g_caption: Caption

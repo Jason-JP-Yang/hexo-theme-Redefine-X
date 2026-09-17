@@ -119,10 +119,10 @@ VAPID_PUBLIC_KEY = ""
 
 # ─── The nightly build ──────────────────────────────────────
 # Which workflow the daily cron starts on each backend, and which side wins when
-# both are reachable at the same commit. The editor's repository variables
-# (GITEA_API_URL, GITEA_REPO, GITEA_BRANCH and the GITHUB_* pair) are what say
-# WHERE; these two say WHAT to start. Leave them out and both default to
-# "deploy.yml".
+# both are reachable at the same commit. The cron and the sync find the
+# repositories through GITEA_API_URL, GITEA_REPO, GITEA_BRANCH and the GITHUB_*
+# pair; the editor reads `backend.online_editor` from the theme config instead
+# and asks this Worker only for GITEA_TOKEN / GITHUB_EDITOR_TOKEN.
 GITEA_DEPLOY_WORKFLOW = "deploy.yml"
 GITHUB_DEPLOY_WORKFLOW = "deploy.yml"
 REPO_PREFER = "gitea"

@@ -24,6 +24,7 @@
  */
 
 const clock = require("./lib/build-clock");
+const backend = require("./lib/backend");
 
 const DEFAULT_LIMIT = 30;
 
@@ -167,8 +168,8 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
   // REPLACE hexo.theme.config wholesale on generateBefore (the _data/_config
   // override), so the live object is the only one worth reading.
   const theme = hexo.theme.config || {};
-  const notifications = theme.notifications || {};
-  if (!notifications.enable || notifications.changelog === false) return [];
+  const notifications = backend.resolve(theme).notifications;
+  if (!notifications.enable || !notifications.changelog) return [];
 
   const config = hexo.config;
   const limit = Number(notifications.changelog_limit) || DEFAULT_LIMIT;
@@ -213,8 +214,7 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
 // ─── manifest ───────────────────────────────────────────────
 hexo.extend.generator.register("redefine_manifest", function () {
   const theme = hexo.theme.config || {};
-  const notifications = theme.notifications || {};
-  if (!notifications.enable) return [];
+  if (!backend.resolve(theme).notifications.enable) return [];
 
   const config = hexo.config;
   const icon = (theme.defaults && (theme.defaults.logo || theme.defaults.favicon)) || "";
@@ -258,8 +258,8 @@ hexo.extend.generator.register("redefine_manifest", function () {
 // under the admin key (scripts/vault-generator.js) and mounted after the Worker
 // releases that key and the blob opens under it.
 hexo.extend.generator.register("redefine_blog_management", function () {
-  const theme = hexo.theme.config || {};
-  if (!theme.notifications || !theme.notifications.enable) return [];
+  const resolved = backend.resolve(hexo.theme.config || {});
+  if (!resolved.management) return [];
 
   const shell = (kind, title) => ({
     layout: "page",
@@ -280,7 +280,7 @@ hexo.extend.generator.register("redefine_blog_management", function () {
 
   // A new post needs somewhere to be composed; an existing one is edited where
   // it already is.
-  if (theme.backend && theme.backend.vault_enable) {
+  if (resolved.online_editor.enable) {
     pages.push(
       Object.assign({ path: "blog-management/write/index.html" }, shell("composer", "Write"))
     );
@@ -304,11 +304,13 @@ function editorStrings() {
   const yaml = require("js-yaml");
 
   const dir = path.join(__dirname, "../languages");
-  const lang = hexo.config.language || "en";
+  const lang = [].concat(hexo.config.language || "en")[0] || "en";
   const file = fs.existsSync(path.join(dir, `${lang}.yml`)) ? `${lang}.yml` : "en.yml";
 
   try {
-    return yaml.load(fs.readFileSync(path.join(dir, file), "utf8")).editor || {};
+    const table = yaml.load(fs.readFileSync(path.join(dir, file), "utf8")) || {};
+    // The EXIF card's labels ride along: the editor prints the card the build prints.
+    return Object.assign({}, table.editor || {}, { image_exif: table.image_exif || {} });
   } catch (e) {
     return {};
   }

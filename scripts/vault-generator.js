@@ -50,6 +50,7 @@ const vc = require("./lib/vault-crypto");
 const state = require("./lib/vault-state");
 const store = require("./lib/vault-store");
 const inventory = require("./lib/post-inventory");
+const backend = require("./lib/backend");
 
 // A page whose date range holds more encrypted posts than this would need more
 // pre-solved arrangements than it is worth writing to disk (2^k). Raising it is
@@ -60,11 +61,11 @@ const MAX_VARIANT_POSTS = 8;
 const EXCERPT_CHARS = 220;
 
 function prefix() {
-  return String(hexo.theme.config?.backend?.vault_prefix || "/v").replace(/^\/+|\/+$/g, "");
+  return String(backend.resolve(hexo.theme.config).encryption.prefix).replace(/^\/+|\/+$/g, "");
 }
 
 function enabled() {
-  return hexo.theme.config?.backend?.vault_enable === true && state.all().length > 0;
+  return backend.resolve(hexo.theme.config).encryption.enable && state.all().length > 0;
 }
 
 /**
@@ -834,12 +835,12 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   //          taxonomy, draft state, where each file lives — so opening the
   //          console costs one blob rather than a request per post.
   //   e.bin  the composer, which is the article layout with nothing in it.
+  //   o.bin  which repositories the editor commits to. Private coordinates, so
+  //          they reach the editor through this key and never through the page.
+  const editor = backend.resolve(hexo.theme.config).online_editor;
   for (const entry of state.pages()) {
     const consoleView = hexo.theme.getView("pages/management/blog-management.ejs");
-    const composerView = hexo.theme.getView("pages/management/editor.ejs");
-
     const shell = await consoleView.render(cardLocals({ page: { type: "blog-management" } }));
-    const composer = await composerView.render(cardLocals({ page: { type: "blog-editor" } }));
 
     routes.set(
       `${p}/${entry.slug}/b.bin`,
@@ -851,10 +852,15 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
         })
       )
     );
+
+    if (!editor.enable) continue;
+    const composerView = hexo.theme.getView("pages/management/editor.ejs");
+    const composer = await composerView.render(cardLocals({ page: { type: "blog-editor" } }));
     routes.set(
       `${p}/${entry.slug}/e.bin`,
       vc.seal(entry.key, avifRewrite ? avifRewrite(composer) : composer)
     );
+    routes.set(`${p}/${entry.slug}/o.bin`, vc.seal(entry.key, JSON.stringify({ providers: editor.providers })));
   }
 
   // ── pre-solved geometry ───────────────────────────────────────────────────

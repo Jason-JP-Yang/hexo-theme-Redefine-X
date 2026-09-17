@@ -292,9 +292,10 @@ const FALLBACK = { width: 1000, height: 500 };
  * same node is what makes the editor load, size, skeleton and open images the
  * way the page does — anything else is a second image pipeline that will drift.
  *
- * Mirrors `buildPreloaderDiv` in scripts/filters/lazyload-handle.js.
+ * Mirrors `buildPreloaderDiv` in scripts/filters/lazyload-handle.js, including
+ * the `{% exifimage %}` variant, whose shim carries its size and the height cap.
  */
-export function buildPreloader(src, alt, list) {
+export function buildPreloader(src, alt, list, exif) {
   const el = document.createElement("div");
   el.className = "img-preloader";
   el.dataset.alt = alt || "";
@@ -321,7 +322,32 @@ export function buildPreloader(src, alt, list) {
     ` style="width:100%;height:auto;display:block;opacity:0;pointer-events:none"></svg>` +
     `<div class="img-preloader-skeleton"></div>`;
 
+  shapeMedia(el, exif);
   return el;
+}
+
+/**
+ * The same picture node, dressed as an EXIF figure's image or a plain one.
+ *
+ * Kept rather than rebuilt when a caption becomes a card: a rebuilt preloader
+ * is a second request and a skeleton over a picture that had already arrived.
+ */
+export function shapeMedia(node, exif) {
+  if (!node) return;
+  node.classList.toggle("image-exif-img", !!exif);
+  const shim = node.classList.contains("img-preloader") && node.querySelector(".img-preloader-shim");
+  if (!shim) return;
+  const width = node.dataset.width;
+  const height = node.dataset.height;
+  if (exif) {
+    shim.setAttribute("width", width);
+    shim.setAttribute("height", height);
+    shim.style.maxHeight = "80svh";
+  } else {
+    shim.removeAttribute("width");
+    shim.removeAttribute("height");
+    shim.style.removeProperty("max-height");
+  }
 }
 
 /**

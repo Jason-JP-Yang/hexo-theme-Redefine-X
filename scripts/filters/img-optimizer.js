@@ -760,11 +760,9 @@ hexo.extend.helper.register("avifManifestBody", manifestBody);
  * whose route this file had withdrawn.
  */
 function publishManifest() {
-  // The vault is not the only thing that reads it: the editor's picture browser
-  // is built from this file whether or not any post is encrypted, so the gate is
-  // "there is a backend" rather than "there are sealed posts".
-  const backend = hexo.theme.config.backend || {};
-  if (!backend.vault_enable && !backend.api_url) return;
+  // Read by the vault and by the editor's picture browser, and the editor needs
+  // encryption too — so encryption is the whole gate.
+  if (!require("../lib/backend").resolve(hexo.theme.config).encryption.enable) return;
 
   const body = manifestBody(null);
   hexo.route.set("build/manifest.json", () => body);

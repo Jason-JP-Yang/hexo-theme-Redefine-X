@@ -216,6 +216,23 @@ function movedId(from, to) {
   return "";
 }
 
+const PROPS = ["exifTitle", "alt", "autoExif"];
+
+/** The first property two versions of a picture disagree on, or "" when none does. */
+export function propsKey(a, b) {
+  for (const key of PROPS) {
+    const x = key === "autoExif" ? a[key] !== false : a[key] || "";
+    const y = key === "autoExif" ? b[key] !== false : b[key] || "";
+    if (x !== y) return key;
+  }
+  const one = a.exif || {};
+  const two = b.exif || {};
+  for (const key of new Set([...Object.keys(one), ...Object.keys(two)])) {
+    if ((one[key] || "") !== (two[key] || "")) return key;
+  }
+  return "";
+}
+
 function uploadPath(from, to) {
   const before = new Set(from.pending.map((asset) => asset.path));
   for (const asset of to.pending) if (!before.has(asset.path)) return asset.path;
@@ -259,6 +276,13 @@ function decide(from, to, cause) {
   const named = cause && cause.target ? String(cause.target) : "";
   if (cause && cause.kind === "move" && named && want.has(named)) {
     return { kind: "block", id: named, how: "move" };
+  }
+
+  // A picture's properties, changed in the sheet: the step goes back to the
+  // sheet, on the field that changed, rather than to a caption on the canvas.
+  if (cause && cause.kind === "props" && want.has(named) && now.has(named)) {
+    const key = propsKey(now.get(named), want.get(named));
+    if (key) return { kind: "props", id: named, key };
   }
 
   // A picture ADDED to the repository. It is not a block edit even though a
