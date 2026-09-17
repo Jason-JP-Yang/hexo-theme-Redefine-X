@@ -15,13 +15,15 @@
 %>
 <li class="home-feature-tile feature-<%= tile.name %>" style="<%= bentoStyle(tile) %>">
     <% if (tile.name === "info") { %>
-        <div class="sidebar-content">
+        <div class="sidebar-content" data-ux="bento" data-ux-card="profile">
             <%- partial("components/sidebar/avatar") %>
             <%- partial("components/sidebar/author") %>
             <%- partial('components/sidebar/statistics') %>
         </div>
+    <% } else if (tile.name === "pulse") { %>
+        <%- partial("components/sidebar/pulse") %>
     <% } else if (hasLinks || hasAnnouncement) { %>
-        <div class="sidebar-links">
+        <div class="sidebar-links" data-ux="bento" data-ux-card="links">
             <div class="site-info">
                 <div class="site-name"><%= theme.info.title || config.title %></div>
                 <% if (hasAnnouncement && hasLinks) { %>
@@ -33,7 +35,8 @@
             <% if (hasLinks) { %>
                 <% for (let i in sidebar.links) { %>
                     <% if (sidebar.links[i].path !== 'none') { %>
-                        <a class="links" href="<%= url_for(sidebar.links[i].path) %>">
+                        <a class="links" href="<%= url_for(sidebar.links[i].path) %>"
+                           data-ux="bento" data-ux-card="links" data-ux-to="<%= i %>">
                             <% if (sidebar.links[i].icon) { %>
                                 <i class="<%- sidebar.links[i].icon %> icon-space"></i>
                             <% } %>

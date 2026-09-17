@@ -1,0 +1,2 @@
+export function toBase64(e){const t="string"==typeof e?(new TextEncoder).encode(e):new Uint8Array(e);let r="";for(let e=0;e<t.length;e+=32768)r+=String.fromCharCode.apply(null,t.subarray(e,e+32768));return btoa(r)}export function fromBase64(e){const t=atob(String(e||"").replace(/\s+/g,"")),r=new Uint8Array(t.length);for(let e=0;e<t.length;e++)r[e]=t.charCodeAt(e);return r}export function decodeText(e){return(new TextDecoder).decode(fromBase64(e))}
+//# sourceMappingURL=repo-bytes.js.map

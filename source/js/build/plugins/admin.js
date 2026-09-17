@@ -1,0 +1,2 @@
+function boot(){document.querySelector("[data-admin-gate]")&&import("./admin-gate.js").then((t=>t.default())).catch((()=>{})),document.documentElement.classList.contains("blog-admin")&&document.querySelector(".tool-edit-post")&&import("./editor/index.js").then((t=>t.initEditor())).catch((()=>{}))}document.addEventListener("DOMContentLoaded",boot);try{swup.hooks.on("page:view",boot)}catch(t){}
+//# sourceMappingURL=admin.js.map

@@ -24,14 +24,17 @@
  * the draft in the same commit, so the two can never both be live.
  */
 
-import * as gitea from "./gitea.js";
+import * as repo from "./repo.js";
 import { docToMarkdown, markdownToDoc, parseFrontMatter, setFrontMatterKey } from "./markdown.js";
 import {
+  assetURL,
   b64urlToBytes,
+  dropAssetKeys,
   importAesKey,
   openText,
   openJSON,
   fetchSealed,
+  registerAssetKey,
   vaultPrefix,
   siteRoot,
 } from "../../tools/vaultCrypto.js";
@@ -56,11 +59,18 @@ function repoPath(p) {
 }
 
 let grants = null;
+let sealedAll = null;
+// hash -> the grant that opens it. Held here and handed to nobody: the browser
+// asks for one picture at a time and gets a URL, never a key.
+let owners = null;
 
 /* ─── grants ───────────────────────────────────────────────────────────────── */
 
 async function loadGrants(force) {
   if (grants && !force) return grants;
+  // A re-fetch replaces the grant objects, and the sealed index is built out of
+  // the metadata cached on them.
+  sealedAll = null;
   if (!window.blogAuth) return (grants = []);
 
   const session = await window.blogAuth.getSession();
@@ -99,6 +109,103 @@ async function metaOf(grant) {
   return grant.meta;
 }
 
+/**
+ * Every sealed picture in the vault, under both of the names it answers to.
+ *
+ * The public manifest deliberately omits them — a withheld image's FILE NAME is
+ * the one piece of plaintext encryption would otherwise leave behind — so
+ * without this the picture browser simply could not see a third of the library,
+ * and previewing one meant asking the site for a route the build withdrew: a
+ * 404, the browser's broken-picture glyph, and only then the slow fall back to
+ * the repository. That is the flash this removes.
+ *
+ * It costs NO requests. `listDocuments` has already fetched every grant and
+ * opened every `c.bin`, and both are cached on the grant objects; this walks
+ * what is already in hand.
+ *
+ * ── What this deliberately does NOT do ──────────────────────────────────────
+ *
+ * It does not register a single decryption key. An earlier version registered
+ * all of them here, which quietly made every withheld picture on the site
+ * openable by anything holding a hash, for as long as the page lived — a
+ * listing is not permission to decrypt. Keys are handed to `vaultCrypto` one
+ * picture at a time, by `unlockAsset` below, when the author clicks that
+ * picture, and taken back when they click away from it.
+ *
+ * Keyed by published route AND source path, the two spellings `noteAsset`
+ * writes, so a caller with either one finds it.
+ *
+ * @returns {Promise<Object<string, {hash: string, width: number, height: number}>>}
+ */
+export async function sealedIndex() {
+  if (sealedAll) return sealedAll;
+
+  // FORCED when there are no grants in hand. `loadGrants` returns an empty
+  // array — which is truthy — for every reason the session was not ready yet:
+  // no `blogAuth` on the page, no token, a Worker that did not answer. Asking
+  // it again without `force` hands the same empty array back for the rest of
+  // the page's life, and the picture browser is then permanently missing every
+  // withheld picture with nothing to say it went wrong.
+  const granted = await loadGrants(!grants || !grants.length);
+  const metas = await Promise.all(granted.map((grant) => metaOf(grant)));
+  const out = {};
+  const map = new Map();
+
+  granted.forEach((grant, i) => {
+    const meta = metas[i];
+    if (!meta || !meta.assets) return;
+    const sizes = meta.sizes || {};
+    for (const [name, hash] of Object.entries(meta.assets)) {
+      if (!hash) continue;
+      const wh = sizes[name] || [];
+      out[name] = { hash, width: wh[0] || 0, height: wh[1] || 0 };
+      map.set(hash, grant);
+    }
+  });
+
+  if (!granted.length) return out; // nothing to cache, and nothing to unlock
+
+  owners = map;
+  return (sealedAll = out);
+}
+
+/**
+ * Open ONE sealed picture, now, because the author asked to look at it.
+ *
+ * The key is registered for this hash alone and only at this moment; the caller
+ * gets a blob URL back and never the key. `relockAsset` takes it away again.
+ * Nothing is unlocked ahead of a click, so a browser left open on a folder of
+ * withheld pictures holds none of them in the clear.
+ *
+ * Returns "" when this hash belongs to no grant — including before the index
+ * has ever been built, which is the ordinary case for the open document's own
+ * images: those are registered by `setVaultAssets`, and `assetURL` finds them.
+ */
+export async function unlockAsset(hash) {
+  if (!hash) return "";
+  const grant = owners && owners.get(hash);
+  if (grant) registerAssetKey(hash, grant.raw);
+  return assetURL(hash);
+}
+
+/** Take the key and the decrypted bytes back. */
+export function relockAsset(hashes) {
+  dropAssetKeys(hashes);
+}
+
+/**
+ * Drop the post keys.
+ *
+ * Same bargain as the repository tokens: they live in this module's closure and
+ * nowhere else, and they go the moment the editor does. credentials.js is the
+ * complete list of events that reach here.
+ */
+export function forgetGrants() {
+  grants = null;
+  sealedAll = null;
+  owners = null;
+}
+
 /* ─── the document list ────────────────────────────────────────────────────── */
 
 /**
@@ -109,7 +216,7 @@ async function metaOf(grant) {
  * two entries for one article is a way to edit the wrong one.
  */
 export async function listDocuments() {
-  const [files, granted] = await Promise.all([gitea.list(POSTS_DIR), loadGrants(true)]);
+  const [files, granted] = await Promise.all([repo.list(POSTS_DIR), loadGrants(true)]);
 
   const metas = await Promise.all(granted.map(metaOf));
   const vaultBySource = new Map();
@@ -139,7 +246,13 @@ export async function listDocuments() {
     if (entry.path) vaultBySource.set(entry.path, entry);
   });
 
-  const shadowed = new Set(drafts.map((d) => d.supersedes).filter(Boolean));
+  // Keyed by the PUBLISHED FILE the draft stands in front of, not by permalink.
+  // A permalink needs a date, and a plain published post has none here — its
+  // front matter is never fetched — so every public row's permalink came out
+  // empty, matched nothing, and no published post was ever marked shadowed.
+  // Opening one then edited the published copy while the reader was being shown
+  // the draft, and saving forked a SECOND draft of the same article.
+  const shadowed = new Set(drafts.map(publishedPathOf).filter(Boolean));
   const out = [];
 
   for (const file of files) {
@@ -172,8 +285,7 @@ export async function listDocuments() {
   // A public post whose draft exists is marked rather than hidden: the admin
   // still needs to see that the published version is there and unchanged.
   for (const row of out) {
-    if (row.permalink === undefined) row.permalink = "";
-    if (!row.draft && shadowed.has(permalinkOf(row))) row.shadowed = true;
+    if (!row.draft && shadowed.has(row.path)) row.shadowed = true;
   }
 
   return out.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.path.localeCompare(b.path));
@@ -181,6 +293,21 @@ export async function listDocuments() {
 
 function titleFromName(name) {
   return name.replace(/\.md$/i, "");
+}
+
+/**
+ * The published post a draft stands in front of — as a FILE.
+ *
+ * `supersedes` is a permalink, and its last segment is the published post's
+ * filename stem: `permalinkOf` builds it from that very path. Matching on the
+ * whole permalink needs a date the public listing does not have; matching on
+ * the file needs nothing. This is also where a draft's body goes when it is
+ * published, which is why there is one function and not two.
+ */
+function publishedPathOf(entry) {
+  const stem = String(entry.supersedes || "").replace(/\/+$/, "").split("/").pop();
+  if (stem) return `${POSTS_DIR}/${stem}.md`;
+  return String(entry.path || "").replace(/\.draft\.md$/i, ".md");
 }
 
 /** Hexo's `:year/:month/:day/:title/`, read off the file rather than computed
@@ -200,21 +327,24 @@ export function permalinkOf(entry) {
  * page carries nothing else. A published post that already HAS a draft resolves
  * to the draft — editing the published copy instead would fork a second one,
  * and the reader is already being shown the draft's text.
+ *
+ * BOTH spellings resolve. The slug branch used to return whatever grant the page
+ * named and stop there, so an ENCRYPTED published post with a draft in front of
+ * it opened the published copy — the same confusion the path branch was written
+ * to prevent, reached by the other door.
  */
 export async function entryForPage({ source, slug }) {
+  const path = slug ? "" : repoPath(source);
+  if (!slug && !path) return null;
+
   const entries = await listDocuments();
+  const row = slug
+    ? entries.find((e) => e.slug === slug)
+    : entries.find((e) => e.path === path);
 
-  if (slug) return entries.find((e) => e.slug === slug) || null;
-
-  const path = repoPath(source);
-  if (!path) return null;
-
-  const row = entries.find((e) => e.path === path);
   if (!row) return null;
-  if (!row.shadowed) return row;
-
-  const link = permalinkOf(row);
-  return entries.find((e) => e.draft && e.supersedes === link) || row;
+  if (row.draft || !row.shadowed) return row;
+  return entries.find((e) => e.draft && publishedPathOf(e) === row.path) || row;
 }
 
 /** The post key for an id, after a mint has put it in D1. */
@@ -232,7 +362,7 @@ export async function openDocument(entry) {
     // what the last BUILD sealed, so the two differing means a build is still
     // in flight. A post built before `s.bin` existed simply skips that check.
     const [file, sealed] = await Promise.all([
-      entry.path ? gitea.read(entry.path) : Promise.resolve(null),
+      entry.path ? repo.read(entry.path) : Promise.resolve(null),
       fetchSealed(`${vaultPrefix()}/${entry.slug}/s.bin`).catch(() => null),
     ]);
 
@@ -248,7 +378,7 @@ export async function openDocument(entry) {
     };
   }
 
-  const file = await gitea.read(entry.path);
+  const file = await repo.read(entry.path);
   if (!file) throw new Error(`${entry.path} is not in the repository`);
   return { ...markdownToDoc(file.text), path: entry.path, sha: file.sha, entry, stale: false };
 }
@@ -263,14 +393,14 @@ export async function openDocument(entry) {
  * SAME commit that creates the file also updates `.vault/keys.enc`. A key and
  * the content it protects can never be one commit apart.
  */
-export async function mintVaultKey(sourcePath, title) {
+export async function mintVaultKey(sourcePath) {
   const session = await window.blogAuth.getSession();
   const base = window.blogAuth.resolveApiBase();
 
   const res = await fetch(base + "/api/admin/vault/mint", {
     method: "POST",
     headers: { Authorization: "Bearer " + session.token, "Content-Type": "application/json" },
-    body: JSON.stringify({ source: sourcePath, title: title || "" }),
+    body: JSON.stringify({ source: sourcePath }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -327,9 +457,13 @@ const TRUTHY = /^(true|yes|on|1)$/i;
  * `choice` is that switch, and it is set only when it was actually operated, so
  * it wins over both readings without needing to guess between them.
  */
-function publishEncrypted(doc, entry, choice) {
+function publishEncrypted(doc, entry, choice, published) {
   if (choice !== undefined && choice !== null) return TRUTHY.test(String(choice));
-  if (entry.draft) return false;
+  // A draft's own `vault` is machinery; the post it goes back over decides. A
+  // draft of an encrypted post published in the clear is a leak.
+  if (entry.draft) {
+    return !!published && TRUTHY.test(String(parseFrontMatter(markdownToDoc(published.text).front).vault || ""));
+  }
   return TRUTHY.test(String(parseFrontMatter(doc.front).vault || ""));
 }
 
@@ -367,7 +501,7 @@ async function movedFiles(stage) {
   const listings = new Map();
   const known = async (repoPath) => {
     const dir = repoPath.replace(/\/[^/]+$/, "");
-    if (!listings.has(dir)) listings.set(dir, gitea.list(dir).catch(() => []));
+    if (!listings.has(dir)) listings.set(dir, repo.list(dir).catch(() => []));
     return (await listings.get(dir)).some((row) => row.path === repoPath);
   };
 
@@ -382,7 +516,7 @@ async function movedFiles(stage) {
   let held = [];
   let sha = "";
   try {
-    const current = await gitea.read(JOURNAL);
+    const current = await repo.read(JOURNAL);
     if (current) {
       sha = current.sha;
       held = JSON.parse(current.text) || [];
@@ -396,7 +530,7 @@ async function movedFiles(stage) {
     {
       operation: sha ? "update" : "create",
       path: JOURNAL,
-      content: gitea.toBase64(body),
+      content: repo.toBase64(body),
       ...(sha ? { sha } : {}),
     },
   ];
@@ -418,7 +552,7 @@ export async function save(doc, mode, pending, choice, stage) {
   // to move, so the rename can only happen by committing it under the new name.
   for (const asset of pending || []) {
     const at = stage ? stage.resolve(asset.path) : asset.path;
-    files.push({ operation: "create", path: at, content: gitea.toBase64(asset.bytes) });
+    files.push({ operation: "create", path: at, content: repo.toBase64(asset.bytes) });
   }
   files.push(...(await movedFiles(stage)));
 
@@ -430,23 +564,23 @@ export async function save(doc, mode, pending, choice, stage) {
       : entry.draft
         ? findPublishTarget(doc, entry)
         : doc.path;
-    const encrypted = publishEncrypted(doc, entry, choice);
+    const current = await repo.read(target);
+    const encrypted = publishEncrypted(doc, entry, choice, current);
     const clean = withFront(source, {
       vault: encrypted ? "true" : null,
       draft: null,
       supersedes: null,
     });
 
-    const current = await gitea.read(target);
     files.push({
       operation: current ? "update" : "create",
       path: target,
-      content: gitea.toBase64(clean),
+      content: repo.toBase64(clean),
       ...(current ? { sha: current.sha } : {}),
     });
 
     if (entry.draft && doc.path && doc.path !== target) {
-      const draftFile = await gitea.read(doc.path);
+      const draftFile = await repo.read(doc.path);
       if (draftFile) files.push({ operation: "delete", path: doc.path, sha: draftFile.sha });
       // The draft's key goes; the published post gets its own from the build,
       // which is what puts it on the console's Encrypted Posts list.
@@ -458,7 +592,7 @@ export async function save(doc, mode, pending, choice, stage) {
       files.push(await keyringFile(keysEnc));
     }
 
-    const result = await gitea.commit(files, `Publish: ${titleOf(doc)}`);
+    const result = await repo.commit(files, `Publish: ${titleOf(doc)}`);
     return { ...result, path: target, published: true, encrypted };
   }
 
@@ -470,17 +604,19 @@ export async function save(doc, mode, pending, choice, stage) {
   if (doc.isNew) {
     path = pathForTitle(frontOf(doc).title);
     sha = "";
-    if (await gitea.read(path)) {
+    if (await repo.read(path)) {
       throw new Error(`${path} already exists — give this post a different title`);
     }
-    minted = await mintVaultKey(path, titleOf(doc));
+    minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, { vault: "true", draft: "true" });
-  } else if (!entry.draft && !entry.encrypted) {
-    // First edit of a published post: fork it.
+  } else if (!entry.draft) {
+    // A published post, encrypted or not, is never written by a draft save: it
+    // forks. Testing `encrypted` here is what sent an encrypted post's draft
+    // straight over the published file.
     path = draftPathFor(doc.path);
     sha = "";
-    minted = await mintVaultKey(path, titleOf(doc));
+    minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, {
       vault: "true",
@@ -488,24 +624,24 @@ export async function save(doc, mode, pending, choice, stage) {
       supersedes: permalinkOf({ date: frontOf(doc).date, path: doc.path }),
     });
   } else if (!entry.encrypted) {
-    minted = await mintVaultKey(path, titleOf(doc));
+    minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, { vault: "true", draft: "true" });
   } else {
-    const existing = await gitea.read(path);
+    const existing = await repo.read(path);
     sha = existing ? existing.sha : "";
   }
 
   files.push({
     operation: sha ? "update" : "create",
     path,
-    content: gitea.toBase64(body),
+    content: repo.toBase64(body),
     ...(sha ? { sha } : {}),
   });
 
   if (keysEnc) files.push(await keyringFile(keysEnc));
 
-  const result = await gitea.commit(files, `Draft: ${titleOf(doc)}`);
+  const result = await repo.commit(files, `Draft: ${titleOf(doc)}`);
   return { ...result, path, minted, published: false };
 }
 
@@ -555,9 +691,83 @@ function pathForTitle(title) {
   return `${POSTS_DIR}/${stem}.md`;
 }
 
+/**
+ * Take published articles down without losing them.
+ *
+ * Each one's markdown becomes a draft — encrypted, and readable by nobody but
+ * its author — and the published file is deleted. ONE commit for the whole
+ * selection, so no article is ever both live and withdrawn, never neither, and
+ * a batch of five costs one build rather than five.
+ *
+ * `supersedes` is dropped on the way: it names the published post a draft
+ * stands in front of, and after this there is no such post. A draft that kept
+ * it would be folded back into a row whose published half no longer exists,
+ * both in the console's inventory and in the reader's listings.
+ *
+ * The keyring is written ONCE, at the end. Every mint and every revoke hands
+ * back the whole file rebuilt from the database, so only the last answer is
+ * current — collecting them all and keeping the last is the same rule the
+ * single-post path followed, generalised.
+ *
+ * @param {Array<object>} rows  items of the console's sealed inventory
+ */
+export async function unpublishAll(rows) {
+  const files = [];
+  let keysEnc = null;
+
+  for (const row of rows) {
+    const source = repoPath(row.source);
+    const published = source ? await repo.read(source) : null;
+    const draftSource = row.draft && row.draft.source ? repoPath(row.draft.source) : "";
+
+    if (draftSource) {
+      // A draft already stands in front of it. It simply stops standing in for
+      // anything — its path and its key are unchanged, so no key moves here.
+      const current = await repo.read(draftSource);
+      if (current) {
+        files.push({
+          operation: "update",
+          path: draftSource,
+          sha: current.sha,
+          content: repo.toBase64(
+            withFront(current.text, { vault: "true", draft: "true", supersedes: null })
+          ),
+        });
+      }
+    } else {
+      if (!published) throw new Error(`${source || row.title} is not in the repository`);
+      const path = draftPathFor(source);
+      if (await repo.read(path)) throw new Error(`${path} already exists`);
+      keysEnc = (await mintVaultKey(path)).keysEnc;
+      files.push({
+        operation: "create",
+        path,
+        content: repo.toBase64(
+          withFront(published.text, { vault: "true", draft: "true", supersedes: null })
+        ),
+      });
+    }
+
+    if (published) files.push({ operation: "delete", path: source, sha: published.sha });
+
+    if (row.encrypted && row.vaultId) {
+      keysEnc = (await revokeVaultKey(row.vaultId)).keysEnc;
+    }
+  }
+
+  if (!files.length) return null;
+  if (keysEnc) files.push(await keyringFile(keysEnc));
+
+  const titles = rows.map((row) => row.title || repoPath(row.source)).filter(Boolean);
+  return repo.commit(
+    files,
+    titles.length === 1 ? `Unpublish: ${titles[0]}` : `Unpublish ${titles.length} posts`
+  );
+}
+
 export async function remove(entry) {
   const files = [];
-  const file = await gitea.read(entry.path);
+  const file = await repo.read(entry.path);
   if (file) files.push({ operation: "delete", path: entry.path, sha: file.sha });
 
   if (entry.encrypted && entry.id) {
@@ -565,15 +775,15 @@ export async function remove(entry) {
     if (revoked.keysEnc) files.push(await keyringFile(revoked.keysEnc));
   }
   if (!files.length) return null;
-  return gitea.commit(files, `Remove: ${entry.title || entry.path}`);
+  return repo.commit(files, `Remove: ${entry.title || entry.path}`);
 }
 
 async function keyringFile(keysEnc) {
-  const current = await gitea.read(".vault/keys.enc");
+  const current = await repo.read(".vault/keys.enc");
   return {
     operation: current ? "update" : "create",
     path: ".vault/keys.enc",
-    content: gitea.toBase64(keysEnc),
+    content: repo.toBase64(keysEnc),
     ...(current ? { sha: current.sha } : {}),
   };
 }
@@ -588,11 +798,7 @@ function titleOf(doc) {
 
 /** Where a draft's body belongs when it is published. */
 function findPublishTarget(doc, entry) {
-  if (entry.supersedes) {
-    const stem = String(entry.supersedes).replace(/\/+$/, "").split("/").pop();
-    if (stem) return `${POSTS_DIR}/${stem}.md`;
-  }
-  return doc.path.replace(/\.draft\.md$/i, ".md");
+  return publishedPathOf({ supersedes: entry.supersedes, path: doc.path });
 }
 
 function localStamp() {

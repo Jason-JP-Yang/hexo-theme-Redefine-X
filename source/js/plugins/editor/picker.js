@@ -24,12 +24,13 @@
  *
  * ── Where the tree comes from, and when a change is real ────────────────────
  *
- * The listing is Gitea's, read live, so it is the truth rather than a cache of
- * it. Tidying is NOT: a rename, a move or a new folder is held here and travels
- * with the post's own commit, so one save is one commit and nothing is half
- * done if you close the tab. Git has no empty directories, so a new folder is
- * local until a picture lands in it — which is also the only moment it could
- * have been committed.
+ * The listing is the BUILD's — `build/manifest.json` plus the vault's own
+ * metadata, both already fetched, rather than a walk over the repository API.
+ * See `loadTree`. Tidying is NOT: a rename, a move or a new folder is held here
+ * and travels with the post's own commit, so one save is one commit and nothing
+ * is half done if you close the tab. Git has no empty directories, so a new
+ * folder is local until a picture lands in it — which is also the only moment it
+ * could have been committed.
  *
  * A rename rewrites the addresses in the post being edited, and nothing else.
  * The file itself is not moved by the commit and no other post is touched by
@@ -43,7 +44,8 @@
  */
 
 import { escapeHTML } from "./markdown.js";
-import * as gitea from "./gitea.js";
+import { loadManifest, manifestRows, relockPreviewed, setVaultIndex } from "./assets.js";
+import { sealedIndex } from "./session.js";
 import { EASE, MORPH_MS, createEdgeScroll, pop, setDragImage } from "./motion.js";
 
 // Every place in the repository that holds pictures. Two trees, side by side in
@@ -52,6 +54,10 @@ import { EASE, MORPH_MS, createEdgeScroll, pop, setDragImage } from "./motion.js
 // to put one in a post was to type its path.
 const ROOTS = ["source/images", "source/masonry"];
 const isRoot = (path) => ROOTS.includes(path);
+
+// How long a stepped-to row wears the mark — the length of `ed-flash`, which is
+// what decides when the selected row gets its own colours back.
+const FLASH_MS = 1250;
 
 /** Which root this path lives under, or "" when it is outside all of them. */
 function rootOf(path) {
@@ -111,46 +117,110 @@ function readableSize(bytes) {
 
 /* ─── what the repository holds, read once per session ─────────────────────── */
 
-let treeCache = null;
+/**
+ * The file tree, from the BUILD rather than from the repository.
+ *
+ * This used to be a recursive walk over Gitea's contents API: one listing per
+ * folder, serial because a browser-held token is one token, each behind its own
+ * CORS preflight. Ten folders, two of them album directories answering with a
+ * couple of hundred kilobytes of JSON apiece — thirty seconds before the
+ * dialogue had a single row in it, every time it was opened.
+ *
+ * None of that was ever needed. The build already walks every source image to
+ * transcode it, and already writes down what it found: `build/manifest.json` is
+ * a flat `source path -> [route, width, height, bytes]` map of the entire
+ * library, served from the site's own origin as a static file — no preflight,
+ * no token, and cached by the browser between sessions. One fetch, already made
+ * when the editor opened, and the folders are just the paths' own prefixes.
+ *
+ * The withheld half is not in that file, on purpose: an encrypted post's
+ * pictures are named in its sealed metadata instead, which the editor has
+ * already opened for the document list. Merging the two is what makes the tree
+ * complete without either a request or a leak.
+ *
+ * The manifest is the PUBLISHED state, so it cannot see a picture committed
+ * minutes ago and not yet deployed. Two things cover that window and nothing
+ * else needs to: uploads not yet saved are in `ctx.pending`, which `model()`
+ * merges over the top, and ones this session has already committed are in
+ * `landed`.
+ */
+/**
+ * Pictures this session committed that the site has not published yet.
+ *
+ * A build takes minutes, and for those minutes the manifest does not name what
+ * was just added — so without this a picture would vanish from the browser the
+ * moment the post carrying it was saved. The bytes are in the repository by
+ * then, which is where `bindImage` falls back to, so all this has to carry is
+ * the name and the shape.
+ */
+const landed = new Map();
 
-async function walk(dir, out, depth, step) {
-  if (depth > 6) return out;
-  let rows = [];
-  try {
-    rows = await gitea.list(dir);
-  } catch (err) {
-    return out;
+export function noteCommitted(assets, stage) {
+  for (const asset of assets || []) {
+    if (!asset || !asset.path) continue;
+    // Under the name it was COMMITTED at, which is the staged one — the same
+    // resolution `save` applies before it builds the commit.
+    landed.set(stage ? stage.resolve(asset.path) : asset.path, {
+      size: asset.bytes ? asset.bytes.byteLength : 0,
+      width: asset.width || 0,
+      height: asset.height || 0,
+      route: "",
+    });
   }
-  const dirs = [];
-  for (const row of rows) {
-    if (row.type === "dir") {
-      out.push({ path: row.path, type: "dir" });
-      dirs.push(row.path);
-    } else if (IMAGE.test(row.name)) {
-      out.push({ path: row.path, type: "file", size: row.size || 0, sha: row.sha });
+}
+
+/**
+ * Rebuilt on every open rather than cached: the two things it reads are the
+ * ones that cache (a static file and a decrypted keyring), and walking 350
+ * paths costs nothing beside them. A cached ARRAY was worse than useless — a
+ * picker opened one moment before the vault keys arrived would have held a tree
+ * with every withheld picture missing from it for the rest of the session.
+ */
+export async function loadTree(force) {
+  const [rows, vault] = await Promise.all([
+    loadManifest(force).then(() => manifestRows()),
+    sealedIndex().catch(() => ({})),
+  ]);
+  setVaultIndex(vault);
+
+  const files = new Map();
+  for (const [key, row] of Object.entries(rows)) {
+    // `row[4]` is the theme's own picture: published under the same `images/`
+    // key, but not a file in this repository, so nothing here may rename it.
+    if (!IMAGE.test(key) || (row && row[4])) continue;
+    files.set("source/" + key, {
+      route: (row && row[0]) || key,
+      width: (row && row[1]) || 0,
+      height: (row && row[2]) || 0,
+      size: (row && row[3]) || 0,
+    });
+  }
+  // Keyed by published route as well as source path; only the latter is a file.
+  for (const [key, row] of Object.entries(vault)) {
+    if (key.startsWith("build/") || !IMAGE.test(key)) continue;
+    const path = "source/" + key;
+    if (files.has(path)) continue;
+    files.set(path, { route: "", width: row.width, height: row.height, size: 0, sealed: true });
+  }
+  for (const [path, info] of landed) if (!files.has(path)) files.set(path, info);
+
+  const out = ROOTS.map((path) => ({ path, type: "dir" }));
+  const dirs = new Set(ROOTS);
+
+  for (const [path, info] of files) {
+    if (!rootOf(path)) continue;
+    out.push({ path, type: "file", ...info });
+    for (let dir = parentOf(path); dir && rootOf(dir) && !dirs.has(dir); dir = parentOf(dir)) {
+      dirs.add(dir);
+      out.push({ path: dir, type: "dir" });
     }
   }
-  if (step) step(out.length);
-  // Serial rather than parallel: a browser-held token is one token, and forty
-  // simultaneous listings is how it gets rate-limited.
-  for (const child of dirs) await walk(child, out, depth + 1, step);
+
   return out;
 }
 
-/** @param {function} step called after each listing, with the count so far */
-export async function loadTree(force, step) {
-  if (treeCache && !force) return treeCache;
-  const out = [];
-  for (const root of ROOTS) {
-    out.push({ path: root, type: "dir" });
-    await walk(root, out, 0, step);
-  }
-  treeCache = out;
-  return treeCache;
-}
-
 export function forgetTree() {
-  treeCache = null;
+  landed.clear();
 }
 
 /* ─── the staged tidy-up ───────────────────────────────────────────────────── */
@@ -350,6 +420,8 @@ function probeCard(icon, text) {
 export function closeDialogs() {
   const open = document.querySelectorAll(".ed-picker-mask");
   for (const mask of open) mask.remove();
+  live = null;
+  sheet = null;
   if (open.length) {
     locks = 0;
     document.documentElement.style.overflow = "";
@@ -359,6 +431,43 @@ export function closeDialogs() {
 /* ─── a sheet of fields ────────────────────────────────────────────────────── */
 
 /**
+ * The sheet that is open, if one is — the same bargain as `pickerLive`. A step
+ * that changed a picture's properties opens the sheet on that picture, scrolls
+ * to the field, puts the value back and marks it, rather than changing a caption
+ * behind a closed door.
+ */
+let sheet = null;
+
+export function sheetLive() {
+  return sheet;
+}
+
+/** Scroll one scrolling panel so `el` sits in its middle — the page never moves. */
+function centreIn(panel, el, animate) {
+  const delta =
+    el.getBoundingClientRect().top -
+    panel.getBoundingClientRect().top -
+    Math.max(0, (panel.clientHeight - el.offsetHeight) / 2);
+  const to = Math.max(0, Math.min(panel.scrollHeight - panel.clientHeight, panel.scrollTop + delta));
+  if (Math.abs(to - panel.scrollTop) < 1) return Promise.resolve();
+  if (!animate) {
+    panel.scrollTop = to;
+    return Promise.resolve();
+  }
+  const from = panel.scrollTop;
+  const began = performance.now();
+  return new Promise((done) => {
+    const step = (now) => {
+      const k = Math.min(1, (now - began) / MORPH_MS);
+      panel.scrollTop = from + (to - from) * (1 - Math.pow(1 - k, 3));
+      if (k < 1) requestAnimationFrame(step);
+      else done();
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/**
  * Everything a picture can be told about itself.
  *
  * Seventeen EXIF fields plus a title and a switch is not a toolbar row, and the
@@ -366,11 +475,42 @@ export function closeDialogs() {
  * closed by one. Leaving every field empty is how a picture goes back to being
  * a plain `![alt](path)`.
  *
- * @param {Array} groups  [{ label, fields: [{key, label, kind}] }]
+ * The switch is `.np-switch` and the note is `.bm-notice`: the notification
+ * centre's control and the console's standing note, not a second design of
+ * either.
+ *
+ * @param {object} opts  { id, title, groups: [{ label, fields: [{key, label, kind, wide, text}] }], values }
  * @returns {Promise<object|null>}
  */
-export function openSheet(ctx, title, groups, values) {
+export function openSheet(ctx, opts) {
   const t = ctx.t;
+  const values = opts.values || {};
+
+  const fieldHTML = (field) => {
+    const key = escapeHTML(field.key || "");
+    const label = escapeHTML(field.label || "");
+    if (field.kind === "note") {
+      return `<div class="ed-sheet-note"><p class="bm-notice">
+          <i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>${escapeHTML(field.text)}</span>
+        </p></div>`;
+    }
+    if (field.kind === "toggle") {
+      const on = values[field.key] !== false;
+      return `<div class="np-row ed-f-toggle" data-key="${key}">
+          <span class="np-row-main"><span class="np-row-label">${label}</span></span>
+          <button type="button" class="np-switch${on ? " is-on" : ""}" role="switch"
+            aria-checked="${on ? "true" : "false"}" data-toggle="${key}" aria-label="${label}">
+            <span class="np-switch-knob"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+          </button>
+        </div>`;
+    }
+    const value = values[field.key];
+    return `<label class="ed-f${field.wide ? " is-wide" : ""}" data-key="${key}">
+        <span class="ed-f-label">${label}</span>
+        <input class="ed-f-input" data-key="${key}" spellcheck="false"
+          value="${escapeHTML(value == null ? "" : String(value))}">
+      </label>`;
+  };
 
   return new Promise((resolve) => {
     const mask = document.createElement("div");
@@ -378,37 +518,18 @@ export function openSheet(ctx, title, groups, values) {
     mask.innerHTML = `
       <section class="ed-sheet" role="dialog" aria-modal="true">
         <header class="ed-picker-bar">
-          <span class="ed-picker-name"><i class="fa-solid fa-sliders" aria-hidden="true"></i>${escapeHTML(title)}</span>
+          <span class="ed-picker-name"><i class="fa-solid fa-sliders" aria-hidden="true"></i>${escapeHTML(opts.title || "")}</span>
           <span class="ed-picker-acts">
             <button type="button" data-act="close" title="${escapeHTML(t("close", "Close"))}"><i class="fa-solid fa-xmark"></i></button>
           </span>
         </header>
         <div class="ed-sheet-body">
-          ${groups
+          ${(opts.groups || [])
             .map(
               (group) => `
             <div class="ed-sheet-group">
               <h3 class="ed-front-legend">${escapeHTML(group.label)}</h3>
-              <div class="ed-front-grid">
-                ${group.fields
-                  .map((field) => {
-                    const value = values[field.key];
-                    if (field.kind === "toggle") {
-                      return `<label class="ed-f" data-key="${escapeHTML(field.key)}">
-                          <span class="ed-f-label">${escapeHTML(field.label)}</span>
-                          <button type="button" class="ed-f-toggle${value === false ? "" : " is-on"}"
-                            data-toggle="${escapeHTML(field.key)}" role="switch"
-                            aria-checked="${value === false ? "false" : "true"}"></button>
-                        </label>`;
-                    }
-                    return `<label class="ed-f${field.wide ? " is-wide" : ""}" data-key="${escapeHTML(field.key)}">
-                        <span class="ed-f-label">${escapeHTML(field.label)}</span>
-                        <input class="ed-f-input" data-key="${escapeHTML(field.key)}" spellcheck="false"
-                          value="${escapeHTML(value == null ? "" : String(value))}">
-                      </label>`;
-                  })
-                  .join("")}
-              </div>
+              <div class="ed-front-grid">${group.fields.map(fieldHTML).join("")}</div>
             </div>`
             )
             .join("")}
@@ -421,10 +542,21 @@ export function openSheet(ctx, title, groups, values) {
         </footer>
       </section>`;
 
+    const body = mask.querySelector(".ed-sheet-body");
+    const rowOf = (key) => {
+      for (const row of body.querySelectorAll("[data-key]")) {
+        if (row.dataset.key === key && !row.matches("input")) return row;
+      }
+      return null;
+    };
+
     let done = false;
+    let litOff = 0;
     const finish = (value) => {
       if (done) return;
       done = true;
+      clearTimeout(litOff);
+      if (sheet && sheet.owner === mask) sheet = null;
       mask.remove();
       unlockPage();
       document.removeEventListener("keydown", onKey, true);
@@ -457,12 +589,47 @@ export function openSheet(ctx, title, groups, values) {
       finish(out);
     });
 
+    sheet = {
+      owner: mask,
+      id: opts.id || "",
+      /** Every field, from the document as it now stands. */
+      set(next) {
+        for (const input of body.querySelectorAll(".ed-f-input")) {
+          const value = next[input.dataset.key];
+          input.value = value == null ? "" : String(value);
+        }
+        for (const toggle of body.querySelectorAll("[data-toggle]")) {
+          const on = next[toggle.dataset.toggle] !== false;
+          toggle.classList.toggle("is-on", on);
+          toggle.setAttribute("aria-checked", on ? "true" : "false");
+        }
+      },
+      reveal(key, animate) {
+        const row = rowOf(key);
+        return row ? centreIn(body, row, animate) : Promise.resolve();
+      },
+      flash(key) {
+        const row = rowOf(key);
+        if (!row) return;
+        clearTimeout(litOff);
+        for (const held of body.querySelectorAll(".ed-flash")) held.classList.remove("ed-flash");
+        void row.offsetWidth;
+        row.classList.add("ed-flash");
+        litOff = setTimeout(() => row.classList.remove("ed-flash"), FLASH_MS);
+      },
+      close: () => finish(null),
+    };
+
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
     lockPage();
     pop(mask.querySelector(".ed-sheet"));
-    const first = mask.querySelector(".ed-f-input");
-    if (first) first.focus();
+    // Opened by a step, the sheet is a window onto the change and the caret stays
+    // out of it; opened by the author, the first field is where typing starts.
+    if (!opts.quiet) {
+      const first = mask.querySelector(".ed-f-input");
+      if (first) first.focus({ preventScroll: true });
+    }
   });
 }
 
@@ -509,6 +676,21 @@ function searchScore(path, query) {
  * @param {object} opts  { current }
  * @returns {Promise<{path: string, site: string} | null>}
  */
+/**
+ * The browser that is open, if one is.
+ *
+ * Undo has to be able to put a staged rename back WHERE IT HAPPENED, and where
+ * it happened is a row in this tree. Rather than teach the editor how to draw a
+ * file manager, the open one publishes the three things a step needs: rebuild
+ * yourself from the stage as it now stands, hand me the row for this path, and
+ * close. Null whenever no browser is up.
+ */
+let live = null;
+
+export function pickerLive() {
+  return live;
+}
+
 export function openPicker(ctx, opts = {}) {
   const t = ctx.t;
 
@@ -553,6 +735,7 @@ export function openPicker(ctx, opts = {}) {
     const body = mask.querySelector(".ed-pick-body");
     const side = mask.querySelector(".ed-pick-side");
     const grip = mask.querySelector(".ed-pick-grip");
+    const view = mask.querySelector(".ed-pick-view");
     const stage = mask.querySelector(".ed-pick-stage");
     const meta = mask.querySelector(".ed-pick-meta");
     const field = mask.querySelector(".ed-pick-field");
@@ -645,6 +828,10 @@ export function openPicker(ctx, opts = {}) {
         kids: isDir ? el.querySelector(".ed-pick-kids-in") : null,
         type: entry.type,
         size: entry.size || 0,
+        width: entry.width || 0,
+        height: entry.height || 0,
+        route: entry.route || "",
+        sealed: !!entry.sealed,
         staged: !!entry.staged,
         fresh: !!entry.fresh,
       };
@@ -704,18 +891,105 @@ export function openPicker(ctx, opts = {}) {
       if (node && node.type === "dir") node.el.dataset.open = on ? "1" : "0";
     }
 
-    function reveal(path) {
+    function reveal(path, travelling) {
       let cur = parentOf(path);
       while (cur && rootOf(cur)) {
         open(cur, true);
         cur = parentOf(cur);
       }
       const node = nodes.get(path);
-      if (node) node.row.scrollIntoView({ block: "nearest" });
+      if (!node) return;
+      node.row.scrollIntoView(travelling ? { block: "center", behavior: "smooth" } : { block: "nearest" });
     }
 
     function paintSelection() {
-      for (const [path, node] of nodes) node.row.dataset.on = path === chosen ? "1" : "0";
+      for (const [path, node] of nodes) {
+        node.row.dataset.on = path === chosen ? "1" : "0";
+        // Choosing anything takes the step's mark down. The author has moved on,
+        // and a row wearing the mark's colours is a row not wearing the ones that
+        // say it is selected.
+        unlight(node.row);
+      }
+    }
+
+    let lit = null;
+    let litOff = 0;
+
+    function unlight(row) {
+      if (!row) return;
+      row.classList.remove("ed-flash");
+      delete row.dataset.lit;
+      if (lit === row) lit = null;
+    }
+
+    /**
+     * Where a step landed, marked on a row in the tree.
+     *
+     * The mark WASHES the row gold, and a selected row is white ink on the
+     * primary colour — two backgrounds on one element, with the animation beating
+     * the declaration, which left white text on pale gold. So the selected state
+     * stands down for as long as the mark is up (`data-lit`) and comes back the
+     * moment it is over; choosing something else takes it down early, because by
+     * then the author is telling us where they are rather than being told.
+     *
+     * A file the step has just taken away has no row left, so the folder it was
+     * in is marked instead — which is the place being shown.
+     */
+    function flash(path) {
+      clearTimeout(litOff);
+      if (lit) unlight(lit);
+
+      let here = path;
+      while (here && !nodes.has(here) && rootOf(here)) here = parentOf(here);
+      const node = here && nodes.get(here);
+      if (!node) return;
+
+      reveal(here);
+      const row = node.row;
+      row.dataset.lit = "1";
+      row.classList.remove("ed-flash");
+      void row.offsetWidth;
+      row.classList.add("ed-flash");
+      lit = row;
+      litOff = setTimeout(() => unlight(row), FLASH_MS);
+    }
+
+    /**
+     * Rebuild the tree from the stage as it now stands, and stand on `path`.
+     *
+     * Synchronous on purpose. A step opens this, lands, and rebuilds again; an
+     * animated rebuild ran twice per step and held the whole step up while it did.
+     *
+     * The destination may no longer exist — undoing an upload takes the file away
+     * — and then the folder it was in is opened instead. Collapsing back to the
+     * roots is what left a step with nothing to show, and that branch also called
+     * `open()` while a local `const open = new Set()` shadowed it, so it threw
+     * before revealing anything: the tree never opened at all.
+     */
+    function restage(path) {
+      const unfolded = new Set();
+      for (const [held, node] of nodes) {
+        if (node.type === "dir" && node.el.dataset.open === "1") unfolded.add(held);
+      }
+      mount();
+      for (const [held, node] of nodes) {
+        if (node.type === "dir" && unfolded.has(held)) node.el.dataset.open = "1";
+      }
+
+      if (path && nodes.has(path)) {
+        reveal(path, true);
+        return void select(path, false);
+      }
+
+      let here = path;
+      while (here && !nodes.has(here) && rootOf(here)) here = parentOf(here);
+      if (here && nodes.has(here)) reveal(here, true);
+      else for (const root of ROOTS) open(root, true);
+
+      if (chosen && !nodes.has(chosen)) chosen = "";
+      paintSelection();
+      paintPath(false);
+      paintPreview(false);
     }
 
     function paintPath(animate) {
@@ -727,108 +1001,177 @@ export function openPicker(ctx, opts = {}) {
       );
     }
 
-    /** `key` keeps the row in place while its value is still being found out. */
-    function metaRow(label, value, key) {
-      if (!value && !key) return "";
-      return `<dt>${escapeHTML(label)}</dt><dd${key ? ` data-field="${key}"` : ""}>${escapeHTML(value || "")}</dd>`;
+    function metaRow(label, value) {
+      if (!value) return "";
+      return `<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd>`;
     }
 
     /**
-     * The preview: one `<img>`, and nothing wrapped around it.
+     * The preview: a NEW `<img>` per selection, bound through `bindImage`.
      *
-     * It used to mount the article's `.img-preloader` and hand it to the
-     * article's lazyload observer, which built an `<img>` inside it — three
-     * layers and an IntersectionObserver for a picture the author has just
-     * clicked on, with nothing to defer and nothing to be lazy about. The
-     * nesting is also what made the size uncontrollable: the caps landed on the
-     * wrapper while the picture inside sized itself.
+     * Two things it must not be. Not ONE element re-pointed at each file — an
+     * `<img>` keeps painting what it already has until the next picture decodes,
+     * and the box around it has been resized to the new picture's shape by then,
+     * so between two clicks the author sees the LAST photograph stretched out of
+     * shape. And not a `.img-preloader` handed to the lazyload observer either:
+     * that observer opens a withheld picture through the page's key ring, which
+     * holds the OPEN post's images and nothing else, so every encrypted picture
+     * belonging to another post came back blank or as an error card at the wrong
+     * ratio. `bindImage` borrows the key for exactly as long as the file is being
+     * looked at — `openSealed` in assets.js — which is what a browser over the
+     * whole library needs.
      *
-     * Then the wrapper became a grid with a centred item, which is the same bug
-     * wearing different clothes — a grid item in an auto-sized row IS the row,
-     * so `max-height: 100%` was a percentage of the picture's own height and
-     * silently meant nothing. The picture stood full height inside a box that
-     * cropped it. It is a flex column now: see `.ed-pick-stage`.
-     *
-     * `naturalSize` gives the intrinsic pixels, which go on as `width`/`height`
-     * attributes so the box is the picture's shape before a byte arrives and as
-     * `--shot-w` so a small picture is never blown up; `bindImage` keeps the
-     * resolution rules — a staged upload's blob, a sealed image's decrypted
-     * bytes, and the repository fallback for a picture committed minutes ago
-     * that the site has not published yet.
+     * A fresh element has nothing to paint, so what shows is the skeleton, at the
+     * size the picture will arrive at. That size is arithmetic, not CSS: see
+     * `fitShot` and `.ed-pick-stage`.
      */
-    let shotSize = null;
+    function shotNode() {
+      return stage.querySelector("img");
+    }
 
-    function paintPreview() {
-      ok.disabled = !chosen || !IMAGE.test(chosen);
-      shotSize = null;
-      stage.innerHTML = "";
-      stage.style.removeProperty("--shot-w");
-      meta.innerHTML = "";
+    const blank = document.createElement("p");
+    blank.className = "ed-pick-blank";
+    blank.innerHTML =
+      `<i class="fa-solid fa-images" aria-hidden="true"></i>` +
+      escapeHTML(t("pick_hint", "Choose a picture, or drag one onto a folder to move it."));
 
-      if (!chosen || !IMAGE.test(chosen)) {
-        stage.dataset.empty = "1";
-        stage.innerHTML = `<p class="ed-pick-blank"><i class="fa-solid fa-images" aria-hidden="true"></i>${escapeHTML(
-          t("pick_hint", "Choose a picture, or drag one onto a folder to move it.")
-        )}</p>`;
-        return;
+    // Below this there is no picture worth looking at, only a strip of one.
+    // The pane is then the file's details alone, which is the right answer on a
+    // phone with the tree pulled most of the way down.
+    const MIN_SHOT = 56;
+
+    /** The picture's measured pixels, or null when nothing is chosen. */
+    let shape = null;
+
+    /**
+     * Size the picture to the room that is actually left.
+     *
+     * ONE scale factor for both axes — that is the whole of "never distorted" —
+     * worked out from the pane's inside width and the height remaining once the
+     * details have taken theirs. Written as an explicit width and height, so
+     * the box the skeleton stands in and the box the picture lands in are the
+     * same box: same element, same numbers, before and after it decodes.
+     *
+     * Never above 1: a 200px thumbnail is 200px, not blown up across the pane.
+     */
+    function fitShot() {
+      if (!shape || !shotNode()) return 0;
+
+      const cs = getComputedStyle(view);
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      const facts = meta.offsetHeight;
+      const gap = facts ? parseFloat(cs.rowGap) || 0 : 0;
+
+      const room = Math.max(0, view.clientHeight - padY - facts - gap);
+      const wide = Math.max(0, view.clientWidth - padX);
+
+      if (room < MIN_SHOT || wide <= 0) {
+        stage.hidden = true;
+        return 0;
       }
+      stage.hidden = false;
+
+      // Published as two custom properties rather than written onto the element:
+      // the preloader is REPLACED by the `<img>` it becomes, and a size living on
+      // the box that survives both is a size neither of them can lose.
+      const scale = Math.min(1, wide / shape.width, room / shape.height);
+      stage.style.setProperty("--ed-shot-w", Math.max(1, Math.round(shape.width * scale)) + "px");
+      stage.style.setProperty("--ed-shot-h", Math.max(1, Math.round(shape.height * scale)) + "px");
+      return 1;
+    }
+
+    /** Carry the pane from the height it had to the height it now has. */
+    function travel(before) {
+      const after = stage.hidden ? 0 : stage.getBoundingClientRect().height;
+      if (!before || !after || Math.abs(before - after) < 1) return;
+      stage.animate([{ height: before + "px" }, { height: after + "px" }], {
+        duration: MORPH_MS,
+        easing: EASE,
+      });
+    }
+
+    // The pane changes size for three reasons — the window, the splitter and
+    // the phone turning — and the answer above depends on all of them.
+    const refit = new ResizeObserver(() => fitShot());
+    refit.observe(view);
+
+    function paintPreview(animate) {
+      const known = !!chosen && IMAGE.test(chosen);
+      ok.disabled = !known;
+
+      // The picture being left is locked again before the next one is opened,
+      // so one click on a withheld image decrypts that image and nothing else,
+      // and moving off it takes the bytes back.
+      relockPreviewed();
+
+      const before = animate === false || stage.hidden ? 0 : stage.getBoundingClientRect().height;
+      const old = shotNode();
+
+      if (!known) {
+        shape = null;
+        if (old) old.remove();
+        stage.hidden = false;
+        if (!blank.isConnected) stage.appendChild(blank);
+        stage.dataset.empty = "1";
+        meta.innerHTML = "";
+        return void travel(before);
+      }
+
+      blank.remove();
       delete stage.dataset.empty;
 
       const node = nodes.get(chosen);
       const origin = ctx.stage.origin(chosen);
       const address = siteAddress(chosen);
+      // The enumeration carries the shape, so the box is right before a byte
+      // arrives. `naturalSize` is asked first for the one case it knows better:
+      // a picture added in this session, measured here rather than by a build.
+      const size =
+        ctx.naturalSize(address) || (node && node.width ? { width: node.width, height: node.height } : null);
 
-      shotSize = ctx.naturalSize(address);
-      const shot = document.createElement("img");
-      shot.alt = nameOf(chosen);
-      shot.dataset.ready = "0";
-      if (shotSize && shotSize.width && shotSize.height) {
-        shot.width = shotSize.width;
-        shot.height = shotSize.height;
-        stage.style.setProperty("--shot-w", shotSize.width + "px");
-      } else {
-        // The build never measured this one — a picture no page has referenced
-        // yet, or one it declined to transcode. Without a box the `<img>` is
-        // nothing until the bytes land and then snaps to full height, which on
-        // a slow fetch is the whole pane jumping under the pointer. A neutral
-        // 3:2 holds the space and the real shape is TRAVELLED to on load.
-        shot.dataset.guessed = "1";
-        shot.style.width = "100%";
-        shot.style.aspectRatio = "3 / 2";
-      }
-      shot.addEventListener("load", () => {
-        shot.dataset.ready = "1";
-        if (shot.dataset.guessed !== "1" || !shot.naturalWidth) return;
-        const before = shot.offsetHeight;
-        shot.style.aspectRatio = `${shot.naturalWidth} / ${shot.naturalHeight}`;
-        stage.style.setProperty("--shot-w", shot.naturalWidth + "px");
-        const after = shot.offsetHeight;
-        if (before && after && before !== after) {
-          shot.animate([{ height: before + "px" }, { height: after + "px" }], { duration: MORPH_MS, easing: EASE });
-        }
-        const row = meta.querySelector('[data-field="dims"]');
-        if (row) row.textContent = `${shot.naturalWidth} × ${shot.naturalHeight}`;
-      }, { once: true });
-      // A picture that cannot be fetched at all stops shimmering rather than
-      // promising forever. `bindImage`'s repository retry re-points `src`, and a
-      // retry that works fires `load` and puts it back.
-      shot.addEventListener("error", () => (shot.dataset.ready = "err"));
-      stage.appendChild(shot);
-      ctx.bindImage(shot, address);
+      // A nominal 3:2 for the only thing that can be unmeasured — a picture
+      // staged in this session that could not be read.
+      shape = size && size.width && size.height ? size : { width: 1200, height: 800 };
 
+      // The details first: their height is what the picture's is subtracted from.
       meta.innerHTML =
         metaRow(t("pick_name", "Name"), nameOf(chosen)) +
         metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
-        metaRow(t("pick_dims", "Size"), shotSize ? `${shotSize.width} × ${shotSize.height}` : "", "dims") +
-        metaRow(t("pick_bytes", "File"), readableSize(node && node.size)) +
+        metaRow(t("pick_dims", "Size"), size ? `${size.width} × ${size.height}` : "—") +
+        metaRow(t("pick_bytes", "File"), readableSize(node && node.size) || "—") +
+        metaRow(t("pick_served", "Served at"), servedAt(node)) +
         (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
+
+      const shot = document.createElement("img");
+      shot.decoding = "async";
+      shot.alt = nameOf(chosen);
+      if (old) old.replaceWith(shot);
+      else stage.appendChild(shot);
+
+      fitShot();
+      travel(before);
+      ctx.bindImage(shot, address);
+    }
+
+    /**
+     * Where the site actually serves this picture from — the AVIF the build
+     * produced, the original where it produced none, and nowhere at all for one
+     * an encrypted post withheld. The address in the markdown is the source
+     * path either way, so this is the only place the difference is visible.
+     */
+    function servedAt(node) {
+      if (!node) return "";
+      if (node.staged) return t("pick_new", "new");
+      if (node.sealed) return t("encrypted", "Encrypted");
+      return node.route ? "/" + node.route : "";
     }
 
     function select(path, animate) {
       chosen = path;
       paintSelection();
       paintPath(animate !== false);
-      paintPreview();
+      paintPreview(animate);
     }
 
     /* ─── the search menu ──────────────────────────────────────────────── */
@@ -892,6 +1235,10 @@ export function openPicker(ctx, opts = {}) {
     /* ─── renaming, in place ───────────────────────────────────────────── */
 
     let renaming = "";
+    // The live rename, callable from outside it. A name being typed is part of
+    // what "use this picture" means, and waiting for the field's own blur left
+    // that to the order two events happened to fire in.
+    let settleName = null;
 
     function beginRename(path) {
       const node = nodes.get(path);
@@ -908,6 +1255,7 @@ export function openPicker(ctx, opts = {}) {
       const stop = (commit) => {
         if (renaming !== path) return;
         renaming = "";
+        settleName = null;
         node.label.contentEditable = "false";
         delete node.row.dataset.editing;
         node.label.removeEventListener("keydown", onKeys);
@@ -933,8 +1281,14 @@ export function openPicker(ctx, opts = {}) {
       };
       const onBlur = () => stop(true);
 
+      settleName = () => stop(true);
       node.label.addEventListener("keydown", onKeys);
       node.label.addEventListener("blur", onBlur);
+    }
+
+    /** Land any name being typed, before acting on what it names. */
+    function settleRename() {
+      if (settleName) settleName();
     }
 
     /* ─── moving, which is also what a rename is ───────────────────────── */
@@ -960,6 +1314,10 @@ export function openPicker(ctx, opts = {}) {
         const held = nodes.get(path);
         if (held && held.type === "file") ctx.stage.move(path, to + path.slice(from.length));
       }
+      // Recorded where it happens rather than when the browser closes: a tidy-up
+      // is half a dozen moves, and an author who undoes one of them means that
+      // one, not the whole afternoon.
+      if (ctx.onStageChange) ctx.onStageChange(to);
 
       const moved = new Map();
       for (const path of affected) {
@@ -1000,6 +1358,7 @@ export function openPicker(ctx, opts = {}) {
     }
 
     async function onAct(act) {
+      if (act !== "rename") settleRename();
       if (act === "close") return finish(null);
 
       if (act === "upload") {
@@ -1020,6 +1379,7 @@ export function openPicker(ctx, opts = {}) {
         while (nodes.has(`${base}/${name}`)) name = `${t("pick_folder", "New folder")} ${n++}`;
         const path = `${base}/${name}`;
         ctx.stage.folder(path);
+        if (ctx.onStageChange) ctx.onStageChange(path);
         addNode({ path, type: "dir", fresh: true });
         reveal(path);
         select(path);
@@ -1050,9 +1410,15 @@ export function openPicker(ctx, opts = {}) {
     function finish(value) {
       if (done) return;
       done = true;
+      if (live && live.owner === mask) live = null;
       scroller.stop();
+      refit.disconnect();
       mask.remove();
       unlockPage();
+      // Whatever was being looked at is locked again with the dialogue. A
+      // browser that had been left open on a withheld picture must not leave it
+      // decryptable behind itself.
+      relockPreviewed();
       document.removeEventListener("keydown", onKey, true);
       resolve(value);
     }
@@ -1099,13 +1465,17 @@ export function openPicker(ctx, opts = {}) {
 
     side.addEventListener("dblclick", (e) => {
       const row = e.target.closest(".ed-pick-row");
-      if (!row) return;
+      if (!row || opts.browse) return;
+      settleRename();
       const path = row.parentElement.dataset.path;
       const node = nodes.get(path);
       if (node && node.type === "file") finish({ path, site: siteAddress(path) });
     });
 
     ok.addEventListener("click", () => {
+      // Before `chosen` is read: committing the name is what moves the selection
+      // onto the file's new address, so reading first answers with the old one.
+      settleRename();
       if (!chosen || !IMAGE.test(chosen)) return;
       finish({ path: chosen, site: siteAddress(chosen) });
     });
@@ -1268,7 +1638,22 @@ export function openPicker(ctx, opts = {}) {
 
     function applySplit(fraction) {
       const { prop, key } = axis();
-      const value = Math.max(0.2, Math.min(0.75, fraction));
+      let value = Math.max(0.2, Math.min(0.75, fraction));
+
+      // Stacked, the tree may not take so much that the file's details have
+      // nowhere to be. The ceiling is worked out here rather than left to a
+      // `min-content` track, because a track that reads the pane's contents and
+      // contents that are sized from the track is a loop that bounces.
+      if (stacked() && body.clientHeight) {
+        const cs = getComputedStyle(view);
+        const need =
+          meta.offsetHeight +
+          (parseFloat(cs.paddingTop) || 0) +
+          (parseFloat(cs.paddingBottom) || 0) +
+          grip.offsetHeight;
+        value = Math.min(value, Math.max(0.2, (body.clientHeight - need) / body.clientHeight));
+      }
+
       body.style.setProperty(prop, value);
       try {
         window.localStorage.setItem(key, String(value));
@@ -1322,25 +1707,53 @@ export function openPicker(ctx, opts = {}) {
 
     /* ─── open ─────────────────────────────────────────────────────────── */
 
+    // Browsing rather than choosing. Opened by an undo that put a staged rename
+    // back, it is a window onto the folders, not a question — so the one button
+    // that would answer a question it was never asked is not drawn.
+    if (opts.browse) {
+      card.dataset.browse = "1";
+      ok.hidden = true;
+    }
+
+    // The folders have been read and drawn. A step that lands before this would
+    // rebuild the tree from a stage the restore is about to replace.
+    let drawn = null;
+    const ready = new Promise((done) => (drawn = done));
+
+    live = {
+      owner: mask,
+      ready,
+      /**
+       * Rebuild from the stage as it now stands, and stand on `path`.
+       *
+       * The tree has to be rebuilt — a rename changes the key every node is
+       * held under — but which branches were OPEN is the author's, not the
+       * tree's. Carried across, because a tree that expands and then collapses
+       * a frame later is not a tree anybody can follow.
+       */
+      goto: (path) => restage(path),
+      row: (path) => {
+        const node = nodes.get(path);
+        return node ? node.row : null;
+      },
+      flash,
+      close: () => finish(null),
+    };
+
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(mask);
     lockPage();
     pop(card);
 
-    // Two phases, because they fail differently and take different amounts of
-    // time: reaching the repository at all, then walking it folder by folder.
-    side.innerHTML = probeCard("fa-folder-tree", t("pick_loading", "Reading the repository"));
-    paintPreview();
+    // One phase now, and usually no wait at all: the build's index is a static
+    // file the editor has already fetched, so the card is there for the session
+    // whose first act is opening the browser.
+    side.innerHTML = probeCard("fa-folder-tree", t("pick_loading", "Reading the file tree"));
+    paintPreview(false);
 
-    let walked = false;
-    const step = () => {
-      if (walked) return;
-      walked = true;
-      const text = side.querySelector(".access-probe-text");
-      if (text) text.textContent = t("pick_walking", "Reading the file tree");
-    };
-
-    loadTree(false, step).then((loaded) => {
+    // A tree that cannot be read falls back to what this session has staged,
+    // rather than leaving the probe card up and `ready` unsettled for good.
+    loadTree(false).catch(() => []).then((loaded) => {
       rows = loaded;
       mount();
       if (chosen && nodes.has(chosen)) {
@@ -1351,6 +1764,7 @@ export function openPicker(ctx, opts = {}) {
         for (const root of ROOTS) open(root, true);
         paintPath(false);
       }
+      drawn();
     });
   });
 }

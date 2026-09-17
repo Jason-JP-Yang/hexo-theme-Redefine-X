@@ -63,9 +63,16 @@ export async function openJSON(key, sealed) {
   return JSON.parse(await openText(key, sealed));
 }
 
+/** Mirrors `pageId` in scripts/lib/vault-crypto.js. The admin console and the
+ *  composer are sealed like any other item, and this is how a browser holding
+ *  the keyring recognises which grant opens them. */
+export function pageId(name) {
+  return sha256Hex("page|" + String(name)).then((hex) => hex.slice(0, 16));
+}
+
 export function vaultPrefix() {
-  return String((window.theme && window.theme.backend && window.theme.backend.vault_prefix) || "/v")
-    .replace(/\/+$/, "");
+  const backend = (window.theme && window.theme.backend) || {};
+  return String((backend.encryption && backend.encryption.prefix) || "/v").replace(/\/+$/, "");
 }
 
 export function siteRoot() {
@@ -201,6 +208,23 @@ export async function revealAssets(root, rawPostKey) {
       node.removeAttribute("data-vault-asset");
     })
   );
+}
+
+/**
+ * Forget the key for these sealed images, and any blob already opened with it.
+ *
+ * Scoped rather than wholesale, because two parties register keys here: the
+ * page, for the article a reader has unlocked, and the editor, for the whole
+ * library. The editor leaving must not take the reader's article down with it.
+ */
+export function dropAssetKeys(hashes) {
+  for (const hash of hashes || []) {
+    assetKeys.delete(hash);
+    const url = assetCache.get(hash);
+    if (url) URL.revokeObjectURL(url);
+    assetCache.delete(hash);
+    assetInflight.delete(hash);
+  }
 }
 
 export function dropAssetCache() {

@@ -1,3 +1,5 @@
+import { trackSearch } from "./uxEvents.js";
+
 export default function initLocalSearch() {
   // Search DB path
   let searchPath = config.path;
@@ -212,7 +214,14 @@ export default function initLocalSearch() {
     if (keywords.length === 1 && keywords[0] === "") {
       resultContent.innerHTML =
         '<div id="no-result"><i class="fa-solid fa-magnifying-glass fa-5x"></i></div>';
-    } else if (resultItems.length === 0) {
+      return;
+    }
+
+    // One event per pageview, whatever the reader types — the cap lives in
+    // uxEvents, so this reports every query and lets it decide.
+    trackSearch(resultItems.length);
+
+    if (resultItems.length === 0) {
       resultContent.innerHTML =
         '<div id="no-result"><i class="fa-solid fa-box-open fa-5x"></i></div>';
     } else {

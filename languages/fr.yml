@@ -225,6 +225,94 @@ notifications:
   account_banned_note: Vous restez connecte et pouvez continuer a commenter les articles ; seule la possibilite de vous abonner a ce blog a ete retiree. Si l'auteur vous a egalement bloque sur GitHub, les commentaires s'arretent aussi.
 
 management:
+  a_title: Analytique
+  a_lede: Lu directement depuis Umami avec un identifiant administrateur délivré par le Worker à chaque session.
+  a_overview: Aperçu
+  a_events: Événements
+  a_sessions: Sessions
+  a_performance: Performance
+  a_compare: Comparer
+  a_breakdown: Répartition
+  a_visitors: Visiteurs
+  a_visits: Visites
+  a_views: Vues
+  a_bounce: Taux de rebond
+  a_duration: Durée de visite
+  a_countries: Pays
+  a_pages: Pages
+  a_sources: Sources
+  a_environment: Environnement
+  a_location: Localisation
+  a_traffic_over_time: Trafic
+  a_weekly: Trafic hebdomadaire
+  a_weekdays: Dim,Lun,Mar,Mer,Jeu,Ven,Sam
+  a_chart: Graphique
+  a_activity: Activité
+  a_properties: Propriétés
+  a_all: Tout
+  a_type: Type
+  a_event: Événement
+  a_events_fired: Événements
+  a_event_types: Événements uniques
+  a_triggered: Événement
+  a_viewed: Vue
+  a_session: Session
+  a_last_seen: Vu la dernière fois
+  a_when: Quand
+  a_count: Nombre
+  a_name: Nom
+  a_direct: Direct / aucun
+  a_samples: Échantillons
+  a_previous: Précédent
+  a_current: Actuel
+  a_change: Variation
+  a_prev_views: Vues (précédent)
+  a_prev_visitors: Visiteurs (précédent)
+  a_map: Visiteurs par pays
+  a_linear: Linéaire
+  a_log: Log
+  a_less: Moins
+  a_more: Plus
+  a_sort: Trier par
+  a_u_hour: Heure
+  a_u_day: Jour
+  a_u_month: Mois
+  a_ch_direct: Direct
+  a_ch_search: Recherche
+  a_ch_social: Social
+  a_ch_referral: Référence
+  a_ch_email: E-mail
+  a_ch_paid: Payant
+  a_ch_affiliate: Affilié
+  a_ch_video: Vidéo
+  a_ch_unknown: Inconnu
+  a_search: Rechercher
+  a_prev: Précédent
+  a_next: Suivant
+  a_now: à l'instant
+  a_f_path: Chemin
+  a_f_url: URL
+  a_entry: Page d'entrée
+  a_exit: Page de sortie
+  a_f_referrer: Référent
+  a_channel: Canal
+  a_f_browser: Navigateur
+  a_f_os: Système
+  a_f_device: Appareil
+  a_f_screen: Écran
+  a_f_language: Langue
+  a_f_country: Pays
+  a_f_region: Région
+  a_f_city: Ville
+  a_f_title: Titre de page
+  a_f_query: Requête
+  a_f_hostname: Hôte
+  a_f_tag: Étiquette
+  a_nodata: Rien dans cet intervalle
+  a_offline: Umami n'a pas répondu.
+  a_denied: Les identifiants d'analytique ont été refusés.
+  a_perf_none: Pas encore de web vitals. Le traceur ne les collecte que si data-performance est activé.
+  a_break_note: Choisissez les dimensions à croiser. Au moins une, quatre au maximum.
   title: Administration du blog
   lede: Les annonces, ce que la base de notifications conserve encore, et chaque abonne avec ses appareils.
   checking: Verification de votre session...
@@ -298,25 +386,24 @@ management:
   confirm: Appuyez a nouveau
   orphans: Appareils sans proprietaire
   orphans_hint: Abonnements dont le proprietaire s'est desabonne. Seuls les bloques sont conserves - le balayage quotidien supprime les autres.
-  v_title: Articles chiffres
-  v_lede: Tous les articles chiffres publies et qui peut les ouvrir. Seules leurs cles sont conservees ici, jamais leur contenu.
-  v_empty: Aucun article chiffre n'a encore ete active.
-  v_add: Activer un article
-  v_add_hint: Collez une ligne de la sortie de compilation. La recoller la met a jour.
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: Activer
-  v_added: Active
-  v_bad: Ce n'est pas une ligne d'activation.
-  v_revoke: Revoquer
-  v_revoke_hint: Plus personne ne pourra l'ouvrir, vous compris.
+  p_title: Gestion des articles
+  p_lede: "Chaque article et album du site, et ce qu'on peut en faire. Rien n'est telecharge ici ; la generation l'a scelle dans cette page."
+  p_all: Tout
+  p_encrypted: Chiffres
+  p_drafts: Brouillons
+  p_unpublished: Non publies
+  p_new: Nouvel article
+  p_album: Album
+  p_draft: Brouillon
+  p_unpublished_tag: Non publie
+  p_sticky: Epingle
+  p_untitled: Sans titre
+  p_empty: Rien ne correspond a ce filtre.
+  p_unpublish: Depublier
+  v_badge: Chiffre
   v_audience: Qui peut le lire
-  v_save: Enregistrer les lecteurs
-  v_saved: Enregistre
-  v_slug: Chemin
   v_reader: lecteur
   v_readers: lecteurs
-  v_unreadable: Illisible - la cle ne correspond pas a cette compilation
-  v_none: personne pour l'instant
 
 vault:
   unlocking: Verification de votre acces
@@ -329,3 +416,14 @@ vault:
   no_comments_hint: Un fil public sous un article que seuls certains lecteurs peuvent ouvrir exposerait de nouveau son titre et son contenu.
   no_comments_album: Les commentaires et les mentions J'aime sont desactives sur les albums chiffres
   no_comments_album_hint: Un fil public exposerait le titre de l'album et le nom de fichier de chaque photo, et les mentions J'aime vivent dans ce meme fil, donc ni l'un ni l'autre n'est propose ici.
+  draft: Brouillon
+  draft_hint: "Une copie inachevee d'un article publie. Vous seul pouvez la lire."
+  unpublished: Non publie
+  unpublished_hint: "Cet article n'a jamais ete publie. Vous seul pouvez le lire."
+  published: Publie
+  view_published: Voir la version publiee
+  view_draft: Voir le brouillon
+analytics:
+  activity: Activité du blog
+  less: Moins
+  more: Plus

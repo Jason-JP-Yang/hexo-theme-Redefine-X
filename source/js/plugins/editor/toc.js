@@ -18,7 +18,9 @@
  * typing is worse than none, because it is confidently wrong.
  */
 
-import { refreshTOC } from "../../layouts/toc.js";
+import { holdTOCActive, refreshTOC } from "../../layouts/toc.js";
+
+export { holdTOCActive };
 
 const ANCHOR = "ed-h-";
 const SETTLE_MS = 220;
@@ -105,10 +107,25 @@ export function paintTOC(canvas) {
   const next = build(headings(canvas), depth);
 
   const old = host.querySelector("ol.nav");
+  // Which entry was lit, carried across the replacement by the heading it points
+  // at. Every link in the old list is about to be discarded, so a rail rebuilt
+  // while a post is being typed would go dark until the next scroll — which is
+  // once per keystroke in a heading, and reads as the rail blinking.
+  const lit = old ? old.querySelector("a.nav-link.active-current") : null;
+  const href = lit ? lit.getAttribute("href") : "";
+
   // The list is the only thing replaced: the title and the post's name above it
   // belong to the page, not to this.
   if (old) old.replaceWith(next);
   else host.appendChild(next);
+
+  if (href) {
+    for (const link of next.querySelectorAll("a.nav-link")) {
+      if (link.getAttribute("href") !== href) continue;
+      link.classList.add("active", "active-current");
+      break;
+    }
+  }
 
   refreshTOC();
 }
@@ -130,16 +147,22 @@ export function scheduleTOC(canvas) {
  * ones the anchors in that article already use.
  */
 let held = null;
+// Whether a session took the rail at all. One that failed to open never did,
+// and releasing on its behalf removed the list of whatever page came next.
+let holding = false;
 
 export function holdTOC(canvas) {
   const host = document.querySelector(".post-toc-wrap .post-toc");
   held = host ? host.querySelector("ol.nav") : null;
+  holding = true;
   paintTOC(canvas);
 }
 
 export function releaseTOC() {
   clearTimeout(timer);
   timer = 0;
+  if (!holding) return;
+  holding = false;
 
   const host = document.querySelector(".post-toc-wrap .post-toc");
   if (host) {

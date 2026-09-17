@@ -83,9 +83,6 @@ const W = {
   // hard floor alone (270px) is a column nothing reads well in.
   SPLIT_TEXT: 0.8,
   SPLIT_TEXT_WANT: 430,
-  // The opening that gives the site cards the whole first row. Only worth it
-  // when no other opening works, so it carries a flat charge of its own.
-  SOLO_OPENING: 420,
   // Repeating an arrangement is dull rather than wrong, so it costs. As a
   // fraction of the movement's own weight, one entry per movement looked back.
   REPEAT: [0.28, 0.14],
@@ -131,6 +128,13 @@ const TITLE_LINE = 26;
 const TITLE_EM = 19;
 const LINE = 24;
 const EM = 16;
+
+// The badge stack's line in the head, charged ONLY to a tile with no picture: one
+// with a picture carries its badges over it and pays nothing. Without this the
+// solver reserves a row for chrome the tile does not have, the summary is left
+// with less than a whole line, and `round(down, 100%, 1lh)` floors it to none —
+// a tile with an excerpt and no excerpt on it.
+const BADGE_ROW = 31;
 
 // A split tile's text column may not fall below this; its cover column takes what
 // is left of the width, and never more than SPLIT_COVER_MAX of the tile. Mirrors
@@ -220,9 +224,13 @@ function measure(post, now) {
   const body = measureText(post.content);
   const summary = excerpt ? measureText(excerpt) : null;
 
+  const cover = post.thumbnail !== false && !!(post.thumbnail || post.cover || post.banner);
+
   return {
     sticky: !!post.sticky,
-    cover: post.thumbnail !== false && !!(post.thumbnail || post.cover || post.banner),
+    cover,
+    // Pinned, encrypted, draft — whatever it is, one wrapping row of chips.
+    badges: !cover && !!(post.sticky || post.vault),
     // A post with no excerpt of its own gets one generated from its body, so the
     // body is the supply; one that asked for silence has nothing to show at all.
     textEms: silent ? 0 : summary ? summary.ems : body.ems,
@@ -253,7 +261,10 @@ function ask(m, shape, height) {
   const room = Math.min(shape.width - SPLIT_TEXT_MIN, shape.width * SPLIT_COVER_MAX);
   const column = shape.split && m.cover ? Math.min(Math.max(0, height) * COVER, room) : 0;
   const width = shape.width - pad - column;
-  const chrome = CHROME + Math.max(1, lines(m.titleEms, width / TITLE_EM)) * TITLE_LINE;
+  const chrome =
+    CHROME +
+    Math.max(1, lines(m.titleEms, width / TITLE_EM)) * TITLE_LINE +
+    (m.badges ? BADGE_ROW : 0);
 
   // Only a cover ABOVE the text takes a share of the tile's HEIGHT.
   const stacked = m.cover && !shape.split;
@@ -522,70 +533,24 @@ const MOVEMENTS = {
   // paginator never flips them — they are furniture, and furniture that turns
   // over reads as the page having lost its place.
   //
-  // Their row is PINNED to their own height and nothing may stretch or compress
-  // it. So the third cell of that row never holds a one-row tile: every opening
-  // below puts a tile that also reaches the free rows underneath, which is what
-  // lets it take the height its cover and summary need without touching the
-  // cards. And when none of them works — a page with one post, or one whose
-  // opening posts fit nothing — the links card takes the third cell itself and
-  // the row is furniture end to end, which is the only arrangement in which the
-  // pinned row provably cannot starve anything.
-  openingSolo: {
+  // Three cards fill the row exactly, so the row is furniture end to end and no
+  // post tile begins in it. That is what makes the row safe: its height is
+  // PINNED to the cards and nothing may stretch or compress it, and a post tile
+  // sharing that row would be a tile whose cover and summary have to fit a
+  // height chosen for something else.
+  //
+  // It holds no posts at all, which is why `planSequence` threads `first` rather
+  // than testing `i === 0`: the movement after this one also starts at post
+  // zero, and it is drawn from the ordinary pool. So the page below the cards is
+  // arranged by the same search as every other band, with the whole shape
+  // vocabulary available to it.
+  featureRow: {
+    slots: [feature("info", 1), feature("links", 2), feature("pulse", 3)],
+  },
+  // The same row with analytics switched off. The links card takes the spare
+  // cell rather than the row shrinking to two thirds of the page.
+  featureRowPair: {
     slots: [feature("info", 1), feature("links", 2, 2)],
-    penalty: W.SOLO_OPENING,
-  },
-  // 3x2 — a double-height tile beside the cards, and a wide one under them.
-  openingPair: {
-    slots: [feature("info", 1), feature("links", 2), slot("standard", 3), slot("duo", 1)],
-  },
-  // 3x2 — the same, with two single cells instead.
-  openingTrio: {
-    slots: [
-      feature("info", 1),
-      feature("links", 2),
-      slot("standard", 3),
-      slot("small", 1),
-      slot("small", 2),
-    ],
-  },
-  // 3x3 — a wide tile under the cards and a full-width band closing the opening.
-  openingBand: {
-    slots: [
-      feature("info", 1),
-      feature("links", 2),
-      slot("standard", 3),
-      slot("duo", 1),
-      slot("band", 1),
-    ],
-  },
-  // 3x3 — the lead arrangements, for a page whose opening posts are heavy.
-  openingLead: {
-    slots: [feature("info", 1), feature("links", 2), slot("tall", 3), slot("wide", 1)],
-  },
-  openingStack: {
-    slots: [
-      feature("info", 1),
-      feature("links", 2),
-      slot("tall", 3),
-      slot("standard", 1),
-      slot("standard", 2),
-    ],
-  },
-  // 3x3 — a full-height tile beside the cards, with two wide ones under them.
-  openingTall: {
-    slots: [feature("info", 1), feature("links", 2), slot("tall", 3), slot("duo", 1), slot("duo", 1)],
-  },
-  // 3x3 — the widest opening: a wide tile, then a row of singles.
-  openingMix: {
-    slots: [
-      feature("info", 1),
-      feature("links", 2),
-      slot("standard", 3),
-      slot("duo", 1),
-      slot("small", 1),
-      slot("small", 2),
-      slot("small", 3),
-    ],
   },
 
   // 3x1 — three single cells, one band, or a two-column tile and a single.
@@ -685,16 +650,11 @@ const MOVEMENTS = {
   },
 };
 
-const OPENINGS = [
-  "openingMix",
-  "openingBand",
-  "openingTall",
-  "openingStack",
-  "openingLead",
-  "openingTrio",
-  "openingPair",
-  "openingSolo",
-];
+// One opening, holding no posts. The variety that used to live in eight
+// hand-authored openings now comes from the candidate pool, which the search
+// reaches on the very next step — a wider vocabulary under the cards, not a
+// narrower one.
+const OPENINGS = ["featureRow", "featureRowPair"];
 
 const CANDIDATES = [
   "tallStack",
@@ -819,14 +779,16 @@ function repeatCost(name, last) {
  * property of the finished page and cannot be judged one movement at a time. It
  * is charged at the end, so nothing local is distorted by it.
  */
-function planSequence(metrics, features) {
+function planSequence(metrics, features, pulse) {
   const count = metrics.length;
   if (!count) return [];
+
+  const opening = pulse ? "featureRow" : "featureRowPair";
 
   // `first` rather than `i === 0`: an opening may hold no posts at all, and then
   // the movement after it also starts at zero. It is what stops that being an
   // infinite loop as well as what keeps openings off the middle of the page.
-  const pool = (first) => (first && features ? OPENINGS : CANDIDATES);
+  const pool = (first) => (first && features ? [opening] : CANDIDATES);
 
   // Every movement's fit at every position, solved once: the row solve does not
   // depend on what came before it, so the search is arithmetic on this table.
@@ -936,7 +898,11 @@ function planHomeGrid(posts, options) {
   // would rearrange itself as posts age and no two builds would agree.
   const now = clock.now();
   const metrics = list.map((post) => measure(post, now));
-  const sequence = planSequence(metrics, !!(opts.features && list.length));
+  const sequence = planSequence(
+    metrics,
+    !!(opts.features && list.length),
+    opts.pulse !== false,
+  );
 
   const tiles = [];
   let postIndex = 0;
@@ -973,9 +939,16 @@ function planHomeGrid(posts, options) {
     const lgBoxes = drawn.map(slotBox);
     const lgRows = placeRows(lgBoxes, COLUMNS);
 
-    // The two site cards open the tablet grid the same way they open the wide
-    // one — one cell each, side by side — and the packed posts follow.
-    const mdBoxes = features.map((s, i) => ({ cs: i + 1, cn: 1, rn: 1 })).concat(md);
+    // The site cards open the tablet grid the same way they open the wide one —
+    // one cell each, side by side — until they run out of columns. The card that
+    // does not fit takes the next row whole rather than leaving half of one
+    // empty, which suits the activity card in particular: it is the only card
+    // whose content grows with the width it is given.
+    const mdBoxes = features
+      .map((s, i) =>
+        i < COLUMNS_MD ? { cs: i + 1, cn: 1, rn: 1 } : { cs: 1, cn: COLUMNS_MD, rn: 1 },
+      )
+      .concat(md);
     const mdRows = placeRows(mdBoxes, COLUMNS_MD);
 
     let mdIndex = 0;
@@ -992,7 +965,10 @@ function planHomeGrid(posts, options) {
           name: s.shape,
           movement: step.name,
           lg: { cs: s.cs, cn: s.cn, rn: 1, rs: lgRow },
-          md: { cs: featureIndex + 1, cn: 1, rn: 1, rs: mdOffset + mdRows[featureIndex] + 1 },
+          md: {
+            ...mdBoxes[featureIndex],
+            rs: mdOffset + mdRows[featureIndex] + 1,
+          },
         });
         featureIndex++;
         continue;

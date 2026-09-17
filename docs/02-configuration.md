@@ -11,8 +11,8 @@ Each top-level block below carries a `Docs:` link to the matching public docs pa
 info:
   title:    Theme Redefine-X        # Site title
   subtitle: Redefine Your Hexo...   # Site subtitle
-  author:   Jason-JP-Yang           # Author name
-  url:      https://blog.jason-yang.top
+  author:   Your Name               # Author name
+  url:      https://blog.example.com
 ```
 
 ## `defaults` — Site images
@@ -64,9 +64,6 @@ global:
     enable: true
     image: /images/redefine-og.avif   # default og:image
     description: ...
-  google_analytics:
-    enable: false
-    id:                         # GA Measurement ID
 ```
 
 ## `fontawesome` — Font Awesome Pro v6.2.1
@@ -109,9 +106,8 @@ home_banner:
     style: default              # default | reverse | center
     links: { github, instagram, zhihu, twitter, email, ... }   # url per key
     qrs:   { weixin, ... }      # QR-drawer image url per key
-  instant_notes:                # Instagram-"Notes"-style bubbles on the banner
+  instant_notes:                # Instagram-"Notes"-style bubbles on the banner (needs `backend`)
     enable: false
-    api_url:                    # Cloudflare Worker endpoint (see workflows/backend-worker)
     avatar: /images/redefine-avatar.svg
 ```
 
@@ -202,21 +198,6 @@ articles:
     skip_dirs: []
 ```
 
-## `comment`
-```yaml
-comment:
-  enable: true
-  system: waline                # waline | gitalk | twikoo | giscus
-  config:
-    waline:  { serverUrl, lang, emoji[], recaptchaV3Key, turnstileKey, reaction }
-    gitalk:  { clientID, clientSecret, repo, owner, proxy }
-    twikoo:  { version, server_url, region }
-    giscus:  { repo, repo_id, category, category_id, mapping, strict,
-               reactions_enabled, emit_metadata, lang, input_position, loading,
-               proxy, author_pat }
-```
-**Giscus + masonry reactions**: the masonry photo-album "reactions" feature reuses Giscus and requires `proxy` (a CORS proxy Worker) and `author_pat` (a GitHub PAT with read/write to the discussions repo). See [04 — masonry-reactions](04-scripts.md#masonry-reactionsjs). Avoid `mapping: og:title` when swup/PJAX is on (og:title isn't updated on virtual navigation).
-
 ## `footer`
 ```yaml
 footer:
@@ -267,6 +248,50 @@ plugins:
 ```
 
 > **Cache caveat:** AVIF/SVGO output is cached under `<site>/source/build/`. After changing any `imagesOptimize` option, clear it with `hexo clean --include-minify` or stale optimized images will be reused.
+
+## `comment`
+```yaml
+comment:
+  enable: true
+  system: waline                # waline | gitalk | twikoo | giscus
+  config:
+    waline:  { serverUrl, lang, emoji[], recaptchaV3Key, turnstileKey, reaction }
+    gitalk:  { clientID, clientSecret, repo, owner, proxy }
+    twikoo:  { version, server_url, region }
+    giscus:  { repo, repo_id, category, category_id, mapping, strict,
+               reactions_enabled, emit_metadata, lang, input_position, loading }
+```
+**Giscus + masonry reactions**: the masonry photo-album "reactions" feature reuses Giscus; its CORS proxy is `backend.api_url` and its author PAT is `GISCUS_AUTHOR_PAT` in `.env`. See [04 — masonry-reactions](04-scripts.md#masonry-reactionsjs). Avoid `mapping: og:title` when swup/PJAX is on (og:title isn't updated on virtual navigation).
+
+## `backend` — The Worker and everything signed in through it
+Every feature here is off unless `backend.api_url` is set **and** `comment.enable: true` with `comment.system: giscus` — the sign-in is the giscus session. `scripts/lib/backend.js` resolves the block once; templates read it through the `backend_config()` helper and the page gets it as `window.theme.backend`.
+```yaml
+backend:
+  api_url:                      # Worker base URL
+  mode: production              # production | local (honoured on localhost pages only)
+  local_api_url: http://localhost:8787
+  encryption:                   # `vault:` posts; Blog Management and the editor need it
+    enable: false
+    prefix: /v
+  notifications:                # follow + push
+    enable: false
+    vapid_public_key:
+    changelog: true
+    changelog_limit: 30
+    topics: posts, announcements, notes
+  analytics:                    # self-hosted Umami
+    enable: false
+    host:
+    website_id:
+    performance: true
+    recorder: true
+    pulse: true
+    events: true
+  online_editor:                # a provider is on once all its fields are filled
+    gitea:  { api_url, repo, branch: main }
+    github: { repo, branch: main }
+```
+The editor's repository coordinates never reach a public page: the build seals them under the admin key (`<prefix>/<admin slug>/o.bin`), and the Worker issues only the tokens (`GITEA_TOKEN`, `GITHUB_EDITOR_TOKEN`).
 
 ## `page_templates`
 ```yaml

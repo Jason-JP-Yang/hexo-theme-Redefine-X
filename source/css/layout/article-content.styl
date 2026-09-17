@@ -16,7 +16,7 @@ $gap = 30px
 
 
   &.show-toc
-    gap 30px
+    gap $gap
 
     .toc-content-container
       display block
@@ -42,8 +42,23 @@ $gap = 30px
         border 3px solid rgba(183, 183, 183, 0)
         transition all 0.2s ease
 
+    // The column, the rail and the gap between them have to add up to the row —
+    // and they used to add up to the row PLUS the gap. Flex found the missing
+    // 30px by shrinking, and how much each side gave up depended on how narrow
+    // its contents could be squeezed: the rail is `nowrap` and gave nothing, so
+    // the article gave all 30px — unless something inside it refused to be
+    // narrow, and then it gave nothing either and simply sat 30px wider with the
+    // row overflowing.
+    //
+    // A code listing is exactly such a thing, which is why the editor's article
+    // CHANGED WIDTH — with `transition: width` animating it — every time a code
+    // block was toggled between its source and its rendered preview. Subtracting
+    // the gap as well as the rail makes the row add up, so nothing shrinks and
+    // no content can move the column it is in. The measure is unchanged: the
+    // article already ended up at this width on every post whose rail was too
+    // long to give anything back, which is all of them.
     .article-content-container
-      width calc(100% - 210px) !important
+      width unquote('calc(100% - ' + ($toc-container-width + $gap) + ')') !important
 
   +redefine-tablet()
     .toc-content-container

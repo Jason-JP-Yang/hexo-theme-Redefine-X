@@ -1,6 +1,7 @@
 import { requestScrollPass, invalidateMetrics } from "../tools/scrollScheduler.js";
 import initAutoHover, { syncHomeAutoHover } from "./autoHover.js";
 import initBentoFit, { syncBentoFit } from "./bentoFit.js";
+import initPulseCard from "./pulseCard.js";
 import initTileSpotlight from "./tileSpotlight.js";
 import initCoverParallax, {
   setCoverParallaxSuspended,
@@ -380,6 +381,10 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll, app
   let entering = [];
   initBentoFit();
   syncBentoFit();
+  // The furniture row is part of the list, so the swap took the activity card's
+  // node with it. Re-wired here, while the cards are still edge-on, it redraws
+  // from the series already in hand and is never seen arriving.
+  initPulseCard();
   initCoverParallax();
   syncCoverParallax();
   initAutoHover();

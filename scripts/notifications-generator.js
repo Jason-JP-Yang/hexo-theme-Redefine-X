@@ -24,6 +24,7 @@
  */
 
 const clock = require("./lib/build-clock");
+const backend = require("./lib/backend");
 
 const DEFAULT_LIMIT = 30;
 
@@ -167,8 +168,8 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
   // REPLACE hexo.theme.config wholesale on generateBefore (the _data/_config
   // override), so the live object is the only one worth reading.
   const theme = hexo.theme.config || {};
-  const notifications = theme.notifications || {};
-  if (!notifications.enable || notifications.changelog === false) return [];
+  const notifications = backend.resolve(theme).notifications;
+  if (!notifications.enable || !notifications.changelog) return [];
 
   const config = hexo.config;
   const limit = Number(notifications.changelog_limit) || DEFAULT_LIMIT;
@@ -213,8 +214,7 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
 // ─── manifest ───────────────────────────────────────────────
 hexo.extend.generator.register("redefine_manifest", function () {
   const theme = hexo.theme.config || {};
-  const notifications = theme.notifications || {};
-  if (!notifications.enable) return [];
+  if (!backend.resolve(theme).notifications.enable) return [];
 
   const config = hexo.config;
   const icon = (theme.defaults && (theme.defaults.logo || theme.defaults.favicon)) || "";
@@ -252,44 +252,38 @@ hexo.extend.generator.register("redefine_manifest", function () {
 });
 
 // ─── the admin management page ──────────────────────────────
-// A real page rather than a panel: it holds three long-lived lists that outgrow
-// a 440px card. It renders for everybody — the route has to exist for Swup to
-// navigate to it — and shows nothing but a locked notice until the front end has
-// confirmed an admin session. Authorisation is the Worker's, not this page's.
+// A real page rather than a panel: it holds several long-lived lists that
+// outgrow a 440px card. The route has to exist for Swup to navigate to it, but
+// what it publishes is only the access probe — the markup itself is sealed
+// under the admin key (scripts/vault-generator.js) and mounted after the Worker
+// releases that key and the blob opens under it.
 hexo.extend.generator.register("redefine_blog_management", function () {
-  const theme = hexo.theme.config || {};
-  if (!theme.notifications || !theme.notifications.enable) return [];
+  const resolved = backend.resolve(hexo.theme.config || {});
+  if (!resolved.management) return [];
+
+  const shell = (kind, title) => ({
+    layout: "page",
+    data: {
+      type: "admin-gate",
+      admin_kind: kind,
+      title,
+      layout: "page",
+      content: "",
+      comment: false,
+      robots: "noindex,nofollow",
+    },
+  });
 
   const pages = [
-    {
-      path: "blog-management/index.html",
-      layout: "page",
-      data: {
-        type: "blog-management",
-        title: "Blog Management",
-        layout: "page",
-        content: "",
-        comment: false,
-        robots: "noindex,nofollow",
-      },
-    },
+    Object.assign({ path: "blog-management/index.html" }, shell("console", "Blog Management")),
   ];
 
   // A new post needs somewhere to be composed; an existing one is edited where
-  // it already is. This page is the article layout with nothing in it.
-  if (theme.backend && theme.backend.vault_enable) {
-    pages.push({
-      path: "blog-management/write/index.html",
-      layout: "page",
-      data: {
-        type: "blog-editor",
-        title: "Write",
-        layout: "page",
-        content: "",
-        comment: false,
-        robots: "noindex,nofollow",
-      },
-    });
+  // it already is.
+  if (resolved.online_editor.enable) {
+    pages.push(
+      Object.assign({ path: "blog-management/write/index.html" }, shell("composer", "Write"))
+    );
 
     // The editor's strings, as a route rather than as part of every page's
     // config block. The editor can now open on ANY article, and this table is
@@ -310,11 +304,13 @@ function editorStrings() {
   const yaml = require("js-yaml");
 
   const dir = path.join(__dirname, "../languages");
-  const lang = hexo.config.language || "en";
+  const lang = [].concat(hexo.config.language || "en")[0] || "en";
   const file = fs.existsSync(path.join(dir, `${lang}.yml`)) ? `${lang}.yml` : "en.yml";
 
   try {
-    return yaml.load(fs.readFileSync(path.join(dir, file), "utf8")).editor || {};
+    const table = yaml.load(fs.readFileSync(path.join(dir, file), "utf8")) || {};
+    // The EXIF card's labels ride along: the editor prints the card the build prints.
+    return Object.assign({}, table.editor || {}, { image_exif: table.image_exif || {} });
   } catch (e) {
     return {};
   }

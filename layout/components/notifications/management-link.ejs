@@ -5,15 +5,9 @@
     paint, the same way `blog-following` works. Nothing is protected by hiding
     it: the page behind it is empty without an admin session, and every route it
     calls is checked by the Worker. %>
-<% if (theme.notifications && theme.notifications.enable) { %>
+<% if (backend_config().management) { %>
 <a class="links blog-admin-only" href="<%= url_for('/blog-management/') %>">
     <i class="fa-solid fa-screwdriver-wrench icon-space"></i>
     <span class="link-name"><%= __('notifications.blog_management') %></span>
 </a>
-<% if (theme.backend && theme.backend.vault_enable) { %>
-<a class="links blog-admin-only" href="<%= url_for('/blog-management/write/') %>">
-    <i class="fa-solid fa-feather-pointed icon-space"></i>
-    <span class="link-name"><%= __('editor.new_post') %></span>
-</a>
-<% } %>
 <% } %>

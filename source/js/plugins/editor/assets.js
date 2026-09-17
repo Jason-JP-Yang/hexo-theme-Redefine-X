@@ -27,26 +27,92 @@
  */
 
 import { assetURL, registerAssetKey } from "../../tools/vaultCrypto.js";
-import { blobURL } from "./gitea.js";
+import { relockAsset, unlockAsset } from "./session.js";
+import { blobURL } from "./repo.js";
+
+/**
+ * What an `<img>` points at while it has nothing to show.
+ *
+ * NOT an empty `src` and not a missing one: both make the element a broken
+ * picture, and a broken picture with a width and a height is drawn by the
+ * browser as its own glyph — which is what appeared the instant a sealed image
+ * was clicked, held for as long as the decryption took, and looked exactly like
+ * a failure. A 1×1 transparent GIF is a picture that loaded, so there is
+ * nothing to draw; the box comes from the width/height attributes and the
+ * skeleton underneath is what the author sees.
+ */
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
 let manifest = null;
 let sealed = null;
 let sealedSizes = null;
+let vaultIndex = null;
 
 export function siteRoot() {
   return String((window.config && window.config.root) || "/").replace(/\/+$/, "");
 }
 
 /** Fetched once per editing session; a miss simply means nothing is rewritten. */
-export async function loadManifest() {
-  if (manifest) return manifest;
+export async function loadManifest(force) {
+  if (manifest && !force) return manifest;
   try {
-    const res = await fetch(`${siteRoot()}/build/manifest.json`, { cache: "no-cache" });
+    const res = await fetch(`${siteRoot()}/build/manifest.json`, {
+      cache: force ? "reload" : "no-cache",
+    });
     manifest = res.ok ? await res.json() : {};
   } catch (err) {
     manifest = {};
   }
   return manifest;
+}
+
+/** `source path -> [route, width, height, bytes]`, for callers that want it all. */
+export function manifestRows() {
+  return manifest || {};
+}
+
+/**
+ * Erase what this module learned, down to the decryption keys.
+ *
+ * The manifest is public; what the browser unlocked is not.
+ */
+export function forgetAssets() {
+  relockPreviewed();
+  manifest = null;
+  vaultIndex = null;
+}
+
+/* ─── one picture at a time ────────────────────────────────────────────────── */
+
+/**
+ * Which sealed pictures the BROWSER has opened — never the article's own.
+ *
+ * A file manager over an encrypted library must not be a way to decrypt that
+ * library. Nothing is unlocked until the author clicks it, and the previous one
+ * is locked again before the next is opened, so at most one withheld picture is
+ * in the clear at any moment and none of them survive the dialogue closing.
+ */
+const previewed = new Set();
+
+function openSealed(hash) {
+  // The open document's own images were registered by `setVaultAssets` for the
+  // canvas, and are the page's to manage; the browser neither unlocks nor locks
+  // those. Anything else is borrowed for as long as it is being looked at.
+  if (documentOwns(hash)) return assetURL(hash);
+  previewed.add(hash);
+  return unlockAsset(hash);
+}
+
+function documentOwns(hash) {
+  if (!sealed) return false;
+  for (const value of Object.values(sealed)) if (value === hash) return true;
+  return false;
+}
+
+/** Give back every key the browser borrowed, and the bytes opened with them. */
+export function relockPreviewed() {
+  if (previewed.size) relockAsset([...previewed]);
+  previewed.clear();
 }
 
 /**
@@ -58,6 +124,29 @@ export function setVaultAssets(grant, assets, sizes) {
   sealedSizes = sealed ? sizes || null : null;
   if (!sealed) return;
   for (const hash of Object.values(sealed)) registerAssetKey(hash, grant.raw);
+}
+
+/**
+ * Every sealed image in the vault, not just this document's.
+ *
+ * The picture browser is a browser over the whole library, so it previews
+ * pictures belonging to posts other than the open one — and a withheld image is
+ * published at NO plaintext route, so asking the site for one is a guaranteed
+ * 404 followed by the browser's broken-picture glyph. This is what stops that
+ * request being made: consulted only when the public manifest does not list the
+ * image, which is exactly the withheld case. See session.js `sealedIndex`.
+ */
+export function setVaultIndex(rows) {
+  vaultIndex = rows && Object.keys(rows).length ? rows : null;
+}
+
+/**
+ * The vault-wide record for an image the public manifest does not carry.
+ * `at` is already where the bytes ARE — see `here`, which must not run twice.
+ */
+function withheld(at) {
+  if (!vaultIndex || record(at)) return null;
+  return vaultIndex[routeFor(at)] || vaultIndex[manifestKey(at)] || null;
 }
 
 /** `/source/images/a.png`, `images/a.png`, `/images/a.png` → `images/a.png`. */
@@ -104,7 +193,7 @@ function here(src) {
   }
 }
 
-/** `[route, width, height]`, or null when the build never touched this image. */
+/** `[route, width, height, bytes]`, or null when the build never touched this image. */
 function record(src) {
   const row = manifest && manifest[manifestKey(src)];
   return Array.isArray(row) ? row : null;
@@ -127,15 +216,14 @@ export function imageSize(src) {
   if (row && row[1] && row[2]) return { width: row[1], height: row[2] };
 
   // A withheld image is not in the public manifest at all; its size travels in
-  // the post's own sealed metadata instead.
+  // the post's own sealed metadata instead — or, for one belonging to another
+  // post, in the vault-wide index the browser builds from every grant.
   const key = manifestKey(at);
   const wh = sealedSizes && (sealedSizes[routeFor(at)] || sealedSizes[key]);
-  return wh && wh[0] ? { width: wh[0], height: wh[1] } : null;
-}
+  if (wh && wh[0]) return { width: wh[0], height: wh[1] };
 
-/** True once the build has an AVIF (or optimised SVG) for this source image. */
-export function isTranscoded(src) {
-  return !!record(src);
+  const row2 = withheld(at);
+  return row2 && row2.width ? { width: row2.width, height: row2.height } : null;
 }
 
 /** `/images/a.png` → `source/images/a.png`, which is what the repository calls it. */
@@ -186,8 +274,11 @@ export function resolveAsset(src, list) {
  */
 function sealedHash(src, list) {
   const at = here(src);
-  if (!sealed || staged(at, list) || /^(blob:|data:|https?:|\/\/)/i.test(at)) return null;
-  return sealed[routeFor(at)] || sealed[manifestKey(at)] || null;
+  if (staged(at, list) || /^(blob:|data:|https?:|\/\/)/i.test(at)) return null;
+  const mine = sealed && (sealed[routeFor(at)] || sealed[manifestKey(at)]);
+  if (mine) return mine;
+  const other = withheld(at);
+  return (other && other.hash) || null;
 }
 
 // What the build reserves for an image it could not measure.
@@ -201,9 +292,10 @@ const FALLBACK = { width: 1000, height: 500 };
  * same node is what makes the editor load, size, skeleton and open images the
  * way the page does — anything else is a second image pipeline that will drift.
  *
- * Mirrors `buildPreloaderDiv` in scripts/filters/lazyload-handle.js.
+ * Mirrors `buildPreloaderDiv` in scripts/filters/lazyload-handle.js, including
+ * the `{% exifimage %}` variant, whose shim carries its size and the height cap.
  */
-export function buildPreloader(src, alt, list) {
+export function buildPreloader(src, alt, list, exif) {
   const el = document.createElement("div");
   el.className = "img-preloader";
   el.dataset.alt = alt || "";
@@ -230,7 +322,32 @@ export function buildPreloader(src, alt, list) {
     ` style="width:100%;height:auto;display:block;opacity:0;pointer-events:none"></svg>` +
     `<div class="img-preloader-skeleton"></div>`;
 
+  shapeMedia(el, exif);
   return el;
+}
+
+/**
+ * The same picture node, dressed as an EXIF figure's image or a plain one.
+ *
+ * Kept rather than rebuilt when a caption becomes a card: a rebuilt preloader
+ * is a second request and a skeleton over a picture that had already arrived.
+ */
+export function shapeMedia(node, exif) {
+  if (!node) return;
+  node.classList.toggle("image-exif-img", !!exif);
+  const shim = node.classList.contains("img-preloader") && node.querySelector(".img-preloader-shim");
+  if (!shim) return;
+  const width = node.dataset.width;
+  const height = node.dataset.height;
+  if (exif) {
+    shim.setAttribute("width", width);
+    shim.setAttribute("height", height);
+    shim.style.maxHeight = "80svh";
+  } else {
+    shim.removeAttribute("width");
+    shim.removeAttribute("height");
+    shim.style.removeProperty("max-height");
+  }
 }
 
 /**
@@ -242,36 +359,65 @@ export function buildPreloader(src, alt, list) {
  * what the reader would be left looking at. So `src` is cleared and filled in
  * when the bytes arrive; `assetURL` fetches and decrypts each blob once however
  * many callers ask.
+ *
+ * `data-ready` is set here and nowhere else — "0" while there is nothing to
+ * show, "1" once it decodes, "err" when every route has been tried. It belongs
+ * here because only this function knows a failure is not final: the repository
+ * retry below clears `src` and asks again, and a caller watching `error` called
+ * that the end and dropped its skeleton onto a picture that was about to
+ * arrive. Clearing `src` first is what takes the browser's broken-picture glyph
+ * out of the box while that second question is being asked.
  */
 export function bindImage(img, src, list) {
   if (!img) return;
   const value = String(src || "");
 
+  // Waiting, not broken: `BLANK` keeps a real resource in the element so the
+  // browser has no glyph to draw while the answer is being found.
+  img.onload = null;
+  img.onerror = null;
+  img.dataset.ready = "0";
+  img.src = BLANK;
+  delete img.dataset.edSealed;
+  delete img.dataset.edSrc;
+
   if (!value) {
-    img.removeAttribute("src");
+    img.dataset.ready = "err";
     return;
   }
+
+  const settle = (url) => {
+    if (!url) return void (img.dataset.ready = "err");
+    img.onload = () => (img.dataset.ready = "1");
+    img.src = url;
+  };
 
   const hash = sealedHash(value, list);
 
-  if (!hash) {
-    img.dataset.edSrc = value;
-    img.onerror = () => {
-      img.onerror = null;
-      repoURL(value, list).then((url) => {
-        if (url && img.dataset.edSrc === value) img.src = url;
-      });
-    };
-    img.src = resolveAsset(value, list);
+  if (hash) {
+    img.dataset.edSealed = hash;
+    openSealed(hash).then((url) => {
+      // The element may have been re-pointed at something else while we waited.
+      if (img.dataset.edSealed === hash) settle(url);
+    });
     return;
   }
 
-  img.removeAttribute("src");
-  img.dataset.edSealed = hash;
-  assetURL(hash).then((url) => {
-    // The element may have been re-pointed at something else while we waited.
-    if (url && img.dataset.edSealed === hash) img.src = url;
-  });
+  img.dataset.edSrc = value;
+  img.onerror = () => {
+    img.onerror = null;
+    img.onload = null;
+    // Back to the placeholder while the repository is asked, for the same
+    // reason: a 404 leaves a glyph in the box otherwise.
+    img.src = BLANK;
+    repoURL(value, list).then((url) => {
+      if (img.dataset.edSrc === value) settle(url);
+    });
+  };
+  // Through `settle` too, in the same task, so the placeholder's own load event
+  // is cancelled by this assignment rather than arriving later and reporting
+  // the blank as the picture.
+  settle(resolveAsset(value, list));
 }
 
 /**

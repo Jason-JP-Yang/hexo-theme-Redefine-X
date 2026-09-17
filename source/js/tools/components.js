@@ -303,9 +303,9 @@
    *
    * scripts/modules/image-exif.js is the build's, and it can do one thing this
    * cannot: open the file and read the camera data out of it. So the editor
-   * renders what the author has WRITTEN — the same figure, the same card, the
-   * same section and item classes — and leaves the automatic fields to the
-   * build. What is on the canvas is the layout that will be published; what
+   * renders what the author has WRITTEN — the build's figure, card, labels and
+   * figure number, in the build's order — and leaves the automatic fields to
+   * the build. What is on the canvas is the layout that will be published; what
    * fills it may still grow.
    */
   const EXIF_ORDER = [
@@ -325,6 +325,15 @@
   };
 
   const SECTION_LABELS = { camera: "Camera", lens: "Lens", exposure: "Exposure", other: "Other" };
+  // The keys `image_exif.field.*` is translated under, which is what the build prints.
+  const FIELD_KEYS = {
+    Make: "make", Model: "model", DateTimeOriginal: "datetime_original",
+    LensModel: "lens_model", FocalLength: "focal_length", FocusMode: "focus_mode",
+    ExposureTime: "exposure_time", Aperture: "aperture", ISOSpeedRatings: "iso",
+    ExposureProgram: "exposure_program", ExposureBias: "exposure_bias",
+    MeteringMode: "metering_mode", Flash: "flash", WhiteBalance: "white_balance",
+    GPSLatitude: "gps_latitude", GPSLongitude: "gps_longitude", GPSAltitude: "gps_altitude",
+  };
   const NEWLINES = /\r?\n/;
 
   /** The image line and the exif-info comment the tag's body is made of. */
@@ -364,63 +373,89 @@
     };
   }
 
+  /**
+   * @param {object} options
+   *   resolve(path)  the address the picture is fetched from
+   *   float          `articles.style.image_caption === "float"`: the card sits
+   *                  INSIDE the image wrapper, which is what the float CSS reads
+   *   labels         the site's `image_exif` translations, as the build prints them
+   *   figure         the figure number img-handle.js would prefix, or 0
+   *   media          markup to stand in for the `<img>` (the lazy preloader)
+   */
   function exifImage(args, content, render, options) {
-    const { title, autoExif } = exifArgs(args);
+    const { title } = exifArgs(args);
     const { description, path, info } = parseExifBody(content);
     const opts = options || {};
+    const labels = opts.labels || {};
     const src = opts.resolve ? opts.resolve(path) : path;
+    const n = Number(opts.figure) || 0;
 
-    const hasInfo = Object.keys(info).length > 0;
+    // `false` written into a field is how the build is told to leave it out.
+    const shown = {};
+    for (const key of Object.keys(info)) {
+      if (String(info[key]).toLowerCase() !== "false") shown[key] = info[key];
+    }
+    const hasInfo = Object.keys(shown).length > 0;
     const alt = escapeText(description);
+    const numbered = (text) => (n ? `<strong>Figure ${n}.</strong> ` : "") + text;
 
-    // Simple mode: a caption, no card. What image-exif.js emits when there is
-    // nothing to put in the card.
     if (!hasInfo) {
-      const caption =
-        (title ? `<strong class="image-exif-title">${escapeText(title)}</strong>` : "") +
-        (title && description ? "<br>" : "") +
-        (description ? escapeText(description) : "");
+      const caption = title
+        ? `<strong class="image-exif-title">${numbered(escapeText(title))}</strong>` +
+          (description ? "<br>" + escapeText(description) : "")
+        : numbered(escapeText(description));
+      const media = opts.media || `<img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" data-no-img-handle="true" />`;
       return `
 <figure class="image-caption image-exif-simple-container">
-  <img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" data-no-img-handle="true" />
+  ${media}
   <figcaption>${caption}</figcaption>
 </figure>`;
     }
 
+    const section = labels.section || {};
+    const field = labels.field || {};
     let sections = "";
     for (const [key, icon, fields] of EXIF_ORDER) {
-      const items = fields.filter((f) => info[f]);
+      const items = fields.filter((f) => shown[f]);
       if (!items.length) continue;
       sections +=
         `<div class="image-exif-section image-exif-${key}">` +
-        `<div class="image-exif-section-title"><i class="fa-solid ${icon}"></i> ${SECTION_LABELS[key]}</div>` +
+        `<div class="image-exif-section-title"><i class="fa-solid ${icon}"></i> ${escapeText(section[key] || SECTION_LABELS[key])}</div>` +
         `<div class="image-exif-items">` +
         items
           .map(
             (f) =>
-              `<div class="image-exif-item"><span class="image-exif-label">${EXIF_LABELS[f]}</span>` +
-              `<span class="image-exif-value">${escapeText(info[f])}</span></div>`
+              `<div class="image-exif-item"><span class="image-exif-label">${escapeText(field[FIELD_KEYS[f]] || EXIF_LABELS[f])}</span>` +
+              `<span class="image-exif-value">${escapeText(shown[f])}</span></div>`
           )
           .join("") +
         `</div></div>`;
     }
 
+    const toggle = escapeText((labels.ui && labels.ui.toggle) || "Toggle EXIF data");
+    const heading = title
+      ? `<div class="image-exif-title">${numbered(escapeText(title))}</div>`
+      : n
+        ? `<div class="image-exif-title">Figure ${n}</div>`
+        : "";
     const header =
       `<div class="image-exif-header"><div class="image-exif-header-content">` +
-      (title ? `<div class="image-exif-title">${escapeText(title)}</div>` : "") +
+      heading +
       (description ? `<div class="image-exif-description">${escapeText(description)}</div>` : "") +
-      `</div><button class="image-exif-toggle-btn" aria-label="Toggle EXIF data">` +
+      `</div><button class="image-exif-toggle-btn" aria-label="${toggle}">` +
       `<i class="fa-solid fa-chevron-down"></i></button></div>`;
 
-    const layout = opts.float ? "image-exif-float" : "image-exif-block";
     const card = `<div class="image-exif-info-card">${header}<div class="image-exif-data">${sections}</div></div>`;
+    const media = opts.media || `<img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" />`;
+    const layout = opts.float ? "image-exif-float" : "image-exif-block";
 
     return `
-<figure class="image-exif-container ${layout}" data-no-img-handle="true" data-auto-exif="${autoExif}">
+<figure class="image-exif-container ${layout}" data-no-img-handle="true">
   <div class="image-exif-image-wrapper">
-    <img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" />
+    ${media}
+    ${opts.float ? card : ""}
   </div>
-  ${card}
+  ${opts.float ? "" : card}
 </figure>`;
   }
 

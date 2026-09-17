@@ -14,8 +14,8 @@ info:
   title: Theme Redefine-X
   # Site subtitle
   subtitle: Redefine Your Hexo Journey.
-  # Author name
-  author: Jason-JP-Yang
+  # Author name. Empty uses the site's `author`
+  author:
   # Site URL
   url: https://blog.example.com
 # BASIC INFORMATION <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
@@ -99,12 +99,8 @@ global:
     enable: true
     image: /images/redefine-og.avif  # default og:image
     description: Hexo Theme Redefine, Redefine Your Hexo Journey.
-  # Google Analytics
-  google_analytics:
-    enable: false # Whether to enable Google Analytics
-    id:  # Google Analytics Measurement ID
 # SITE CUSTOMIZATION <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
-    
+
 
 # FONTAWESOME >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/basic/fontawesome
@@ -358,53 +354,6 @@ articles:
     skip_dirs: []
 # ARTICLE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
-# COMMENT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-x-docs.jason-yang.top/zh/posts/comment
-comment:
-  # Whether to enable comment
-  enable: true
-  # Comment system
-  system: waline # waline, gitalk, twikoo, giscus
-  # System configuration
-  config:
-    # Waline comment system. See https://waline.js.org/
-    waline:
-      serverUrl: https://example.example.com # Waline server URL. e.g. https://example.example.com
-      lang: zh-CN # Waline language. e.g. zh-CN, en-US. See https://waline.js.org/guide/client/i18n.html
-      emoji: [] # Waline emojis, see https://waline.js.org/guide/features/emoji.html
-      recaptchaV3Key: # Google reCAPTCHA v3 key. See https://waline.js.org/reference/client/props.html#recaptchav3key
-      turnstileKey: # Turnstile key. See https://waline.js.org/reference/client/props.html#turnstilekey
-      reaction: false # Waline reaction. See https://waline.js.org/reference/client/props.html#reaction
-    # Gitalk comment system. See https://github.com/gitalk/gitalk
-    gitalk:
-      clientID: # GitHub Application Client ID
-      clientSecret: # GitHub Application Client Secret
-      repo: # GitHub repository
-      owner: # GitHub repository owner
-      proxy: # GitHub repository proxy
-    # Twikoo comment system. See https://twikoo.js.org/
-    twikoo:
-      version: 1.6.10 # Twikoo version, do not modify if you dont know what it is
-      server_url: # Twikoo server URL. e.g. https://example.example.com
-      region: # Twikoo region. can be empty
-    # Giscus comment system. See https://giscus.app/
-    giscus:
-      repo: # Github repository name e.g. EvanNotFound/hexo-theme-redefine
-      repo_id: # Github repository id
-      category: # Github discussion category
-      category_id: # Github discussion category id
-      mapping: pathname # Which value to use as the unique identifier for the page. e.g. pathname, url, title, og:title. DO NOT USE og:title WITH PJAX ENABLED since pjax will not update og:title when the page changes
-      strict: 0 # Whether to enable strict mode. e.g. 0, 1
-      reactions_enabled: 1 # Whether to enable reactions. e.g. 0, 1
-      emit_metadata: 0 # Whether to emit metadata. e.g. 0, 1
-      lang: en # Giscus language. e.g. en, zh-CN, zh-TW
-      input_position: bottom # Place the comment box above/below the comments. e.g. top, bottom
-      loading: lazy # Load the comments lazily
-
-      # The CORS proxy giscus needs is `backend.api_url`; the author PAT that
-      # masonry reactions need is GISCUS_AUTHOR_PAT in .env. Neither lives here.
-# COMMENT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
-
 # FOOTER >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/footer
 footer:
@@ -500,43 +449,106 @@ plugins:
     normal_width: 0.6
 # PLUGINS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
+# COMMENT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
+# Docs: https://redefine-x-docs.jason-yang.top/zh/posts/comment
+comment:
+  # Whether to enable comment
+  enable: true
+  # Comment system. The backend below needs giscus: its sign-in is the giscus session
+  system: waline # waline, gitalk, twikoo, giscus
+  # System configuration
+  config:
+    # Waline comment system. See https://waline.js.org/
+    waline:
+      serverUrl: https://example.example.com # Waline server URL. e.g. https://example.example.com
+      lang: zh-CN # Waline language. e.g. zh-CN, en-US. See https://waline.js.org/guide/client/i18n.html
+      emoji: [] # Waline emojis, see https://waline.js.org/guide/features/emoji.html
+      recaptchaV3Key: # Google reCAPTCHA v3 key. See https://waline.js.org/reference/client/props.html#recaptchav3key
+      turnstileKey: # Turnstile key. See https://waline.js.org/reference/client/props.html#turnstilekey
+      reaction: false # Waline reaction. See https://waline.js.org/reference/client/props.html#reaction
+    # Gitalk comment system. See https://github.com/gitalk/gitalk
+    gitalk:
+      clientID: # GitHub Application Client ID
+      clientSecret: # GitHub Application Client Secret
+      repo: # GitHub repository
+      owner: # GitHub repository owner
+      proxy: # GitHub repository proxy
+    # Twikoo comment system. See https://twikoo.js.org/
+    twikoo:
+      version: 1.6.10 # Twikoo version, do not modify if you dont know what it is
+      server_url: # Twikoo server URL. e.g. https://example.example.com
+      region: # Twikoo region. can be empty
+    # Giscus comment system. See https://giscus.app/
+    giscus:
+      repo: # Github repository name e.g. EvanNotFound/hexo-theme-redefine
+      repo_id: # Github repository id
+      category: # Github discussion category
+      category_id: # Github discussion category id
+      mapping: pathname # Which value to use as the unique identifier for the page. e.g. pathname, url, title, og:title. DO NOT USE og:title WITH PJAX ENABLED since pjax will not update og:title when the page changes
+      strict: 0 # Whether to enable strict mode. e.g. 0, 1
+      reactions_enabled: 1 # Whether to enable reactions. e.g. 0, 1
+      emit_metadata: 0 # Whether to emit metadata. e.g. 0, 1
+      lang: en # Giscus language. e.g. en, zh-CN, zh-TW
+      input_position: bottom # Place the comment box above/below the comments. e.g. top, bottom
+      loading: lazy # Load the comments lazily
+# COMMENT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
+
 # BACKEND >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/backend
-# ONE Cloudflare Worker (workflows/backend-worker) serves every authenticated
-# concern: instant notes, GitHub-OAuth identity, the giscus CORS proxy,
-# notifications, and the encrypted-post vault. The ONLY place its URL is written.
+# The Cloudflare Worker in workflows/backend-worker. Everything here needs
+# comment.enable: true and comment.system: giscus.
 backend:
-  # Worker base URL. Leave empty to disable everything that depends on it.
+  # Worker base URL. Empty turns every backend feature off
   api_url:
-  # Which Worker the front-end talks to: production, local
-  # `local` applies ONLY on a localhost page and ONLY to a loopback URL; a
-  # deployed site ignores it. Switches EVERY worker call at once, because a
-  # session token only verifies at the instance that signed it.
+  # Which Worker the front-end talks to: production, local (honoured on localhost pages only)
   mode: production
-  # The Worker used when mode is `local`. Must be localhost or 127.0.0.1.
+  # The Worker used when mode is local. Must be a localhost or private address
   local_api_url: http://localhost:8787
-  # Encrypted posts (`vault:` front matter). Keys live in .vault/keys.json and D1.
-  vault_enable: false
-  # Path prefix for obfuscated vault pages and assets.
-  vault_prefix: /v
+  # Encrypted posts (`vault:` front matter). Blog Management and the online editor need it
+  encryption:
+    enable: false
+    # Path prefix for obfuscated vault pages and assets
+    prefix: /v
+  # Follow + push notifications
+  notifications:
+    enable: false
+    # VAPID public key, from `npm run vapid:keygen` in the Worker directory
+    vapid_public_key:
+    # Emit changelog.json at build time; the Worker reads it after each deploy
+    changelog: true
+    # How many most-recent entries changelog.json keeps
+    changelog_limit: 30
+    # Topics a reader can subscribe to, comma-separated
+    topics: posts, announcements, notes
+  # A self-hosted Umami instance
+  analytics:
+    enable: false
+    # Umami base URL, no trailing slash
+    host:
+    # The website id the tracker reports under
+    website_id:
+    # Web-vitals collection (LCP/FCP/CLS/INP/TTFB)
+    performance: true
+    # Session replay + heatmap capture (recorder.js)
+    recorder: true
+    # The activity card on the home grid; UMAMI_TOKEN in .env fills it at build time
+    pulse: true
+    # Custom events, named in source/js/tools/uxEvents.js
+    events: true
+  # The in-browser post editor. A provider is on once all of its fields are filled;
+  # its token stays a Worker secret (GITEA_TOKEN / GITHUB_EDITOR_TOKEN)
+  online_editor:
+    gitea:
+      # API base, e.g. https://gitea.example.com/api/v1
+      api_url:
+      # owner/name
+      repo:
+      branch: main
+    github:
+      # owner/name
+      repo:
+      branch: main
 # BACKEND <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
-
-# NOTIFICATIONS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
-# Docs: https://redefine-x-docs.jason-yang.top/zh/notifications
-# Requires the backend Worker in workflows/backend-worker (see its README).
-notifications:
-  # Whether to enable follow + push notifications
-  enable: false
-  # VAPID public key. Public by design — it is shipped to every browser.
-  # Generate a pair with `npm run vapid:keygen` in the backend-worker directory.
-  vapid_public_key:
-  # Emit changelog.json at build time. This file is what the backend reads.
-  changelog: true
-  # How many most-recent entries changelog.json keeps
-  changelog_limit: 30
-  # Topics a reader can subscribe to, comma-separated
-  topics: posts, announcements, notes
-# NOTIFICATIONS <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # PAGE TEMPLATES >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/page_templates
@@ -565,5 +577,4 @@ cdn:
 developer:
   # Whether to enable developer mode (only for developers who want to modify the theme source code, not for ordinary users)
   enable: false
-  # Which Worker the front-end talks to is `backend.mode` / `backend.local_api_url`.
 # DEVELOPER MODE <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end

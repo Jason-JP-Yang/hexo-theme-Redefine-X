@@ -379,7 +379,7 @@ function itemInterface(item) {
     ? raw
     : urlFor.call(hexo, raw.startsWith("/") ? raw : "/" + raw);
 
-  return `<a class="recommended-article-item" href="${url}" title="${item.title}" rel="bookmark">
+  return `<a class="recommended-article-item" href="${url}" title="${item.title}" rel="bookmark" data-ux="recommend">
   <img src="${src}" alt="${item.title}" class="!max-w-none">
   <span class="title">${item.title}</span>
 </a>`;

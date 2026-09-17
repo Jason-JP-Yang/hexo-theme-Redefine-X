@@ -75,7 +75,7 @@ let restoreTried = false;
 // ─── config ──────────────────────────────────────────────────
 function readConfig() {
   const theme = window.theme || {};
-  const n = theme.notifications;
+  const n = theme.backend && theme.backend.notifications;
   if (!n || !n.enable) return null;
 
   // Resolve THROUGH blogAuth, never straight from the config: on localhost it
@@ -871,24 +871,6 @@ export function initNotifications() {
   setBadge(state.unread);
   syncControls();
   refresh({ quiet: true });
-
-  // The admin console is a page of its own and several times the size of this
-  // file. Fetched only when its markup is actually on screen, so no reader ever
-  // downloads a console they cannot open.
-  if (document.getElementById("blog-management")) {
-    import("./blog-management.js").then((module) => module.initBlogManagement()).catch(() => {});
-  }
-
-  // Same bargain, but the editor now opens on any article, so the trigger is
-  // the pencil rather than a page. `blog-admin` is written before the first
-  // paint from the cached session, so a reader never fetches it at all.
-  const writable =
-    document.querySelector('.article-content-container[data-post-new="1"]') ||
-    (document.documentElement.classList.contains("blog-admin") && document.querySelector(".tool-edit-post"));
-
-  if (writable) {
-    import("./editor/index.js").then((module) => module.initEditor()).catch(() => {});
-  }
 }
 
 document.addEventListener("DOMContentLoaded", initNotifications);

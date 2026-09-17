@@ -49,6 +49,8 @@ const path = require("path");
 const vc = require("./lib/vault-crypto");
 const state = require("./lib/vault-state");
 const store = require("./lib/vault-store");
+const inventory = require("./lib/post-inventory");
+const backend = require("./lib/backend");
 
 // A page whose date range holds more encrypted posts than this would need more
 // pre-solved arrangements than it is worth writing to disk (2^k). Raising it is
@@ -59,11 +61,11 @@ const MAX_VARIANT_POSTS = 8;
 const EXCERPT_CHARS = 220;
 
 function prefix() {
-  return String(hexo.theme.config?.backend?.vault_prefix || "/v").replace(/^\/+|\/+$/g, "");
+  return String(backend.resolve(hexo.theme.config).encryption.prefix).replace(/^\/+|\/+$/g, "");
 }
 
 function enabled() {
-  return hexo.theme.config?.backend?.vault_enable === true && state.all().length > 0;
+  return backend.resolve(hexo.theme.config).encryption.enable && state.all().length > 0;
 }
 
 /**
@@ -191,7 +193,22 @@ async function sealAssets(entry, html, routes) {
   out = out.replace(/\s+data-original-src\s*=\s*("|')[^"']*\1/gi, "");
 
   for (const job of jobs) {
-    const bytes = await readRoute(job.routePath);
+    // The reference can still name the PRE-AVIF path: avifRewriteHtml rewrites
+    // only what it can resolve back to a source file, so a path spelled
+    // differently from the file on disk — a masonry avatar given the wrong
+    // extension in masonry.yml — arrives here untouched. Reading it directly
+    // then failed, the reference was left pointing at a withdrawn route, and the
+    // derivative was never noted and so never withheld: the picture stayed
+    // published in the clear while the card that wanted it showed nothing.
+    let bytes = null;
+    let matched = "";
+    for (const candidate of assetCandidates(job.routePath)) {
+      bytes = await readRoute(candidate);
+      if (bytes) {
+        matched = candidate;
+        break;
+      }
+    }
     if (!bytes) {
       // Not an image this build produced (a theme asset, an external mount).
       // Leave the reference alone rather than breaking it.
@@ -207,7 +224,9 @@ async function sealAssets(entry, html, routes) {
     // The reference carries the hash only. `src` is emptied so nothing is
     // requested before the blob has been fetched and decrypted.
     out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="" data-vault-asset="${hash}"`);
-    noteAsset(entry, job.routePath, hash);
+    // The route that was actually READ, not the reference the template wrote:
+    // withholding the wrong one leaves the real derivative published.
+    noteAsset(entry, matched, hash);
   }
 
   return out;
@@ -319,7 +338,14 @@ function addPublicMasonryRoutes(into) {
     for (const item of (category && category.list) || []) {
       add(item.avatar);
       add(item.thumbnail);
-      for (const image of item.images || []) add("masonry/" + image.image);
+      // A leading slash is an absolute site path, not a name inside the album
+      // folder — the same rule masonry.ejs's buildImagePath applies. Prefixing
+      // it anyway named a route that does not exist, so a public album written
+      // that way lost any picture it shares with an encrypted one.
+      for (const image of item.images || []) {
+        const rel = String(image.image || "");
+        add(rel.startsWith("/") ? rel : "masonry/" + rel);
+      }
     }
   }
 }
@@ -355,6 +381,19 @@ function addThemeConfigRoutes(into) {
   // photograph site furniture and publish it.
   const { masonry, ...rest } = hexo.theme.config || {};
   walk(rest, 0);
+}
+
+const IMAGE_EXT = /\.(avif|png|jpe?g|gif|webp|bmp|svg|ico)$/i;
+
+/**
+ * The same search for a reference taken out of rendered markup, where `src` may
+ * name something that is not a picture at all. A non-image keeps its one exact
+ * route: probing `build/js/…` for a script would be a lookup that can only ever
+ * find the wrong file.
+ */
+function assetCandidates(relPath) {
+  if (!IMAGE_EXT.test(relPath)) return [relPath];
+  return avifCandidates(relPath);
 }
 
 /** Where an image may have ended up once img-optimizer had a turn at it. */
@@ -461,7 +500,7 @@ function metaFor(entry, href, coverAsset, body) {
     assets: entry.assetMap || {},
     sizes: entry.assetSizes || {},
     draft: entry.post.draft === true,
-    supersedes: entry.post.supersedes || "",
+    supersedes: entry.supersedes || "",
     cover: coverAsset || "",
     excerpt: plainExcerpt(entry.post, body),
     tags: (entry.tags || []).map((tag) => ({
@@ -597,6 +636,10 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     page.__post = true;
     page.comment = false; // encrypted posts carry no comment thread
     page.content = body;
+    // Resolved by filters/vault from the draft's file name, and shadowed onto
+    // the derived object rather than written back onto the model. The article's
+    // version control and the card's badge both read it from here.
+    page.supersedes = entry.supersedes || "";
     Object.assign(page, neighbours(entry.post));
     // The taxonomy getters are backed by the relation index this build has
     // already emptied for this post (filters/vault.js). Hand back the snapshot
@@ -741,6 +784,14 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
             category: entry.category.links_category,
             thumbs: entry.category.has_thumbnail === true,
             href,
+            // The same two the post branch writes, and for the same reason: an
+            // album's photographs are withheld from build/manifest.json, so
+            // this is the ONLY record of what they are called and what they
+            // weigh. Written after `b.bin` above, which is the pass that seals
+            // them and fills the map. Without it the editor's picture browser
+            // showed an album with most of its photographs missing.
+            assets: entry.assetMap || {},
+            sizes: entry.assetSizes || {},
             // Where the card goes back, sealed so the public build discloses no
             // gap in the sequence. See markedAlbums in scripts/filters/vault.js.
             index: entry.index,
@@ -774,6 +825,44 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     data: { type: "vault-listing", title: "", comment: false },
   });
 
+  // ── the admin surface ─────────────────────────────────────────────────────
+  // Blog Management and the composer, sealed like anything else. Two blobs
+  // under one key, because they are one audience and splitting them would mean
+  // two grants to keep in step:
+  //
+  //   b.bin  the console's markup, with the post inventory folded in. Every
+  //          fact Posts Management shows is settled here — titles, dates,
+  //          taxonomy, draft state, where each file lives — so opening the
+  //          console costs one blob rather than a request per post.
+  //   e.bin  the composer, which is the article layout with nothing in it.
+  //   o.bin  which repositories the editor commits to. Private coordinates, so
+  //          they reach the editor through this key and never through the page.
+  const editor = backend.resolve(hexo.theme.config).online_editor;
+  for (const entry of state.pages()) {
+    const consoleView = hexo.theme.getView("pages/management/blog-management.ejs");
+    const shell = await consoleView.render(cardLocals({ page: { type: "blog-management" } }));
+
+    routes.set(
+      `${p}/${entry.slug}/b.bin`,
+      vc.seal(
+        entry.key,
+        JSON.stringify({
+          shell: avifRewrite ? avifRewrite(shell) : shell,
+          inventory: inventory.build(hexo, entries, state.albums(), p),
+        })
+      )
+    );
+
+    if (!editor.enable) continue;
+    const composerView = hexo.theme.getView("pages/management/editor.ejs");
+    const composer = await composerView.render(cardLocals({ page: { type: "blog-editor" } }));
+    routes.set(
+      `${p}/${entry.slug}/e.bin`,
+      vc.seal(entry.key, avifRewrite ? avifRewrite(composer) : composer)
+    );
+    routes.set(`${p}/${entry.slug}/o.bin`, vc.seal(entry.key, JSON.stringify({ providers: editor.providers })));
+  }
+
   // ── pre-solved geometry ───────────────────────────────────────────────────
   const bentoPlan = hexo.extend.helper.get("bentoPlan");
   const bentoRows = hexo.extend.helper.get("bentoRows");
@@ -790,7 +879,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     // that actually change the grid, and a superseding draft is not one.
     const buckets = assignToPages(
       pages,
-      entries.filter((entry) => !entry.post.supersedes)
+      entries.filter((entry) => !entry.supersedes)
     );
     const withFeatures = hexo.theme.config?.home?.sidebar?.enable === true;
 

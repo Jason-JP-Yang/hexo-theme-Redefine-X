@@ -2,14 +2,14 @@
 	<ul class="article-tools-list">
 		<!-- TOC aside toggle -->
 		<% if (theme.articles.toc.enable) { %>
-		<li class="right-bottom-tools page-aside-toggle">
+		<li class="right-bottom-tools page-aside-toggle" data-ux="toc" data-ux-action="toggle">
 			<i class="fa-regular fa-outdent"></i>
 		</li>
 		<% } %>
 
 		<!-- go comment -->
 		<% if (theme.comment.enable === true && theme.comment.hasOwnProperty('system') && page.comment !== false) { %>
-		<li class="go-comment">
+		<li class="go-comment" data-ux="tool" data-ux-name="comment">
 			<i class="fa-regular fa-comments"></i>
 		</li>
 		<% } %>
@@ -17,8 +17,11 @@
 		<%# Edit this post. Rendered for everyone and hidden by CSS until
 			`html.blog-admin` is set — the same mechanism the management link
 			uses, and tidiness rather than access control: pressing it only
-			opens a shell, and the Worker decides whether a ticket comes back. %>
-		<% if (theme.backend && theme.backend.vault_enable) { %>
+			opens a shell, and the Worker decides whether a ticket comes back.
+
+			Never on the console, which shares this rail for its contents toggle
+			and has no article under it to open. %>
+		<% if (backend_config().online_editor.enable && page.type !== "admin-gate") { %>
 		<li class="right-bottom-tools tool-edit-post blog-admin-only" title="<%= __('editor.edit_post') %>">
 			<i class="fa-regular fa-pen-to-square"></i>
 		</li>

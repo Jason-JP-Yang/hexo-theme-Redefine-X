@@ -1,0 +1,48 @@
+<%#
+    Umami, wired into the head.
+
+    This replaces the two hand-written <script> lines that used to live in
+    `inject.head`, for two reasons that list cannot serve:
+
+      • `data-performance` is what turns web vitals on. Without it the tracker
+        registers no PerformanceObserver at all and the Performance report is
+        empty forever — which is exactly the state the site shipped in.
+      • `data-before-send` needs a function that is already defined, and the
+        frame gate below needs to run before the first paint, not after the
+        deferred tracker has queued its pageview.
+
+    The gate is the whole reason this is inline. Umami's heatmap report loads
+    the live page in an iframe; without a gate every look at a heatmap records
+    a visit and inflates the numbers it is drawing.
+%>
+<%
+    const a = backend_config().analytics;
+    const host = a.host;
+%>
+<% if (a.enable) { %>
+<script>
+    (function () {
+        // `--frame-vh` is the visitor's viewport height, handed to us by the
+        // heatmap report. Inside an iframe `100svh` resolves against the FRAME,
+        // which is sized to the whole document — so the banner would eat the
+        // page and every recorded click would land in the wrong place.
+        var m = /[#&]__umami_frame=(\d+)x(\d+)/.exec(location.hash);
+        if (!m) return;
+        window.__umamiFramed = 1;
+        var r = document.documentElement;
+        r.setAttribute("data-framed", "umami");
+        r.style.setProperty("--frame-vw", m[1] + "px");
+        r.style.setProperty("--frame-vh", m[2] + "px");
+    })();
+    window.umamiGate = function (type, payload) {
+        return window.__umamiFramed ? null : payload;
+    };
+</script>
+<script defer src="<%= host %>/script.js"
+        data-website-id="<%= a.website_id %>"
+        <% if (a.performance) { %>data-performance="true"<% } %>
+        data-before-send="umamiGate"></script>
+<% if (a.recorder) { %>
+<script defer src="<%= host %>/recorder.js" data-website-id="<%= a.website_id %>"></script>
+<% } %>
+<% } %>

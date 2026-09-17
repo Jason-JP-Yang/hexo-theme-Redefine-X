@@ -225,6 +225,94 @@ notifications:
   account_banned_note: Puedes seguir con la sesion iniciada y comentar en las entradas; solo se ha retirado la posibilidad de suscribirte a este blog. Si el autor tambien te ha bloqueado en GitHub, los comentarios tambien se detienen.
 
 management:
+  a_title: Analítica
+  a_lede: Se lee directamente de Umami con una credencial de administrador que el Worker entrega por sesión.
+  a_overview: Resumen
+  a_events: Eventos
+  a_sessions: Sesiones
+  a_performance: Rendimiento
+  a_compare: Comparar
+  a_breakdown: Desglose
+  a_visitors: Visitantes
+  a_visits: Visitas
+  a_views: Vistas
+  a_bounce: Tasa de rebote
+  a_duration: Duración de visita
+  a_countries: Países
+  a_pages: Páginas
+  a_sources: Fuentes
+  a_environment: Entorno
+  a_location: Ubicación
+  a_traffic_over_time: Tráfico
+  a_weekly: Tráfico semanal
+  a_weekdays: Dom,Lun,Mar,Mié,Jue,Vie,Sáb
+  a_chart: Gráfico
+  a_activity: Actividad
+  a_properties: Propiedades
+  a_all: Todo
+  a_type: Tipo
+  a_event: Evento
+  a_events_fired: Eventos
+  a_event_types: Eventos únicos
+  a_triggered: Evento
+  a_viewed: Vista
+  a_session: Sesión
+  a_last_seen: Última vez
+  a_when: Cuándo
+  a_count: Recuento
+  a_name: Nombre
+  a_direct: Directo / ninguno
+  a_samples: Muestras
+  a_previous: Anterior
+  a_current: Actual
+  a_change: Cambio
+  a_prev_views: Vistas (anterior)
+  a_prev_visitors: Visitantes (anterior)
+  a_map: Visitantes por país
+  a_linear: Lineal
+  a_log: Log
+  a_less: Menos
+  a_more: Más
+  a_sort: Ordenar por
+  a_u_hour: Hora
+  a_u_day: Día
+  a_u_month: Mes
+  a_ch_direct: Directo
+  a_ch_search: Búsqueda
+  a_ch_social: Social
+  a_ch_referral: Referencia
+  a_ch_email: Correo
+  a_ch_paid: Pago
+  a_ch_affiliate: Afiliado
+  a_ch_video: Vídeo
+  a_ch_unknown: Desconocido
+  a_search: Buscar
+  a_prev: Anterior
+  a_next: Siguiente
+  a_now: ahora mismo
+  a_f_path: Ruta
+  a_f_url: URL
+  a_entry: Página de entrada
+  a_exit: Página de salida
+  a_f_referrer: Referente
+  a_channel: Canal
+  a_f_browser: Navegador
+  a_f_os: Sistema
+  a_f_device: Dispositivo
+  a_f_screen: Pantalla
+  a_f_language: Idioma
+  a_f_country: País
+  a_f_region: Región
+  a_f_city: Ciudad
+  a_f_title: Título de página
+  a_f_query: Consulta
+  a_f_hostname: Host
+  a_f_tag: Etiqueta
+  a_nodata: Nada en este rango
+  a_offline: Umami no respondió.
+  a_denied: Se rechazó la credencial de analítica.
+  a_perf_none: Aún no hay web vitals. El rastreador solo los recoge cuando data-performance está activo.
+  a_break_note: Elige las dimensiones a cruzar. Al menos una, como máximo cuatro.
   title: Administracion del blog
   lede: Anuncios, lo que aun guarda la base de datos de notificaciones y cada seguidor con sus dispositivos.
   checking: Comprobando tu sesion...
@@ -298,25 +386,24 @@ management:
   confirm: Pulsa otra vez
   orphans: Dispositivos sin propietario
   orphans_hint: Suscripciones cuyo propietario dejo de seguir. Solo se conservan las bloqueadas; el barrido diario elimina el resto.
-  v_title: Entradas cifradas
-  v_lede: Todas las entradas cifradas publicadas y quien puede abrirlas. Aqui solo se guardan sus claves, nunca su contenido.
-  v_empty: Aun no se ha activado ninguna entrada cifrada.
-  v_add: Activar una entrada
-  v_add_hint: Pega una linea de la salida de compilacion. Repetirla la actualiza.
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: Activar
-  v_added: Activada
-  v_bad: Esa no es una linea de activacion.
-  v_revoke: Revocar
-  v_revoke_hint: Nadie podra volver a abrirla, tu incluido.
+  p_title: Gestion de publicaciones
+  p_lede: Cada articulo y album del sitio, y lo que se puede hacer con cada uno. Nada de esto se descarga; la compilacion lo sello en esta pagina.
+  p_all: Todo
+  p_encrypted: Cifrados
+  p_drafts: Borradores
+  p_unpublished: Sin publicar
+  p_new: Nueva publicacion
+  p_album: Album
+  p_draft: Borrador
+  p_unpublished_tag: Sin publicar
+  p_sticky: Fijado
+  p_untitled: Sin titulo
+  p_empty: Nada coincide con este filtro.
+  p_unpublish: Retirar
+  v_badge: Cifrado
   v_audience: Quien puede leerla
-  v_save: Guardar lectores
-  v_saved: Guardado
-  v_slug: Ruta
   v_reader: lector
   v_readers: lectores
-  v_unreadable: "Ilegible - la clave no corresponde a esta compilacion"
-  v_none: nadie todavia
 
 vault:
   unlocking: Comprobando tu acceso
@@ -329,3 +416,14 @@ vault:
   no_comments_hint: Un hilo publico bajo una entrada que solo algunos lectores pueden abrir volveria a exponer su titulo y su contenido.
   no_comments_album: Los comentarios y los me gusta estan cerrados en los albumes cifrados
   no_comments_album_hint: Un hilo publico expondria el titulo del album y el nombre de archivo de cada foto, y los me gusta viven en ese mismo hilo, asi que no se ofrece ninguno de los dos.
+  draft: Borrador
+  draft_hint: Una copia sin terminar de una publicacion ya publicada. Solo tu puedes leerla.
+  unpublished: Sin publicar
+  unpublished_hint: Esta publicacion nunca se ha publicado. Solo tu puedes leerla.
+  published: Publicado
+  view_published: Ver la version publicada
+  view_draft: Ver el borrador
+analytics:
+  activity: Actividad del blog
+  less: Menos
+  more: Más

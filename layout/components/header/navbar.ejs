@@ -1,3 +1,4 @@
+<% const backend = backend_config(); %>
 <header class="navbar-container px-6 md:px-12">
     <div class="navbar-content transition-navbar <%- (theme.home_banner.enable === true && is_home() && !page.prev) ? 'has-home-banner' : '' %>">
         <div class="left">
@@ -8,7 +9,7 @@
                     }) %>
                 </a>
             <% } %>
-            <a class="logo-title" href="<%= config.root %>">
+            <a class="logo-title" href="<%= config.root %>" data-ux="nav" data-ux-to="home" data-ux-from="logo">
                 <%- is_home() ? '<h1>' : '' %>
                 <%= theme.info.title || config.title || 'Redefine Theme' %>
                 <%- is_home() ? '</h1>' : '' %>
@@ -37,6 +38,7 @@
                                 <!-- Menu -->
                                 <a class="<%= hasSubmenus ? 'has-dropdown' : (isActive ? 'active' : '') %>"
                                    href="<%= linkHref %>"
+                                   <% if (!hasSubmenus) { %>data-ux="nav" data-ux-to="<%= i.toLowerCase() %>" data-ux-from="bar"<% } %>
                                         <%= onClickAction %>>
                                     <%- iconClass %>
                                     <%= linkText %>
@@ -48,7 +50,8 @@
                                     <ul class="sub-menu">
                                         <% for (var submenu in link.submenus) { %>
                                             <li>
-                                                <a href="<%- url_for(link.submenus[submenu]) %>">
+                                                <a href="<%- url_for(link.submenus[submenu]) %>"
+                                                   data-ux="nav" data-ux-to="<%= submenu.toLowerCase() %>" data-ux-from="submenu">
                                                     <%= __(submenu.toLowerCase()).toUpperCase() %>
                                                 </a>
                                             </li>
@@ -57,7 +60,7 @@
                                 <% } %>
                             </li>
                     <% } } %>
-                    <% if (theme.notifications && theme.notifications.enable) { %>
+                    <% if (backend.notifications.enable) { %>
                         <li class="navbar-item notifications-bell"
                             role="button"
                             tabindex="0"
@@ -68,6 +71,7 @@
                         </li>
                         <li class="navbar-item navbar-follow">
                             <button type="button" class="follow-trigger"
+                                    data-ux="nav" data-ux-to="follow" data-ux-from="bar"
                                     aria-label="<%= __('notifications.follow_blog') %>">
                                 <i class="fa-regular fa-bell" aria-hidden="true"></i>
                                 <span class="follow-label"><%= __('notifications.follow_nav') %></span>
@@ -83,7 +87,7 @@
             </div>
             <!-- Mobile -->
             <div class="mobile">
-                <% if (theme.notifications && theme.notifications.enable) { %>
+                <% if (backend.notifications.enable) { %>
                     <div class="icon-item notifications-bell"
                          role="button"
                          tabindex="0"
@@ -94,6 +98,7 @@
                     </div>
                     <div class="navbar-follow">
                         <button type="button" class="follow-trigger"
+                                data-ux="nav" data-ux-to="follow" data-ux-from="bar"
                                 aria-label="<%= __('notifications.follow_blog') %>">
                             <i class="fa-regular fa-bell" aria-hidden="true"></i>
                             <span class="follow-label"><%= __('notifications.follow_nav') %></span>
@@ -148,6 +153,7 @@
                         <% } else { %>
                         <a class="py-1.5 px-2 flex flex-row items-center justify-between gap-1 hover:!text-primary active:!text-primary text-2xl font-semibold group border-b border-border-color hover:border-primary w-full <%= isActive ? 'active' : '' %>"
                            href="<%= linkPath %>"
+                           data-ux="nav" data-ux-to="<%= i.toLowerCase() %>" data-ux-from="drawer"
                         >
                             <span>
                                 <%= linkText %>
@@ -163,6 +169,7 @@
                                 <% for (var submenu in linkData.submenus) { %>
                                     <div class="drawer-navbar-item text-base flex flex-col justify-center items-start hover:underline active:underline hover:underline-offset-1 rounded-3xl">
                                         <a class=" text-third-text-color text-xl"
+                                           data-ux="nav" data-ux-to="<%= submenu.toLowerCase() %>" data-ux-from="drawer"
                                            href="<%- url_for(linkData.submenus[submenu]) %>"><%= __(submenu.toLowerCase()).toUpperCase() %></a>
                                     </div>
                                 <% } %>
@@ -184,6 +191,7 @@
                     <li class="drawer-navbar-item text-base my-1.5 flex flex-col w-full">
                         <a class="py-1.5 px-2 flex flex-row items-center justify-between gap-1 hover:!text-primary active:!text-primary text-2xl font-semibold group border-b border-border-color hover:border-primary w-full active"
                            href="<%= url_for(theme.home.sidebar.links[i].path) %>"
+                           data-ux="nav" data-ux-to="<%= i %>" data-ux-from="drawer"
                         >
                             <span><%= __(i) %></span>
                             <i class="<%= theme.home.sidebar.links[i].icon %> fa-sm fa-fw"></i>
@@ -192,7 +200,7 @@
                 <% } %>
             <% } %>
 
-            <% if (theme.notifications && theme.notifications.enable) { %>
+            <% if (backend.management) { %>
                 <li class="drawer-navbar-item blog-admin-only text-base my-1.5 flex flex-col w-full">
                     <a class="py-1.5 px-2 flex flex-row items-center justify-between gap-1 hover:!text-primary active:!text-primary text-2xl font-semibold group border-b border-border-color hover:border-primary w-full active"
                        href="<%= url_for('/blog-management/') %>">
@@ -202,7 +210,7 @@
                 </li>
             <% } %>
 
-            <% if (theme.home.bento === false && theme.notifications && theme.notifications.enable) { %>
+            <% if (theme.home.bento === false && backend.notifications.enable) { %>
                 <li class="drawer-navbar-item drawer-follow-item text-base my-1.5 flex flex-col w-full">
                     <%- partial("components/notifications/follow-cta") %>
                 </li>

@@ -10,7 +10,7 @@
 #
 # This does NOT have to match production — but note that a token minted by one
 # Worker will not verify at the other, so the front-end must talk to exactly one
-# of them. That is what `developer.local_api_url` in the theme config arranges.
+# of them. That is what `backend.mode` / `backend.local_api_url` in the theme config arrange.
 SESSION_SECRET=replace-with-a-long-random-value
 
 # VAPID application server PRIVATE key — base64url, the 32-byte P-256 scalar.
@@ -38,3 +38,9 @@ SITE_URL=http://localhost:4000
 # 192.168.x, *.local), so a phone on the LAN can reach this Worker during
 # testing. Setting it here keeps the production allowlist untouched.
 ALLOWED_ORIGIN=local
+
+# Umami bearer from POST /api/auth/login on the analytics instance. Released to
+# an admin browser by GET /api/admin/analytics/ticket; never reaches the page.
+UMAMI_TOKEN=
+UMAMI_API_URL=https://analytics.example.com
+UMAMI_WEBSITE_ID=

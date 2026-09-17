@@ -225,6 +225,94 @@ notifications:
   account_banned_note: サインインしたまま記事へのコメントは続けられます。取り消されたのはこのブログを購読する権限だけです。管理者が GitHub 上でもブロックしている場合は、コメントもできなくなります。
 
 management:
+  a_title: アクセス解析
+  a_lede: Worker がセッションごとに発行する管理者資格情報で、Umami から直接読み取ります。
+  a_overview: 概要
+  a_events: イベント
+  a_sessions: セッション
+  a_performance: パフォーマンス
+  a_compare: 比較
+  a_breakdown: 内訳
+  a_visitors: 訪問者
+  a_visits: 訪問
+  a_views: 閲覧数
+  a_bounce: 直帰率
+  a_duration: 滞在時間
+  a_countries: 国と地域
+  a_pages: ページ
+  a_sources: 参照元
+  a_environment: 環境
+  a_location: 地域
+  a_traffic_over_time: トラフィック
+  a_weekly: 曜日別トラフィック
+  a_weekdays: 日,月,火,水,木,金,土
+  a_chart: チャート
+  a_activity: 履歴
+  a_properties: プロパティ
+  a_all: すべて
+  a_type: 種類
+  a_event: イベント
+  a_events_fired: イベント数
+  a_event_types: イベント種類
+  a_triggered: イベント
+  a_viewed: 閲覧
+  a_session: セッション
+  a_last_seen: 最終アクセス
+  a_when: 日時
+  a_count: 回数
+  a_name: 名前
+  a_direct: 直接アクセス
+  a_samples: サンプル数
+  a_previous: 前の期間
+  a_current: 今の期間
+  a_change: 変化
+  a_prev_views: 閲覧数（前期間）
+  a_prev_visitors: 訪問者（前期間）
+  a_map: 国別の訪問者
+  a_linear: 線形
+  a_log: 対数
+  a_less: 閉じる
+  a_more: もっと見る
+  a_sort: 並べ替え
+  a_u_hour: 時間
+  a_u_day: 日
+  a_u_month: 月
+  a_ch_direct: 直接
+  a_ch_search: 検索
+  a_ch_social: ソーシャル
+  a_ch_referral: 参照
+  a_ch_email: メール
+  a_ch_paid: 広告
+  a_ch_affiliate: アフィリエイト
+  a_ch_video: 動画
+  a_ch_unknown: 不明
+  a_search: 検索
+  a_prev: 前へ
+  a_next: 次へ
+  a_now: たった今
+  a_f_path: パス
+  a_f_url: URL
+  a_entry: 入口ページ
+  a_exit: 離脱ページ
+  a_f_referrer: リファラー
+  a_channel: チャネル
+  a_f_browser: ブラウザ
+  a_f_os: OS
+  a_f_device: デバイス
+  a_f_screen: 画面
+  a_f_language: 言語
+  a_f_country: 国
+  a_f_region: 地方
+  a_f_city: 都市
+  a_f_title: ページタイトル
+  a_f_query: クエリ
+  a_f_hostname: ホスト名
+  a_f_tag: タグ
+  a_nodata: この期間のデータはありません
+  a_offline: Umami が応答しませんでした。
+  a_denied: 解析用の資格情報が拒否されました。
+  a_perf_none: Web Vitals はまだありません。data-performance を有効にした場合のみ収集されます。
+  a_break_note: 交差させる項目を選んでください。1 つ以上 4 つまで。
   title: ブログ管理
   lede: お知らせの配信、通知データベースに残っている内容、そしてフォロワーとそれぞれの登録デバイス。
   checking: セッションを確認しています...
@@ -298,25 +386,24 @@ management:
   confirm: もう一度押す
   orphans: 所有者のいないデバイス
   orphans_hint: 所有者がフォローを解除した購読です。ブロック済みのものだけが残り、それ以外は日次の掃除で削除されます。
-  v_title: 暗号化された記事
-  v_lede: 公開済みの暗号化記事と、それを開ける人の一覧。ここに保存されるのは鍵だけで、本文は決して保存されません。
-  v_empty: まだ有効化された暗号化記事はありません。
-  v_add: 記事を有効化
-  v_add_hint: ビルド出力の1行を貼り付けてください。同じ行を貼り直すと更新になります。
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: 有効化
-  v_added: 有効化しました
-  v_bad: これは有効化用の行ではありません。
-  v_revoke: 失効
-  v_revoke_hint: 以後は自分を含め誰も開けなくなります。
+  p_title: 記事の管理
+  p_lede: サイトのすべての記事とアルバム、そしてそれぞれに対してできること。ここに表示される内容は取得したものではなく、ビルドがこのページに封入したものです。
+  p_all: すべて
+  p_encrypted: 暗号化
+  p_drafts: 下書き
+  p_unpublished: 未公開
+  p_new: 新しい記事
+  p_album: アルバム
+  p_draft: 下書き
+  p_unpublished_tag: 未公開
+  p_sticky: 固定
+  p_untitled: 無題
+  p_empty: この絞り込みに一致するものはありません。
+  p_unpublish: 公開を取り消す
+  v_badge: 暗号化
   v_audience: 読める人
-  v_save: 読者を保存
-  v_saved: 保存しました
-  v_slug: パス
   v_reader: 人
   v_readers: 人
-  v_unreadable: 読み取れません — 鍵が今回のビルドと一致しません
-  v_none: まだ誰もいません
 
 vault:
   unlocking: アクセス権を確認しています
@@ -329,3 +416,14 @@ vault:
   no_comments_hint: 一部の読者しか開けない記事に公開スレッドを置くと、題名と内容が再び公開されてしまいます。
   no_comments_album: 暗号化アルバムではコメントといいねを受け付けません
   no_comments_album_hint: 公開スレッドにはアルバム名と各写真のファイル名が残り、いいねの数も同じスレッドに保存されるため、どちらも有効にしていません。
+  draft: 下書き
+  draft_hint: 公開済みの記事の未完成のコピーです。読めるのはあなただけです。
+  unpublished: 未公開
+  unpublished_hint: この記事はまだ公開されていません。読めるのはあなただけです。
+  published: 公開済み
+  view_published: 公開版を見る
+  view_draft: 下書きを見る
+analytics:
+  activity: ブログの活動
+  less: 少
+  more: 多

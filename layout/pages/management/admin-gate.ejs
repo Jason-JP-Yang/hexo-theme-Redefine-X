@@ -1,0 +1,29 @@
+<%#
+    The whole public surface of Blog Management and of the composer.
+
+    Both pages are for exactly one reader, so neither is published: the build
+    seals their markup under the admin key and what lands in public/ is this —
+    a probe, and nothing that says what the page contains.
+
+    Two things have to happen before anything appears, and neither is enough on
+    its own: the Worker has to release the key (authorisation, decided against
+    the isAdmin claim) and the blob has to open under it (decryption). A page
+    that merely painted nothing until an admin route answered was presentation;
+    this is the same wait with the content genuinely absent.
+
+    `data-admin-kind` says which blob to open. The slug is the vault path the
+    key already names, so nothing here identifies the page either.
+%>
+<div class="admin-gate" data-admin-gate data-admin-kind="<%= page.admin_kind %>"
+    data-admin-state="probing">
+
+    <div class="admin-gate-probe">
+        <%- partial('components/access-probe', { text: __('management.checking') }) %>
+    </div>
+
+    <div class="admin-gate-notfound" hidden>
+        <%- partial('pages/notfound/notfound') %>
+    </div>
+
+    <div class="admin-gate-host"></div>
+</div>

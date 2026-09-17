@@ -128,7 +128,12 @@ forward with the numbered files in `migrations/` instead, each run once:
 
 ```sh
 wrangler d1 execute instant-notes-db --remote --file=./migrations/0001-moderation.sql
+wrangler d1 execute instant-notes-db --remote --file=./migrations/0002-vault.sql
+wrangler d1 execute instant-notes-db --remote --file=./migrations/0003-vault-draft.sql
 ```
+
+`0003` needs no backfill: the first build after it runs writes the true value for
+every row, because every sync sends the whole keyring.
 
 ## API reference
 
@@ -354,26 +359,47 @@ CPU: one HMAC session verify plus one AES-GCM unwrap per post, well under a
 millisecond for any realistic N.
 
 #### `GET /api/admin/vault`
-`?offset=<n>` → `{ "posts": [{ "id", "slug", "created_at", "audience": [{id, login}] }],
-"more": bool }`, 20 per page.
+→ `{ "audiences": { "<post id>": [{ "id", "login" }] } }`, unpaginated.
 
-#### `POST /api/admin/vault`
-`{ "id", "slug", "wrapped" }` — one line of the block the build prints. Upserts,
-so re-pasting the same line is an update rather than a duplicate.
+The only part of the registry the console asks for. Everything else it shows —
+titles, dates, taxonomy, draft state, which file each post lives in — travels in
+the inventory the build seals into the console page, so opening Posts Management
+costs one blob and this one small answer.
 
-#### `DELETE /api/admin/vault/:id`
-Revokes a post outright. Stale ids left behind in `moderation.vault` match no
-row on the next read; rewriting every grant row here would be a write per reader
-in the scarce direction to save nothing.
+#### `POST /api/admin/vault/sync`
+Build-signed, no session. `{ "posts": [{ "id", "slug", "wrapped", "draft" }] }` —
+the build's **whole** keyring. Every row in it is registered and every row
+outside it is revoked, in one batch.
+→ `{ "ok": true, "registered": n, "revoked": ["<id>"] }`
+
+There is no route to add a post or to delete one. Registration and revocation
+are consequences of what carries `vault:`, decided by the build that also writes
+the ciphertext — a second authority over them could only ever disagree. A build
+that cannot reach the Worker changes nothing; the next one that can puts the
+table right, which is why the whole set travels rather than a delta.
+
+Authorized by an HMAC over the raw body, keyed by `HKDF(VAULT_MASTER,
+"rdfx-vault-push")`. Neither `hexo generate` on a laptop nor a CI runner can hold
+an admin session, and both already hold `VAULT_MASTER` — without it they could
+not seal `.vault/keys.enc` either.
+
+Stale ids left behind in `moderation.vault` match no row on the next read;
+rewriting every grant row on a revoke would be a write per reader in the scarce
+direction to save nothing.
 
 #### `PUT /api/admin/vault/:id/audience`
 `{ "audience": [{ "id": 108601445 }] }` — the **complete** new list. The diff is
 computed server-side, so only the identities that actually changed are written.
 
+Refused with 400 for a **draft**. A draft is the author's unfinished copy of an
+article and has exactly one reader; the published version is what anyone else is
+granted. `vault_posts.draft` is set by every sync, so the rule holds whatever
+client asks.
+
 #### `POST /api/admin/lookup`
-`{ "ids": ["Jason-JP-Yang", 108601445] }` — names the identities typed into an
+`{ "ids": ["octocat", 583231] }` — names the identities typed into an
 audience or blocklist field.
-→ `{ "matched": [{ "id": 108601445, "login": "…", "name": "…", "follower": 1 }],
+→ `{ "matched": [{ "id": 583231, "login": "…", "name": "…", "follower": 1 }],
       "unknown": ["typo"] }`
 
 Resolved against **this blog's own** followers and moderation rows, never
@@ -455,21 +481,11 @@ notification simply not created yet.
 
 ### Editor
 
-Two routes, and the Worker's whole involvement in the online editor. It is **not**
+Three routes, and the Worker's whole involvement in the online editor. It is **not**
 in the commit path: the browser talks to Gitea directly, so a save carrying
 twenty megabytes of images never touches the 10 ms CPU budget. One editing
 session costs one `ticket` call plus one `mint` per new encrypted post.
 
-#### `GET /api/admin/gitea/ticket`
-
-Admin only. Returns the repository coordinates and the Gitea token the browser
-commits with.
-
-```jsonc
-{ "api": "https://repos.…/api/v1", "owner": "…", "repo": "…", "branch": "main",
-  "token": "<gitea token>",
-  "author": { "name": "…", "email": "…" } }
-```
 
 The token is contained where it is **spent**, not where it is handed out — a
 dedicated Gitea account with write on the content repository only, token scope
@@ -478,9 +494,22 @@ Patterns** covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`,
 `package.json`, `package-lock.json`, `_config.yml`. Without that last control an
 admin session is code execution on a runner that holds `VAULT_MASTER`.
 
+#### `GET /api/admin/repo/ticket`
+
+Admin only. Returns `{ prefer, backends: [{ id, api, owner, repo, branch, token,
+… }] }` — one row per configured backend, and the browser picks.
+
+Both tokens are standing credentials, so what bounds them is **how long the
+browser keeps them**, not an expiry stamp. They live in one module's closure and
+are wiped the moment any of the conditions in
+`source/js/plugins/editor/credentials.js` is met — leaving the editor, signing
+out, navigating away, closing the tab. Nothing is ever written to `localStorage`,
+`sessionStorage` or IndexedDB, and the response carries `Cache-Control:
+no-store`.
+
 #### `POST /api/admin/vault/mint`
 
-Admin only. `{ "source": "source/_posts/x.md", "titles": { "<id>": "…" } }`
+Admin only. `{ "source": "source/_posts/x.md" }`
 
 The one thing the editor cannot do for itself: wrapping a post key needs
 `VAULT_MASTER`. Returns the key, its slug, and **the whole keyring re-sealed** —
@@ -492,16 +521,28 @@ Idempotent on `source`: a path that already has a key gets that key back. A post
 key is stable forever, and a second one would orphan everything already sealed
 under the first.
 
-`titles` is supplied by the browser, which reads them from each post's own
-sealed record. The database stores none: a dump of it says how many encrypted
-posts exist and who may read them, never what any of them is called.
+The path is normalised by stripping a leading `source/` before it is hashed,
+because the build hashes Hexo's `post.source` — which is relative to `source/` —
+and the editor only ever holds repository paths. Hashing whichever spelling
+arrived minted a **second** key for every post the editor created, which the
+build then orphaned: a row in this table that opened nothing, and which the
+console could only describe as unreadable.
+
+A keyring entry is `{key, slug, registered}` and nothing else. The database
+stores no titles: a dump of it says how many encrypted posts exist and who may
+read them, never what any of them is called.
 
 #### `DELETE /api/admin/vault/mint?id=…`
 
 Retires a draft's key when the draft is published or deleted, and returns the
 re-sealed keyring so the same commit that removes the file removes the key.
 
-### Retention (cron, 03:40 UTC daily)
+### The daily cron (03:40 UTC) — two jobs, one trigger
+
+The hour is not arbitrary and it is shared deliberately: 03:40 UTC is safely past
+UTC midnight, which is the moment yesterday's analytics stopped moving.
+
+#### Retention
 
 One round trip, four statements, in this order because each depends on what the
 previous left behind:
@@ -516,6 +557,36 @@ previous left behind:
 4. **Delete orphan devices** — subscriptions whose owner unfollowed, **except
    banned ones**. Those stay: it is why unfollow leaves them behind, and a sweep
    that removed them would hand back the one-click escape the ban closes.
+
+#### The nightly build
+
+The site's activity card is drawn from days the BUILD read out of Umami and
+committed to `source/_data/analytics.json` — no reader ever asks the analytics
+instance anything. A day therefore only reaches the page once something rebuilds
+the site after that day has finished, and nothing else guarantees that: a week
+with no post is a week with no build. This is what wakes it up.
+
+Which side builds it follows the editor's rule, for the editor's reason —
+**reachability, then who is ahead, never speed**. A home runner's queue has
+nothing to do with how fast its API answers.
+
+1. Read both branch heads. Neither answering ends it.
+2. One reachable → that one. Both reachable and level → `REPO_PREFER`.
+3. Both reachable and different → ask each side whether it holds the other's
+   commit. The one that does is ahead and builds.
+4. Neither holds the other → **diverged**; nothing is dispatched and the log says
+   both heads. Guessing there would publish one history and strand the other.
+
+Then `POST …/actions/workflows/<deploy workflow>/dispatches`. Both `deploy.yml`
+files already accept `workflow_dispatch`, and the run's reseal commit carries
+`Build-on: done`, so it cannot start a second build on the other side.
+
+Two tokens, each where it is already contained: reading a branch head needs
+`Contents: read` (`GITHUB_EDITOR_TOKEN`), starting a workflow needs `Actions:
+write` (`GITHUB_SYNC_TOKEN`). Neither gains a capability it did not have.
+
+A dispatch that does not land costs one day of latency, not a day of data: the
+next build fetches **every** day the archive is missing, not just the last one.
 
 ### Webhook
 
@@ -580,16 +651,17 @@ npm run deploy
 ### Wire the theme to the Worker
 
 ```yaml
-# _config.redefine-x.yml
-home_banner:
-  instant_notes:
-    api_url: https://backend.example.com
-notifications:
+# _config.redefine-x.yml — every backend feature also needs giscus comments
+comment:
   enable: true
+  system: giscus
+backend:
   api_url: https://backend.example.com
-  vapid_public_key: <the public half from step 5>
-  changelog: true
-  topics: posts, announcements, notes
+  notifications:
+    enable: true
+    vapid_public_key: <the public half from step 5>
+    changelog: true
+    topics: posts, announcements, notes
 ```
 
 ### Add the webhook
@@ -617,10 +689,10 @@ npm run vapid:keygen   # print a fresh VAPID key pair
 
 ### Choosing a backend — three permitted combinations
 
-`developer.backend` in the theme config selects it. Exactly three pairings can be
+`backend.mode` in the theme config selects it. Exactly three pairings can be
 expressed; the fourth is rejected in code rather than by convention.
 
-| | Front-end | Backend | `developer.backend` | Reachable | When |
+| | Front-end | Backend | `backend.mode` | Reachable | When |
 | --- | --- | --- | --- | --- | --- |
 | **A** | `localhost:4000` | `localhost:8787` | `local` | yes — `.dev.vars` sets `ALLOWED_ORIGIN=local` | Full-stack work. Everything writes to the **local** D1. |
 | **B** | `localhost:4000` | production | `production` *(default)* | only if `local` is added to the production `ALLOWED_ORIGIN` | Theme work against real data. |
@@ -628,8 +700,8 @@ expressed; the fourth is rejected in code rather than by convention.
 
 Two guards make that enforceable:
 
-- **`backend: local` only applies on a localhost page, and only to a loopback
-  URL.** A stray `backend: local` committed by accident degrades a deployed site
+- **`mode: local` only applies on a localhost page, and only to a loopback
+  URL.** A stray `mode: local` committed by accident degrades a deployed site
   to C instead of breaking it, and `local_api_url` cannot be repointed at an
   arbitrary host — otherwise one config line would turn the developer hook into
   a redirect for every authenticated API call, session token included.
@@ -666,7 +738,7 @@ with `blogAuth.backend` in the console.
 | Instant notes admin | **yes** | Writes land in the local D1. |
 | Masonry likes | **yes**, via production | They only use the stateless giscus proxy, so they stay on the deployed Worker. Nothing is written there. |
 | Queue consumer | **yes** | `wrangler dev` runs the consumer locally against the same process, so a local ingest really does send. |
-| Cron sweep | **no** | `wrangler dev` does not fire triggers. Use `wrangler dev --test-scheduled` and hit `/__scheduled`. It is retention only — nothing is sent from it. |
+| Cron sweep | **no** | `wrangler dev` does not fire triggers. Use `wrangler dev --test-scheduled` and hit `/__scheduled`. Nothing is *sent* from it, but it does **dispatch a real build** — unset `GITEA_TOKEN`/`GITHUB_SYNC_TOKEN` locally unless that is what you are testing. |
 | GitHub webhook | **no** | GitHub cannot reach localhost. `POST /api/admin/notify/ingest` runs the same ingest. |
 
 ### A full local round trip

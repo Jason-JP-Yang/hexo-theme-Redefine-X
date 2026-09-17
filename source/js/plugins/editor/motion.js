@@ -174,10 +174,10 @@ export async function crossFade(el, mutate) {
     )
   );
 
-  const from = el.offsetHeight;
+  const from = measureFlow(el);
   await mutate();
   await nextFrame();
-  const to = el.offsetHeight;
+  const to = measureFlow(el);
 
   el.getAnimations().forEach((a) => a.cancel());
 
@@ -187,10 +187,250 @@ export async function crossFade(el, mutate) {
       { duration: FADE_MS, easing: "ease-out" }
     ),
   ];
-  if (from !== to) {
-    runs.push(el.animate([{ height: from + "px" }, { height: to + "px" }], { duration: MORPH_MS, easing: EASE }));
+  // The margins travel with the height for the same reason they do in `enter`:
+  // an explicit height stops the contents' own margins collapsing out of the
+  // box, so animating the height alone moved everything below by that difference
+  // for the length of the swap and put it back at the end of it.
+  const moved = from.height !== to.height || from.mt1 !== to.mt1 || from.mb1 !== to.mb1;
+  if (moved) {
+    el.style.overflow = "clip";
+    runs.push(
+      el.animate(
+        [
+          { height: from.height + "px", marginTop: from.mt1 + "px", marginBottom: from.mb1 + "px" },
+          { height: to.height + "px", marginTop: to.mt1 + "px", marginBottom: to.mb1 + "px" },
+        ],
+        { duration: MORPH_MS, easing: EASE }
+      )
+    );
   }
   await Promise.all(runs.map(settle));
+  if (moved) el.style.overflow = "";
+}
+
+/**
+ * What a box COSTS the page, and the two margins that hand that cost back.
+ *
+ * A height animation alone cannot open or close a gap, because a box's height
+ * is not what it occupies. Three things sit outside it:
+ *
+ *   · its own margins, which on the document bar are 22px and 14px of real
+ *     space that the height animation never touched — they landed whole, in one
+ *     frame, the instant the bar was inserted;
+ *   · the flex `gap` on either side of it, another 26px each in the console's
+ *     column, which landed the same way;
+ *   · the margins of what is INSIDE it. `.ed-block` is a bare wrapper with no
+ *     padding and no border, so a paragraph's 1rem margins collapse straight
+ *     through it — they are the block's outer margins, and its `offsetHeight`
+ *     does not include them.
+ *
+ * That last one is also why the old animation ended with a jolt. `overflow:
+ * hidden` makes a box a block formatting context, and a formatting context does
+ * not let its children's margins collapse out — so pinning the block for the
+ * animation moved roughly 2rem of margin from OUTSIDE the box to INSIDE it, and
+ * releasing the pin at the end moved it back, in one frame, under the reader's
+ * cursor. How much depended entirely on what the block's neighbours were: a full
+ * 32px between two paragraphs, 24px against the tail's smaller gap, something
+ * else again inside a note — which is why no two insertions jumped alike.
+ * `overflow: clip` does the same clipping and establishes no formatting context,
+ * so the box keeps the shape it will keep.
+ *
+ * So the cost is MEASURED, by asking the page what moves, and then given back
+ * through the margins — which are the only properties that can cancel space the
+ * box does not contain. Four readings, each correcting the last:
+ *
+ *   `mt1`/`mb1`  pinned at full height, the box costs exactly what it costs at
+ *                rest — so the animation's final frame IS the resting layout and
+ *                clearing the inline styles changes nothing.
+ *   `mt0`/`mb0`  collapsed, the box costs NOTHING — its top edge sits exactly
+ *                where the following content was, and that content has not
+ *                moved a pixel.
+ *
+ * Between those two the travel is continuous, and the gap under the box stays
+ * the gap it will end up being for the whole of it.
+ */
+/**
+ * The first box below `el` that a change in `el`'s height actually moves.
+ *
+ * It CLIMBS. A block inserted at the end of the article — or at the end of a
+ * nested block, which is the same shape one level down — has no following
+ * sibling, and this used to give up there and fall back to the parent's own
+ * height. That reading is a lie in exactly the case it was needed: a last
+ * child's bottom margin COLLAPSES THROUGH its parent's bottom edge, so
+ * `parent.offsetHeight` does not change when the margin does. The compensation
+ * computed from it was therefore zero, while the collapsed margin escaped the
+ * parent and shoved everything after the article down by a whole paragraph gap
+ * on the animation's first frame. That is the jolt — and it happened only at a
+ * tail, because anywhere else there is a sibling and the reading is honest.
+ *
+ * Climbing to the parent's next sibling reads a box OUTSIDE the collapsing
+ * chain, which does move, and moves continuously.
+ *
+ * `offsetTop` is 0 on a box that is not rendered, says nothing about what is
+ * above it when the box is out of the flow, and reports where a sticky box is
+ * STUCK rather than where it belongs — so those are skipped. Only differences
+ * between readings of the SAME probe are ever used, so it does not matter that
+ * a climbed probe measures from a different offset parent than `el` does.
+ */
+function flowProbe(el) {
+  let at = el;
+  while (at && at !== document.body && at !== document.documentElement) {
+    for (let next = at.nextElementSibling; next; next = next.nextElementSibling) {
+      const style = getComputedStyle(next);
+      if (style.display === "none") continue;
+      if (style.position !== "static" && style.position !== "relative") continue;
+      return next;
+    }
+    at = at.parentElement;
+  }
+  return null;
+}
+
+/**
+ * What the box below an insertion point measures right now.
+ *
+ * Taken by the caller BEFORE the new block is in the tree, because that is the
+ * one reading the measurement below cannot take for itself: a block pulled out
+ * of the flow is still a SIBLING, so `:first-child` and `:last-of-type` have
+ * already moved to it — and those three rules in editor.styl are worth a whole
+ * paragraph margin on the block that used to hold them. `before` is whatever
+ * the new block will be inserted in front of.
+ */
+export function flowCost(parent, before) {
+  if (before) return before.offsetTop;
+  // The same probe `measureFlow` will find once the block is the last child:
+  // no siblings of its own, so the chain starts at the parent. Read the same
+  // way, or the difference the caller hands back means nothing.
+  const probe = flowProbe(parent);
+  return probe ? probe.offsetTop : parent.offsetHeight;
+}
+
+/**
+ * Take the neighbours' facing margins to zero and hand their value to this box.
+ *
+ * THE reason a block arriving or leaving at the end of a box jolted. Every
+ * number below is a compensation written onto this box's own margins, and
+ * between two block boxes the gap is not the sum of the two margins, it is
+ * `max` of them — so while this box's margin is the smaller of the pair the gap
+ * does not respond to it AT ALL. The compensation is swallowed, and the page
+ * jumps by exactly what was swallowed at the moment the two cross.
+ *
+ * Negative against positive is linear (`max(positives) + min(negatives)`),
+ * which is why the beginning of the travel looked right and the end did not:
+ * the margin climbs back through zero, meets the neighbour's, and stops
+ * mattering for the rest of the way.
+ *
+ * Zeroing the other side of each pair and giving this box `max` of the two
+ * leaves the resting layout identical — the gap was that number either way —
+ * and makes it a gap that moves when the box does. Restored by `restore`, at
+ * the same moment the box's own inline margins go.
+ */
+function hushNeighbours(el, below) {
+  const held = [];
+
+  const take = (node, prop) => {
+    if (!node) return 0;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || (style.position !== "static" && style.position !== "relative")) return 0;
+    const value = parseFloat(style[prop]) || 0;
+    if (value <= 0) return 0;
+    held.push([node, prop, node.style[prop]]);
+    node.style[prop] = "0px";
+    return value;
+  };
+
+  return {
+    above: take(el.previousElementSibling, "marginBottom"),
+    below: take(below, "marginTop"),
+    restore() {
+      for (const [node, prop, value] of held) node.style[prop] = value;
+      held.length = 0;
+    },
+  };
+}
+
+function measureFlow(el, gone, shed) {
+  const parent = el.parentElement;
+  const probe = flowProbe(el);
+  // Only a SIBLING sits where this box is about to be. A climbed probe is
+  // further down the page and past a margin that collapses, so the whole of the
+  // compensation belongs on the bottom margin — the same as having no probe at
+  // all, which is what this used to be.
+  const beside = !!probe && probe.parentElement === parent;
+  // What the box costs, in one number: where the next thing starts, or failing
+  // that how tall the parent is.
+  const cost = probe ? () => probe.offsetTop : () => (parent ? parent.offsetHeight : 0);
+
+  const own = getComputedStyle(el);
+  const hushed = hushNeighbours(el, beside ? probe : null);
+  const natMT = Math.max(parseFloat(own.marginTop) || 0, hushed.above);
+  const natMB = Math.max(parseFloat(own.marginBottom) || 0, hushed.below);
+  const back = {
+    height: el.style.height,
+    overflow: el.style.overflow,
+    marginTop: el.style.marginTop,
+    marginBottom: el.style.marginBottom,
+    position: el.style.position,
+  };
+
+  // Every reading below is a FLOW reading, and a stuck sticky box — the document
+  // bar, on a console that is already scrolled — reports where it is stuck
+  // instead. `relative` with no offsets is the same box in the same place minus
+  // the stickiness, so the flow is legible again; `back` puts it back.
+  const inFlow = own.position === "sticky" ? "relative" : back.position;
+  el.style.position = inFlow;
+
+  const height = el.offsetHeight;
+  const topAtRest = el.offsetTop;
+  const costAtRest = cost();
+
+  // Taken out of the flow rather than hidden. `display: none` blurs whatever is
+  // focused inside the box, and a block is very often deleted from the caret
+  // that is still sitting in it.
+  //
+  // `shed` adds the class the first/last structural rules are written against,
+  // so this reading is the page WITHOUT this box at all — not merely with it
+  // collapsed. The two differ by a whole paragraph margin at the end of a box,
+  // which is the margin a deletion used to drop in one frame after the
+  // animation had finished.
+  el.style.position = "absolute";
+  if (shed) el.classList.add("ed-shed");
+  const loose = cost();
+  if (shed) el.classList.remove("ed-shed");
+  el.style.position = inFlow;
+  const zero = gone == null ? loose : gone;
+
+  el.style.overflow = "clip";
+  el.style.height = height + "px";
+  el.style.marginTop = natMT + "px";
+  el.style.marginBottom = natMB + "px";
+  const mt1 = natMT + (topAtRest - el.offsetTop);
+  const mb1 = natMB + (costAtRest - cost());
+
+  el.style.height = "0px";
+  el.style.marginTop = mt1 + "px";
+  el.style.marginBottom = mb1 + "px";
+  // Nothing directly below to be overlapped: the whole of the compensation goes
+  // on the bottom margin.
+  const mt0 = beside ? mt1 + (zero - el.offsetTop) : mt1;
+  el.style.marginTop = mt0 + "px";
+  const mb0 = mb1 + (zero - cost());
+
+  Object.assign(el.style, back);
+  return { height, mt0, mb0, mt1, mb1, loose, restore: hushed.restore };
+}
+
+function frames(flow) {
+  return [
+    { height: "0px", marginTop: flow.mt0 + "px", marginBottom: flow.mb0 + "px", opacity: 0, filter: BLUR },
+    {
+      height: flow.height + "px",
+      marginTop: flow.mt1 + "px",
+      marginBottom: flow.mb1 + "px",
+      opacity: 1,
+      filter: "none",
+    },
+  ];
 }
 
 /**
@@ -200,57 +440,92 @@ export async function crossFade(el, mutate) {
  * equation and a code block all render asynchronously, and a height measured
  * before that finished is a height the block then jumps away from the instant
  * the animation ends. The block is held collapsed until it can be measured
- * truthfully, which is also why it never flashes at full size first: the inline
- * height goes back to `0` in the same tick it was cleared to measure, so the
- * browser has no frame in which to paint the open state.
+ * truthfully, and held at NO COST while it waits, so a diagram taking a second
+ * to draw does not hold the page open around an empty box. It never flashes at
+ * full size first either: everything between clearing the pin to measure and
+ * putting it back happens inside one task, so the browser has no frame in which
+ * to paint the open state.
  */
-export async function enter(el, ready) {
+export async function enter(el, ready, gone) {
   if (reduced()) return;
-  el.style.overflow = "hidden";
 
-  let height;
+  let flow = measureFlow(el, gone);
   if (ready) {
-    // Held shut while it renders, so it never flashes at full size first: the
-    // inline height goes back to `0` in the same tick it was cleared to
-    // measure, and the browser has no frame in which to paint the open state.
+    el.style.overflow = "clip";
     el.style.height = "0px";
+    el.style.marginTop = flow.mt0 + "px";
+    el.style.marginBottom = flow.mb0 + "px";
     await Promise.resolve(ready).catch(() => {});
     await nextFrame();
     el.style.height = "";
-    height = el.offsetHeight;
-    el.style.height = "0px";
-  } else {
-    // A paragraph knows its height the moment it exists, and waiting a frame
-    // for it would mean the caret landing in a box that has not opened yet.
-    height = el.offsetHeight;
+    el.style.marginTop = "";
+    el.style.marginBottom = "";
+    el.style.overflow = "";
+
+    // The caller's reading was absolute, and a block that took a second to draw
+    // itself has let the page move under it. What carries over is the DIFFERENCE
+    // that reading revealed — what the first/last selectors are worth — rather
+    // than the number, re-anchored to where the page is now.
+    const selectors = gone == null ? 0 : gone - flow.loose;
+    flow.restore();
+    flow = measureFlow(el);
+    if (selectors) {
+      flow.restore();
+      flow = measureFlow(el, flow.loose + selectors);
+    }
   }
 
-  const run = el.animate(
-    [
-      { height: 0, opacity: 0, filter: BLUR, marginBottom: 0 },
-      { height: height + "px", opacity: 1, filter: "none" },
-    ],
-    { duration: MORPH_MS, easing: EASE }
-  );
-  // Cleared while the animation owns the property, so there is no frame in
-  // which the inline `0` and the animation disagree.
+  el.style.overflow = "clip";
+  const run = el.animate(frames(flow), { duration: MORPH_MS, easing: EASE });
+  // Cleared while the animation owns them, so there is no frame in which the
+  // inline values and the animation disagree — and none left behind at the end,
+  // where the animation's last frame is already the resting layout.
   el.style.height = "";
+  el.style.marginTop = "";
+  el.style.marginBottom = "";
   await settle(run);
+  // In the same task the animation stops owning the margins, so the box's own
+  // margins and the neighbours' come back together and neither is seen alone.
+  flow.restore();
   el.style.overflow = "";
 }
 
-/** A block leaving. Resolves once it is safe to remove from the DOM. */
+/**
+ * A block leaving. Resolves once it is safe to remove from the DOM — by then it
+ * costs the page nothing, so removing it moves nothing.
+ *
+ * The layout it travels TO is the one that exists after the removal, not the
+ * one with a collapsed box still in it. Those differ, and by a whole paragraph
+ * margin at the end of a box: `.ed-block:last-of-type .ed-body > *` zeroes the
+ * last block's bottom margin, so the block ABOVE the one being deleted inherits
+ * that rule the instant this element leaves the tree. Nothing was compensating
+ * for it, which is why deleting at a tail jumped where deleting anywhere else
+ * did not. Read by taking the element out and putting it straight back, inside
+ * one task, so no frame is painted without it.
+ */
 export async function exit(el) {
   if (reduced()) return;
-  await settle(
-    el.animate(
-      [
-        { height: el.offsetHeight + "px", opacity: 1, filter: "none" },
-        { height: 0, opacity: 0, filter: BLUR, marginBottom: 0 },
-      ],
-      { duration: MORPH_MS, easing: EASE, fill: "forwards" }
-    )
-  );
+
+  // `shed` is what makes the travel end at the layout the removal produces
+  // rather than at "the same page with a collapsed box still in it". The two
+  // differ wherever a structural rule moves — `.ed-block:last-of-type .ed-body
+  // > *` zeroes the last block's bottom margin, so the block ABOVE the deleted
+  // one inherits it the instant this element leaves the tree.
+  const flow = measureFlow(el, undefined, true);
+
+  el.style.overflow = "clip";
+  const run = el.animate(frames(flow).reverse(), { duration: MORPH_MS, easing: EASE });
+  await settle(run);
+
+  // In the same task the animation stops owning them: the neighbours get their
+  // margins back and this box is pinned at no size and no margin of its own,
+  // which collapses to exactly the gap those two will have once it is gone.
+  // Removing it then moves nothing.
+  flow.restore();
+  el.style.height = "0px";
+  el.style.marginTop = "0px";
+  el.style.marginBottom = "0px";
+  el.style.opacity = "0";
 }
 
 /**

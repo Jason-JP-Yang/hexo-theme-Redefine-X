@@ -227,6 +227,94 @@ notifications:
   account_banned_note: 你仍可保持登入並在文章下留言 —— 被收回的只是訂閱本部落格的權限。如果站長同時在 GitHub 上封鎖了你的帳號，留言也會一併停止。
 
 management:
+  a_title: 訪問分析
+  a_lede: 使用 Worker 依工作階段下發的管理員憑證，直接讀取 Umami。
+  a_overview: 概覽
+  a_events: 事件
+  a_sessions: 工作階段
+  a_performance: 效能
+  a_compare: 對比
+  a_breakdown: 拆分
+  a_visitors: 訪客
+  a_visits: 造訪
+  a_views: 瀏覽量
+  a_bounce: 跳出率
+  a_duration: 造訪時長
+  a_countries: 國家和地區
+  a_pages: 頁面
+  a_sources: 來源
+  a_environment: 環境
+  a_location: 地區
+  a_traffic_over_time: 流量
+  a_weekly: 每週流量
+  a_weekdays: 日,一,二,三,四,五,六
+  a_chart: 圖表
+  a_activity: 明細
+  a_properties: 屬性
+  a_all: 全部
+  a_type: 類型
+  a_event: 事件
+  a_events_fired: 事件數
+  a_event_types: 事件種類
+  a_triggered: 事件
+  a_viewed: 瀏覽
+  a_session: 工作階段
+  a_last_seen: 最近活動
+  a_when: 時間
+  a_count: 次數
+  a_name: 名稱
+  a_direct: 直接造訪
+  a_samples: 樣本數
+  a_previous: 上一週期
+  a_current: 目前週期
+  a_change: 變化
+  a_prev_views: 瀏覽量（上一週期）
+  a_prev_visitors: 訪客（上一週期）
+  a_map: 訪客國家分布
+  a_linear: 線性
+  a_log: 對數
+  a_less: 收合
+  a_more: 展開
+  a_sort: 排序方式
+  a_u_hour: 小時
+  a_u_day: 天
+  a_u_month: 月
+  a_ch_direct: 直接造訪
+  a_ch_search: 搜尋
+  a_ch_social: 社群
+  a_ch_referral: 引薦
+  a_ch_email: 郵件
+  a_ch_paid: 付費
+  a_ch_affiliate: 聯盟
+  a_ch_video: 影片
+  a_ch_unknown: 未知
+  a_search: 搜尋
+  a_prev: 上一頁
+  a_next: 下一頁
+  a_now: 剛剛
+  a_f_path: 路徑
+  a_f_url: 完整網址
+  a_entry: 入口頁
+  a_exit: 離開頁
+  a_f_referrer: 引薦來源
+  a_channel: 管道
+  a_f_browser: 瀏覽器
+  a_f_os: 作業系統
+  a_f_device: 裝置
+  a_f_screen: 解析度
+  a_f_language: 語言
+  a_f_country: 國家和地區
+  a_f_region: 省份
+  a_f_city: 城市
+  a_f_title: 頁面標題
+  a_f_query: 查詢參數
+  a_f_hostname: 主機名稱
+  a_f_tag: 標籤
+  a_nodata: 此區間內沒有資料
+  a_offline: Umami 沒有回應。
+  a_denied: 分析憑證遭拒。
+  a_perf_none: 尚無 Web Vitals 資料。只有開啟 data-performance 時追蹤腳本才會採集。
+  a_break_note: 選擇要交叉的維度，至少一個，最多四個。
   title: 部落格管理
   lede: 發布公告、查看通知資料庫中現存的內容，以及每一位追蹤者與其名下的推播裝置。
   checking: 正在檢查你的登入狀態…
@@ -300,25 +388,24 @@ management:
   confirm: 再按一次
   orphans: 無歸屬裝置
   orphans_hint: 原擁有者已取消追蹤的訂閱。只有被封鎖的會被保留 —— 其餘的由每日清理工作移除。
-  v_title: 加密文章
-  v_lede: 站點已發佈的全部加密文章，以及誰可以開啟它們。這裡從不儲存文章本身，只儲存金鑰。
-  v_empty: 還沒有啟用任何加密文章。
-  v_add: 啟用一篇文章
-  v_add_hint: 貼上建置輸出裡的一行。重複貼上同一行等同於更新。
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: 啟用
-  v_added: 已啟用
-  v_bad: 這不是一行啟用資訊。
-  v_revoke: 撤銷
-  v_revoke_hint: 之後沒有人能再開啟它，包括你自己。
+  p_title: 文章管理
+  p_lede: 站點上的全部文章與相簿，以及每一項可以做的操作。這裡的內容都不需要請求，建置時已經封裝進這個頁面。
+  p_all: 全部
+  p_encrypted: 加密
+  p_drafts: 草稿
+  p_unpublished: 未發布
+  p_new: 撰寫新文章
+  p_album: 相簿
+  p_draft: 草稿
+  p_unpublished_tag: 未發布
+  p_sticky: 置頂
+  p_untitled: 無標題
+  p_empty: 沒有符合該篩選條件的內容。
+  p_unpublish: 取消發布
+  v_badge: 加密
   v_audience: 可以閱讀的人
-  v_save: 儲存名單
-  v_saved: 已儲存
-  v_slug: 路徑
   v_reader: 人
   v_readers: 人
-  v_unreadable: 無法讀取 —— 金鑰與本次建置不符
-  v_none: 暫無
 
 vault:
   unlocking: 正在檢查存取權限
@@ -331,3 +418,14 @@ vault:
   no_comments_hint: 只有部分讀者能開啟的文章，若掛上公開討論串，標題與內容會重新暴露在外。
   no_comments_album: 加密相簿不開放留言與按讚
   no_comments_album_hint: 公開討論串會連同相簿標題與每張照片的檔名一併曝光，公開按讚系統也依賴同一個討論串，因此兩者都不會開啟。
+  draft: 草稿
+  draft_hint: 已發布文章的未完成副本，只有你能閱讀。
+  unpublished: 未發布
+  unpublished_hint: 這篇文章從未發布，只有你能閱讀。
+  published: 已發布
+  view_published: 查看已發布版本
+  view_draft: 查看草稿
+analytics:
+  activity: 部落格活躍度
+  less: 少
+  more: 多

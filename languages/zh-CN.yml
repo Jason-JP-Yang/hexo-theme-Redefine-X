@@ -228,6 +228,94 @@ notifications:
   account_banned_note: 你仍可保持登录并在文章下评论 —— 被收回的只是订阅本博客的权限。如果博主同时在 GitHub 上封禁了你的账号，评论也会一并停止。
 
 management:
+  a_title: 访问分析
+  a_lede: 使用 Worker 按会话下发的管理员凭证，直接读取 Umami。
+  a_overview: 概览
+  a_events: 事件
+  a_sessions: 会话
+  a_performance: 性能
+  a_compare: 对比
+  a_breakdown: 拆分
+  a_visitors: 访客
+  a_visits: 访问
+  a_views: 浏览量
+  a_bounce: 跳出率
+  a_duration: 访问时长
+  a_countries: 国家和地区
+  a_pages: 页面
+  a_sources: 来源
+  a_environment: 环境
+  a_location: 地区
+  a_traffic_over_time: 流量
+  a_weekly: 每周流量
+  a_weekdays: 日,一,二,三,四,五,六
+  a_chart: 图表
+  a_activity: 明细
+  a_properties: 属性
+  a_all: 全部
+  a_type: 类型
+  a_event: 事件
+  a_events_fired: 事件数
+  a_event_types: 事件种类
+  a_triggered: 事件
+  a_viewed: 浏览
+  a_session: 会话
+  a_last_seen: 最近活动
+  a_when: 时间
+  a_count: 次数
+  a_name: 名称
+  a_direct: 直接访问
+  a_samples: 样本数
+  a_previous: 上一周期
+  a_current: 当前周期
+  a_change: 变化
+  a_prev_views: 浏览量（上一周期）
+  a_prev_visitors: 访客（上一周期）
+  a_map: 访客国家分布
+  a_linear: 线性
+  a_log: 对数
+  a_less: 收起
+  a_more: 展开
+  a_sort: 排序方式
+  a_u_hour: 小时
+  a_u_day: 天
+  a_u_month: 月
+  a_ch_direct: 直接访问
+  a_ch_search: 搜索
+  a_ch_social: 社交
+  a_ch_referral: 引荐
+  a_ch_email: 邮件
+  a_ch_paid: 付费
+  a_ch_affiliate: 联盟
+  a_ch_video: 视频
+  a_ch_unknown: 未知
+  a_search: 搜索
+  a_prev: 上一页
+  a_next: 下一页
+  a_now: 刚刚
+  a_f_path: 路径
+  a_f_url: 完整地址
+  a_entry: 入口页
+  a_exit: 退出页
+  a_f_referrer: 引荐来源
+  a_channel: 渠道
+  a_f_browser: 浏览器
+  a_f_os: 操作系统
+  a_f_device: 设备
+  a_f_screen: 分辨率
+  a_f_language: 语言
+  a_f_country: 国家和地区
+  a_f_region: 省份
+  a_f_city: 城市
+  a_f_title: 页面标题
+  a_f_query: 查询参数
+  a_f_hostname: 主机名
+  a_f_tag: 标签
+  a_nodata: 该区间内没有数据
+  a_offline: Umami 没有响应。
+  a_denied: 分析凭证被拒绝。
+  a_perf_none: 暂无 Web Vitals 数据。只有开启 data-performance 时统计脚本才会采集。
+  a_break_note: 选择要交叉的维度，至少一个，最多四个。
   title: 博客管理
   lede: 发布公告、查看通知数据库中现存的内容，以及每一位关注者与其名下的推送设备。
   checking: 正在检查你的登录状态…
@@ -301,25 +389,38 @@ management:
   confirm: 再按一次
   orphans: 无归属设备
   orphans_hint: 原主人已取消关注的订阅。只有被封禁的会被保留 —— 其余的由每日清理任务移除。
-  v_title: 加密文章
-  v_lede: 站点已发布的全部加密文章，以及谁可以打开它们。这里从不存储文章本身，只存储密钥。
-  v_empty: 还没有激活任何加密文章。
-  v_add: 激活一篇文章
-  v_add_hint: 粘贴构建输出里的一行。重复粘贴同一行等同于更新。
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: 激活
-  v_added: 已激活
-  v_bad: 这不是一行激活信息。
-  v_revoke: 吊销
-  v_revoke_hint: 之后没有人能再打开它，包括你自己。
+  p_title: 文章管理
+  p_lede: 站点上的全部文章与相册，以及每一项可以做的操作。这里的内容都不需要请求，构建时已经封装进这个页面。
+  p_all: 全部
+  p_encrypted: 加密
+  p_drafts: 草稿
+  p_unpublished: 未发布
+  p_new: 写新文章
+  p_album: 相册
+  p_draft: 草稿
+  p_unpublished_tag: 未发布
+  p_sticky: 置顶
+  p_untitled: 无标题
+  p_empty: 没有符合该筛选条件的内容。
+  p_unpublish: 取消发布
+  p_unpub_queued: 已选中
+  p_unpub_one: 篇文章待撤下
+  p_unpub_many: 篇文章待撤下
+  p_unpub_go: 保存并发布
+  p_unpub_cancel: 取消
+  p_unpub_done: 已提交
+  p_unpub_empty: 没有需要提交的内容。
+  p_unpub_land: 已完成，正在载入读者看到的站点……
+  p_unpub_failed: 构建失败。提交已落地，已发布的内容没有变化。
+  p_backend: 构建于
+  p_s_committed: 已提交
+  p_s_building: 构建中
+  p_s_pushed: 产物已推送
+  p_s_deployed: 已部署
+  v_badge: 加密
   v_audience: 可以阅读的人
-  v_save: 保存名单
-  v_saved: 已保存
-  v_slug: 路径
   v_reader: 人
   v_readers: 人
-  v_none: 暂无
-  v_unreadable: 无法读取 —— 密钥与本次构建不匹配
 
 vault:
   unlocking: 正在校验访问权限
@@ -333,6 +434,12 @@ vault:
   no_comments_album: 加密相册不开放评论与点赞
   no_comments_album_hint: 公开讨论串会连同相册标题与每张照片的文件名一并暴露，公开点赞系统也依赖同一个讨论串，因此两者都不会开启。
   draft: 草稿
+  draft_hint: 已发布文章的未完成副本，只有你能阅读。
+  unpublished: 未发布
+  unpublished_hint: 这篇文章从未发布，只有你能阅读。
+  published: 已发布
+  view_published: 查看已发布版本
+  view_draft: 查看草稿
 
 editor:
   checking: 正在确认你的身份…
@@ -342,6 +449,8 @@ editor:
   edit_post: 编辑这篇文章
   new_post: 新建文章
   close: 结束编辑
+  undo: 撤销
+  redo: 重做
   untitled: 未命名
   draft: 草稿
   encrypted: 已加密
@@ -368,6 +477,12 @@ editor:
   stale: 已发布的版本落后于仓库 — 构建可能还在进行中。
   conflict_hint: 仓库中的这个文件已经改变。你的文字仍在这里 — 请在新标签页打开这篇文章查看已落地的内容，然后重新应用改动。
   build_failed: 构建失败。文章已提交，已发布的内容没有变化。
+  backend_switch: 构建于
+  backend_catchup: 正在让首选仓库追上进度...
+  backend_caught_up: 已同步。
+  backend_behind: 首选仓库仍然落后，本次会话提交到另一侧。
+  backend_diverged: 两个仓库已分叉 —— 各自都有对方没有的提交。本次会话提交到所显示的一侧。
+  deployed_reload: 已发布。正在载入读者看到的页面...
   view_run: 查看构建
   s_committed: 已提交
   s_building: 构建中
@@ -385,7 +500,6 @@ editor:
   arguments: 参数
   remove_block: 删除
   replace: 替换
-  caption: 图注
   icon: 图标
   title: 标题
   more: 更多
@@ -456,6 +570,7 @@ editor:
   m_em: 斜体
   m_strike: 删除线
   m_code: 行内代码
+  m_math: 行内公式
   m_mark: 高亮
   m_link: 链接
   m_clear: 清除格式
@@ -511,6 +626,9 @@ editor:
   open_folder: 打开图片库
   open_viewer: 放大查看
   auto_exif: 构建时读取 EXIF
+  exif_note: 开启后，站点构建时会从图片文件中读取相机数据，这些数值只出现在发布后的页面上，不会显示在编辑器里。下方手动填写的字段会覆盖从文件读取的值。
+  chrome_min: 隐藏顶栏
+  chrome_max: 显示顶栏
   no_deeper: 提示框、折叠块与标签组不能再嵌套一层。
   sheet_hint: 全部留空即为普通图片。
   g_caption: 图注
@@ -529,10 +647,14 @@ editor:
   pick_unsaved: 未提交
   pick_none: 这里还没有内容
   pick_hint: 选择一张图片，或把它拖到文件夹里移动。
-  pick_loading: 正在读取仓库
-  pick_walking: 正在读取文件树
+  pick_loading: 正在读取文件树
   pick_name: 文件名
   pick_where: 所在文件夹
   pick_dims: 尺寸
   pick_bytes: 大小
+  pick_served: 实际路径
   pick_moved: 移动自
+analytics:
+  activity: 博客活跃度
+  less: 少
+  more: 多

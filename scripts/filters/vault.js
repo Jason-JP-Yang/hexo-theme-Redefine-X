@@ -20,10 +20,34 @@ const path = require("path");
 const store = require("../lib/vault-store");
 const state = require("../lib/vault-state");
 const vc = require("../lib/vault-crypto");
+const inventory = require("../lib/post-inventory");
+const backend = require("../lib/backend");
 
 function vaultEnabled() {
-  return hexo.theme.config?.backend?.vault_enable === true;
+  return backend.resolve(hexo.theme.config).encryption.enable;
 }
+
+/**
+ * The admin surface — Blog Management and the composer — is sealed like any
+ * other item, under ONE key with a fixed identity.
+ *
+ * Both pages are for exactly one reader, and until now the only thing standing
+ * between a visitor and their markup was a panel that painted nothing. Sealing
+ * them makes the wait real: the Worker has to release the key (authorization)
+ * AND the blob has to open under it (decryption), and neither alone is enough.
+ * The key is only ever granted to an admin — `grantedPosts` hands an admin
+ * every row and everyone else only what their own grant names, and nothing in
+ * Posts Management offers this one to anybody.
+ */
+function adminPageId() {
+  if (!backend.resolve(hexo.theme.config).management) return null;
+  return vc.pageId("admin");
+}
+
+// Whether this build owes the backend a reconcile. Set while the keyring is
+// being decided, acted on once public/ is written: a build that sealed nothing
+// but retired something still has to say so.
+let syncOwed = false;
 
 /**
  * Withhold the post's TAXONOMY as well as the post.
@@ -120,6 +144,40 @@ function markedAlbums() {
   return out;
 }
 
+/**
+ * What a draft stands in front of — resolved from the FILE NAME, not only from
+ * `supersedes:` front matter.
+ *
+ * A draft lives at `<stem>.draft.md` beside the `<stem>.md` it shadows, and that
+ * pairing is the whole convention: the editor writes it, the archive de-dupes on
+ * it, and the reader swaps tiles on it. Front matter said the same thing a second
+ * time, so a draft created any other way than by the editor — by hand, or by an
+ * older version of it — had no `supersedes` at all and the build read it as an
+ * article that had never been published: the wrong badge on the home tile, and
+ * the wrong row in Posts Management.
+ *
+ * Explicit front matter still wins, for a draft that shadows something its file
+ * name does not name.
+ *
+ * @param {Query} posts  the UNMASKED post list, so an encrypted published post
+ *                       is as findable as a public one
+ */
+function supersedesResolver(posts) {
+  const live = new Map();
+  for (const post of posts.toArray()) {
+    if (post.draft === true) continue;
+    live.set(String(post.source || ""), post);
+  }
+
+  return function (post) {
+    if (post.supersedes) return String(post.supersedes);
+    const source = String(post.source || "");
+    if (!/\.draft\.md$/i.test(source)) return "";
+    const target = live.get(source.replace(/\.draft\.md$/i, ".md"));
+    return target ? inventory.permalinkOf(target) : "";
+  };
+}
+
 /** The masonry data with every encrypted album — and any category left empty by
  *  their removal — taken out of it. */
 function maskMasonry(data) {
@@ -146,36 +204,50 @@ hexo.extend.filter.register(
     // Rebuilt every pass: `hexo server` regenerates on each change, and a stale
     // stash would seal a body that is no longer the one on disk.
     state.clear();
+    syncOwed = false;
 
     const albums = markedAlbums();
-    if (!marked.length && !albums.length) {
+    const adminId = adminPageId();
+
+    if (!marked.length && !albums.length && !adminId) {
       // The last `vault:` flag on the site has just been removed. The keyring
       // still names every post that ever carried one, so it is reconciled here
       // too — this is the one build that would otherwise never look at it.
-      if (vaultEnabled()) store.reportRetired(hexo.log, store.prune(new Set()));
+      if (vaultEnabled() && store.prune(new Set()).length) syncOwed = true;
       return;
     }
 
     if (!vaultEnabled()) {
       store.fail(
-        `${marked.length + albums.length} item(s) carry \`vault:\` but backend.vault_enable is false. ` +
-          `Refusing to build them in the clear — set backend.vault_enable: true, or remove the flag.`
+        `${marked.length + albums.length} item(s) carry \`vault:\` but backend encryption is off. ` +
+          `Refusing to build them in the clear — set backend.encryption.enable: true (with backend.api_url ` +
+          `and giscus comments), or remove the flag.`
       );
     }
 
     const hidden = new Set();
     const live = new Set();
+    const supersedes = supersedesResolver(posts);
     for (const post of marked) {
       const id = vc.postId(post.source);
-      const { key, slug, rekeyed } = store.ensurePost(id, post.title || "");
+      const { key, slug, rekeyed } = store.ensurePost(id);
       if (rekeyed) {
         hexo.log.warn(
           `[vault] "${post.title || id}" was flagged for regeneration: a NEW key was minted and ` +
-            `the slug (${slug}) kept. Nobody can open it until the line below is pasted into ` +
-            `Blog Management -> Encrypted Posts.`
+            `the slug (${slug}) kept. Everything sealed under the old key is now unreadable.`
         );
       }
-      state.put(id, { kind: "post", id, key, slug, post, plain: post.content || "" });
+      state.put(id, {
+        kind: "post",
+        id,
+        key,
+        slug,
+        post,
+        plain: post.content || "",
+        // On the ENTRY, never on the post: `post` is a Warehouse document and a
+        // property written onto it would be persisted into db.json.
+        supersedes: post.draft === true ? supersedes(post) : "",
+      });
       hidden.add(post.source);
       live.add(id);
     }
@@ -183,11 +255,11 @@ hexo.extend.filter.register(
     for (const { category, item, index, pos, catIndex, catPos } of albums) {
       const title = item["page-title"] || item.name;
       const id = vc.albumId(title);
-      const { key, slug, rekeyed } = store.ensurePost(id, item.name || title);
+      const { key, slug, rekeyed } = store.ensurePost(id);
       if (rekeyed) {
         hexo.log.warn(
           `[vault] album "${item.name || title}" was flagged for regeneration: a NEW key was ` +
-            `minted and the slug (${slug}) kept. Paste the line below into Blog Management.`
+            `minted and the slug (${slug}) kept. The old ciphertext opens for nobody.`
         );
       }
       state.put(id, {
@@ -206,9 +278,17 @@ hexo.extend.filter.register(
       live.add(id);
     }
 
+    if (adminId) {
+      const { key, slug } = store.ensurePost(adminId);
+      state.put(adminId, { kind: "page", id: adminId, key, slug });
+      live.add(adminId);
+    }
+
     // A key whose post has since dropped the flag is a key for content that is
-    // no longer sealed. It goes now, before the keyring is written.
-    store.reportRetired(hexo.log, store.prune(live));
+    // no longer sealed. It goes now, before the keyring is written; `sync` is
+    // what takes the wrapped copy out of D1 at the end of the same build.
+    store.prune(live);
+    syncOwed = true;
 
     // Before anything is sealed: a key that reached public/ but not the keyring
     // would leave the post encrypted under a key that exists nowhere.
@@ -376,32 +456,47 @@ function pruneEmptyDirs(from) {
 hexo.extend.filter.register(
   "after_generate",
   async function () {
-    if (!state.all().length) return;
-    const { unrouted, removed } = withholdPlaintextImages();
-    const pages = withholdAlbumPages();
-    hexo.log.info(
-      `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)` +
-        (pages ? ` and ${pages} previously published album page(s)` : "")
-    );
+    if (state.all().length) {
+      const { unrouted, removed } = withholdPlaintextImages();
+      const pages = withholdAlbumPages();
+      hexo.log.info(
+        `[vault] withheld ${unrouted} plaintext image route(s), deleted ${removed} stale file(s)` +
+          (pages ? ` and ${pages} previously published album page(s)` : "")
+      );
+    }
 
-    // Activation, then sealing — both part of building rather than commands to
+    if (!syncOwed || !vaultEnabled()) return;
+
+    // Reconciling, then sealing — both part of building rather than commands to
     // remember. A commit must never carry a post's ciphertext without the key
     // that opens it, and a key nobody has registered opens nothing.
     //
-    // The push runs first because it MARKS the entries it registered, and the
-    // seal has to capture that state; the fallback print runs only for whatever
-    // is still unregistered afterwards.
+    // The sync runs first because it MARKS the entries it registered, and the
+    // seal has to capture that state.
     const opened = store.load().opened;
     if (opened) hexo.log.info(`[vault] opened ${opened} key(s) from .vault/keys.enc`);
 
-    const api = String(hexo.theme.config.backend?.api_url || "");
+    // Which ids are drafts, so the Worker can refuse to grant one an audience.
+    // A draft is the author's unfinished copy and has exactly one reader.
+    const drafts = new Set(
+      state.sorted().filter((entry) => entry.post.draft === true).map((entry) => entry.id)
+    );
+
+    const api = backend.resolve(hexo.theme.config).api_url;
     try {
-      const sent = await store.push(api);
-      if (sent) hexo.log.info(`[vault] registered ${sent.pushed} key(s) with the backend`);
+      const done = await store.sync(api, drafts);
+      if (done) {
+        hexo.log.info(
+          `[vault] backend reconciled: ${done.registered} key(s) registered` +
+            (done.revoked ? `, ${done.revoked} revoked` : "")
+        );
+      }
     } catch (err) {
-      hexo.log.warn(`[vault] could not reach ${api} to register new keys — ${err.message}`);
+      hexo.log.warn(
+        `[vault] could not reach ${api} to reconcile the keyring — ${err.message}. ` +
+          `The next build that can reach it will put D1 right; nothing has to be done by hand.`
+      );
     }
-    store.report(hexo.log);
 
     const sealed = store.seal();
     if (sealed && sealed.changed) {

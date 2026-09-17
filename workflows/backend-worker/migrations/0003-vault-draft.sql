@@ -1,0 +1,14 @@
+-- Which registered items are drafts.
+--
+-- A draft is an author's unfinished copy of an article, and there is exactly one
+-- person it is ever for. Hiding the audience control for one in the console
+-- would be presentation; this is what lets the Worker REFUSE the grant, so the
+-- rule holds however the request is made.
+--
+-- It is the only fact about an item this table has ever held beyond its key, and
+-- it was worth the exception: a dump now also says how many of the encrypted
+-- items are drafts, which discloses nothing about what any of them says.
+--
+-- The build sets it on every reconcile, so no backfill is needed — the first
+-- build after this migration writes the true value for every row.
+ALTER TABLE vault_posts ADD COLUMN draft INTEGER NOT NULL DEFAULT 0;

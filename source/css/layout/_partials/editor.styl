@@ -40,6 +40,14 @@ $ed-docbar-top = ($navbar-height + 12px)
 $ed-docbar-top-tablet = ($navbar-height * 0.9 + 10px)
 $ed-docbar-top-mobile = ($navbar-height * 0.8 + 8px)
 $ed-mono = 'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace
+// The gold a stepped-back change is lit in.
+//
+// One colour for every theme, and translucent rather than opaque: what it lands
+// on is a paragraph, a field or a row in a file tree, and a wash that lets the
+// surface through reads the same on white, on near-black and over a picture.
+// Nothing here ever recolours TEXT — the words keep whatever contrast they had,
+// which is the only way a highlight can be guaranteed legible everywhere.
+$ed-gold = #F5B316
 
 // The theme's own thin scrollbar, from the instant-notes field: 6px, a rounded
 // thumb on a transparent track, no arrows, and the Firefox pair beside it. Every
@@ -85,6 +93,91 @@ css-min(a, b)
   to
     opacity 1
     transform none
+
+// ─── where a step landed ────────────────────────────────────
+// In, hold, out. One continuous pass and no blink: the job is to let the eye
+// find a place, and something that switches on and off twice reads as an error
+// being reported rather than as a pointer.
+@keyframes ed-flash
+  0%
+    background-color rgba($ed-gold, 0)
+    outline-color rgba($ed-gold, 0)
+  16%, 62%
+    background-color rgba($ed-gold, 0.26)
+    outline-color rgba($ed-gold, 0.85)
+  100%
+    background-color rgba($ed-gold, 0)
+    outline-color rgba($ed-gold, 0)
+
+// A row inside the picture browser's tree — the one target that lives in a
+// scrolling panel of its own, where a mark painted in page coordinates could
+// not follow it. Everything on the page itself is drawn by `.ed-spot` below.
+.ed-flash
+  border-radius 8px
+  outline 2px solid transparent
+  outline-offset 1px
+  animation ed-flash 1250ms cubic-bezier(0.32, 0.72, 0, 1) both
+
+// The SELECTED row is white ink on the primary colour, and an animation beats a
+// plain declaration — so washing a selected row gold repainted that colour out
+// from under white text and left the name, the folder icon and the chevron
+// unreadable. Dropping the wash instead made the mark the faintest thing in the
+// panel, which is the opposite failure.
+//
+// So the selection stands DOWN while the mark is up. `data-lit` is set by the
+// browser that draws the row, for exactly as long as the animation runs, and
+// removed the moment the author chooses anything — by then they are telling us
+// where they are rather than being shown. The row is its ordinary self under a
+// gold wash, which is the one combination legible in every theme.
+.ed-pick-row[data-lit="1"][data-on="1"]
+  background transparent
+  color var(--second-text-color)
+
+.ed-pick-row[data-lit="1"][data-on="1"] i
+  color var(--third-text-color)
+
+.ed-pick-row[data-lit="1"][data-on="1"] .ed-pick-name
+  color var(--first-text-color)
+
+.ed-pick-row[data-lit="1"][data-on="1"] .ed-pick-flag
+  background var(--second-background-color)
+  color var(--third-text-color)
+
+// The layer the marks are painted on: at the document origin, above the article
+// and under the toolbar, and never in the way of a pointer. Its children carry
+// their own coordinates — see plugins/editor/spotlight.js.
+.ed-spot
+  position absolute
+  top 0
+  left 0
+  width 100%
+  height 0
+  z-index $z-index-3
+  pointer-events none
+
+.ed-spot-mark
+  position absolute
+  border-radius 4px
+  background rgba($ed-gold, 0.28)
+  box-shadow 0 0 0 1px rgba($ed-gold, 0.75), 0 0 14px 1px rgba($ed-gold, 0.30)
+  pointer-events none
+  will-change opacity, transform
+
+  // A whole block is a large area, so it is lit by its EDGE rather than by a
+  // wash the words would have to be read through.
+  &.is-block,
+  &.is-move,
+  &.is-field
+    border-radius 9px
+    background rgba($ed-gold, 0.13)
+    box-shadow 0 0 0 2px rgba($ed-gold, 0.80), 0 0 20px 2px rgba($ed-gold, 0.28)
+
+  // The gap a block left. Solid, because there is nothing underneath it to
+  // show through, and it is the one mark that stands for something absent.
+  &.is-seam
+    border-radius 2px
+    background rgba($ed-gold, 0.92)
+    box-shadow 0 0 12px 1px rgba($ed-gold, 0.45)
 
 // ─── the pencil ─────────────────────────────────────────────
 // One more tool in the article's own rail; `.blog-admin-only` already decides
@@ -191,6 +284,8 @@ html.blog-editing .post-page-container
   // two are one object in two rows and a difference between them would be read
   // as a difference in what they do.
   box-shadow 0 0 0 1px var(--shadow-color-1), 0 16px 34px -20px var(--shadow-color-2), 0 4px 12px -8px var(--shadow-color-1), inset 0 1px 0 0 var(--background-color)
+  // Both directions of the keyboard rule below, which asks it to step aside.
+  transition opacity $ed-fade, transform $ed-morph
 
   @media (min-width 640px)
     margin 24px 24px 16px
@@ -333,6 +428,25 @@ html.blog-editing .post-page-container
 .ed-close
   padding 6px 9px
 
+// Which repository this session commits to. Quieter than the two verbs beside
+// it — it reports a fact, and is only a button because occasionally the fact
+// needs overriding.
+.ed-backend
+  padding 5px 10px
+  border-style dashed
+  color var(--third-text-color)
+  font-weight 500
+  font-size 0.72rem
+
+  i
+    font-size 0.78rem
+
+  &[data-backend="gitea"] i
+    color var(--box-green-text)
+
+  &[data-backend="github"] i
+    color var(--second-text-color)
+
 // ─── the title, in its own place ────────────────────────────
 .ed-title
   outline none
@@ -422,7 +536,7 @@ html.blog-editing .post-page-container
   min-width 0
 
   &.is-wide
-    grid-column 1 / -1
+    grid-column s('1 / -1')
 
 .ed-f-label
   display flex
@@ -691,6 +805,50 @@ textarea.ed-f-input
   +redefine-mobile()
     top unquote(s('calc(%s + var(--ed-docbar-h, 0px))', $ed-docbar-top-mobile + 8px))
 
+// ─── the bars put away on a phone ───────────────────────────
+// A soft keyboard takes half the screen and the browser answers it by scrolling
+// the document until the caret clears it — which on a short post scrolls past
+// the end, leaving a screen of blank under the paragraph and the navigation, the
+// document bar and the toolbar all shoved off the top.
+//
+// So the two bars that are no use mid-word step aside while typing, or whenever
+// the author minimised them from the toolbar, and the toolbar moves to the top
+// of what is actually VISIBLE. `plugins/editor/index.js` publishes `--ed-vv-top`
+// from the visual viewport and does the scrolling itself; see `syncChrome`.
+//
+// Nothing here changes a height, so nothing reflows: the document bar keeps its
+// place in the flow and only stops being drawn, which is what makes this a
+// transition rather than a jump.
+html[data-ed-chrome="min"] .main-content-header
+  // The navigation's OWN way of getting out of the way, transition included.
+  transform translateY(-105%)
+  pointer-events none
+
+html[data-ed-chrome="min"] .ed-docbar
+  opacity 0
+  transform translateY(-10px)
+  pointer-events none
+
+// A `position: fixed` element is laid out against the LAYOUT viewport, most of
+// which is behind the keyboard. `--ed-vv-top` is where the band somebody can
+// actually see begins.
+html[data-ed-chrome="min"] .ed-toolbar
+  top unquote('calc(var(--ed-vv-top, 0px) + 8px)')
+
+// Perch is about a page at rest. With the bars away this is the only chrome
+// left, and it stays whatever the scroll position says.
+html[data-ed-chrome="min"] .ed-toolbar[data-perch="hide"]
+  opacity 1
+  transform none
+
+// Room to scroll INTO. A short post cannot put its last paragraph at the top of
+// the band, so the browser answers the keyboard by over-scrolling and leaving a
+// screen of blank under it. The room is reserved deliberately instead — below
+// everything, where nothing visible moves when it appears and nothing is left
+// behind when it goes.
+html[data-ed-compose="1"] .article-content-container.is-editing
+  padding-bottom var(--ed-vv-h, 60vh)
+
 // `position: relative` is what the outgoing row is placed against while it
 // slides away; see `snapshot` in plugins/editor/toolbar.js.
 //
@@ -722,10 +880,74 @@ textarea.ed-f-input
   overflow hidden
   pointer-events none
 
+// ─── stepping back and forward ──────────────────────────────
+// Left of the tab strip and OUTSIDE it, in a group of their own.
+//
+// They are the only two controls in this toolbar that act on the document as a
+// whole — everything else belongs to a selection, to a block, or to the caret —
+// and they are the pair reached for in a hurry. So they get the one position
+// that never changes under the author: the strip repaints whenever Format takes
+// Block's slot, and the rows repaint on every caret move, but this corner is the
+// same corner in all four faces of the toolbar.
+.ed-toolbar-head
+  display flex
+  align-items stretch
+  gap 6px
+  min-width 0
+
+.ed-toolbar-steps
+  display flex
+  flex 0 0 auto
+  align-items center
+  gap 2px
+  padding 2px
+  border-radius 10px
+  background var(--background-color-transparent-40)
+  box-shadow inset 0 0 0 1px var(--border-color)
+
+.ed-step
+  display inline-flex
+  align-items center
+  justify-content center
+  width 26px
+  height 26px
+  padding 0
+  border none
+  border-radius 8px
+  background transparent
+  color var(--second-text-color)
+  font-size 0.76rem
+  cursor pointer
+  transition background $ed-fade, color $ed-fade, transform $ed-fade
+
+  &:hover:not(:disabled)
+    background var(--primary-color)
+    color $ed-on-primary
+
+  &:active:not(:disabled)
+    transform scale(0.9)
+
+  // Nothing to go back to. Dimmed rather than removed: a control that comes and
+  // goes moves the one beside it, and these two must never move.
+  &:disabled
+    color var(--third-text-color)
+    opacity 0.35
+    cursor default
+
+// Minimise / maximise the bars. Only where the editor puts them away for the
+// keyboard — a touch screen of phone or tablet width — which is also the only
+// place bringing them back needs a button.
+.ed-step.ed-chrome
+  display none
+
+  @media (pointer: coarse) and (max-width: 820px)
+    display inline-flex
+
 .ed-toolbar-tabs
   position relative
   display flex
-  flex 0 0 auto
+  flex 1 1 auto
+  min-width 0
   gap 3px
 
   // ONE lit shape that travels between the two tabs, rather than a background
@@ -988,7 +1210,12 @@ textarea.ed-f-input
 // The article zeroes the top margin of its first child. With blocks that child
 // is a wrapper, so the rule has to reach one level further in — otherwise the
 // body starts a line lower here than it will once published.
-.article-content > .ed-block:first-child .ed-body > *
+//
+// `.ed-shed` is a block mid-way through leaving: the rule moves to whoever
+// inherits it so `exit` can travel to the layout the removal produces instead
+// of jumping into it afterwards. See motion.js.
+.article-content > .ed-block:first-child:not(.ed-shed) .ed-body > *,
+.article-content > .ed-block.ed-shed:first-child + .ed-block .ed-body > *
   margin-top 0 !important
 
 // The carried block keeps its own handle lit — hover is not a thing you can do
@@ -1161,12 +1388,14 @@ textarea.ed-f-input
   > .ed-block[data-on="1"] > .ed-gutter
     opacity 1
 
-  > .ed-block:first-child .ed-body > *
+  > .ed-block:first-child:not(.ed-shed) .ed-body > *,
+  > .ed-block.ed-shed:first-child + .ed-block .ed-body > *
     margin-top 0
 
   // `:last-of-type`, not `:last-child`: every box now ends with its own `+`
   // button, so the last BLOCK is no longer the last child of anything.
-  > .ed-block:last-of-type .ed-body > *
+  > .ed-block:last-of-type:not(.ed-shed) .ed-body > *,
+  > .ed-block:has(+ .ed-block.ed-shed:last-of-type) .ed-body > *
     margin-bottom 0
 
 // ─── an equation in a sentence ──────────────────────────────
@@ -1175,22 +1404,32 @@ textarea.ed-f-input
 .ed-math
   border-radius 4px
   cursor pointer
-  transition background $ed-fade
+  transition background $ed-fade, color $ed-fade
 
-  &:hover
-    background var(--second-background-color)
+  // Both halves of the pair, never one. A highlight box paints near-white ink on
+  // its own dark slate, and those are literal colours in box.styl rather than
+  // theme tokens — so a chip inside one that changed only its BACKGROUND put
+  // near-white text on a near-white field the moment it was opened, in light
+  // mode, which is an equation you cannot see while you edit it.
+  &:hover,
+  &[data-editing="1"]
+    background var(--background-color)
+    color var(--first-text-color)
 
   &[data-editing="1"]
-    background var(--second-background-color)
     cursor text
-
-    .ed-math-src
-      font-family $ed-mono
-      font-size 0.86em
-      outline none
+    box-shadow inset 0 0 0 1px var(--border-color)
 
 .ed-math[data-editing="1"] .ed-math-src
   padding 0 3px
+  font-family $ed-mono
+  // The LaTeX reads at the size of the sentence it sits in. At 0.86em it was
+  // smaller than the equation it stands in for AND smaller than the words either
+  // side of it, which is the one thing a source view must not be.
+  font-size 1em
+  line-height inherit
+  color var(--first-text-color)
+  outline none
 
 .ed-math-error
   color var(--box-red-text)
@@ -1345,14 +1584,27 @@ $ed-pop-h = 620px
   // question about how much tree and how much picture, just turned ninety
   // degrees. `touch-action: none` on the grip is what lets a finger drag it
   // without the panel scrolling underneath.
+  //
+  // Both rows are sized by the splitter and NOTHING ELSE. A `min-content` floor
+  // on the preview row read its own contents, so the row grew when the picture
+  // did and the picture was sized from the row — the pane bounced on every
+  // click and the grip had no free space left to move into. The floor that
+  // keeps the file's details visible is applied to the splitter's own ceiling
+  // instead, where it cannot feed back: see `applySplit`.
   +redefine-tablet()
     grid-template-columns minmax(0, 1fr)
     grid-template-rows calc(var(--ed-pick-vsplit, 0.42) * 100%) 11px minmax(0, 1fr)
 
+// The padding is the MARK's, not the tree's. A row carries a 2px ring one pixel
+// proud of itself and a 14px glow around that, and a scrolling panel clips both
+// — so the first row's top edge and every row's left edge lost theirs. The
+// scroll padding is the same promise for a row travelled to rather than merely
+// sitting there: `scrollIntoView` stops short of the edge instead of against it.
 .ed-pick-side
   min-height 0
   min-width 0
-  padding 8px 0 12px
+  padding 12px 0 14px 5px
+  scroll-padding 12px 0 14px
   overflow-y auto
   overscroll-behavior contain
   ed-scroll()
@@ -1472,8 +1724,9 @@ $ed-pop-h = 620px
     background var(--primary-color)
     color $ed-on-primary
 
-    i,
-    .ed-pick-icon,
+    // `i` stays on this line: a nested list that OPENS with a bare element name
+    // and a comma is lexed as a property, and the whole rule was being dropped.
+    i, .ed-pick-icon,
     .ed-pick-twist,
     .ed-pick-name
       color $ed-on-primary
@@ -1489,10 +1742,30 @@ $ed-pop-h = 620px
   &[data-carry="1"]
     opacity 0.45
 
+  // Renaming happens on the row that is SELECTED, and a selected row is white
+  // ink on the primary colour — so a field that only changes the background
+  // leaves the name being typed white on near-white. The three tokens the
+  // selected state overrode are handed back, one rule each: a list opening with
+  // a bare element name is lexed as a property by Stylus.
   &[data-editing="1"]
-    background var(--second-background-color)
+    background var(--background-color)
     box-shadow inset 0 0 0 1px var(--primary-color)
     cursor text
+    color var(--first-text-color)
+
+    .ed-pick-name
+      color var(--first-text-color)
+      outline none
+
+    .ed-pick-icon
+      color var(--third-text-color)
+
+    .ed-pick-twist
+      color var(--third-text-color)
+
+    .ed-pick-flag
+      background var(--second-background-color)
+      color var(--third-text-color)
 
 // The insertion line, the article canvas's own: same bar, same halo, same
 // entrance. One gesture, one visual language.
@@ -1582,6 +1855,13 @@ $ed-pop-h = 620px
   overscroll-behavior contain
   ed-scroll()
 
+  // Stacked, this pane never scrolls. Its row is already floored at the height
+  // of the details and the picture is capped at whatever is left, so a
+  // scrollbar here could only mean the picture had been allowed to overflow —
+  // which is the bug, not the fix for it.
+  +redefine-tablet()
+    overflow hidden
+
 // One picture, at its own shape and its own size, with the facts under it.
 //
 // The picture is the ONLY thing here: no frame, no plate, no panel behind it.
@@ -1589,43 +1869,60 @@ $ed-pop-h = 620px
 // ends the file's details begin — a box that centred it vertically put the
 // details somewhere else entirely and made a small picture look like a mistake.
 //
-// ── Why this is a flex column and not a grid ────────────────────────────────
+// ── The size is arithmetic, not a cascade of caps ───────────────────────────
 //
-// `flex: 0 1 auto` + `min-height: 0` is what caps the height, and it is the
-// ONLY arrangement here that does. The box's natural height is the picture's;
-// when that does not fit, flex shrinks the box, and a flex item's post-flexing
-// main size is definite — so `max-height: 100%` on the picture inside resolves
-// against it and the picture comes down with it. When it does fit, nothing
-// shrinks and the box is exactly the picture, so the details sit right beneath.
+// There is no `max-width`, no `max-height`, no `aspect-ratio` and no
+// `object-fit` here. Every one of those was tried and each broke a different
+// way, because they all ask CSS to solve "fit this rectangle inside that one"
+// through a chain of clamps that behaves differently depending on whether the
+// element has loaded, whether its width is auto, and whether the box it is
+// clamped against has a definite height:
 //
-// Two earlier versions got this wrong in the same way. A `.img-preloader`
-// wrapper handed to the article's lazyload observer put the caps on the wrapper
-// while the picture inside sized itself; replacing it with `display: grid;
-// place-items: center` moved the picture into an auto-sized row, and a
-// percentage against a track sized by its own content is circular — so the cap
-// quietly became `none`, the row took the picture's full 925px, and `overflow:
-// hidden` cropped it. Both times the picture stood taller than the pane.
+//   attributes + `width/height: auto`   right once decoded, and ZERO before —
+//                                       so the skeleton had no box at all and
+//                                       the pane jumped when the bytes landed.
+//   attributes sizing the box directly  `max-width` and `max-height` then clamp
+//                                       INDEPENDENTLY: squashed in a short pane.
+//   `aspect-ratio` + `width: 100%`      the box could no longer shrink, so it
+//                                       stretched the pane and pushed the file's
+//                                       details out of it — and `object-fit`
+//                                       made the painted picture a DIFFERENT
+//                                       rectangle from the element, which is
+//                                       where the rounded corners went and why
+//                                       the skeleton was never the picture's
+//                                       size.
 //
-// `width`/`height` attributes carry the intrinsic ratio, so the box is the
-// right shape before the bytes arrive; `--shot-w` stops a 200px thumbnail being
-// blown up across a 600px pane.
+// `fitShot` in picker.js works out one scale factor from the picture's measured
+// pixels and the room actually left beside the details, and writes the result
+// as a width and a height. One number for both axes is what "never distorted"
+// means; an explicit size is what makes the skeleton's box and the picture's
+// box the same box, because they are the same element at the same size before
+// and after it decodes. The details cannot be pushed out because the height
+// they need was subtracted before the picture got any.
 .ed-pick-stage
   display flex
   justify-content center
   align-items flex-start
-  flex 0 1 auto
+  flex 0 0 auto
   min-height 0
   min-width 0
   overflow hidden
 
+  // An author `display` beats the UA's `[hidden]`, and `fitShot` uses the
+  // attribute to put the pane down to the file's details alone.
+  &[hidden]
+    display none
+
+  // The element is replaced per selection, so the size `fitShot` worked out is
+  // published on the STAGE: the box is the thing that survives, which is what
+  // makes the skeleton and the picture the same rectangle.
   > img
     display block
-    width auto
-    height auto
-    max-width css-min(100%, var(--shot-w, 100%))
-    max-height 100%
+    width var(--ed-shot-w, auto)
+    height var(--ed-shot-h, auto)
+    max-width 100%
+    margin 0
     border-radius 10px
-    transition opacity $ed-fade
 
   // Until it decodes, the box it already occupies IS the skeleton — the theme's
   // own shimmer, on the element that is about to hold the picture.
@@ -1633,17 +1930,22 @@ $ed-pop-h = 620px
     background linear-gradient(100deg, var(--third-background-color) 30%, var(--second-background-color) 50%, var(--third-background-color) 70%) 0 0 / 300% 100%
     animation ed-shot-wait 1.5s ease-in-out infinite
 
-// Nothing chosen: the hint is the whole pane rather than one line pinned to
-// the top of it.
-.ed-pick-stage[data-empty]
-  flex 1 1 auto
-  align-items center
+  // Every route has been tried. A flat plate rather than the browser's
+  // broken-picture glyph, which `assets.js` keeps out of the box entirely.
+  > img[data-ready="err"]
+    background var(--third-background-color)
 
 @keyframes ed-shot-wait
   from
     background-position 100% 0
   to
     background-position -100% 0
+
+// Nothing chosen: the hint is the whole pane rather than one line pinned to
+// the top of it.
+.ed-pick-stage[data-empty]
+  flex 1 1 auto
+  align-items center
 
 .ed-pick-blank
   display flex
@@ -1795,6 +2097,10 @@ $ed-pop-h = 620px
   padding-top 14px
   border-top 1px solid var(--border-color)
 
+// The console's own standing note (`.bm-notice`), across the whole grid row.
+.ed-sheet-note
+  grid-column s('1 / -1')
+
 .ed-chip
   display inline-flex
   align-items center
@@ -1818,6 +2124,7 @@ $ed-pop-h = 620px
   line-height 1.6
   resize none
   outline none
+  overflow hidden
 
 .ed-preview
   padding 12px 14px
@@ -1852,23 +2159,6 @@ $ed-pop-h = 620px
 .ed-math-inline
   padding 0 1px
   border-bottom 1px dotted var(--fourth-text-color)
-
-// ─── image ──────────────────────────────────────────────────
-// The figure IS the article's own `figure.image-caption`, carrying the article's
-// own `.img-preloader` and caption. Nothing here may restyle either: the only
-// addition is a control overlay and an editable caption, so what is on screen is
-// the picture as published, at the size it will be published at.
-.ed-figure
-  position relative
-
-  figcaption
-    outline none
-    cursor text
-
-    &:empty::before
-      content attr(data-placeholder)
-      color var(--third-text-color)
-      opacity 0.7
 
 // ─── table ──────────────────────────────────────────────────
 // The table draws its own frame — markdown.styl gives `.table-container > table`
@@ -2216,11 +2506,18 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   font-size 0.72rem
   cursor pointer
 // ─── the console's link into here ───────────────────────────
+// Sits at the top of Posts Management, on the primary fill.
+//
+// The ink is a LITERAL white on BOTH the anchor and its children. common/basic
+// colours `a i, a span` directly, and two element selectors (0,0,0,2) beat this
+// class (0,1,0,0) for the inner nodes only — so the button's label took
+// `--default-text-color`, which is near-black in light mode: an invisible label
+// on a dark red pill, while the same rule in dark mode looked fine. Colouring
+// the anchor alone is what left it that way.
 .bm-write
   display inline-flex
   align-items center
   gap 7px
-  margin-top 12px
   padding 7px 13px
   border 1px solid transparent
   border-radius 10px
@@ -2234,26 +2531,34 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
     transform translateY(-1px)
     filter brightness(1.08)
 
-// ─── the draft ribbon on a superseded tile ──────────────────
+  // Doubled to outrank `a:hover i` / `a:hover span` without `!important`.
+  &.bm-write
+    i, span
+      color $ed-on-primary
+
+  &:hover,
+  &:active
+    color $ed-on-primary
+
+// ─── the console's copy of the document bar ─────────────────
+// Blog Management arms an unpublish in THIS bar rather than in one of its own:
+// the act is a commit and a build, which is what this bar is for, and a second
+// box for the same thing would be a second thing to learn about one thing.
+//
+// One declaration for every width, and it comes after the base rule's media
+// queries so it wins on source order at all of them. The only difference is the
+// side inset: the console's sections already carry the article's, so the bar's
+// own would be that inset twice.
+.bm-unpub
+  margin 0 0 4px
+
+.bm-unpub-count
+  font-size 0.8rem
+  font-weight 600
+  color var(--second-text-color)
+
 .vault-draft
   position relative
-
-.vault-draft-ribbon
-  position absolute
-  top 10px
-  left 10px
-  z-index 2
-  display inline-flex
-  align-items center
-  gap 5px
-  padding 3px 9px
-  border-radius 999px
-  background var(--box-amber-bg)
-  color var(--box-amber-text)
-  font-size 0.66rem
-  font-weight 650
-  letter-spacing 0.02em
-  pointer-events none
 
 .vault-archive-draft .vault-archive-lock
   color var(--box-amber-text)

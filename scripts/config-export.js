@@ -33,11 +33,9 @@ hexo.extend.helper.register("export_config", function () {
     navbar: this.theme.navbar,
     page_templates: this.theme.page_templates,
     home: this.theme.home,
-    notifications: this.theme.notifications,
-    // The one Worker URL, plus the local-dev override tools/auth.js reads to
-    // point every Worker call at `wrangler dev`. No secret is ever in here —
-    // GISCUS_AUTHOR_PAT and VAULT_MASTER live in .env and never leave Node.
-    backend: this.theme.backend,
+    // Resolved, not raw: what is switched on after the giscus and encryption
+    // rules. No secret and no repository coordinate is ever in here.
+    backend: require("./lib/backend").forPage(this.theme),
     developer: this.theme.developer,
 
     footerStart: this.theme.footer.start,

@@ -52,8 +52,69 @@ export function offsetIn(el) {
   return range ? typed(range).length : 0;
 }
 
+const ZWSP = 0x200b;
+
+function collapse(node, offset) {
+  const range = document.createRange();
+  range.setStart(node, Math.max(0, Math.min(offset, node.nodeValue ? node.nodeValue.length : 0)));
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/**
+ * Where the caret is inside `el`, or null when it is somewhere else entirely.
+ *
+ * `offsetIn` answers 0 for both "at the start" and "not here", which is fine for
+ * a slash menu and wrong for the thing this is used for: putting the caret back
+ * after a block has been rewritten under it. Only a block that HELD the caret
+ * should get it back.
+ */
+export function caretMark(el) {
+  const sel = selection();
+  if (!el || !sel || !el.contains(sel.anchorNode)) return null;
+  return offsetIn(el);
+}
+
+/**
+ * The inverse of `offsetIn`: put the caret `offset` typed characters into `el`.
+ *
+ * Boundary anchors are skipped on the way in exactly as they are skipped on the
+ * way out, so a paragraph that gained or lost a mark while being rewritten still
+ * puts the caret back beside the same character. `preventScroll` is not a
+ * nicety — focusing without it scrolls the block into the browser's idea of
+ * view, which on a phone fights the editor's own scrolling and bounces the page.
+ */
+export function placeAt(el, offset) {
+  if (!el) return;
+  el.focus({ preventScroll: true });
+
+  const want = Math.max(0, offset || 0);
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  let last = null;
+  let node;
+
+  while ((node = walk.nextNode())) {
+    const raw = node.nodeValue;
+    last = node;
+    for (let i = 0; i <= raw.length; i++) {
+      if (seen === want) return void collapse(node, i);
+      if (i < raw.length && raw.charCodeAt(i) !== ZWSP) seen += 1;
+    }
+  }
+
+  if (last) return void collapse(last, last.nodeValue.length);
+  focusEnd(el);
+}
+
 export function focusStart(el) {
-  el.focus();
+  // `preventScroll` throughout: the browser's idea of "in view" is the middle of
+  // the window, and letting it scroll there fights the editor's own travel and
+  // bounces the page — hardest on a phone, where it also fires under the
+  // keyboard. Where the caret should be on screen is decided in index.js.
+  el.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(el);
   range.collapse(true);
@@ -63,7 +124,7 @@ export function focusStart(el) {
 }
 
 export function focusEnd(el) {
-  el.focus();
+  el.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(el);
   range.collapse(false);

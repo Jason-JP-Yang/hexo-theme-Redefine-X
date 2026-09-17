@@ -237,6 +237,30 @@ hexo.extend.helper.register("buildDate", function () {
   return require("../lib/build-clock").date();
 });
 
+/** `backend:` as it is actually switched on — see scripts/lib/backend.js. */
+hexo.extend.helper.register("backend_config", function () {
+  return require("../lib/backend").resolve(this.theme || hexo.theme.config);
+});
+
+/**
+ * The activity card's numbers, for the page to carry.
+ *
+ * `source/_data/analytics.json` is the whole archive and grows forever; the page
+ * gets only the tail a calendar could draw, as a start date and a dense run of
+ * counts. Returns "" when there is nothing stored — which is also what decides
+ * whether the card is placed at all.
+ */
+let pulseJSON = null;
+
+hexo.extend.helper.register("pulseSeries", function () {
+  if (pulseJSON !== null) return pulseJSON;
+  const { sealed } = require("../lib/analytics-archive");
+  const data = hexo.locals.get("data") || {};
+  const out = sealed(data.analytics);
+  pulseJSON = out ? JSON.stringify(out) : "";
+  return pulseJSON;
+});
+
 hexo.extend.helper.register("configOptions", function (obj, indent = '  ') {
   if (!obj || typeof obj !== 'object') return '';
   

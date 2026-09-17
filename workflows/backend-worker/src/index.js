@@ -51,8 +51,8 @@ import {
 import { verifySignature, fetchChangelog, isLiveDeployment } from "./hooks.js";
 import {
   grantedPosts,
-  listPosts,
-  registerPost,
+  listAudiences,
+  reconcile,
   deletePost,
   setAudience,
   mintPost,
@@ -1524,46 +1524,32 @@ app.post("/api/vault/keys", userMiddleware, async (c) => {
   return c.json({ posts, admin: !!session.isAdmin });
 });
 
-// ─── ADMIN: encrypted post registry ─────────────────────────
+// ─── ADMIN: who may read which encrypted post ───────────────
+//
+// The only part of the registry that is not already in the console's hands. The
+// posts themselves — titles, dates, taxonomy, draft state — travel in the
+// inventory the build seals into the console page, so this answers the one
+// question a build cannot: who has been granted what.
 app.get("/api/admin/vault", authMiddleware, async (c) => {
-  const offset = Math.max(0, Number(c.req.query("offset")) || 0);
-  const { posts, more } = await listPosts(c.env.DB, ADMIN_PAGE, offset);
-  return c.json({ posts, more, offset });
-});
-
-// Activation. The build prints one JSON line per post and it is pasted here;
-// re-pasting the same line is an update, so a repeated paste cannot duplicate.
-app.post("/api/admin/vault", authMiddleware, async (c) => {
-  let body;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Bad request" }, 400);
-  }
-
-  const id = String(body?.id || "").trim();
-  const slug = String(body?.slug || "").trim();
-  const wrapped = String(body?.wrapped || "").trim();
-  if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: "Bad id" }, 400);
-  if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: "Bad slug" }, 400);
-  if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: "Bad key" }, 400);
-
-  await registerPost(c.env.DB, { id, slug, wrapped });
-  return c.json({ ok: true, id, slug });
+  return c.json({ audiences: await listAudiences(c.env.DB) });
 });
 
 /**
- * Activation from a BUILD, with no session — the same registration the route
- * above does by hand, done automatically.
+ * The registry, reconciled by a BUILD with no session.
  *
- * A build that mints a key must be able to register it, or the ciphertext ships
- * and nobody, the author included, can open it until a block of JSON is pasted
- * into a panel. Neither `hexo generate` on a laptop nor a CI runner can hold an
- * admin session, so this is authorized by an HMAC keyed off VAULT_MASTER, which
- * both already hold and without which they could not seal the keyring anyway.
- * No session, no new secret, and no route a browser can reach.
+ * Registration and revocation are consequences of what carries `vault:`, never
+ * commands anybody issues, so the build sends its WHOLE keyring and this makes
+ * the table match: everything in the set is registered, everything outside it
+ * is revoked. That is why there is no route here to add a post or to delete
+ * one — a post's ciphertext and its key are decided together, by the same
+ * build, and a second authority over them could only ever disagree.
+ *
+ * Neither `hexo generate` on a laptop nor a CI runner can hold an admin
+ * session, so this is authorized by an HMAC keyed off VAULT_MASTER, which both
+ * already hold and without which they could not seal the keyring anyway. No
+ * session, no new secret, and no route a browser can reach.
  */
-app.post("/api/admin/vault/push", async (c) => {
+app.post("/api/admin/vault/sync", async (c) => {
   if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
 
   const raw = await c.req.text();
@@ -1578,7 +1564,9 @@ app.post("/api/admin/vault/push", async (c) => {
   }
   if (!Array.isArray(posts) || posts.length > 200) return c.json({ error: "Bad request" }, 400);
 
-  const written = [];
+  // Validated in full BEFORE anything is written: a malformed row half way down
+  // the set would otherwise revoke every post that was not reached.
+  const clean = [];
   for (const row of posts) {
     const id = String(row?.id || "").trim();
     const slug = String(row?.slug || "").trim();
@@ -1586,16 +1574,10 @@ app.post("/api/admin/vault/push", async (c) => {
     if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: `Bad id: ${id}` }, 400);
     if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: `Bad slug for ${id}` }, 400);
     if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: `Bad key for ${id}` }, 400);
-    await registerPost(c.env.DB, { id, slug, wrapped });
-    written.push(id);
+    clean.push({ id, slug, wrapped });
   }
 
-  return c.json({ ok: true, registered: written });
-});
-
-app.delete("/api/admin/vault/:id", authMiddleware, async (c) => {
-  const removed = await deletePost(c.env.DB, c.req.param("id"));
-  return c.json({ ok: removed });
+  return c.json({ ok: true, ...(await reconcile(c.env.DB, clean)) });
 });
 
 // The complete new audience for one post, not a delta: the panel always sends
@@ -1610,8 +1592,9 @@ app.put("/api/admin/vault/:id/audience", authMiddleware, async (c) => {
   const ids = Array.isArray(body?.audience) ? body.audience : [];
   if (ids.length > ADMIN_LOOKUP_MAX) return c.json({ error: "Too many" }, 400);
 
-  const written = await setAudience(c.env.DB, c.req.param("id"), ids);
-  return c.json({ ok: true, written });
+  const result = await setAudience(c.env.DB, c.req.param("id"), ids);
+  if (result.error) return c.json({ error: result.error }, 400);
+  return c.json({ ok: true, written: result.written });
 });
 
 // ─── EDITOR: mint a post key, and re-seal the keyring ───────
@@ -1642,8 +1625,7 @@ app.post("/api/admin/vault/mint", authMiddleware, async (c) => {
     return c.json({ error: "Bad source path" }, 400);
   }
 
-  const titles = body && typeof body.titles === "object" ? body.titles : null;
-  const minted = await mintPost(c.env.DB, c.env, { source, titles });
+  const minted = await mintPost(c.env.DB, c.env, { source });
 
   c.header("Cache-Control", "no-store");
   return c.json(minted);
@@ -1658,7 +1640,7 @@ app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
   if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: "Bad id" }, 400);
 
   await deletePost(c.env.DB, id);
-  const keysEnc = await keyringBlob(c.env.DB, c.env, null);
+  const keysEnc = await keyringBlob(c.env.DB, c.env);
 
   c.header("Cache-Control", "no-store");
   return c.json({ ok: true, keysEnc });
@@ -1666,37 +1648,161 @@ app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
 
 // ─── EDITOR: the repository ticket ──────────────────────────
 //
-// After this the Worker is OUT of the commit path: the browser talks to Gitea
-// directly, so a save carrying twenty megabytes of images costs this Worker
-// nothing at all. One request per editing session.
+// After this the Worker is OUT of the commit path: the browser talks to the
+// repository host directly, so a save carrying twenty megabytes of images costs
+// this Worker nothing at all. One request per editing session.
 //
-// The token is contained where it is SPENT, not where it is handed out — a
-// dedicated Gitea account with write on the content repository only, scope
-// `write:repository`, and branch protection with Protected File Patterns
-// covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`, `package.json` and
-// `_config.yml`. Without that last control an admin session is code execution on
-// a runner that holds VAULT_MASTER.
-app.get("/api/admin/gitea/ticket", authMiddleware, (c) => {
-  const api = String(c.env.GITEA_API_URL || "").replace(/\/+$/, "");
-  const repo = String(c.env.GITEA_REPO || "");
-  const [owner, name] = repo.split("/");
+// The source lives in two places — a Gitea instance on the author's machine and
+// a private GitHub mirror — and either can build. Both tickets are handed over
+// at once and the browser picks; deciding here would mean this Worker probing
+// two hosts on a 10 ms budget to answer a question the browser can answer for
+// itself, about reachability from where it is actually standing.
+//
+// ── Each token is contained where it is SPENT ───────────────
+//
+// Gitea: a dedicated account with write on the content repository only, scope
+// `write:repository`, plus branch protection with Protected File Patterns
+// covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`, `.gitmodules`,
+// `package.json` and `_config.yml`.
+//
+// GitHub: a fine-grained PAT scoped to that one repository with `Contents:
+// write`, `Metadata: read` and `Actions: read` — and NO `Workflows` permission,
+// which is what makes GitHub itself refuse every write under
+// `.github/workflows/`. It must not be the CI's token, which needs `Workflows:
+// write` to mirror and therefore could rewrite the very job that holds
+// VAULT_MASTER.
+// Who a commit is BY. One identity for both backends and for CI, because the
+// author of a post is a person and not the machinery that carried it — a
+// history split between `blog-updater`, `blog-ci` and a name attaches the work
+// to whichever route it happened to take that day.
+//
+// GITEA_AUTHOR_* is the old spelling, read as a fallback so a Worker deploy and
+// a variable edit need not be the same instant.
+function commitAuthor(env) {
+  return {
+    name: env.COMMIT_AUTHOR_NAME || env.GITEA_AUTHOR_NAME || "blog-editor",
+    email: env.COMMIT_AUTHOR_EMAIL || env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
+  };
+}
 
-  if (!api || !owner || !name || !c.env.GITEA_TOKEN) {
+// WHERE the editor commits is the site's `backend.online_editor`, sealed under
+// the admin key by the build; a token is issued on its own. The repository
+// variables are echoed when set, for a page built before that config existed.
+function where(api, repo, branch) {
+  const [owner, name] = String(repo || "").split("/");
+  return api && owner && name ? { api, owner, repo: name, branch: branch || "main" } : {};
+}
+
+function giteaTicket(env) {
+  if (!env.GITEA_TOKEN) return null;
+
+  return {
+    id: "gitea",
+    kind: "gitea",
+    label: env.GITEA_LABEL || "Gitea",
+    ...where(String(env.GITEA_API_URL || "").replace(/\/+$/, ""), env.GITEA_REPO, env.GITEA_BRANCH),
+    token: env.GITEA_TOKEN,
+    author: commitAuthor(env),
+  };
+}
+
+function githubTicket(env) {
+  if (!env.GITHUB_EDITOR_TOKEN) return null;
+  const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+
+  return {
+    id: "github",
+    kind: "github",
+    label: env.GITHUB_LABEL || "GitHub",
+    api,
+    ...where(api, env.GITHUB_REPO, env.GITHUB_BRANCH),
+    token: env.GITHUB_EDITOR_TOKEN,
+    // Which workflow's runs answer "where has the build got to". GitHub Actions
+    // writes no commit status, so there is nothing else to read.
+    workflow: env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml",
+    author: commitAuthor(env),
+  };
+}
+
+// ─── ANALYTICS: release the Umami credential ────────────────
+//
+// The same shape as the repository ticket above, and for the same reason: the
+// browser talks to Umami DIRECTLY afterwards. Proxying a dashboard's worth of
+// queries through here would spend a 10 ms CPU budget on work this Worker adds
+// nothing to.
+//
+// UMAMI_TOKEN is the bearer from Umami's POST /api/auth/login. It does not
+// expire, which is exactly why it is a secret here and never in the page: the
+// public half of the site reads Umami through a share slug restricted to the
+// Overview section, and everything past that costs an admin session.
+//
+// No fetch, no database read. The whole handler is a signature check that has
+// already happened in authMiddleware.
+app.get("/api/admin/analytics/ticket", authMiddleware, (c) => {
+  const token = c.env.UMAMI_TOKEN;
+  const host = String(c.env.UMAMI_API_URL || "").replace(/\/+$/, "");
+  const websiteId = c.env.UMAMI_WEBSITE_ID;
+
+  if (!token || !host || !websiteId) {
+    return c.json({ error: "Analytics is not configured" }, 503);
+  }
+
+  c.header("Cache-Control", "no-store");
+  return c.json({ token, host, websiteId });
+});
+
+app.get("/api/admin/repo/ticket", authMiddleware, (c) => {
+  const backends = [giteaTicket(c.env), githubTicket(c.env)].filter(Boolean);
+  if (!backends.length) {
     return c.json({ error: "Repository access is not configured" }, 503);
   }
 
   c.header("Cache-Control", "no-store");
-  return c.json({
-    api,
-    owner,
-    repo: name,
-    branch: c.env.GITEA_BRANCH || "main",
-    token: c.env.GITEA_TOKEN,
-    author: {
-      name: c.env.GITEA_AUTHOR_NAME || "blog-editor",
-      email: c.env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
-    },
-  });
+  return c.json({ prefer: c.env.REPO_PREFER || "gitea", backends });
+});
+
+// ─── EDITOR: fast-forward the backend that fell behind ──────
+//
+// Gitea goes down, a post is committed to GitHub, Gitea comes back one commit
+// behind. Only a runner can settle that — the browser holds a content token,
+// not a git client — so this fires the GitHub workflow that pushes to Gitea and
+// does NOT build. The editor polls Gitea afterwards; nothing is reported here
+// beyond "the run was accepted", because a dispatch is asynchronous and this
+// Worker has 10 ms.
+app.post("/api/admin/repo/sync", authMiddleware, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (String(body.to || "") !== "gitea") {
+    return c.json({ error: "Only the Gitea side can be caught up from here" }, 400);
+  }
+
+  const [owner, name] = String(c.env.GITHUB_REPO || "").split("/");
+  if (!owner || !name || !c.env.GITHUB_SYNC_TOKEN) {
+    return c.json({ error: "Sync is not configured" }, 503);
+  }
+
+  const file = c.env.GITHUB_SYNC_WORKFLOW || "sync-to-gitea.yml";
+  const api = String(c.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+  const res = await fetch(
+    `${api}/repos/${owner}/${name}/actions/workflows/${file}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${c.env.GITHUB_SYNC_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "backend-blog",
+      },
+      body: JSON.stringify({ ref: c.env.GITHUB_BRANCH || "main" }),
+    }
+  );
+
+  c.header("Cache-Control", "no-store");
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return c.json({ error: "Could not start the sync", status: res.status, detail: text.slice(0, 200) }, 502);
+  }
+  return c.json({ ok: true });
 });
 
 // ─── WEBHOOK: the deploy repo finished deploying ────────────
@@ -1749,19 +1855,169 @@ app.post("/api/hooks/github", async (c) => {
 // ─── Health root (no front-end; just a liveness probe) ─────
 app.get("/", (c) => c.json({ service: "redefine-x backend worker", ok: true }));
 
+// ─── The nightly build ──────────────────────────────────────
+//
+// The site's activity card is drawn from days the BUILD read out of Umami and
+// committed, so a day only reaches the page once something rebuilds the site
+// after it has finished. Nothing else guarantees that: a week with no post is a
+// week with no build. This is what wakes it up.
+//
+// ── Which side builds it ────────────────────────────────────
+//
+// The same rule the editor uses, for the same reason: REACHABILITY and then WHO
+// IS AHEAD, never speed. A home runner's queue has nothing to do with how fast
+// its API answers, so latency picks the wrong side confidently. Diverged is
+// surfaced and nothing is dispatched — guessing there would publish one history
+// and strand the other.
+//
+// Five subrequests at the very most, against a budget of fifty.
+//
+// ── Two tokens, each where it is already contained ──────────
+//
+// Reading a branch head needs `Contents: read`, which the editor's PAT has and
+// the sync PAT deliberately does not; starting a workflow needs `Actions:
+// write`, which is the sync PAT's whole purpose. So the probe and the dispatch
+// use different credentials, and neither gains a capability it did not have.
+const GH = {
+  Accept: "application/vnd.github+json",
+  "X-GitHub-Api-Version": "2022-11-28",
+  "User-Agent": "backend-blog",
+};
+
+async function json(url, headers) {
+  const res = await fetch(url, { headers });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+function sides(env) {
+  const gitea = (() => {
+    const api = String(env.GITEA_API_URL || "").replace(/\/+$/, "");
+    const [owner, repo] = String(env.GITEA_REPO || "").split("/");
+    if (!api || !owner || !repo || !env.GITEA_TOKEN) return null;
+    const auth = { Authorization: `token ${env.GITEA_TOKEN}` };
+    const base = `${api}/repos/${owner}/${repo}`;
+    return {
+      id: "gitea",
+      head: () => json(`${base}/branches/${env.GITEA_BRANCH || "main"}`, auth)
+        .then((b) => (b && b.commit && (b.commit.id || b.commit.sha)) || null),
+      holds: (sha) => json(`${base}/git/commits/${sha}`, auth).then(Boolean),
+      start: () =>
+        fetch(
+          `${base}/actions/workflows/${env.GITEA_DEPLOY_WORKFLOW || "deploy.yml"}/dispatches`,
+          {
+            method: "POST",
+            headers: { ...auth, "Content-Type": "application/json" },
+            body: JSON.stringify({ ref: env.GITEA_BRANCH || "main" }),
+          }
+        ),
+    };
+  })();
+
+  const github = (() => {
+    const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+    const [owner, repo] = String(env.GITHUB_REPO || "").split("/");
+    if (!api || !owner || !repo) return null;
+    const base = `${api}/repos/${owner}/${repo}`;
+    const read = { ...GH, Authorization: `Bearer ${env.GITHUB_EDITOR_TOKEN}` };
+    if (!env.GITHUB_EDITOR_TOKEN || !env.GITHUB_SYNC_TOKEN) return null;
+    return {
+      id: "github",
+      head: () => json(`${base}/branches/${env.GITHUB_BRANCH || "main"}`, read)
+        .then((b) => (b && b.commit && b.commit.sha) || null),
+      holds: (sha) => json(`${base}/commits/${sha}`, read).then(Boolean),
+      start: () =>
+        fetch(
+          `${base}/actions/workflows/${env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml"}/dispatches`,
+          {
+            method: "POST",
+            headers: {
+              ...GH,
+              Authorization: `Bearer ${env.GITHUB_SYNC_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ref: env.GITHUB_BRANCH || "main" }),
+          }
+        ),
+    };
+  })();
+
+  return { gitea, github };
+}
+
+async function nightlyBuild(env) {
+  const { gitea, github } = sides(env);
+  if (!gitea && !github) return { ok: false, why: "no backend is configured" };
+
+  const [giteaHead, githubHead] = await Promise.all([
+    gitea ? gitea.head().catch(() => null) : null,
+    github ? github.head().catch(() => null) : null,
+  ]);
+
+  const up = [];
+  if (giteaHead) up.push(gitea);
+  if (githubHead) up.push(github);
+  if (!up.length) return { ok: false, why: "neither backend answered" };
+
+  let pick;
+  if (up.length === 1) {
+    pick = up[0];
+  } else if (giteaHead === githubHead) {
+    pick = (env.REPO_PREFER || "gitea") === "github" ? github : gitea;
+  } else {
+    // One request each, and it cannot be wrong: the side that HOLDS the other's
+    // commit is the side that is ahead.
+    const [giteaHasGithub, githubHasGitea] = await Promise.all([
+      gitea.holds(githubHead).catch(() => false),
+      github.holds(giteaHead).catch(() => false),
+    ]);
+    if (giteaHasGithub && !githubHasGitea) pick = gitea;
+    else if (githubHasGitea && !giteaHasGithub) pick = github;
+    else {
+      return {
+        ok: false,
+        why: `diverged: gitea ${String(giteaHead).slice(0, 7)} vs github ${String(githubHead).slice(0, 7)} — nothing dispatched`,
+      };
+    }
+  }
+
+  const res = await pick.start();
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    return { ok: false, on: pick.id, why: `dispatch ${res.status} ${detail.slice(0, 160)}` };
+  }
+  return { ok: true, on: pick.id };
+}
+
 /**
- * Cron entry point — retention only, once a day.
+ * Cron entry point — once a day, 03:40 UTC. ONE trigger, two jobs.
  *
  * It used to run every five minutes because it owned the second half of
  * SENDING: a fan-out too large for one invocation, and the retry for a push
  * service that was down. Queues owns both of those now, and owns them better —
  * it starts within seconds instead of on the next tick, and it scales out
- * instead of draining a fixed batch — so what is left here is housekeeping, and
- * housekeeping has no reason to wake up 288 times a day to find nothing to do.
+ * instead of draining a fixed batch.
+ *
+ * What is left is the inbox retention sweep and the nightly build. The build
+ * shares the trigger rather than adding one, because the hour it needs is the
+ * same hour this already runs at: safely past UTC midnight, which is the moment
+ * yesterday's analytics stopped moving and became something worth committing.
+ *
+ * Neither half can fail the other — a build dispatch that does not land is a day
+ * the archive picks up tomorrow, since the next build fetches every day it is
+ * missing rather than just the last one.
  */
 async function scheduled(event, env, ctx) {
   const stats = await pruneInboxes(env.DB);
   console.log("[notify] prune", JSON.stringify(stats));
+
+  let build;
+  try {
+    build = await nightlyBuild(env);
+  } catch (err) {
+    build = { ok: false, why: String((err && err.message) || err) };
+  }
+  console.log("[build] nightly", JSON.stringify(build));
 }
 
 /**

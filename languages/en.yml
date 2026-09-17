@@ -226,6 +226,94 @@ notifications:
   account_banned_note: You can stay signed in and keep commenting on posts - only the ability to subscribe to this blog has been withdrawn. If the owner has also blocked you on GitHub, commenting stops too.
 
 management:
+  a_title: Analytics
+  a_lede: Read straight from Umami with an admin credential the Worker releases per session.
+  a_overview: Overview
+  a_events: Events
+  a_sessions: Sessions
+  a_performance: Performance
+  a_compare: Compare
+  a_breakdown: Breakdown
+  a_visitors: Visitors
+  a_visits: Visits
+  a_views: Views
+  a_bounce: Bounce rate
+  a_duration: Visit duration
+  a_countries: Countries
+  a_pages: Pages
+  a_sources: Sources
+  a_environment: Environment
+  a_location: Location
+  a_traffic_over_time: Traffic
+  a_weekly: Weekly traffic
+  a_weekdays: Sun,Mon,Tue,Wed,Thu,Fri,Sat
+  a_chart: Chart
+  a_activity: Activity
+  a_properties: Properties
+  a_all: All
+  a_type: Type
+  a_event: Event
+  a_events_fired: Events
+  a_event_types: Unique events
+  a_triggered: Event
+  a_viewed: View
+  a_session: Session
+  a_last_seen: Last seen
+  a_when: When
+  a_count: Count
+  a_name: Name
+  a_direct: Direct / none
+  a_samples: Samples
+  a_previous: Previous
+  a_current: Current
+  a_change: Change
+  a_prev_views: Views (previous)
+  a_prev_visitors: Visitors (previous)
+  a_map: Visitors by country
+  a_linear: Linear
+  a_log: Log
+  a_less: Less
+  a_more: More
+  a_sort: Sort by
+  a_u_hour: Hour
+  a_u_day: Day
+  a_u_month: Month
+  a_ch_direct: Direct
+  a_ch_search: Search
+  a_ch_social: Social
+  a_ch_referral: Referral
+  a_ch_email: Email
+  a_ch_paid: Paid
+  a_ch_affiliate: Affiliate
+  a_ch_video: Video
+  a_ch_unknown: Unknown
+  a_search: Search
+  a_prev: Previous
+  a_next: Next
+  a_now: just now
+  a_f_path: Path
+  a_f_url: URL
+  a_entry: Entry page
+  a_exit: Exit page
+  a_f_referrer: Referrer
+  a_channel: Channel
+  a_f_browser: Browser
+  a_f_os: System
+  a_f_device: Device
+  a_f_screen: Screen
+  a_f_language: Language
+  a_f_country: Country
+  a_f_region: Region
+  a_f_city: City
+  a_f_title: Page title
+  a_f_query: Query
+  a_f_hostname: Hostname
+  a_f_tag: Tag
+  a_nodata: Nothing in this range
+  a_offline: Umami did not answer.
+  a_denied: The analytics credential was refused.
+  a_perf_none: No web vitals yet. The tracker collects them only when data-performance is set.
+  a_break_note: Pick the dimensions to cross. At least one, at most four.
   title: Blog Management
   lede: Announcements, what the notification database still holds, and every follower with the devices hanging off them.
   checking: Checking your session...
@@ -299,25 +387,38 @@ management:
   confirm: Press again
   orphans: Unowned devices
   orphans_hint: Subscriptions whose owner unfollowed. Only banned ones are kept - the daily sweep removes the rest.
-  v_title: Encrypted posts
-  v_lede: Every encrypted post the site has published, and who may open it. The posts themselves are never stored here - only their keys.
-  v_empty: No encrypted post has been activated yet.
-  v_add: Activate a post
-  v_add_hint: Paste one line from the build output. Re-pasting the same line updates it.
-  v_paste: '{"id":"...","slug":"...","wrapped":"..."}'
-  v_activate: Activate
-  v_added: Activated
-  v_bad: That is not an activation line.
-  v_revoke: Revoke
-  v_revoke_hint: Nobody will be able to open it again, including you.
+  p_title: Posts management
+  p_lede: Every article and album on the site, and what can be done with each. Nothing here is fetched - it was sealed into this page by the build.
+  p_all: All
+  p_encrypted: Encrypted
+  p_drafts: Drafts
+  p_unpublished: Unpublished
+  p_new: New post
+  p_album: Album
+  p_draft: Draft
+  p_unpublished_tag: Unpublished
+  p_sticky: Sticky
+  p_untitled: Untitled
+  p_empty: Nothing matches this filter.
+  p_unpublish: Unpublish
+  p_unpub_queued: Queued
+  p_unpub_one: post to withdraw
+  p_unpub_many: posts to withdraw
+  p_unpub_go: Save & publish
+  p_unpub_cancel: Cancel
+  p_unpub_done: Committed
+  p_unpub_empty: There was nothing to commit.
+  p_unpub_land: Done. Loading the site as readers see it...
+  p_unpub_failed: The build failed. The commit landed; nothing published has changed.
+  p_backend: Build on
+  p_s_committed: Committed
+  p_s_building: Building
+  p_s_pushed: Artifact pushed
+  p_s_deployed: Deployed
+  v_badge: Encrypted
   v_audience: Who can read this
-  v_save: Save readers
-  v_saved: Saved
-  v_slug: Path
   v_reader: reader
   v_readers: readers
-  v_none: nobody yet
-  v_unreadable: Unreadable - the key does not match this build
 
 vault:
   unlocking: Checking your access
@@ -331,6 +432,12 @@ vault:
   no_comments_album: Comments and likes are closed on encrypted albums
   no_comments_album_hint: A public thread would carry the album's title and every photograph's file name, and the like counts live in that same thread - so neither is offered here.
   draft: Draft
+  draft_hint: An unfinished copy of a published post. Only you can read it.
+  unpublished: Unpublished
+  unpublished_hint: This post has never been published. Only you can read it.
+  published: Published
+  view_published: View published
+  view_draft: View draft
 
 editor:
   checking: Checking your session...
@@ -340,6 +447,8 @@ editor:
   edit_post: Edit this post
   new_post: New post
   close: Stop editing
+  undo: Undo
+  redo: Redo
   untitled: Untitled
   draft: Draft
   encrypted: Encrypted
@@ -366,6 +475,12 @@ editor:
   stale: The published copy is behind the repository - a build is probably still running.
   conflict_hint: This file changed in the repository. Your text is safe here - open the post in a new tab to see what landed, then re-apply.
   build_failed: The build failed. The post is committed; nothing published has changed.
+  backend_switch: Build on
+  backend_catchup: Bringing the preferred repository up to date...
+  backend_caught_up: Up to date.
+  backend_behind: The preferred repository is still behind; this session commits to the other one.
+  backend_diverged: The two repositories have diverged - each has commits the other does not. This session commits to the one shown.
+  deployed_reload: Published. Loading the page as readers see it...
   view_run: View run
   s_committed: Committed
   s_building: Building
@@ -383,7 +498,6 @@ editor:
   arguments: arguments
   remove_block: Remove
   replace: Replace
-  caption: Caption
   icon: Icon
   title: Title
   more: More
@@ -454,6 +568,7 @@ editor:
   m_em: Italic
   m_strike: Strikethrough
   m_code: Inline code
+  m_math: Inline equation
   m_mark: Highlight
   m_link: Link
   m_clear: Clear formatting
@@ -509,6 +624,9 @@ editor:
   open_folder: Open folder
   open_viewer: Open viewer
   auto_exif: Read EXIF at build time
+  exif_note: With this on, the build reads the camera data out of the picture file, so those values appear on the published page and not here. Any field filled in below replaces the one read from the file.
+  chrome_min: Hide the bars
+  chrome_max: Show the bars
   no_deeper: A note, folding or tab group cannot go inside another one.
   sheet_hint: Leave everything empty for a plain picture.
   g_caption: Caption
@@ -527,10 +645,14 @@ editor:
   pick_unsaved: unsaved
   pick_none: Nothing here yet
   pick_hint: Choose a picture, or drag one onto a folder to move it.
-  pick_loading: Reading the repository
-  pick_walking: Reading the file tree
+  pick_loading: Reading the file tree
   pick_name: Name
   pick_where: Folder
   pick_dims: Size
   pick_bytes: File
+  pick_served: Served at
   pick_moved: Moving from
+analytics:
+  activity: Blog Activity
+  less: Less
+  more: More

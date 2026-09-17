@@ -34,16 +34,21 @@ function all() {
 }
 
 /** Encrypted POSTS, newest first — the order every listing in the theme uses.
- *  Albums are stashed in the same map and carry no date. */
+ *  Albums and generated pages are stashed in the same map and carry no date. */
 function sorted() {
   return all()
-    .filter((entry) => entry.kind !== "album")
+    .filter((entry) => entry.kind === "post")
     .sort((a, b) => b.post.date.valueOf() - a.post.date.valueOf());
 }
 
 /** Encrypted masonry albums, in the order masonry.yml lists them. */
 function albums() {
   return all().filter((entry) => entry.kind === "album");
+}
+
+/** Sealed generated pages — the admin console and the composer. */
+function pages() {
+  return all().filter((entry) => entry.kind === "page");
 }
 
 function withhold(routePath) {
@@ -59,4 +64,4 @@ function clear() {
   withheld.clear();
 }
 
-module.exports = { put, get, all, sorted, albums, withhold, withheldPaths, clear };
+module.exports = { put, get, all, sorted, albums, pages, withhold, withheldPaths, clear };

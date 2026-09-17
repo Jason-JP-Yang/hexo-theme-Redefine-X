@@ -369,29 +369,6 @@ $bento-split-text  = 'minmax(0, 1fr)'
         > * + *
           margin-top unquote('1lh')
 
-      // ── Sticky badge ─────────────────────────────────────────────────────
-      // Base material tier: a translucent colour, no backdrop pass.
-      .home-article-sticky-badge
-        position absolute
-        top 12px
-        right 12px
-        z-index 2
-        display inline-flex
-        align-items center
-        gap 5px
-        padding 3px 10px
-        font-size 0.7rem
-        line-height 1.6
-        color var(--third-text-color)
-        background var(--background-color-transparent-80)
-        border 1px solid var(--border-color)
-        border-radius $redefine-border-radius-medium
-        pointer-events none
-        user-select none
-
-        i
-          font-size 0.65rem
-
       // ── Meta row ─────────────────────────────────────────────────────────
       // Every entry is one inline-flex unit, so there is no collapsed whitespace
       // between an icon and its text for a line break to land on. Wrapping
@@ -588,6 +565,11 @@ $bento-split-text  = 'minmax(0, 1fr)'
       grid-row 1
       padding 1.5rem
 
+    // Side by side here too, so the same corner for the same reason.
+    .home-article-badges
+      left auto
+      right 10px
+
   .home-content-container .home-article-list:not(.bento) .home-article-item:nth-child(even):not(.no-cover)
     grid-template-columns unquote(s('minmax(0, 1fr) %s', $list-cover-width))
 
@@ -696,6 +678,13 @@ split-composition()
     grid-column 2
     grid-row 1
     padding 1.5rem
+
+  // The far corner of the picture from the text, whichever side the picture is
+  // on: side by side there is no band above the words for a badge to sit over,
+  // and the frame's own corner is the one place it costs the text nothing.
+  .home-article-badges
+    left auto
+    right 10px
 
 // Every second one mirrors, so a run of them zig-zags instead of stamping the
 // same L-shape over and over. The class is put on by the plan.

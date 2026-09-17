@@ -513,6 +513,9 @@
 
   window.addEventListener('resize', debouncedResize);
 
+  // For cards mounted by the editor, which no page view announces.
+  window.__redefineExif = { init: initImageExif };
+
   const toggleBar = document.querySelector('.page-aside-toggle');
   if (toggleBar) {
     toggleBar.addEventListener('click', () => setTimeout(handleResize, 300));

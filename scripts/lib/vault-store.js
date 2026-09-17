@@ -5,8 +5,9 @@
  *
  * A key is minted ONCE, the first time a post carries `vault:` front matter,
  * and never changes again: rebuilding must not invalidate what is already in
- * D1. The wrapped copy the Worker needs is PUSHED at the end of every build
- * (`push`), and only if that cannot be done is it printed for a human to paste.
+ * D1. The whole keyring is sent to the Worker at the end of every build
+ * (`sync`), which registers what is in it and revokes what is not — so neither
+ * activating a post nor retiring one is ever something a person has to do.
  *
  * FAIL CLOSED. Every path that cannot produce a key throws, because the
  * alternative — carrying on and rendering the post — publishes it in the clear.
@@ -103,9 +104,17 @@ const REKEY_FLAGS = new Set(["regenerate", "regen"]);
 
 /**
  * The key and slug for a post, minting them on first sight.
- * @returns {{key: Buffer, slug: string, fresh: boolean}}
+ *
+ * An entry is `{key, slug, registered}` and nothing else. It used to carry the
+ * post's title as well, which no code reads and which the two writers of this
+ * file disagreed about: the build filled it in from the post, and the Worker —
+ * which rebuilds the whole keyring whenever the editor mints, and deliberately
+ * stores no titles — wrote it back empty. So `.vault/keys.enc` changed on
+ * alternate commits, for a field that was never used.
+ *
+ * @returns {{key: Buffer, slug: string, fresh: boolean, rekeyed: boolean}}
  */
-function ensurePost(id, title) {
+function ensurePost(id) {
   const s = load();
   let entry = s.keys[id];
 
@@ -113,29 +122,25 @@ function ensurePost(id, title) {
   if (entry && REKEY_FLAGS.has(String(entry.registered).toLowerCase())) {
     entry.key = vc.b64url(vc.randomKey());
     rekeyed = true;
-    // Back to unregistered: D1 still holds the OLD wrapped key, so until the
-    // new activation line is pasted, nobody — the author included — can open
-    // this post. `report()` prints that line at the end of the build.
+    // Back to unregistered until `sync` has replaced the wrapped copy in D1.
+    // Between the two, the row there still holds the OLD key and opens nothing.
     entry.registered = false;
     s.dirty = true;
     s.minted.push(id);
   }
 
   if (!entry) {
-    entry = {
-      key: vc.b64url(vc.randomKey()),
-      slug: vc.randomSlug(),
-      title: title || "",
-      registered: false,
-    };
+    entry = { key: vc.b64url(vc.randomKey()), slug: vc.randomSlug(), registered: false };
     // A slug collision would silently overwrite another post's blobs.
     const taken = new Set(Object.values(s.keys).map((e) => e.slug));
     while (taken.has(entry.slug)) entry.slug = vc.randomSlug();
     s.keys[id] = entry;
     s.dirty = true;
     s.minted.push(id);
-  } else if (title && entry.title !== title) {
-    entry.title = title;
+  } else if (entry.title !== undefined) {
+    // Written by a version of this file that recorded titles. Dropped on sight,
+    // so one build settles the churn rather than every second commit carrying it.
+    delete entry.title;
     s.dirty = true;
   }
 
@@ -152,49 +157,61 @@ function flush() {
   state.dirty = false;
 }
 
-/** Entries the admin console has not been told about yet. */
-function pending() {
+/**
+ * The whole keyring as the Worker wants it: id, slug, and the wrapped key.
+ *
+ * `draft` is passed IN rather than stored here. The keyring is a key store and
+ * nothing else — the Worker rebuilds `.vault/keys.enc` from its own rows every
+ * time the editor mints, so any field the two sides did not both write would
+ * churn the file on alternate saves.
+ */
+function rows(draftIds) {
   const s = load();
-  return Object.entries(s.keys)
-    .filter(([, e]) => e.registered !== true)
-    .map(([id, e]) => ({
-      id,
-      slug: e.slug,
-      title: e.title || "",
-      wrapped: vc.wrapKey(s.master, vc.fromB64url(e.key)),
-    }));
+  return Object.entries(s.keys).map(([id, e]) => ({
+    id,
+    slug: e.slug,
+    draft: !!(draftIds && draftIds.has(id)),
+    wrapped: vc.wrapKey(s.master, vc.fromB64url(e.key)),
+  }));
 }
 
 /**
- * Register every unactivated key with the Worker, and mark them done.
+ * Make D1 match the keyring — the WHOLE keyring, every build.
  *
- * The whole point of doing it here: a commit that carries a post's ciphertext
- * must never be a commit whose key nobody has. Both build paths reach this —
- * `hexo generate` on the machine and the Gitea Action — because both hold
- * VAULT_MASTER, which is what signs the request. There is no session and no
- * second secret; see `verifyBuildSignature` in the Worker.
+ * Registration and revocation are both consequences of what carries `vault:`,
+ * so neither is a command anybody issues. The keyring has already been pruned
+ * down to the items this build actually sealed (`prune`), so sending it entire
+ * says two things at once: these keys exist, and nothing else does. An item
+ * whose flag was removed loses its row here, in the same build that stopped
+ * publishing its ciphertext — there is no window in which a revoked post is
+ * still openable, and no list for anyone to reconcile by hand.
+ *
+ * Both build paths reach this — `hexo generate` on the machine and the Gitea
+ * Action — because both hold VAULT_MASTER, which is what signs the request.
+ * There is no session and no second secret; see `verifyBuildSignature` in the
+ * Worker.
  *
  * BEST EFFORT, always. A build with no network, or one run before the Worker
- * was deployed, falls back to `report()` and prints the paste block instead.
- * Refusing to build over an unreachable backend would make the offline case —
- * the one that motivated the loopback CI — impossible.
+ * was deployed, leaves D1 alone and the next build that can reach it puts
+ * everything right — which is exactly why the whole set travels rather than a
+ * delta. Refusing to build over an unreachable backend would make the offline
+ * case — the one that motivated the loopback CI — impossible.
  *
- * @returns {Promise<{pushed:number}|null>} null when nothing was pushed
+ * @returns {Promise<{registered:number, revoked:number}|null>} null when the
+ *          backend is not configured
  */
-async function push(apiBase) {
-  const rows = pending();
-  if (!rows.length) return null;
-
+async function sync(apiBase, draftIds) {
   const base = String(apiBase || "").replace(/\/+$/, "");
   if (!base) return null;
 
+  const live = rows(draftIds);
   const body = JSON.stringify({
-    posts: rows.map((r) => ({ id: r.id, slug: r.slug, wrapped: r.wrapped })),
+    posts: live.map((r) => ({ id: r.id, slug: r.slug, wrapped: r.wrapped, draft: r.draft })),
   });
 
-  const res = await fetch(`${base}/api/admin/vault/push`, {
+  const res = await fetch(`${base}/api/admin/vault/sync`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Vault-Signature": pushMac(body) },
+    headers: { "Content-Type": "application/json", "X-Vault-Signature": syncMac(body) },
     body,
   });
   if (!res.ok) {
@@ -202,38 +219,24 @@ async function push(apiBase) {
     throw new Error(`${res.status} ${detail.slice(0, 200)}`);
   }
 
-  // Only now. `acknowledge` is what stops the next build re-sending them, and
-  // marking them before the write landed would lose a key silently.
-  acknowledge();
-  return { pushed: rows.length };
+  const answer = await res.json().catch(() => ({}));
+
+  // Only now, and only because the write landed: `registered` is what the
+  // keyring records about D1, and the Worker rebuilds `.vault/keys.enc` from
+  // its own rows with that flag set. Marking before the answer came back would
+  // make the two files disagree on the next editor save.
+  markRegistered();
+
+  return {
+    registered: live.length,
+    revoked: Array.isArray(answer.revoked) ? answer.revoked.length : 0,
+  };
 }
 
 /** HMAC over the request body, under an HKDF subkey of the master. */
-function pushMac(body) {
+function syncMac(body) {
   const key = vc.hkdf(load().master, "rdfx-vault-push");
   return "sha256=" + crypto.createHmac("sha256", key).update(body, "utf8").digest("hex");
-}
-
-/**
- * What the admin pastes into Management → Encrypted Posts, when and only when
- * the push above could not be made. One JSON line per post so a copy that clips
- * a newline is rejected rather than half-applied.
- */
-function report(log) {
-  const rows = pending();
-  if (!rows.length) return;
-
-  const lines = rows.map((r) =>
-    JSON.stringify({ id: r.id, slug: r.slug, wrapped: r.wrapped })
-  );
-
-  log.warn(
-    `[vault] ${rows.length} encrypted post${rows.length === 1 ? "" : "s"} ` +
-      `not yet activated. Until each is registered in D1, nobody — not even you — can read it.\n\n` +
-      `  Blog Management → Encrypted Posts → Add, paste ONE line per post:\n\n` +
-      rows.map((r, i) => `    ${lines[i]}   # ${r.title || r.id}`).join("\n") +
-      `\n\n  Then run:  node themes/redefine-x/bin/vault-ack.js\n`
-  );
 }
 
 /**
@@ -242,9 +245,8 @@ function report(log) {
  * The keyring is the local authority, so an entry that outlives its flag is a
  * key for content that is no longer sealed — and the next build that re-adds the
  * flag would silently reuse it, re-publishing under a key D1 already handed out.
- * Removing it here is only half the job: the WRAPPED copy in D1 is what actually
- * grants access, and nothing at build time can reach the Worker to delete it.
- * `reportRetired` is what tells the admin to.
+ * What this leaves behind is picked up by `sync`, which sends the pruned keyring
+ * entire and so revokes the wrapped copy in D1 in the same build.
  *
  * Deliberately independent of the master key: pruning never needs one, and a
  * site that has just removed its last `vault:` flag may have unset VAULT_MASTER
@@ -260,7 +262,7 @@ function prune(liveIds) {
   for (const id of Object.keys(keys)) {
     if (liveIds.has(id)) continue;
     const entry = keys[id] || {};
-    retired.push({ id, slug: entry.slug || "", title: entry.title || "" });
+    retired.push({ id, slug: entry.slug || "" });
     delete keys[id];
   }
   if (!retired.length) return [];
@@ -272,21 +274,6 @@ function prune(liveIds) {
     secrets.writeKeyring(keys);
   }
   return retired;
-}
-
-/** What `prune` removed locally and the admin still has to remove from D1. */
-function reportRetired(log, retired) {
-  if (!retired || !retired.length) return;
-  const one = retired.length === 1;
-
-  log.warn(
-    `[vault] ${retired.length} keyring entr${one ? "y" : "ies"} no longer carr${one ? "ies" : "y"} ` +
-      `\`vault:\` and ${one ? "was" : "were"} removed from .vault/keys.json.\n` +
-      `  D1 STILL HOLDS THE WRAPPED KEY for each one, which is what actually grants access.\n` +
-      `  Delete ${one ? "it" : "them"} by hand:  Blog Management → Encrypted Posts → Revoke\n\n` +
-      retired.map((r) => `    ${r.id}  ${r.slug}   # ${r.title || "(untitled)"}`).join("\n") +
-      `\n`
-  );
 }
 
 /** Sorted, so two machines sealing the same keyring produce the same bytes. */
@@ -330,8 +317,8 @@ function seal() {
   return { changed: true, count };
 }
 
-/** Marks everything registered. Run after the console has taken the block. */
-function acknowledge() {
+/** What the keyring records about D1, once a sync has actually landed. */
+function markRegistered() {
   const s = load();
   let n = 0;
   for (const entry of Object.values(s.keys)) {
@@ -351,12 +338,8 @@ module.exports = {
   load,
   ensurePost,
   flush,
-  pending,
-  push,
-  report,
+  sync,
   prune,
-  reportRetired,
   seal,
-  acknowledge,
   fail,
 };

@@ -71,12 +71,12 @@ export function createView(block, ctx) {
   const view = { el, body, block, ctx, touched: false };
   wireRaw(view, el.querySelector(".ed-raw"));
 
-  view.touch = () => {
+  view.touch = (kind) => {
     view.touched = true;
     block.dirty = true;
     // The view goes with it: the contents rail only has to be rebuilt when the
     // block that changed is a heading, and that is the cheapest place to know.
-    ctx.onChange(view);
+    ctx.onChange(view, typeof kind === "string" ? kind : "");
   };
 
   if (RICH_TYPES.has(block.type)) mountRich(view);
@@ -212,6 +212,23 @@ function richHTML(block) {
   return inlineToHTML(block.text);
 }
 
+/**
+ * Take on another block's fields, in place.
+ *
+ * Every view is bound to ONE block object — its listeners write into it, its
+ * `read` writes into it — so a block arriving from the step store has to be
+ * absorbed rather than swapped in. `id` is the one field that never moves: it
+ * is what said the two were the same block in the first place.
+ */
+function absorb(block, next) {
+  for (const key of Object.keys(block)) {
+    if (key !== "id" && !(key in next)) delete block[key];
+  }
+  for (const key of Object.keys(next)) {
+    if (key !== "id") block[key] = next[key];
+  }
+}
+
 function mountRich(view) {
   const { block } = view;
   const host = document.createElement(richTag(block));
@@ -223,7 +240,7 @@ function mountRich(view) {
   // Boundary anchors from the first frame: the caret has to be able to stand
   // either side of a mark before anything has been applied to it.
   anchorMarks(host);
-  typesetMath(host);
+  view.ready = typesetMath(host);
   wireInlineMath(host, view);
 
   view.body.appendChild(host);
@@ -260,6 +277,36 @@ function mountRich(view) {
   // The boundary anchors are the editor's, not the author's: a line holding
   // nothing but them is an empty line, and Backspace has to delete it.
   view.isEmpty = () => isBlankText(host.textContent);
+
+  /**
+   * The same block, saying something else — an undo, a redo.
+   *
+   * Rewriting the host's contents keeps the ELEMENT, and keeping the element is
+   * what keeps the focus, and keeping the focus is what keeps a phone's keyboard
+   * up and the page from bouncing as it closes and reopens. Rebuilding the view
+   * instead did all three every time a step landed.
+   *
+   * Refused when the tag itself would change — an H2 becoming an H3, bullets
+   * becoming numbers — because that is a different element, not different words.
+   */
+  view.patch = (next, dry) => {
+    // The TYPE first, and not merely the tag it would render as. `richTag`
+    // answers "p" for everything it does not recognise — including a picture, a
+    // table, a code listing — so a paragraph view cheerfully accepted an image
+    // block, absorbed its fields, and drew `inlineToHTML(undefined)`: an empty
+    // paragraph where the picture had been, gone for good.
+    if (!RICH_TYPES.has(next.type)) return false;
+    if (richTag(next) !== host.tagName.toLowerCase()) return false;
+    if (dry) return true;
+    const held = caret.caretMark(host);
+    absorb(block, next);
+    host.innerHTML = richHTML(block);
+    anchorMarks(host);
+    view.ready = typesetMath(host);
+    view.touched = !!block.dirty;
+    if (held != null) caret.placeAt(host, held);
+    return true;
+  };
 
   // No heading control here. The toolbar owns the one Heading button and the
   // levels behind it — see `headingControl` in toolbar.js. This used to add a
@@ -643,15 +690,37 @@ function mountSource(view) {
   }
 
   preview.addEventListener("click", () => {
-    view.showSource().then(() => source.focus());
+    view.showSource().then(() => source.focus({ preventScroll: true }));
   });
 
   source.addEventListener("focus", () => ctx.onFocus(view));
 
   view.read = () => {};
-  view.focus = () => view.showSource().then(() => source.focus());
+  view.focus = () => view.showSource().then(() => source.focus({ preventScroll: true }));
   view.isEmpty = () => !source.value.trim();
   view.refresh = paint;
+
+  // A textarea keeps its focus and its scroll when its value is assigned, so a
+  // step that lands on a code block leaves the caret where it was rather than
+  // closing the keyboard and rebuilding the field.
+  view.patch = (next, dry) => {
+    if (next.type !== block.type) return false;
+    if (dry) return true;
+    const at = source.selectionStart;
+    const to = source.selectionEnd;
+    const live = document.activeElement === source;
+    absorb(block, next);
+    source.value = block[field] || "";
+    view.touched = !!block.dirty;
+    if (live) source.setSelectionRange(Math.min(at, source.value.length), Math.min(to, source.value.length));
+    // A diagram, an equation and a highlighted listing all paint ASYNCHRONOUSLY,
+    // so this block's height is not knowable in the tick the step lands. Kept on
+    // `ready` for the step to wait on — measuring before it resolves is what
+    // animated the wrong height and then lit a mark that resized under the eye.
+    if (wrap.dataset.mode === "source") grow();
+    else view.ready = paint();
+    return true;
+  };
 
   // A diagram's palette is written INTO its SVG, so it does not follow the
   // site's light/dark switch — it has to be drawn again under the other theme.
@@ -676,104 +745,95 @@ function mountSource(view) {
 /* ─── image ────────────────────────────────────────────────────────────────── */
 
 /**
- * An image, built the way the published page builds one.
+ * A picture, drawn exactly as the build draws it and typed into nowhere.
  *
- * The page emits a `.img-preloader` that the lazyload observer turns into an
- * `<img>` when it is about to be seen, optionally wrapped in
- * `<figure class="image-caption">` with the ALT text as the caption — see
- * scripts/filters/img-handle.js and scripts/filters/lazyload-handle.js. The
- * editor emits exactly that and lets the same observer, the same skeleton and
- * the same image viewer take it from there. What is added is a small overlay of
- * controls and an editable caption; nothing about the image itself is local.
+ * `img-handle.js`'s `figure.image-caption` with its "Figure N." prefix, or
+ * `{% exifimage %}`'s caption or card — float or block, in the site's own
+ * labels — around the article's own `.img-preloader`, which the lazyload
+ * observer and the image viewer then treat like any other. A caption edited in
+ * place carried the page's figure number inside the text being edited; every
+ * property is the sheet's now (`imageProps` in index.js).
  *
- * The caption edits `alt`, not the markdown title, because alt is what the page
- * prints under the picture. The title never appears anywhere.
+ * The picture node itself survives every repaint of what surrounds it, so a
+ * caption becoming a card never requests the picture again.
  */
 function mountImage(view) {
   const { block, ctx } = view;
   const style = (window.theme && window.theme.articles && window.theme.articles.style) || {};
-  const numbered = style.image_figure_number === true;
   const captioned = style.image_caption !== false;
+  const numbered = captioned && style.image_figure_number === true;
+  const float = style.image_caption === "float";
 
-  const wrap = document.createElement("figure");
-  wrap.className = "image-caption ed-figure";
-  wrap.innerHTML = `
-    <figcaption contenteditable="true" spellcheck="false"
-      data-placeholder="${escapeHTML(ctx.t("caption", "Describe this image"))}"></figcaption>`;
-
-  const caption = wrap.querySelector("figcaption");
-
-  const paintCaption = () => {
-    if (!captioned) return void (caption.hidden = true);
-    const n = numbered ? ctx.figureIndex(block.id) : 0;
-    caption.innerHTML = numbered
-      ? (block.alt ? `<strong>Figure ${n}.</strong> ` : "") + escapeHTML(block.alt || `Figure ${n}`)
-      : escapeHTML(block.alt || "");
-  };
+  const wrap = document.createElement("div");
+  wrap.className = "ed-figure";
 
   const hasExif = () => !!block.exifTitle || Object.keys(block.exif || {}).some((k) => block.exif[k]);
 
-  const paint = () => {
-    const api = window.RedefineComponents;
+  let address = null;
+  let figure = -1;
 
-    // With a caption title or camera data this is an `{% exifimage %}`, and the
-    // card it prints is part of the picture. Rendered through the shared
-    // emitter, so the canvas shows the figure the build will.
-    if (hasExif() && api && api.exifImage) {
-      wrap.className = "ed-figure ed-figure-exif";
+  const media = () => {
+    const held = wrap.querySelector(".img-preloader, img");
+    if (held && address === block.url) return held;
+    address = block.url;
+    const node = ctx.buildPreloader(block.url, block.alt);
+    // A click on the canvas SELECTS a picture; the viewer is the toolbar's.
+    node.setAttribute("data-no-viewer", "");
+    return node;
+  };
+
+  const paint = () => {
+    const exif = hasExif();
+    const node = media();
+    node.remove();
+    ctx.shapeMedia(node, exif);
+    if (node.tagName === "IMG") node.alt = block.alt || "";
+    else node.dataset.alt = block.alt || "";
+
+    figure = numbered ? ctx.figureIndex(block.id) : 0;
+    const api = window.RedefineComponents;
+    const slot = `<i data-ed-media=""></i>`;
+
+    if (exif && api && api.exifImage) {
       wrap.innerHTML = api.exifImage(
-        [block.exifTitle || "", block.autoExif === false ? "auto-exif:false" : ""].filter(Boolean),
+        [block.exifTitle || ""],
         api.buildExifBody({ description: block.alt, path: block.url, info: block.exif || {} }),
         null,
-        { resolve: (p) => ctx.resolveAsset(p) }
+        { float, labels: ctx.exifLabels(), figure, media: slot }
       );
-      const img = wrap.querySelector("img");
-      if (img) {
-        img.setAttribute("data-no-viewer", "");
-        // Through bindImage rather than left as the emitter wrote it: that is
-        // the path that falls back to the repository when the site does not
-        // have this picture yet, which for an EXIF figure is otherwise the one
-        // shape of image with no second chance.
-        ctx.bindImage(img, block.url);
-      }
-      return;
+    } else if (captioned && (block.alt || numbered)) {
+      const text = escapeHTML(block.alt || "");
+      const caption = numbered ? (block.alt ? `<strong>Figure ${figure}.</strong> ${text}` : `Figure ${figure}`) : text;
+      wrap.innerHTML = `<figure class="image-caption">${slot}<figcaption>${caption}</figcaption></figure>`;
+    } else {
+      wrap.innerHTML = `<p>${slot}</p>`;
     }
 
-    wrap.className = "image-caption ed-figure";
-    if (!wrap.contains(caption)) wrap.appendChild(caption);
-    const old = wrap.querySelector(".img-preloader, img");
-    const node = ctx.buildPreloader(block.url, block.alt);
-    // In the editor a click on a picture SELECTS it; the viewer is a button in
-    // the toolbar, because opening a lightbox over the thing you are editing is
-    // not what a click there means.
-    node.setAttribute("data-no-viewer", "");
-    if (old) old.replaceWith(node);
-    else wrap.insertBefore(node, caption);
-    paintCaption();
+    wrap.querySelector("[data-ed-media]").replaceWith(node);
     ctx.observeImages();
+    ctx.settleFigure();
   };
-  paint();
-
-  // Typing in the caption IS typing the alt text; the numbering prefix is the
-  // page's, not the author's, so it is stripped back off on the way out.
-  caption.addEventListener("input", () => {
-    const text = caption.textContent
-      .replace(/​/g, "")
-      .replace(/^\s*Figure\s+\d+\.?\s*/i, "")
-      .trim();
-    block.alt = text;
-    view.touch();
-  });
-  caption.addEventListener("blur", paintCaption);
-
-  caption.addEventListener("focus", () => ctx.onFocus(view));
 
   view.body.appendChild(wrap);
+  paint();
+
   view.read = () => {};
-  view.renumber = paintCaption;
-  view.focus = () => caret.focusEnd(caption);
   view.isEmpty = () => false;
-  view.editable = caption;
+  view.editable = null;
+  view.paint = paint;
+  // Numbers are positional; only a figure whose number actually moved repaints.
+  view.renumber = () => {
+    if (numbered && figure !== ctx.figureIndex(block.id)) paint();
+  };
+
+  view.patch = (next, dry) => {
+    if (next.type !== "image") return false;
+    if (dry) return true;
+    absorb(block, next);
+    view.touched = !!block.dirty;
+    paint();
+    return true;
+  };
 
   view.options = () => [
     { kind: "btn", act: "folder", icon: "fa-folder-open", label: "Open folder", tt: "open_folder", wide: true },
@@ -782,21 +842,14 @@ function mountImage(view) {
   ];
 
   view.act = async (act) => {
-    if (act === "folder") {
-      // The picker names it. Replacing and addressing were the same act asked
-      // two ways, and one of them was a repository path typed from memory.
-      const picked = await ctx.pickImage(block.url);
-      if (!picked) return;
-      block.url = picked.site;
-    } else if (act === "props") {
-      const next = await ctx.imageProps(block);
-      if (!next) return;
-      Object.assign(block, next);
-    } else if (act === "view") {
-      return void ctx.openViewer(wrap.querySelector("img"));
-    } else {
-      return;
-    }
+    if (act === "props") return void ctx.imageProps(view);
+    if (act === "view") return void ctx.openViewer(wrap.querySelector(".img-preloader, img"));
+    if (act !== "folder") return;
+    // The picker names it. Replacing and addressing were the same act asked
+    // two ways, and one of them was a repository path typed from memory.
+    const picked = await ctx.pickImage(block.url);
+    if (!picked) return;
+    block.url = picked.site;
     view.touch();
     paint();
     ctx.onOptionsChanged();
@@ -1090,7 +1143,11 @@ function mountComponent(view) {
       inner.classList.add("ed-nest");
       inner.innerHTML = "";
       nested = ctx.nest(inner, block.body || "", {
+        // A box writes itself back every time it is READ, and reading happens on
+        // a timer. Without this the note was marked dirty, and the post edited,
+        // by nothing at all.
         write: (text) => {
+          if (block.body === text) return;
           block.body = text;
           view.touch();
         },
@@ -1113,6 +1170,37 @@ function mountComponent(view) {
   // and `enter` measures this when the block is inserted.
   view.ready = paint();
   view.nests = nests;
+
+  /**
+   * A step landing on the note, without the note coming apart.
+   *
+   * `paint()` unnests the box, rewrites the note's markup and nests a NEW box —
+   * so every block inside is destroyed and rebuilt, and a picture three lines
+   * below the line that changed re-fetches itself. When only the body moved the
+   * body is handed to the box it already has, which reconciles it; only a change
+   * to the note ITSELF — its colour, its icon, its title — repaints the shell.
+   */
+  view.patch = (next, dry) => {
+    if (next.type !== "component" || next.name !== block.name) return false;
+    if (dry) return true;
+
+    const sameShell = next.args === block.args;
+    absorb(block, next);
+    view.touched = !!block.dirty;
+
+    if (sameShell && nested && ctx.fillBox) {
+      nested.ready = ctx.fillBox(nested, block.body || "");
+      return true;
+    }
+    view.ready = paint();
+    return true;
+  };
+
+  // A folding that is closed is a step the author cannot see land.
+  view.reveal = () => {
+    const details = host.querySelector("details");
+    if (details && !details.open) details.open = true;
+  };
 
   view.read = () => {
     if (nested && ctx.writeBox) ctx.writeBox(nested);
@@ -1250,9 +1338,12 @@ function mountTabs(view, wrap) {
   };
 
   const writeBody = () => {
-    block.body = panes
+    const text = panes
       .map((p) => `<!-- tab ${p.caption} -->\n\n${p.body}\n\n<!-- endtab -->`)
       .join("\n\n");
+    // Same reason as the note's: a pane written back unchanged is not an edit.
+    if (block.body === text) return;
+    block.body = text;
     view.touch();
   };
 
@@ -1312,7 +1403,8 @@ function mountTabs(view, wrap) {
     pane.classList.add("ed-nest");
     nested = ctx.nest(pane, panes[open] ? panes[open].body : "", {
       write: (text) => {
-        if (panes[open]) panes[open].body = text;
+        if (!panes[open] || panes[open].body === text) return;
+        panes[open].body = text;
         writeBody();
       },
       onEmpty: dropPane,
@@ -1326,12 +1418,13 @@ function mountTabs(view, wrap) {
   };
 
   const show = (i) => {
-    if (i === open) return;
+    if (i === open) return null;
     readPane();
     open = Math.max(0, Math.min(panes.length - 1, i));
     paintNav();
-    morphHeight(wrap, paintPane);
+    const done = morphHeight(wrap, paintPane);
     ctx.onOptionsChanged();
+    return done;
   };
 
   nav.addEventListener("click", (e) => {
@@ -1351,6 +1444,48 @@ function mountTabs(view, wrap) {
 
   paintNav();
   view.ready = paintPane();
+
+  /**
+   * A step landing in a tab group.
+   *
+   * Only the OPEN pane is on the page — the others are strings until they are
+   * shown — so the open one is reconciled through its own box and the rest are
+   * simply the new captions and bodies. `reveal` runs before the step lands and
+   * is what opens the pane the change is in; without it a step could change a
+   * pane nobody was looking at and appear to have done nothing at all.
+   */
+  view.patch = (next, dry) => {
+    if (next.type !== "component" || next.name !== block.name) return false;
+    if (dry) return true;
+
+    absorb(block, next);
+    view.touched = !!block.dirty;
+
+    const rows = readPanes(block.body);
+    const sameNav =
+      rows.length === panes.length && rows.every((row, i) => row.caption === panes[i].caption);
+    panes.length = 0;
+    panes.push(...rows);
+    if (!panes.length) panes.push({ caption: "Tab 1", body: "" });
+    open = Math.max(0, Math.min(panes.length - 1, open));
+    if (!sameNav) paintNav();
+
+    if (nested && ctx.fillBox) nested.ready = ctx.fillBox(nested, panes[open] ? panes[open].body : "");
+    else view.ready = paintPane();
+    return true;
+  };
+
+  view.reveal = (next) => {
+    if (!next || next.type !== "component") return null;
+    const rows = readPanes(next.body || "");
+    for (let i = 0; i < Math.max(rows.length, panes.length); i++) {
+      const a = panes[i];
+      const b = rows[i];
+      if (a && b && a.body === b.body && a.caption === b.caption) continue;
+      return show(Math.min(i, Math.max(0, rows.length - 1)));
+    }
+    return null;
+  };
 
   view.nests = true;
   view.read = readPane;
@@ -1550,6 +1685,12 @@ function mountRule(view) {
   view.read = () => {};
   view.focus = () => view.el.scrollIntoView({ block: "nearest" });
   view.isEmpty = () => false;
+  // A rule has no contents, so a step that lands on one has nothing to redraw.
+  view.patch = (next, dry) => {
+    if (next.type !== view.block.type) return false;
+    if (!dry) absorb(view.block, next);
+    return true;
+  };
 }
 
 /* ─── factory for new blocks ───────────────────────────────────────────────── */
