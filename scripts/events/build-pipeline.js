@@ -7,9 +7,10 @@
  *
  * A site is deployed two ways: `hexo generate` on this machine, and the same
  * command on a CI runner. Those two have to be the SAME build, and the only
- * thing they are allowed to disagree about is whether an image is transcoded —
- * AVIF bytes depend on the machine's ffmpeg and libaom, so a runner that
- * encoded would produce different bytes for the same picture.
+ * thing they are allowed to disagree about is how an image is transcoded —
+ * AVIF bytes depend on the machine's ffmpeg and libaom, so a runner never runs
+ * them. It serves the committed cache, and gives a new picture a quick `sharp`
+ * transcode that the next local build replaces (see img-optimizer.js).
  *
  * Everything else the deploy used to do — apply the editor's picture moves,
  * reconcile the album discussions, pin the build clock, keep the transcode
@@ -37,7 +38,7 @@
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { applyMoves, rewriteDeep } = require("../lib/image-moves");
-const { setRunMode, skipAvif, skipReason } = require("../lib/build-index");
+const { setRunMode } = require("../lib/build-index");
 const clock = require("../lib/build-clock");
 
 /** The command as its full name, so `hexo g` and `hexo generate` are one thing. */
@@ -94,12 +95,6 @@ hexo.extend.filter.register(
     if (cmd !== "generate" && cmd !== "server" && cmd !== "deploy") return;
 
     setRunMode(this.env.args);
-    const why = skipReason();
-    if (skipAvif()) {
-      this.log.info(
-        `[build] image encoding is off (${why}); only what source/build/ already holds is served.`
-      );
-    }
 
     if (cmd === "generate" && !watching(this)) pinClock(this);
 

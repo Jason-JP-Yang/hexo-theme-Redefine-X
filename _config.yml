@@ -405,6 +405,8 @@ plugins:
       quality: 65 # Compression quality 0-100 (0=smallest file, 100=best quality)
       effort: 5 # Compression effort/precision 0-10 (0=fastest, 10=best compression)
       IMG_MAX_PIXELS: 2073600 # approx 1920*1080
+      GITEA_CI_COMPRESS: true # Gitea Actions gives images with no cached AVIF a quick sharp transcode (no animated GIF)
+      GITHUB_CI_COMPRESS: true # Same on GitHub Actions. Either way the next local build re-encodes them with the encoder above
       EXCLUDE: # Exclude images that match the regex pattern from optimization. e.g. ^/images/important/.*\.(jpg|jpeg|png)$
         # emoji-mart animated Noto spritesheet chunks — animated WebP that must NOT
         # be transcoded to AVIF (frames would be lost / URLs are hash-referenced).

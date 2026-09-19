@@ -140,11 +140,12 @@ function relKey(absPath, sourceDir, themeDir) {
 /**
  * Encoding is the ONE thing a local build and a CI build may disagree about.
  *
- * AVIF bytes depend on the machine's ffmpeg and libaom, so a runner that
- * encoded would publish different bytes for the same picture every time its
- * image changed. It therefore serves only what `source/build/` already holds,
- * and an image with no cached transcode is published in its original format —
- * heavier, never broken.
+ * AVIF bytes depend on the machine's ffmpeg and libaom, so a runner never runs
+ * them. It serves what `source/build/` already holds, and an image with no
+ * cached transcode is either published in its original format — heavier, never
+ * broken — or, where `quickEncode` allows, given a first transcode by `sharp`.
+ * That one is a pinned npm dependency, and its product is marked `enc: "sharp"`
+ * in the index so the next local build replaces it with the real encoder's.
  *
  * Three ways to say so, in order of authority. The env var is explicit and
  * wins both ways, so `RDFX_SKIP_AVIF=0` forces encoding on even in CI; the
@@ -187,4 +188,33 @@ function skipReason() {
   return "";
 }
 
-module.exports = { BuildIndex, hashFile, relKey, skipAvif, skipReason, setRunMode, VERSION };
+/** The Actions host a runner build is on. Gitea sets both variables; GitHub only its own. */
+function ciHost() {
+  if (!flagged && !inCI()) return "";
+  return BOOL.test(String(process.env.GITEA_ACTIONS || "").trim()) ? "gitea" : "github";
+}
+
+/**
+ * Whether this runner gives uncached images a quick `sharp` transcode, per the
+ * host's own switch in `imagesOptimize`. Off a runner it is always false: a
+ * laptop that skips the encoder is asking for the cache alone.
+ */
+function quickEncode(options) {
+  if (!skipAvif()) return false;
+  const host = ciHost();
+  if (!host) return false;
+  const opts = options || {};
+  return (host === "gitea" ? opts.GITEA_CI_COMPRESS : opts.GITHUB_CI_COMPRESS) !== false;
+}
+
+module.exports = {
+  BuildIndex,
+  hashFile,
+  relKey,
+  skipAvif,
+  skipReason,
+  setRunMode,
+  ciHost,
+  quickEncode,
+  VERSION,
+};

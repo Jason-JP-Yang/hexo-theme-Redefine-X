@@ -227,6 +227,8 @@ plugins:
       quality: 65               # 0 (smallest) – 100 (best)
       effort: 5                 # 0 (fastest) – 10 (best compression)
       IMG_MAX_PIXELS: 2073600   # downscale cap (~1920×1080)
+      GITEA_CI_COMPRESS: true   # Gitea Actions: quick sharp AVIF for images with no cached transcode
+      GITHUB_CI_COMPRESS: true  # same on GitHub Actions; a local build re-encodes them with `encoder`
       SVGO_COMPRESS: true       # minify SVG via SVGO
       EXCLUDE: []               # globs to skip
     jsOptimize: true

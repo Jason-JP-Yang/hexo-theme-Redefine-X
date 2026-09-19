@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const imageSize = require("image-size");
 const { spawn } = require("child_process");
-const { BuildIndex, skipAvif, skipReason } = require("../lib/build-index");
+const { BuildIndex, skipAvif, skipReason, ciHost, quickEncode } = require("../lib/build-index");
 
 const INDEX_FILE = ".images.json";
 
@@ -20,11 +20,17 @@ const INDEX_FILE = ".images.json";
  *   effort:  0-10    (0 = fastest / least CPU, 10 = slowest / best compression)
  *
  * Internally mapped to encoder-specific parameters.
+ *
+ * `quick` is a runner giving uncached images a first transcode. It has no
+ * ffmpeg, so it is `sharp` whatever `encoder` says; `configured` keeps what a
+ * local build will replace that with.
  */
 class ConfigManager {
   static get() {
     const config = hexo.theme.config.plugins?.minifier?.imagesOptimize || {};
-    const encoder = (config.encoder || "sharp").toLowerCase().trim();
+    const configured = (config.encoder || "sharp").toLowerCase().trim();
+    const quick = quickEncode(config);
+    const encoder = quick ? "sharp" : configured;
     const quality = Math.max(0, Math.min(100, config.quality ?? 65));
     const effort = Math.max(0, Math.min(10, config.effort ?? 5));
     const cpuCount = os.cpus().length || 4;
@@ -35,6 +41,9 @@ class ConfigManager {
       MAX_PIXELS: config.IMG_MAX_PIXELS || 2073600,
       EXCLUDE: config.EXCLUDE || [],
       encoder,
+      configured,
+      quick,
+      fine: !skipAvif(),
       quality,
       effort,
       // Derived encoder-specific params
@@ -54,7 +63,7 @@ class ConfigManager {
     switch (encoder) {
       case "sharp":
         return {
-          sharp_quality: quality,           // sharp avif quality: 1-100
+          sharp_quality: Math.max(1, quality), // sharp avif quality: 1-100
           sharp_effort: Math.round(effort * 0.9), // sharp effort: 0-9
         };
       case "libaom-av1": {
@@ -89,10 +98,37 @@ class ConfigManager {
 // ----------------------------------------------------------------------------
 
 class ImageMeta {
+  /** Dimensions, alpha and frame count — from sharp where no ffmpeg is to be had. */
+  static probe(inputPath) {
+    return skipAvif() ? this.probeSharp(inputPath) : this.probeFfprobe(inputPath);
+  }
+
+  static async probeSharp(inputPath) {
+    const m = await require("sharp")(inputPath).metadata();
+    // sharp reports an APNG as one frame; its animation chunk gives it away.
+    const nbFrames = m.format === "png" && (await this.isApng(inputPath)) ? 2 : m.pages || 1;
+    return {
+      width: m.width,
+      height: m.pageHeight || m.height,
+      pixFmt: "",
+      codec: m.format,
+      nbFrames,
+      isAnimated: nbFrames > 1,
+      hasAlpha: !!m.hasAlpha,
+    };
+  }
+
+  static async isApng(inputPath) {
+    const buf = await fs.promises.readFile(inputPath);
+    const control = buf.indexOf("acTL");
+    const data = buf.indexOf("IDAT");
+    return control !== -1 && (data === -1 || control < data);
+  }
+
   /**
    * Detect image properties using ffprobe: dimensions, pixel format, frame count.
    */
-  static async probe(inputPath) {
+  static async probeFfprobe(inputPath) {
     return new Promise((resolve, reject) => {
       const proc = spawn("ffprobe", [
         "-v", "error",
@@ -167,6 +203,8 @@ class ImageProcessor {
     }
     // sharp cannot encode animated images to AVIF; fall back to libaom-av1
     if (encoder === "sharp" && meta.isAnimated) {
+      // A runner has no libaom either: the picture keeps its format until a local build.
+      if (config.quick) return null;
       hexo.log.debug(`[img-optimizer] ${path.basename(inputPath)}: sharp doesn't support animated AVIF, falling back to libaom-av1`);
       encoder = "libaom-av1";
     }
@@ -196,23 +234,26 @@ class ImageProcessor {
   // --------------------------------------------------------------------------
   static async _encodeSharp(inputPath, outputPath, meta, config) {
     const sharp = require("sharp");
-    const { targetWidth, targetHeight } = this._calcScale(meta, config);
 
     let pipeline = sharp(inputPath);
 
-    // Resize if needed
-    if (targetWidth !== meta.width || targetHeight !== meta.height) {
+    // Only the pixel budget resizes: sharp needs no even dimensions, and
+    // shaving an odd row off a small picture would only soften it.
+    if (meta.width * meta.height > config.MAX_PIXELS) {
+      const { targetWidth, targetHeight } = this._calcScale(meta, config);
       pipeline = pipeline.resize(targetWidth, targetHeight, {
-        fit: "inside",
-        withoutEnlargement: true,
+        fit: "fill",
         kernel: sharp.kernel.lanczos3,
       });
     }
 
+    // 4:2:0 like the libaom path; at equal file size it scored higher on VMAF
+    // than sharp's 4:4:4 default, which spends its bytes on chroma.
     const info = await pipeline
       .avif({
         quality: config.sharp_quality,
         effort: config.sharp_effort,
+        chromaSubsampling: "4:2:0",
       })
       .toFile(outputPath);
 
@@ -573,12 +614,14 @@ const queue = new TaskQueue(2);
 
 // Rebuilt per build. `indexedKeys` is what survives the prune; `uncompressed`
 // is every image this build will publish in its original format, whatever the
-// reason; `empty` is the ones with no bytes at all; `dims` is the intrinsic
-// size of EVERY source image this build saw, transcoded or not, and `weights`
-// is what each of those weighs on disk.
+// reason; `quick` is the ones a runner just gave a first transcode, which a
+// local build will redo; `empty` is the ones with no bytes at all; `dims` is
+// the intrinsic size of EVERY source image this build saw, transcoded or not,
+// and `weights` is what each of those weighs on disk.
 let index = null;
 const indexedKeys = new Set();
 const uncompressed = [];
+const quick = [];
 const empty = [];
 const dims = new Map();
 const weights = new Map();
@@ -631,13 +674,18 @@ async function scanAndProcessAllImages() {
   index = new BuildIndex(path.join(hexo.source_dir, "build"), INDEX_FILE);
   indexedKeys.clear();
   uncompressed.length = 0;
+  quick.length = 0;
   empty.length = 0;
   dims.clear();
   weights.clear();
   themeOwned.clear();
 
   queue.concurrency = config.MAX_CONCURRENCY;
-  const mode = skipAvif() ? `cache only (${skipReason()})` : config.encoder;
+  const mode = config.quick
+    ? `sharp, quick pass on ${ciHost()} CI`
+    : skipAvif()
+      ? `cache only (${skipReason()})`
+      : config.encoder;
   hexo.log.info(`[img-optimizer] Encoder: ${mode} | Quality: ${config.quality} | Effort: ${config.effort} | Concurrency: ${config.MAX_CONCURRENCY}`);
   hexo.log.debug("[img-optimizer] Scanning images...");
 
@@ -663,6 +711,13 @@ async function scanAndProcessAllImages() {
       `[img-optimizer] ${uncompressed.length} of ${dims.size} image(s) are published in their ` +
         `original format:\n` + shown.join("\n") +
         `\n  Encode them in a local build and commit source/build/ if the weight matters.`
+    );
+  }
+
+  if (quick.length) {
+    hexo.log.info(
+      `[img-optimizer] ${quick.length} image(s) are on a quick sharp transcode; ` +
+        `a local build re-encodes them with ${config.configured}.`
     );
   }
 
@@ -974,6 +1029,9 @@ async function processFile(absPath, config) {
   await queue.enqueue(async () => {
     try {
       const cached = index.hit(relPath, absPath, (entry) => {
+        // A runner's quick transcode only stands in until a build with the real
+        // encoder has seen the picture.
+        if (config.fine && entry.enc === "sharp" && config.encoder !== "sharp") return false;
         try {
           return fs.statSync(outputPath).size === entry.outSize;
         } catch (e) {
@@ -982,6 +1040,7 @@ async function processFile(absPath, config) {
       });
 
       if (cached) {
+        if (!config.fine && index.get(relPath).enc === "sharp") quick.push(relPath);
         hexo.route.set(routePath, () => fs.createReadStream(outputPath));
         successfulConversions.add(relPath);
         return;
@@ -989,7 +1048,7 @@ async function processFile(absPath, config) {
 
       // SVGO is pure JS and lockfile-pinned, so it keeps running; only the AVIF
       // transcode needs a native encoder whose version would decide the bytes.
-      if (isBitmap && skipAvif()) {
+      if (isBitmap && skipAvif() && !config.quick) {
         uncompressed.push({ rel: relPath, why: "no cached transcode" });
         return;
       }
@@ -1001,9 +1060,16 @@ async function processFile(absPath, config) {
         isSvg
       });
 
-      hexo.log.info(`[img-optimizer] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB)`);
+      if (!res) {
+        uncompressed.push({ rel: relPath, why: "animated; needs a local build" });
+        return;
+      }
 
-      index.record(relPath, absPath, { out: routePath, outSize: res.size });
+      const marked = config.quick && isBitmap;
+      hexo.log.info(`[img-optimizer] Generated: ${relPath} -> ${routePath} (${(res.size / 1024).toFixed(2)} KB${marked ? ", quick" : ""})`);
+
+      if (marked) quick.push(relPath);
+      index.record(relPath, absPath, { out: routePath, outSize: res.size, ...(marked ? { enc: "sharp" } : {}) });
       hexo.route.set(routePath, () => fs.createReadStream(outputPath));
       successfulConversions.add(relPath);
     } catch (err) {

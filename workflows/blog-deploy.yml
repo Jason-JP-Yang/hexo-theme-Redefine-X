@@ -27,11 +27,13 @@
 # themes/redefine-x/scripts/events/build-pipeline.js.
 #
 # The ONE difference is image encoding. AVIF bytes depend on the machine's
-# ffmpeg and libaom, so RDFX_SKIP_AVIF makes img-optimizer serve only what
-# source/build/ already holds; an image with no cached transcode is published
-# in its original format — heavier, never broken. Encode locally and commit
-# source/build/ when the weight matters. (The build detects a CI runner on its
-# own; `RDFX_SKIP_AVIF: "0"` would force encoding back on.)
+# ffmpeg and libaom, so RDFX_SKIP_AVIF keeps libaom off the runner and
+# img-optimizer serves what source/build/ already holds. An image with no cached
+# transcode gets a quick `sharp` AVIF while GITEA_CI_COMPRESS / GITHUB_CI_COMPRESS
+# (imagesOptimize) is on, and is otherwise published in its original format —
+# heavier, never broken. Encode locally and commit source/build/ to replace the
+# quick ones. (The build detects a CI runner on its own; `RDFX_SKIP_AVIF: "0"`
+# would force encoding back on.)
 
 name: Deploy
 

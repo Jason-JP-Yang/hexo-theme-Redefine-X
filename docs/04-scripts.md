@@ -35,6 +35,8 @@ Loads a broad TeX package set (`ams`, `physics`, `mathtools`, `cancel`, `color`,
 
 Downsizes anything above `IMG_MAX_PIXELS`. Concurrency = CPU-1 for sharp, CPU/2 for ffmpeg. **Output is cached in `<site>/source/build/`** — clear with `hexo clean --include-minify` after changing options.
 
+On a CI runner (`RDFX_SKIP_AVIF`, or `CI` detected) ffmpeg/libaom never runs. Images with no cached transcode get a quick `sharp` AVIF (4:2:0) when `GITEA_CI_COMPRESS` / `GITHUB_CI_COMPRESS` is on for that host, recorded as `enc: "sharp"` in `source/build/.images.json`; animated images wait for a local build. A local build treats those entries as cache misses and re-encodes them with the configured `encoder`.
+
 ### `delete-mask-handle.js`
 `after_post_render` (p0). When `articles.style.delete_mask: true`, adds `class="mask"` to `<del>` elements so struck-through text is hidden until hover (spoiler effect).
 
