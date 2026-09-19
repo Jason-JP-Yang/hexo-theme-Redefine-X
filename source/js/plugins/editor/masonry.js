@@ -62,6 +62,7 @@ import {
   makeItem,
   parseItemBlock,
   parseMasonry,
+  pruneEmptyCategories,
   readKeys,
   setImageField,
   setItemField,
@@ -2019,6 +2020,9 @@ function setCategory(name) {
   if (at >= 0) dropFrom(state.cat.items, at, (tail) => (state.cat.post = state.cat.post + tail));
   insertItem(target, state.item, target.items.length);
   state.cat = target;
+  // The one it just left may now hold nothing, and a category with no albums is
+  // not a category — it is a `list:` the build reads as null.
+  pruneEmptyCategories(state.doc);
 
   repaintCard();
   markDirty("front", "category");
@@ -2087,10 +2091,9 @@ async function buildCommit(mode) {
   // own keys wholesale: `pre` holds the category's settings and nothing else, so
   // copying it renames the category and sets `has_thumbnail` in one move without
   // touching a single album under it.
-  let cat = state.cat.openedName ? findCategory(fresh, state.cat.openedName) : null;
-  if (!cat) {
-    cat = appendCategory(fresh, makeCategory(fresh.eol, categoryFields(state.cat).links_category || title, true));
-  }
+  const catName = String(categoryFields(state.cat).links_category || "").trim() || title;
+  let cat = findCategory(fresh, state.cat.openedName) || findCategory(fresh, catName);
+  if (!cat) cat = appendCategory(fresh, makeCategory(fresh.eol, catName, true));
   cat.pre = state.cat.pre;
 
   const origin = state.opened.title
@@ -2131,7 +2134,15 @@ async function buildCommit(mode) {
     const live = shadowed ? findAlbum(fresh, shadowed, "published") : null;
 
     if (live) {
-      replaceAlbum(live.cat, live.index, node);
+      // A category chosen while editing the draft is part of what is being
+      // published: leaving the album where its published copy happened to sit
+      // threw that choice away silently.
+      if (live.cat === cat) replaceAlbum(cat, live.index, node);
+      else {
+        dropFrom(live.cat.items, live.index, (tail) => (live.cat.post += tail));
+        appendAlbum(cat, node);
+      }
+      // Re-found rather than remembered: the drop above may have shifted it.
       const draft = findAlbum(fresh, state.opened.title, "draft");
       if (draft) dropFrom(draft.cat.items, draft.index, (tail) => (draft.cat.post += tail));
     } else if (origin) {
@@ -2168,6 +2179,12 @@ async function buildCommit(mode) {
     appendAlbum(cat, shaped({ draft: "true" }));
     message = `Draft album: ${title}`;
   }
+
+  // Last, over the whole file: an album that moved out of its category, or a
+  // publish that wrote back over a copy in another one, can leave a category
+  // with nothing in it — and `list:` with nothing under it is YAML null, which
+  // the collection generator dies on.
+  pruneEmptyCategories(fresh);
 
   const files = state.pending.map((asset) => ({
     operation: "create",

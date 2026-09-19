@@ -579,10 +579,41 @@ export function categories(doc) {
  * standing in front of a published album carries the published album's title in
  * `supersedes`, and its own `page-title` names the page it will become.
  */
-/** The category this file held under `name` when it was read. */
+/**
+ * The category this file held under `name` when it was read, or — for one this
+ * session created — the category now carrying that name. Without the second
+ * lookup a save appended a SECOND category with a name the file already had.
+ */
 export function findCategory(doc, name) {
   const wanted = String(name || "");
-  return categories(doc).find((node) => node.openedName === wanted) || null;
+  if (!wanted) return null;
+  const list = categories(doc);
+  return (
+    list.find((node) => node.openedName === wanted) ||
+    list.find((node) => String(categoryFields(node).links_category || "") === wanted) ||
+    null
+  );
+}
+
+/**
+ * Drop every category left with no albums in it.
+ *
+ * `list:` with nothing under it is YAML **null**, and every consumer of
+ * masonry.yml reads `category.list` as an array — the collection generator dies
+ * on `null.map` before a single page renders. A category exists to hold albums,
+ * so one holding none is not a state this file may be saved in.
+ */
+export function pruneEmptyCategories(doc) {
+  let dropped = 0;
+  for (let i = doc.nodes.length - 1; i >= 0; i--) {
+    const node = doc.nodes[i];
+    if (node.kind !== "category" || node.items.length) continue;
+    doc.nodes.splice(i, 1);
+    dropped += 1;
+    const before = doc.nodes[i - 1];
+    if (node.tail && before) before.tail = (before.tail || "") + node.tail;
+  }
+  return dropped;
 }
 
 /**

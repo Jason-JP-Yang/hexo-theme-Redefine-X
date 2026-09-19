@@ -440,8 +440,11 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
     collectionTitle = configItem.title;
   }
 
-  // Filter out the config item to get only categories
-  const categories = masonryData.filter(item => item.links_category);
+  // Only categories, and only ones that actually hold albums: `list:` with
+  // nothing under it is YAML null, which every pass below reads as an array.
+  const categories = masonryData.filter(
+    (item) => item && item.links_category && Array.isArray(item.list) && item.list.length
+  );
 
   const pages = [];
 
