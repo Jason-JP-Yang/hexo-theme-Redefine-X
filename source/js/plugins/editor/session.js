@@ -383,6 +383,10 @@ export async function listAlbums(force) {
       category: meta.category || "",
       draft: meta.draft === true,
       supersedes: meta.supersedes || "",
+      // The published album's real address, sealed by the build. Pairing on it
+      // rather than on the title is exact: a title is a string two entries have
+      // to spell identically, an address is the page itself.
+      supersedesHref: meta.supersedesHref || "",
       assets: meta.assets || {},
       sizes: meta.sizes || {},
     });

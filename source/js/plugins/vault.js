@@ -594,15 +594,22 @@ function albumTitleHere() {
  * title because an album has no header row to put it at the end of.
  */
 function mountAlbumSwap(map) {
-  const title = albumTitleHere();
-  if (!title) return;
-
   const host = document.querySelector(".page-template-container");
-  if (!host || host.querySelector(".article-version")) return;
+  if (!host || !host.querySelector("#masonry-container")) return;
+  if (host.querySelector(".article-version")) return;
 
-  const draft = readableAlbums(map).find(
-    (entry) => entry.meta && entry.meta.draft === true && String(entry.meta.supersedes || "") === title
-  );
+  // By ADDRESS first: `supersedesHref` is the published album's own page, sealed
+  // by the build, so it matches whether that album is public or behind the gate
+  // and whatever its title happens to be spelled as. The title is the fallback
+  // for a blob sealed before that field existed.
+  const here = normalizePath(location.pathname);
+  const title = albumTitleHere();
+  const draft = readableAlbums(map).find((entry) => {
+    const meta = entry.meta;
+    if (!meta || meta.draft !== true) return false;
+    if (meta.supersedesHref) return normalizePath(meta.supersedesHref) === here;
+    return !!title && String(meta.supersedes || "") === title;
+  });
   if (!draft) return;
 
   const box = document.createElement("div");

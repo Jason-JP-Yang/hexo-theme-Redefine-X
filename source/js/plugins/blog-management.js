@@ -794,10 +794,17 @@ function canGrant(row) {
   return !!(row.published && row.encrypted && row.vaultId);
 }
 
-/** The draft's page when there is one — editing anything else forks a second
- *  draft of the same article, and the reader is already being shown this one. */
+/**
+ * Where Edit goes — the PUBLISHED page, always.
+ *
+ * Both editors resolve the draft themselves and open it in place, so sending
+ * the author to the draft's own address is a second page load that lands on the
+ * same document. It is also the address that breaks: a draft's page exists only
+ * once a build has sealed it, so a row whose draft was committed minutes ago
+ * pointed at a 404 while the published page it forked from was right there.
+ */
 function editHref(row) {
-  const target = row.draft ? row.draft.href : row.href;
+  const target = row.href;
   return target + (target.indexOf("#") < 0 ? "#edit" : "");
 }
 
@@ -880,7 +887,7 @@ function postRowHTML(row) {
           <i class="fa-solid ${
             row.kind === "album" ? "fa-images" : row.encrypted ? "fa-lock-keyhole" : "fa-file-lines"
           }" aria-hidden="true"></i>
-          <a href="${escapeHTML(row.href)}" target="_blank" rel="noopener">${escapeHTML(
+          <a href="${escapeHTML(row.href)}">${escapeHTML(
             row.title || t("p_untitled", "Untitled")
           )}</a>
         </div>

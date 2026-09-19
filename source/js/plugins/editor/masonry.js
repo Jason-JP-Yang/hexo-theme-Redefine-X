@@ -282,6 +282,27 @@ function storedOf(site) {
 
 /** The same, in the spelling this album already uses for its own pictures.
  *  Both parse, but mixing them makes a one-picture diff look like a rewrite. */
+/** An address as one comparable string: root off, slashes off, escapes decoded. */
+function trimPath(value) {
+  let s = String(value || "");
+  const root = siteRoot();
+  if (root && s.startsWith(root)) s = s.slice(root.length);
+  try {
+    s = decodeURI(s);
+  } catch (err) {
+    /* a malformed escape is not an address we can match anyway */
+  }
+  return s.replace(/^\/+|\/+$/g, "");
+}
+
+function pagePath() {
+  return trimPath(location.pathname);
+}
+
+function samePath(a, b) {
+  return trimPath(a) === trimPath(b);
+}
+
 function storedLike(site) {
   const short = storedOf(site);
   if (short === site) return short;
@@ -1882,9 +1903,14 @@ async function openAlbum(container) {
   let owner = mine;
 
   // A draft standing in front of this album is what readers are NOT being shown
-  // and what the author means by "edit".
+  // and what the author means by "edit". Paired by the published album's own
+  // ADDRESS where the build sealed one — exact whether that album is public or
+  // behind the gate — and by title for a blob sealed before that field existed.
   if (!onDraft) {
-    const draft = albums.find((row) => row.draft && row.supersedes === title);
+    const at = pagePath();
+    const draft = albums.find((row) =>
+      row.draft && (row.supersedesHref ? samePath(row.supersedesHref, at) : row.supersedes === title)
+    );
     if (draft) {
       onDraft = true;
       owner = draft;
