@@ -45,7 +45,14 @@ import { toggleMath } from "./inline.js";
 import { holdTOC, holdTOCActive, releaseTOC, scheduleTOC } from "./toc.js";
 import { getTOC, refreshTOC as measureTOC } from "../../layouts/toc.js";
 import { createFrontCard } from "./frontmatter.js";
-import { PERCH_AT, releaseDocbar as dropDocbar, watchDocbar, watchPerch } from "./chrome.js";
+import {
+  PERCH_AT,
+  hideVersionChrome,
+  navigate,
+  releaseDocbar as dropDocbar,
+  watchDocbar,
+  watchPerch,
+} from "./chrome.js";
 import {
   anchored,
   headroom,
@@ -58,7 +65,6 @@ import {
   viewBottom,
 } from "./travel.js";
 import { loadComponents, typesetMath } from "./render.js";
-import { vaultPrefix } from "../../tools/vaultCrypto.js";
 import {
   bindImage,
   buildPreloader,
@@ -67,16 +73,18 @@ import {
   registerRewind,
   repoURL,
   resolveAsset,
+  relockPreviewed,
   setVaultAssets,
+  setVaultIndex,
   shapeMedia,
   siteRoot,
+  unlockSealed,
 } from "./assets.js";
 import initLazyLoad, {
   forceLoadAllPreloaders,
   registerSrcFallback,
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
-import { assetURL } from "../../tools/vaultCrypto.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
@@ -135,6 +143,7 @@ function blank() {
     stashTimer: null,
     leaving: false,
     perchOff: null,
+    versionOff: null,
     viewportOff: null,
     composing: false,
     // The author's own choice to put the bars away, for this session only.
@@ -323,6 +332,12 @@ async function activate(host) {
   // the editor alone rather than by both of them.
   canvas.classList.add("ed-no-typeset");
   document.documentElement.classList.add("blog-editing");
+  // "Published / View draft" and the encrypted badge describe what a READER is
+  // being shown. Editing makes the canvas the draft, so they describe nothing —
+  // and they go NOW, with the press, rather than after the repository has
+  // answered: a control that lingers for a second and then disappears reads as
+  // the page correcting itself.
+  state.versionOff = hideVersionChrome(document);
 
   ui = { bar: buildDocbar() };
   host.insertBefore(ui.bar, canvas);
@@ -412,22 +427,13 @@ async function activate(host) {
       const entry = await session.entryForPage(identity);
       if (!entry) throw new Error(t("no_document", "This post is not in the repository you can write to."));
 
-      // A published post that already HAS a draft is edited on the DRAFT's own
-      // page, never here. Opening the draft's text under the published post's
-      // URL left the two versions sharing one address: the contents rail, the
-      // recovery stash and the page you would reload after a save all belonged
-      // to the published copy while the text on screen was the draft's, and
-      // which one a later save landed on depended on how you had arrived.
-      //
-      // The test is the SLUG, not how the page named itself: an encrypted
-      // published post carries a slug of its own, so `identity.source` is empty
-      // and the redirect used to be skipped on exactly the page that needed it.
-      if (entry.draft && entry.slug && entry.slug !== identity.slug) {
-        state.dirty = false;
-        location.href = `${siteRoot()}${vaultPrefix()}/${entry.slug}/#edit`;
-        return;
-      }
-
+      // A published post that already HAS a draft is edited ON THE DRAFT —
+      // `entryForPage` has already resolved to it. It opens HERE, in place: the
+      // draft's own page carries no text this page does not, so sending the
+      // author there was a full page load between pressing Edit and being able
+      // to type. Every address the session uses comes off `entry`, not off the
+      // URL — `doc.path`, `doc.sha`, the recovery stash and the save target are
+      // the draft's — so the two versions do not share anything but a viewport.
       state.doc = await session.openDocument(entry);
       state.entry = entry;
 
@@ -474,8 +480,20 @@ async function activate(host) {
     state.entry && state.entry.sizes
   );
 
-  // The same one plugins/vault.js installs, for the pages it is not loaded on.
-  registerSrcResolver((node) => assetURL(node.getAttribute("data-vault-asset")));
+  // And every sealed image the vault holds, which is a different question: a
+  // post may show a picture belonging to ANOTHER encrypted post or album, and
+  // that picture is published at no plaintext route at all. Without this the
+  // canvas asked the site for a 404 and drew a broken image — the index was
+  // loaded only when the picture browser opened.
+  try {
+    setVaultIndex(await session.sealedIndex());
+  } catch (err) {
+    setVaultIndex(null);
+  }
+
+  // Through the session rather than straight to `assetURL`: a borrowed picture
+  // is sealed under its own item's key, and `unlockAsset` is what finds it.
+  registerSrcResolver((node) => unlockSealed(node.getAttribute("data-vault-asset")));
 
   // A picture committed a minute ago is in the repository and not yet on the
   // site. The site is still asked first — that is the copy readers get — and
@@ -893,6 +911,7 @@ async function deactivate() {
   unwire();
   if (state.perchOff) state.perchOff();
   if (state.viewportOff) state.viewportOff();
+  if (state.versionOff) state.versionOff();
 
   // The toolbar leaves FIRST, and `releaseDocbar` comes after it.
   //
@@ -944,7 +963,10 @@ async function deactivate() {
   forgetSession();
   contentChanged();
 
-  if (composer) location.href = `${siteRoot()}/blog-management/`;
+  // `/blog-management/write/` is an empty article with nothing left in it once
+  // the editor closes, so the console it was started from is the page. Through
+  // swup, like every other link on the site.
+  if (composer) navigate(`${siteRoot()}/blog-management/`);
 }
 
 /**
@@ -960,7 +982,11 @@ function forgetSession() {
   useChrome(null);
   registerRewind(null);
   registerSrcFallback(null);
+  // Every key the canvas borrowed for a picture belonging to another encrypted
+  // item, and the bytes opened with it.
+  relockPreviewed();
   setVaultAssets(null);
+  setVaultIndex(null);
   state.boxes.clear();
   Object.assign(state, blank());
   ui = null;
@@ -993,6 +1019,7 @@ function abandon(leaving) {
   unwire();
   if (state.perchOff) state.perchOff();
   if (state.viewportOff) state.viewportOff();
+  if (state.versionOff) state.versionOff();
   releaseDocbar();
   releaseTOC();
   for (const box of state.boxes) for (const view of box.views) releaseView(view);
@@ -1033,7 +1060,7 @@ function onPopVisit(visit, args, perform) {
   confirmLeave().then((go) => {
     if (!go) return;
     state.dirty = false;
-    window.location.href = to;
+    navigate(to);
   });
 }
 
@@ -3391,16 +3418,9 @@ async function doSave(mode) {
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);
 
-    // A post written HERE now lives somewhere else, and this page is the empty
-    // composer it was written in — there is no build rail worth watching on a
-    // page that will never show the result. Draft or published, the answer is
-    // the site.
-    if (state.fresh) {
-      state.dirty = false;
-      setTimeout(() => location.replace(`${siteRoot()}/`), 1200);
-      return;
-    }
-
+    // A post written HERE now lives somewhere else, but the rail is still worth
+    // watching: it is the only thing saying whether the commit built. Where it
+    // lands is what differs — see `land`.
     startProgress(result);
 
     // Publishing is the end of a piece of work, and what it produces — the
@@ -3606,7 +3626,16 @@ function land() {
   // `dirty` is already false, so neither the unload prompt nor the swup guard
   // has anything left to protect.
   state.dirty = false;
-  setTimeout(() => window.location.reload(), 1200);
+  // A post written in the composer has no page of its own — this one is the
+  // empty article it was written in — so the console it was started from is
+  // where it goes. Loaded properly rather than swapped in through swup: every
+  // list on that page was sealed into it by the build that has just been
+  // replaced, and the same is true of the article underneath this editor.
+  const composer = state.fresh;
+  setTimeout(() => {
+    if (composer) window.location.assign(`${siteRoot()}/blog-management/`);
+    else window.location.reload();
+  }, 1200);
 }
 
 /* ─── wiring ───────────────────────────────────────────────────────────────── */
@@ -3843,7 +3872,7 @@ function onNavAway(e) {
     // Whatever the answer was, the work is either committed or deliberately
     // abandoned — so the unload prompt has nothing left to protect.
     state.dirty = false;
-    window.location.href = href;
+    navigate(href);
   });
 }
 

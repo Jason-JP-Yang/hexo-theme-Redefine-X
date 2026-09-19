@@ -401,10 +401,14 @@ async function unlockPost(gate) {
     // pairing is by source file, which needs the other grants' metadata. Only
     // for an admin: nobody else has a draft to be shown, and only an admin is
     // few enough for the extra card fetches to be free.
-    if (isAdmin && !isAlbum && !isDraft) {
+    if (isAdmin && !isDraft) {
       await hydrateMeta(map);
-      const draft = supersedingByVaultId(map).get(entry.id);
-      if (draft && draft.meta) mountDraftSwap(new Map([[normalizePath(location.pathname), draft]]));
+      if (isAlbum) {
+        mountAlbumSwap(map);
+      } else {
+        const draft = supersedingByVaultId(map).get(entry.id);
+        if (draft && draft.meta) mountDraftSwap(new Map([[normalizePath(location.pathname), draft]]));
+      }
     }
 
     host.animate(
@@ -570,6 +574,56 @@ function mountDraftSwap(drafts) {
   link.querySelector("span").textContent = i18n("view_draft", "View draft");
 
   header.appendChild(box);
+  reveal(box);
+  settle();
+}
+
+/** The album this page is showing, by the identity every surface uses for it. */
+function albumTitleHere() {
+  const container = document.querySelector("#masonry-container[data-album-title]");
+  return container ? String(container.dataset.albumTitle || "").trim() : "";
+}
+
+/**
+ * The same control for an album — the direction the build cannot render.
+ *
+ * An album's published page is read by everybody when the album is public, and
+ * by everyone holding its key when it is not; saying "there is a draft" in
+ * either would disclose that one exists. So it is mounted here, for the one
+ * reader who already holds the draft's key, and it sits under the gallery's
+ * title because an album has no header row to put it at the end of.
+ */
+function mountAlbumSwap(map) {
+  const title = albumTitleHere();
+  if (!title) return;
+
+  const host = document.querySelector(".page-template-container");
+  if (!host || host.querySelector(".article-version")) return;
+
+  const draft = readableAlbums(map).find(
+    (entry) => entry.meta && entry.meta.draft === true && String(entry.meta.supersedes || "") === title
+  );
+  if (!draft) return;
+
+  const box = document.createElement("div");
+  box.className = "article-version";
+  box.dataset.version = "published";
+  box.setAttribute(INSERTED, "1");
+  box.innerHTML =
+    `<span class="article-version-tag is-published">` +
+    `<i class="fa-regular fa-circle-check" aria-hidden="true"></i></span>` +
+    `<a class="article-version-swap"><i class="fa-solid fa-pen-nib" aria-hidden="true"></i><span></span></a>`;
+  box.querySelector(".article-version-tag").appendChild(
+    document.createTextNode(i18n("published", "Published"))
+  );
+  const link = box.querySelector(".article-version-swap");
+  link.href = draft.meta.href;
+  link.querySelector("span").textContent = i18n("view_draft", "View draft");
+
+  const heading = host.querySelector(".page-title-header");
+  if (heading && heading.nextSibling) host.insertBefore(box, heading.nextSibling);
+  else if (heading) host.appendChild(box);
+  else host.insertBefore(box, host.firstChild);
   reveal(box);
   settle();
 }
@@ -1175,39 +1229,97 @@ async function unlockMasonry(map) {
   root.dataset.vaultApplied = "1";
 
   await animateHeight(root, () => {
+    dropSupersededAlbums(root, groups);
     for (let g = groups.length - 1; g >= 0; g--) {
       const group = groups[g];
       const list = albumList(root, group);
       for (let i = group.items.length - 1; i >= 0; i--) {
-        const entry = group.items[i];
-        entry.card.setAttribute(INSERTED, "1");
-        list.insertBefore(entry.card, list.children[entry.meta.pos || 0] || null);
-        reveal(entry.card);
+        const slot = group.items[i];
+        slot.card.setAttribute(INSERTED, "1");
+        list.insertBefore(slot.card, list.children[slot.place.pos || 0] || null);
+        reveal(slot.card);
       }
     }
   });
   settle();
 }
 
-/** The readable albums by category, each group's cards in build order and the
- *  groups themselves in the order their headings appear on the page. */
+/**
+ * A draft album takes the published album's card OFF the collection page.
+ *
+ * The same rule an article's draft follows: one album, one card. A public
+ * album's card is in the markup the reader was served, so it is removed here
+ * and put back by `undoSupersedes` when the session ends. An ENCRYPTED album's
+ * card was never on the page at all — `albumGroups` simply does not insert it.
+ */
+function dropSupersededAlbums(root, groups) {
+  const titles = new Set();
+  for (const group of groups) {
+    for (const slot of group.items) if (slot.shadows) titles.add(slot.shadows);
+  }
+  if (!titles.size) return;
+
+  for (const link of Array.from(root.querySelectorAll("li > a[href]"))) {
+    const item = link.parentElement;
+    if (item.hasAttribute(INSERTED)) continue;
+    // `normalizePath` has already decoded and trimmed the slashes, so what is
+    // left after the prefix is the album's page title exactly as masonry.yml
+    // spells it — which is what `supersedes` names.
+    const path = normalizePath(new URL(link.href, location.href).pathname);
+    if (!path.startsWith("masonry/")) continue;
+    if (!titles.has(path.slice("masonry/".length))) continue;
+
+    const parent = item.parentNode;
+    const next = item.nextSibling;
+    superseded.push({ restore: () => parent.insertBefore(item, next) });
+    item.remove();
+  }
+}
+
+/**
+ * The readable albums by category, each group's cards in build order and the
+ * groups themselves in the order their headings appear on the page.
+ *
+ * A draft inherits the SLOT of the album it stands in front of. Its own `pos`
+ * and `index` say where masonry.yml lists it, which is after that album — so
+ * left alone it drew a second card at the end of the category while the
+ * published one kept its place.
+ */
 function albumGroups(map) {
+  const albums = readableAlbums(map).filter((entry) => entry.card && entry.meta);
+
+  const drafts = new Map();
+  const published = new Map();
+  for (const entry of albums) {
+    if (entry.meta.draft === true && entry.meta.supersedes) {
+      drafts.set(String(entry.meta.supersedes), entry);
+    } else if (entry.meta.draft !== true) {
+      published.set(String(entry.meta.title || ""), entry);
+    }
+  }
+
   const byName = new Map();
-  for (const entry of readableAlbums(map)) {
-    if (!entry.card) continue;
-    const name = entry.meta.category || "";
+  for (const entry of albums) {
+    const shadows = entry.meta.draft === true ? String(entry.meta.supersedes || "") : "";
+    // The published half of a pair this reader can also open: its draft is
+    // about to claim the slot, so it is not drawn.
+    if (!shadows && drafts.has(String(entry.meta.title || ""))) continue;
+
+    const host = shadows ? published.get(shadows) : null;
+    const place = host ? host.meta : entry.meta;
+    const name = place.category || entry.meta.category || "";
     if (!byName.has(name)) byName.set(name, []);
-    byName.get(name).push(entry);
+    byName.get(name).push({ card: entry.card, meta: entry.meta, place, shadows });
   }
 
   return Array.from(byName, ([name, items]) => {
-    items.sort((a, b) => (a.meta.index || 0) - (b.meta.index || 0));
+    items.sort((a, b) => (a.place.index || 0) - (b.place.index || 0));
     return {
       name,
       items,
-      pos: items[0].meta.catPos || 0,
-      index: items[0].meta.catIndex || 0,
-      thumbs: !!items[0].meta.thumbs,
+      pos: items[0].place.catPos || 0,
+      index: items[0].place.catIndex || 0,
+      thumbs: !!items[0].place.thumbs,
     };
   }).sort((a, b) => a.pos - b.pos || a.index - b.index);
 }
@@ -1451,6 +1563,7 @@ export default async function initVault() {
 
   await hydrateMeta(map);
   mountDraftSwap(supersedingMap(map));
+  if (isAdmin) mountAlbumSwap(map);
   await unlockHome(map);
   await unlockArchiveLike(map);
   await unlockTagCloud(map);

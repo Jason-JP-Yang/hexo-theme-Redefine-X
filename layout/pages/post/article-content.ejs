@@ -71,7 +71,10 @@
 				<span class="article-version-tag is-draft">
 					<i class="fa-solid fa-pen-nib" aria-hidden="true"></i><%= __('vault.draft') %>
 				</span>
-				<a class="article-version-swap" href="<%= url_for(page.supersedes) %>">
+				<%# `supersedesHref` is resolved by the vault generator, because a
+				    published post carrying `vault:` has no public permalink — its
+				    page is the vault gate. %>
+				<a class="article-version-swap" href="<%= page.supersedesHref || url_for(page.supersedes) %>">
 					<i class="fa-regular fa-eye" aria-hidden="true"></i>
 					<span><%= __('vault.view_published') %></span>
 				</a>

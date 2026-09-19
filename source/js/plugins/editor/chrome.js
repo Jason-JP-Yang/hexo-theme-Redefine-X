@@ -25,6 +25,30 @@
 
 import { onScroll } from "../../tools/scrollScheduler.js";
 
+/**
+ * Leave, the way the rest of the site leaves.
+ *
+ * The blog runs swup, so an in-site address is a page TRANSITION: the navbar,
+ * the footer and every loaded script stay where they are and the new page
+ * slides in. Assigning `location.href` instead is a full load — a white flash
+ * and a cold start — on exactly the journeys the editor owns: closing the
+ * composer, and following a link that was held back to ask about unsaved work.
+ *
+ * `swup` is a top-level `const` in components/swup.ejs, so it is a global
+ * BINDING rather than a property of `window`; a bare reference is the only way
+ * to reach it, and the catch is what covers a page rendered without it.
+ */
+export function navigate(href) {
+  if (!href) return;
+  try {
+    swup.navigate(href);
+    return;
+  } catch (err) {
+    /* no swup on this page */
+  }
+  window.location.assign(href);
+}
+
 export function watchDocbar(bar) {
   let last = "";
 
@@ -94,6 +118,55 @@ export function releaseDocbar(watcher) {
  *                           only chrome left and the rule above does not apply
  */
 export const PERCH_AT = 24;
+
+/**
+ * The reader's version controls, put away while the editor is open.
+ *
+ * "Published / View draft" and the encrypted badge describe the page a READER
+ * is being shown. The moment editing starts they describe nothing: the canvas
+ * is the draft, and the swap would take the author away from work in progress.
+ * They fade out rather than vanish — the row they sit in is the one the author
+ * just pressed Edit in — and the space they occupied is released only once the
+ * fade is over, so nothing under them jumps.
+ *
+ * Returns the function that puts them back.
+ */
+const VERSION_CHROME = ".article-version, .home-article-badges, .vault-badge";
+const FADE_MS = 220;
+
+export function hideVersionChrome(root) {
+  const host = root || document;
+  const nodes = Array.from(host.querySelectorAll(VERSION_CHROME)).filter(
+    (node) => !node.closest(".ed-docbar, .ed-front, .ed-toolbar")
+  );
+  if (!nodes.length) return () => {};
+
+  for (const node of nodes) {
+    node.style.transition = `opacity ${FADE_MS}ms ease`;
+    node.style.opacity = "0";
+    node.style.pointerEvents = "none";
+  }
+  const timer = setTimeout(() => {
+    for (const node of nodes) if (node.isConnected) node.hidden = true;
+  }, FADE_MS);
+
+  return () => {
+    clearTimeout(timer);
+    for (const node of nodes) {
+      if (!node.isConnected) continue;
+      node.hidden = false;
+      node.style.removeProperty("pointer-events");
+      // Two frames: un-hiding and clearing the opacity in one pass is a jump,
+      // because the element has no rendered state to transition from.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          node.style.removeProperty("opacity");
+          setTimeout(() => node.style.removeProperty("transition"), FADE_MS);
+        })
+      );
+    }
+  };
+}
 
 export function watchPerch(el, hidden) {
   let want = "show";

@@ -45,6 +45,7 @@
  * builds it from the same record it already had to fetch.
  */
 
+const fs = require("fs");
 const path = require("path");
 const vc = require("./lib/vault-crypto");
 const state = require("./lib/vault-state");
@@ -98,10 +99,58 @@ function cardLocals(extra) {
   return hexo.execFilterSync("template_locals", locals, { context: hexo });
 }
 
+/**
+ * The file a route WOULD be served from, for a route that does not exist yet.
+ *
+ * Hexo collects every generator's result before it sets a single route, so the
+ * built-in asset generator's routes are not in the table while this generator
+ * runs — only img-optimizer's, which are set at `before_generate`. An image the
+ * optimizer declined to transcode (a CI runner never starts an encoder, and an
+ * image added since the last local build has no cached AVIF) therefore looked
+ * to this file like an image the build had never produced: its reference was
+ * left pointing at its plaintext address, its bytes were never sealed, and
+ * `noteAsset` was never called — so it was never withheld either. The
+ * photograph was published in the clear beside the ciphertext.
+ *
+ * Reading it off disk is the same answer the asset generator will give, one
+ * pass earlier.
+ */
+function diskPath(routePath) {
+  const rel = String(routePath || "").replace(/^\/+/, "");
+  if (!rel || rel.includes("..")) return "";
+  // PICTURES only. A sealed article also carries stylesheets and scripts, and
+  // those are site furniture: sealing one would take the theme's own JavaScript
+  // out of the build and hand every encrypted post a blob where a script tag
+  // belongs. The route table is the right answer for them and always was —
+  // they are never withheld, so never having found them changed nothing.
+  if (!IMAGE_EXT.test(rel)) return "";
+  for (const dir of [hexo.source_dir, path.join(hexo.theme_dir, "source")]) {
+    const file = path.join(dir, rel);
+    try {
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) return file;
+    } catch (e) {}
+  }
+  return "";
+}
+
+/** Is this route published at all — by a route already set, or by the file the
+ *  asset generator will publish from. */
+function routeExists(routePath) {
+  return !!(hexo.route.get(routePath) || diskPath(routePath));
+}
+
 /** Route payloads come back as Buffers, strings, streams or thunks. */
 function readRoute(routePath) {
   const data = hexo.route.get(routePath);
-  if (!data) return Promise.resolve(null);
+  if (!data) {
+    const file = diskPath(routePath);
+    if (!file) return Promise.resolve(null);
+    try {
+      return Promise.resolve(fs.readFileSync(file));
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
   if (Buffer.isBuffer(data)) return Promise.resolve(data);
   if (typeof data === "string") return Promise.resolve(Buffer.from(data));
 
@@ -168,21 +217,53 @@ function noteAsset(entry, routePath, hash) {
   entry.assetSizes[source] = [dims.width, dims.height];
 }
 
+/** A reference as a route path: root stripped, query and fragment gone. */
+function routeOf(value) {
+  const root = String(hexo.config.root || "/");
+  if (!value || /^(data:|blob:|https?:|\/\/|#)/i.test(value)) return "";
+  let decoded;
+  try {
+    decoded = decodeURI(String(value).split("#")[0].split("?")[0]);
+  } catch (e) {
+    decoded = String(value).split("#")[0].split("?")[0];
+  }
+  return decoded
+    .replace(new RegExp("^" + root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "")
+    .replace(/^\/+/, "");
+}
+
+/** The published address of a route, as a reference an `<img>` can carry. */
+function hrefOf(routePath) {
+  return encodeURI(withRoot(routePath));
+}
+
+/** Which of this reference's candidate routes is already published in the
+ *  clear, or "" when none of them is. */
+function publicRouteFor(relPath, shared) {
+  if (!shared || !shared.size) return "";
+  for (const candidate of assetCandidates(relPath)) {
+    if (shared.has(candidate)) return candidate;
+  }
+  return "";
+}
+
 /**
  * Seal every local image the body points at and rewrite the reference to the
  * sealed blob. `data-original-src` is stripped on the way through: img-optimizer
  * adds it to preserve the pre-AVIF path, and that path is the post's own file
  * name — the one piece of plaintext that would otherwise survive encryption.
+ *
+ * `shared` is every route the PUBLIC build already points at. An image in it is
+ * left exactly where it is and the reference points straight at it: sealing a
+ * second copy of bytes anybody can already fetch costs a blob per encrypted
+ * item and protects nothing, and withholding the route would blank the public
+ * page that is entitled to show it.
  */
-async function sealAssets(entry, html, routes) {
-  const root = String(hexo.config.root || "/");
+async function sealAssets(entry, html, routes, shared) {
   const jobs = [];
 
   let out = html.replace(ASSET_ATTR, (whole, attr, quote, value) => {
-    if (/^(data:|blob:|https?:|\/\/|#)/i.test(value)) return whole;
-    const routePath = decodeURI(value.split("#")[0].split("?")[0])
-      .replace(new RegExp("^" + root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "")
-      .replace(/^\/+/, "");
+    const routePath = routeOf(value);
     if (!routePath) return whole;
 
     const token = `__VAULT_ASSET_${jobs.length}__`;
@@ -193,6 +274,12 @@ async function sealAssets(entry, html, routes) {
   out = out.replace(/\s+data-original-src\s*=\s*("|')[^"']*\1/gi, "");
 
   for (const job of jobs) {
+    const open = publicRouteFor(job.routePath, shared);
+    if (open) {
+      out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="${hrefOf(open)}"`);
+      continue;
+    }
+
     // The reference can still name the PRE-AVIF path: avifRewriteHtml rewrites
     // only what it can resolve back to a source file, so a path spelled
     // differently from the file on disk — a masonry avatar given the wrong
@@ -212,7 +299,7 @@ async function sealAssets(entry, html, routes) {
     if (!bytes) {
       // Not an image this build produced (a theme asset, an external mount).
       // Leave the reference alone rather than breaking it.
-      out = out.replace(job.token, job.routePath ? "/" + job.routePath : "");
+      out = out.replace(`${job.attr}="${job.token}"`, `${job.attr}="${hrefOf(job.routePath)}"`);
       continue;
     }
 
@@ -251,18 +338,28 @@ function neighbours(post) {
   return { prev, next };
 }
 
-/** The post's own cover, sealed and named by hash. Mirrors home-content's
- *  `resolveCover`, minus the branches a vault post cannot take. */
-async function sealCover(entry, routes) {
+/**
+ * The post's own cover, sealed and named by hash. Mirrors home-content's
+ * `resolveCover`, minus the branches a vault post cannot take.
+ *
+ * A cover a PUBLIC post also uses comes back as a plain href instead — same
+ * rule as `sealAssets`, and the card template takes either.
+ *
+ * @returns {{hash: string, href: string}}
+ */
+async function sealCover(entry, routes, shared) {
+  const none = { hash: "", href: "" };
   const post = entry.post;
-  if (post.thumbnail === false) return "";
+  if (post.thumbnail === false) return none;
   const raw = post.thumbnail || post.cover || post.banner;
-  if (!raw || typeof raw !== "string" || !raw.includes("/")) return "";
-  if (/^(data:|https?:|\/\/)/i.test(raw)) return "";
+  if (!raw || typeof raw !== "string" || !raw.includes("/")) return none;
+  if (/^(data:|https?:|\/\/)/i.test(raw)) return none;
 
-  const root = String(hexo.config.root || "/");
-  const direct = raw.replace(new RegExp("^" + root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "")
-    .replace(/^\/+/, "");
+  const direct = routeOf(raw);
+  if (!direct) return none;
+
+  const open = publicRouteFor(direct, shared);
+  if (open) return { hash: "", href: hrefOf(open) };
 
   // img-optimizer publishes the AVIF derivative at its own route; the source
   // path only resolves when it declined to convert.
@@ -275,7 +372,7 @@ async function sealCover(entry, routes) {
       break;
     }
   }
-  if (!bytes) return "";
+  if (!bytes) return none;
 
   const hash = vc.assetHash(bytes);
   routes.set(
@@ -285,30 +382,58 @@ async function sealCover(entry, routes) {
   // The route that was actually read, not the front-matter path: withholding
   // the wrong one would leave the real derivative published.
   noteAsset(entry, matched, hash);
-  return hash;
+  return { hash, href: "" };
 }
 
 /** The route a public post's cover resolves to, for the shared-image check. */
-async function publicCoverRoutes() {
-  const root = String(hexo.config.root || "/");
-  const out = new Set();
-
+function addPublicCoverRoutes(into) {
   for (const post of hexo.locals.get("posts").toArray()) {
     if (post.thumbnail === false) continue;
     const raw = post.thumbnail || post.cover || post.banner;
     if (!raw || typeof raw !== "string" || !raw.includes("/")) continue;
     if (/^(data:|https?:|\/\/)/i.test(raw)) continue;
 
-    const direct = raw
-      .replace(new RegExp("^" + root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "")
-      .replace(/^\/+/, "");
+    const direct = routeOf(raw);
+    if (!direct) continue;
     for (const candidate of avifCandidates(direct)) {
-      if (hexo.route.get(candidate)) {
-        out.add(candidate);
+      if (routeExists(candidate)) {
+        into.add(candidate);
         break;
       }
     }
   }
+}
+
+/** Every image a PUBLIC post's rendered body points at. Read off the finished
+ *  HTML rather than off the markdown, so it names the route the reader is
+ *  actually served — AVIF derivative, lazyload `data-src` and all. */
+function addPublicBodyRoutes(into) {
+  for (const post of hexo.locals.get("posts").toArray()) {
+    const html = String(post.content || "");
+    if (!html) continue;
+    ASSET_ATTR.lastIndex = 0;
+    let match;
+    while ((match = ASSET_ATTR.exec(html))) {
+      const rel = routeOf(match[3]);
+      if (rel) into.add(rel);
+    }
+  }
+}
+
+/**
+ * Every route the public build already publishes an image at.
+ *
+ * Settled BEFORE anything is sealed, because both halves of the decision need
+ * it: `sealAssets` leaves a shared image where it is rather than sealing a
+ * second copy, and the withholding pass must not take it away from the page
+ * that is entitled to show it.
+ */
+function publicRoutes() {
+  const out = new Set();
+  addPublicCoverRoutes(out);
+  addPublicBodyRoutes(out);
+  addPublicMasonryRoutes(out);
+  addThemeConfigRoutes(out);
   return out;
 }
 
@@ -325,9 +450,9 @@ function addPublicMasonryRoutes(into) {
 
   const add = (value) => {
     if (!value || typeof value !== "string") return;
-    const rel = value.replace(/^\/+/, "");
+    const rel = routeOf(value) || value.replace(/^\/+/, "");
     for (const candidate of avifCandidates(rel)) {
-      if (hexo.route.get(candidate)) {
+      if (routeExists(candidate)) {
         into.add(candidate);
         break;
       }
@@ -361,11 +486,11 @@ function addThemeConfigRoutes(into) {
     if (depth > 6 || node == null) return;
     if (typeof node === "string") {
       if (!node.includes("/") || /^(https?:|data:|\/\/)/i.test(node)) return;
-      const rel = node.replace(/^\/+/, "");
-      if (seen.has(rel)) return;
+      const rel = routeOf(node) || node.replace(/^\/+/, "");
+      if (!rel || seen.has(rel)) return;
       seen.add(rel);
       for (const candidate of avifCandidates(rel)) {
-        if (hexo.route.get(candidate)) {
+        if (routeExists(candidate)) {
           into.add(candidate);
           break;
         }
@@ -466,6 +591,51 @@ function taxTarget(kind, name) {
   };
 }
 
+/**
+ * Where a draft's "view the published version" control points.
+ *
+ * `supersedes` is the published post's PERMALINK, which is the right address
+ * only while that post is public. An encrypted one was never generated at its
+ * permalink — its page is `/<prefix>/<slug>/` — so the control 404'd on every
+ * draft of an encrypted article. The pairing is by permalink because that is
+ * what the draft carries, and both halves are in this same list.
+ */
+function supersededHref(entries) {
+  const published = new Map();
+  for (const entry of entries) {
+    if (entry.post.draft === true) continue;
+    const link = inventory.permalinkOf(entry.post);
+    if (link) published.set(link.replace(/^\/+|\/+$/g, ""), entry.slug);
+  }
+
+  return function (entry) {
+    if (!entry.supersedes) return "";
+    const slug = published.get(String(entry.supersedes).replace(/^\/+|\/+$/g, ""));
+    return slug ? `${withRoot(prefix())}/${slug}/`.replace(/\/{2,}/g, "/") : "";
+  };
+}
+
+/**
+ * The same question for an album, whose `supersedes` is a page TITLE rather
+ * than a permalink: `/masonry/<title>/` when the published album is public,
+ * the vault gate when it carries `vault:`.
+ */
+function supersededAlbumHref() {
+  const sealed = new Map();
+  for (const entry of state.albums()) {
+    if (entry.item && entry.item.draft === true) continue;
+    sealed.set(String(entry.title), entry.slug);
+  }
+
+  return function (title) {
+    const wanted = String(title || "");
+    if (!wanted) return "";
+    const slug = sealed.get(wanted);
+    if (slug) return `${withRoot(prefix())}/${slug}/`.replace(/\/{2,}/g, "/");
+    return encodeURI(withRoot(`masonry/${wanted}/`).replace(/\/{2,}/g, "/"));
+  };
+}
+
 function metaFor(entry, href, coverAsset, body) {
   const Category = hexo.model("Category");
 
@@ -501,6 +671,9 @@ function metaFor(entry, href, coverAsset, body) {
     sizes: entry.assetSizes || {},
     draft: entry.post.draft === true,
     supersedes: entry.supersedes || "",
+    // The published post's real page, which is the vault gate when it carries
+    // `vault:` — see `supersededHref`.
+    supersedesHref: entry.supersedesHref || "",
     cover: coverAsset || "",
     excerpt: plainExcerpt(entry.post, body),
     tags: (entry.tags || []).map((tag) => ({
@@ -620,13 +793,18 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   const articleView = hexo.theme.getView("pages/post/article-content.ejs");
   const avifRewrite = hexo.extend.helper.get("avifRewriteHtml");
 
+  // Settled once, before a single blob is sealed — see `publicRoutes`.
+  const shared = publicRoutes();
+  const swapHref = supersededHref(entries);
+
   // ── articles, assets, cards and metadata ──────────────────────────────────
   for (const entry of entries) {
     // Only the BODY's images are sealed, never the surrounding chrome: the
     // author avatar and other template assets are public site-wide, and
     // withholding one would break every page that uses it.
-    const body = await sealAssets(entry, entry.plain, routes);
-    const coverAsset = await sealCover(entry, routes);
+    const body = await sealAssets(entry, entry.plain, routes, shared);
+    const cover = await sealCover(entry, routes, shared);
+    const coverAsset = cover.hash;
     const href = `${hexo.config.root || "/"}${p}/${entry.slug}/`.replace(/\/{2,}/g, "/");
 
     // The whole article, not just its text — banner, title, author, meta, tags,
@@ -640,6 +818,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     // the derived object rather than written back onto the model. The article's
     // version control and the card's badge both read it from here.
     page.supersedes = entry.supersedes || "";
+    // Where "view the published version" actually goes. A published post that
+    // carries `vault:` has no public permalink at all — its page is the vault
+    // gate — so linking to `supersedes` was a 404 on exactly the drafts whose
+    // published half is encrypted. Resolved here because only the build knows
+    // which slug that post was sealed under.
+    entry.supersedesHref = swapHref(entry) || "";
+    page.supersedesHref = entry.supersedesHref;
     Object.assign(page, neighbours(entry.post));
     // The taxonomy getters are backed by the relation index this build has
     // already emptied for this post (filters/vault.js). Hand back the snapshot
@@ -686,7 +871,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
         isVault: true,
         vaultId: entry.id,
         tile: null,
-        cover: "",
+        cover: cover.href,
         coverAsset,
         href,
         postNumber: 0,
@@ -726,6 +911,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   const albumCardView = hexo.theme.getView("pages/masonry/masonry-collection-card.ejs");
   const masonryImages = hexo.extend.helper.get("masonryImages");
   const lazyloadMasonry = hexo.extend.helper.get("lazyloadMasonryHtml");
+  const albumSwapHref = supersededAlbumHref();
 
   for (const entry of state.albums()) {
     const item = entry.item;
@@ -751,6 +937,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
           // nowhere a reader could reach.
           albumDraft: item.draft === true,
           albumSupersedes: item.supersedes || "",
+          albumSupersedesHref: albumSwapHref(item.supersedes),
         },
       })
     );
@@ -761,7 +948,10 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     if (avifRewrite) album = avifRewrite(album);
     if (lazyloadMasonry) album = await lazyloadMasonry(album, null);
 
-    routes.set(`${p}/${entry.slug}/b.bin`, vc.seal(entry.key, await sealAssets(entry, album, routes)));
+    routes.set(
+      `${p}/${entry.slug}/b.bin`,
+      vc.seal(entry.key, await sealAssets(entry, album, routes, shared))
+    );
 
     let card = await albumCardView.render(
       cardLocals({
@@ -773,7 +963,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
       })
     );
     if (avifRewrite) card = avifRewrite(card);
-    card = await sealAssets(entry, card, routes);
+    card = await sealAssets(entry, card, routes, shared);
 
     routes.set(
       `${p}/${entry.slug}/c.bin`,
@@ -798,6 +988,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
             // badges the row from them.
             draft: item.draft === true,
             supersedes: item.supersedes ? String(item.supersedes) : "",
+            supersedesHref: albumSwapHref(item.supersedes),
             // The same two the post branch writes, and for the same reason: an
             // album's photographs are withheld from build/manifest.json, so
             // this is the ONLY record of what they are called and what they
@@ -967,39 +1158,29 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   }
 
   // ── withhold the plaintext images ─────────────────────────────────────────
-  // These routes are the AVIF originals the sealed blobs were made from. Left
-  // in place they would be published beside the ciphertext at a guessable path,
+  // These routes are the originals the sealed blobs were made from. Left in
+  // place they would be published beside the ciphertext at a guessable path,
   // which is the cheapest possible way around the whole scheme.
-  // An image a PUBLIC post also uses is already public, so withholding it would
-  // break that post without protecting anything. Bodies AND covers: a cover
-  // comes from front matter and never appears in any post's rendered content.
+  //
+  // Everything a public page shows was taken out before sealing began, so
+  // `entry.assets` already holds only what nothing public points at — the
+  // second test here is belt and braces against a spelling the two passes
+  // resolved differently.
   //
   // The route itself is dropped in filters/vault.js at `after_generate`, not
   // here: Hexo sets every generator's routes AFTER all of them have run, so a
   // removal made from inside a generator is undone before it can take effect.
-  const shared = await publicCoverRoutes();
-  addPublicMasonryRoutes(shared);
-  addThemeConfigRoutes(shared);
-
-  const publicHtml = hexo.locals
-    .get("posts")
-    .toArray()
-    .map((post) => post.content || "")
-    .join("");
-
-  const sealedEntries = state.all();
-  for (const entry of sealedEntries) {
-    for (const routePath of entry.assets || []) {
-      if (publicHtml.includes(routePath)) shared.add(routePath);
-    }
-  }
-
   let withheld = 0;
-  for (const entry of sealedEntries) {
+  for (const entry of state.all()) {
     for (const routePath of entry.assets || []) {
       if (shared.has(routePath)) continue;
       state.withhold(routePath);
       withheld++;
+      // The pre-AVIF file is still on disk and still under `source/`, so Hexo's
+      // asset generator would publish it at its own route however thoroughly
+      // the derivative was withheld.
+      const origin = sourceOfRoute(routePath);
+      if (origin !== routePath && !shared.has(origin)) state.withhold(origin);
     }
   }
 

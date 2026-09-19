@@ -210,7 +210,13 @@ hexo.extend.filter.register(
   "before_generate",
   function () {
     const posts = hexo.locals.get("posts");
-    const marked = posts.filter((post) => !!post.vault).toArray();
+    // `draft: true` withholds a post whatever its `vault:` says, exactly as it
+    // does for an album. A draft has one reader by definition, and its `vault:`
+    // is not about the draft at all — it is the author's decision about the
+    // post that will be PUBLISHED from it, read back by the editor when they
+    // publish. Reading it as the draft's own setting meant a draft of a public
+    // post was built in the clear at its own permalink.
+    const marked = posts.filter((post) => !!post.vault || post.draft === true).toArray();
 
     // Rebuilt every pass: `hexo server` regenerates on each change, and a stale
     // stash would seal a body that is no longer the one on disk.
@@ -497,9 +503,13 @@ hexo.extend.filter.register(
 
     // Which ids are drafts, so the Worker can refuse to grant one an audience.
     // A draft is the author's unfinished copy and has exactly one reader.
-    const drafts = new Set(
-      state.sorted().filter((entry) => entry.post.draft === true).map((entry) => entry.id)
-    );
+    // ALBUMS as well as posts: an album draft is the same thing with a different
+    // document model, and leaving it out of this set was the one place the rule
+    // could be reached round — the Worker would have granted it to whoever the
+    // published album was granted to.
+    const drafts = new Set();
+    for (const entry of state.sorted()) if (entry.post.draft === true) drafts.add(entry.id);
+    for (const entry of state.albums()) if (entry.item && entry.item.draft === true) drafts.add(entry.id);
 
     const api = backend.resolve(hexo.theme.config).api_url;
     try {

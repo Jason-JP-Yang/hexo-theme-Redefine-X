@@ -51,6 +51,7 @@ import {
   emitItem,
   emitMasonry,
   findAlbum,
+  findAlbumDraftFor,
   findCategory,
   imageFields,
   insertItem,
@@ -76,7 +77,14 @@ import {
   sheetLive,
   siteAddress,
 } from "./picker.js";
-import { PERCH_AT, releaseDocbar, watchDocbar, watchPerch } from "./chrome.js";
+import {
+  PERCH_AT,
+  hideVersionChrome,
+  navigate,
+  releaseDocbar,
+  watchDocbar,
+  watchPerch,
+} from "./chrome.js";
 import { filedPath, movedId, uploadPath } from "./history.js";
 import { loadComponents } from "./render.js";
 import { spotClear, spotElement } from "./spotlight.js";
@@ -88,15 +96,17 @@ import {
   naturalSize,
   registerRewind,
   repoURL,
+  relockPreviewed,
   setVaultAssets,
+  setVaultIndex,
   siteRoot,
+  unlockSealed,
 } from "./assets.js";
 import initLazyLoad, {
   forceLoadAllPreloaders,
   registerSrcFallback,
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
-import { assetURL, vaultPrefix } from "../../tools/vaultCrypto.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
@@ -205,6 +215,7 @@ function blank() {
     vaultChoice: undefined,
     stashTimer: null,
     perchOff: null,
+    versionOff: null,
     barSize: null,
     progressTimer: null,
     dragId: "",
@@ -269,6 +280,15 @@ function storedOf(site) {
   return value.startsWith("/masonry/") ? value.slice("/masonry/".length) : value;
 }
 
+/** The same, in the spelling this album already uses for its own pictures.
+ *  Both parse, but mixing them makes a one-picture diff look like a rewrite. */
+function storedLike(site) {
+  const short = storedOf(site);
+  if (short === site) return short;
+  const absolute = images().some((node) => String(imageFields(node).image || "").startsWith("/"));
+  return absolute ? site : short;
+}
+
 /* ─── the page in front of us ──────────────────────────────────────────────── */
 
 function findContainer() {
@@ -319,8 +339,12 @@ function pathLabel() {
 function syncHeader() {
   if (!ui || !state.item) return;
   ui.path.textContent = pathLabel();
-  ui.vaultTag.hidden = !isTrue(itemFields(state.item).vault);
-  ui.draftTag.hidden = !state.opened.draft && !state.fresh;
+  // What THIS document is, the same statement the post editor's tag makes. A
+  // draft is withheld whatever `vault:` says — that key is the author's
+  // decision about the album this will be published as, not about the draft.
+  const draft = state.opened.draft || state.fresh;
+  ui.vaultTag.hidden = !draft && !isTrue(itemFields(state.item).vault);
+  ui.draftTag.hidden = !draft;
   ui.save.disabled = !state.dirty || state.saving;
   ui.publish.disabled = state.saving;
   ui.dot.dataset.state = state.saving ? "busy" : state.dirty ? "dirty" : "clean";
@@ -834,7 +858,7 @@ async function act(action, arg) {
   if (action === "folder") {
     const picked = await pickImage(siteOf(imageFields(node).image));
     if (!picked) return;
-    setImageField(node, "image", storedOf(picked.site));
+    setImageField(node, "image", storedLike(picked.site));
     markDirty("image", node.id);
     await paintCanvas(true, tileOf(node.id));
     if (ui.toolbar) ui.toolbar.refresh();
@@ -925,7 +949,7 @@ async function addImage(at) {
   const anchor = at == null ? null : tileOf((images()[at] || {}).id);
   const picked = await pickImage("");
   if (!picked || !state.on) return;
-  const node = makeImage(state.item.imageLead, state.item.eol, storedOf(picked.site));
+  const node = makeImage(state.item.imageLead, state.item.eol, storedLike(picked.site));
   insertImage(node, at == null ? (state.selected ? indexOf(state.selected) + 1 : images().length) : at);
   state.selected = node.id;
   markDirty("images", node.id);
@@ -1100,7 +1124,16 @@ function liveAddress(src) {
   return siteAddress(state.stage.origin("source" + value));
 }
 
-/** The staged renames, applied to this album's own image paths. */
+/**
+ * The staged renames, applied to this album's own image paths.
+ *
+ * Only a picture a move actually names is rewritten, and it keeps the SPELLING
+ * it was written in. `storedOf` shortens `/masonry/x/y.jpg` to `x/y.jpg`, which
+ * is the right form for a picture this editor filed — and re-storing every
+ * entry through it rewrote every absolute path in the album as a side effect of
+ * one unrelated rename. masonry.yml accepts both, so nothing failed loudly: the
+ * commit simply reformatted an album nobody had touched.
+ */
 function applyStagedMoves() {
   if (!state.stage || !state.stage.dirty) return;
   const fresh = state.stage.moves.filter((move) => !move.noted);
@@ -1108,11 +1141,14 @@ function applyStagedMoves() {
     const stored = String(imageFields(node).image || "");
     if (!stored) continue;
     let site = siteOf(stored);
+    let moved = false;
     for (const move of fresh) {
-      const from = siteAddress(move.from);
-      if (site === from) site = siteAddress(move.to);
+      if (site !== siteAddress(move.from)) continue;
+      site = siteAddress(move.to);
+      moved = true;
     }
-    const next = storedOf(site);
+    if (!moved) continue;
+    const next = stored.startsWith("/") ? site : storedOf(site);
     if (next !== stored) setImageField(node, "image", next);
   }
   for (const key of ["avatar", "thumbnail"]) {
@@ -1685,6 +1721,12 @@ async function activate(container) {
 
   host.classList.add("is-editing", "ed-album-host");
   document.documentElement.classList.add("blog-editing");
+  // "Published / View draft" and the encrypted badge describe what a READER is
+  // being shown. Editing makes the canvas the draft, so they describe nothing —
+  // and they go NOW, with the press, rather than after the repository has
+  // answered: a control that lingers for a second and then disappears reads as
+  // the page correcting itself.
+  state.versionOff = hideVersionChrome(host);
 
   ui = { bar: buildDocbar() };
   host.insertBefore(ui.bar, host.firstChild);
@@ -1750,7 +1792,11 @@ async function activate(container) {
     return;
   }
 
-  registerSrcResolver((node) => assetURL(node.getAttribute("data-vault-asset")));
+  // Through the session, not straight to `assetURL`: a picture this album
+  // borrows from ANOTHER encrypted album or post is sealed under that item's
+  // key, which only `unlockAsset` can find. Without it the canvas asked for a
+  // blob it held no key for and drew a broken picture.
+  registerSrcResolver((node) => unlockSealed(node.getAttribute("data-vault-asset")));
   registerSrcFallback((node) => repoURL(node.dataset.edSrc || "", state.pending));
   registerRewind(liveAddress);
 
@@ -1799,10 +1845,12 @@ async function activate(container) {
 /**
  * Find this album in the file, or start a new one.
  *
- * A published album that already HAS a draft is edited on the DRAFT, never here
- * — the same rule the post editor applies, for the same reason: two entries for
- * one album is a way to edit the copy nobody is looking at. The draft has a page
- * of its own at the vault prefix, so the answer is to go there.
+ * A published album that already HAS a draft is edited ON THE DRAFT — the same
+ * rule the post editor applies, for the same reason: two entries for one album
+ * is a way to edit the copy nobody is looking at. It is opened in place rather
+ * than by sending the author to the draft's own page: both entries live in this
+ * one file, which is already in hand, so the navigation bought nothing and cost
+ * a full page load in the middle of pressing Edit.
  */
 async function openAlbum(container) {
   const file = await repo.read(DATA);
@@ -1818,6 +1866,7 @@ async function openAlbum(container) {
     state.cat = first || appendCategory(state.doc, makeCategory(state.doc.eol, t("cat_first", "Albums"), true));
     state.item = makeItem(state.cat.itemLead, state.doc.eol, { name: "", description: "" });
     state.opened = { title: "", draft: true, category: state.cat.openedName };
+    await loadVaultIndex();
     await offerRecovery();
     return true;
   }
@@ -1829,35 +1878,60 @@ async function openAlbum(container) {
   const title = (mine && mine.title) || here;
   if (!title) throw new Error(t("no_album", "This album is not in the repository you can write to."));
 
-  const onDraft = !!(mine && mine.draft);
+  let onDraft = !!(mine && mine.draft);
+  let owner = mine;
 
   // A draft standing in front of this album is what readers are NOT being shown
-  // and what the author means by "edit". It lives at its own vault page.
+  // and what the author means by "edit".
   if (!onDraft) {
     const draft = albums.find((row) => row.draft && row.supersedes === title);
     if (draft) {
-      state.dirty = false;
-      ui.path.textContent = t("opening", "Opening");
-      location.href = `${siteRoot()}${vaultPrefix()}/${draft.slug}/#edit`;
-      return false;
+      onDraft = true;
+      owner = draft;
     }
   }
 
-  const found = findAlbum(state.doc, title, onDraft ? "draft" : "published");
+  // By `supersedes` when the title no longer matches: a draft whose name has
+  // been changed is still the draft OF this album.
+  const found =
+    findAlbum(state.doc, title, onDraft ? "draft" : "published") ||
+    (onDraft ? findAlbumDraftFor(state.doc, title) : null);
   if (!found) throw new Error(`${title} is not in ${DATA}`);
 
   state.cat = found.cat;
   state.item = found.item;
-  state.opened = { title, draft: onDraft, category: found.cat.openedName };
-  state.grant = mine || null;
+  state.opened = {
+    title: albumTitle(itemFields(found.item)) || title,
+    draft: onDraft,
+    category: found.cat.openedName,
+  };
+  state.grant = owner || null;
 
-  if (mine) setVaultAssets(mine.grant, mine.assets, mine.sizes);
+  if (owner) setVaultAssets(owner.grant, owner.assets, owner.sizes);
   else setVaultAssets(null, null, null);
 
   if (onDraft) notice("info", t("editing_draft_album", "You are editing the draft that stands in front of this album."));
 
+  await loadVaultIndex();
   await offerRecovery();
   return true;
+}
+
+/**
+ * Every sealed picture in the vault, not just this album's.
+ *
+ * An album may show a photograph that belongs to another encrypted album or to
+ * an encrypted post: it is published at NO plaintext route, so the canvas asked
+ * the site for a 404 and drew a broken picture. This is what tells `assets.js`
+ * the hash to ask for; `unlockAsset` is what finds the key. It was loaded only
+ * when the picture browser opened, so the gallery itself never had it.
+ */
+async function loadVaultIndex() {
+  try {
+    setVaultIndex(await session.sealedIndex());
+  } catch (err) {
+    setVaultIndex(null);
+  }
 }
 
 /** The crash net, offered rather than applied. */
@@ -1930,8 +2004,8 @@ function setCategory(name) {
  * Should the PUBLISHED album be encrypted?
  *
  * The switch when it was operated; otherwise whatever the album already said.
- * Unlike a post's, an album's `vault:` is never machinery — a draft is withheld
- * because it is a draft — so there is nothing to untangle here.
+ * `vault:` is never machinery here or on a post — a draft is withheld because
+ * it is a draft — so the value the fork copied across is simply handed back.
  */
 function publishEncrypted(fields) {
   if (state.vaultChoice !== undefined && state.vaultChoice !== null) return isTrue(state.vaultChoice);
@@ -2119,12 +2193,6 @@ async function doSave(mode) {
     syncHeader();
     notice("info", `${t("saved", "Saved")} ${result.short || ""}`.trim());
 
-    if (findContainer() && findContainer().dataset.albumNew === "1") {
-      state.dirty = false;
-      setTimeout(() => location.replace(`${siteRoot()}/masonry/links/`), 1200);
-      return;
-    }
-
     startProgress(result);
     if (plan.published) window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
@@ -2252,11 +2320,24 @@ function startProgress(result) {
   }, POLL_MS);
 }
 
+/**
+ * Show the author what the build produced.
+ *
+ * An album edited on its own page reloads that page. One written in the
+ * composer has no page of its own — `/blog-management/masonry/` is an empty
+ * gallery — so the answer is the console it was started from, loaded properly
+ * rather than swapped in: every list on it was sealed into the page by the
+ * build that has just been replaced.
+ */
 function land() {
   if (!state.on || state.dirty || state.saving) return;
   notice("info", t("deployed_reload", "Published. Loading the page as readers see it…"));
   state.dirty = false;
-  setTimeout(() => window.location.reload(), 1200);
+  const fresh = state.fresh;
+  setTimeout(() => {
+    if (fresh) window.location.assign(`${siteRoot()}/blog-management/`);
+    else window.location.reload();
+  }, 1200);
 }
 
 /* ─── leaving ──────────────────────────────────────────────────────────────── */
@@ -2309,6 +2390,7 @@ async function teardown(restore) {
   spotClear();
   useChrome(null);
   if (state.perchOff) state.perchOff();
+  if (state.versionOff) state.versionOff();
   releaseDocbar(state.barSize);
 
   if (ui) {
@@ -2337,13 +2419,21 @@ async function teardown(restore) {
   document.documentElement.dataset.edChrome = "";
 
   registerRewind(null);
+  relockPreviewed();
   setVaultAssets(null, null, null);
+  setVaultIndex(null);
   history.reset();
   credentials.release();
 
+  const composer = state.fresh;
   ui = null;
   reset();
   contentChanged();
+
+  // `/blog-management/masonry/` is an empty gallery with no album in it, so
+  // there is nothing to go back to once the editor closes — the console it was
+  // started from is the page. Through swup, like every other link on the site.
+  if (restore && composer) navigate(`${siteRoot()}/blog-management/`);
 }
 
 /* ─── wiring ───────────────────────────────────────────────────────────────── */
@@ -2632,7 +2722,7 @@ function onNavAway(e) {
   confirmLeave().then((go) => {
     if (!go) return;
     state.dirty = false;
-    window.location.href = href;
+    navigate(href);
   });
 }
 

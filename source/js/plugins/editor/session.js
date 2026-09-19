@@ -500,22 +500,21 @@ const TRUTHY = /^(true|yes|on|1)$/i;
 /**
  * Should the PUBLISHED post be encrypted?
  *
- * `vault` means two different things depending on who wrote it. On a draft it
- * is machinery — every draft is encrypted, and the fork writes the flag itself
- * — so publishing has to drop it or the first edit of any post would encrypt it
- * forever. In a post's own front matter it is the author's decision, and
- * dropping it there is why the Encrypted switch did nothing.
+ * `vault` means ONE thing wherever it is written: whether the post readers end
+ * up with is encrypted. It never describes the draft — a draft is withheld
+ * because it is a draft, which the build reads off `draft:` alone — so a fork
+ * carries the published post's value forward unchanged and publishing simply
+ * hands it back.
  *
- * `choice` is that switch, and it is set only when it was actually operated, so
- * it wins over both readings without needing to guess between them.
+ * The earlier reading made it machinery on a draft and re-read the published
+ * file at publish time, which meant the Encrypted switch silently did nothing
+ * on any draft, and a fork rewrote `vault: true` over a public post's own
+ * setting.
+ *
+ * `choice` is the switch, set only when it was actually operated, so it wins.
  */
-function publishEncrypted(doc, entry, choice, published) {
+function publishEncrypted(doc, choice) {
   if (choice !== undefined && choice !== null) return TRUTHY.test(String(choice));
-  // A draft's own `vault` is machinery; the post it goes back over decides. A
-  // draft of an encrypted post published in the clear is a leak.
-  if (entry.draft) {
-    return !!published && TRUTHY.test(String(parseFrontMatter(markdownToDoc(published.text).front).vault || ""));
-  }
   return TRUTHY.test(String(parseFrontMatter(doc.front).vault || ""));
 }
 
@@ -617,7 +616,7 @@ export async function save(doc, mode, pending, choice, stage) {
         ? findPublishTarget(doc, entry)
         : doc.path;
     const current = await repo.read(target);
-    const encrypted = publishEncrypted(doc, entry, choice, current);
+    const encrypted = publishEncrypted(doc, choice);
     const clean = withFront(source, {
       vault: encrypted ? "true" : null,
       draft: null,
@@ -653,6 +652,11 @@ export async function save(doc, mode, pending, choice, stage) {
   let sha = doc.sha;
   let body = source;
 
+  // `vault:` is never written by a draft save. It is the author's decision
+  // about the PUBLISHED post and it travels with the fork untouched; the draft
+  // itself is withheld and keyed on `draft: true`, which the build reads on its
+  // own (scripts/filters/vault.js). Overwriting it here is what made forking a
+  // public post silently mark it for encryption.
   if (doc.isNew) {
     path = pathForTitle(frontOf(doc).title);
     sha = "";
@@ -661,7 +665,7 @@ export async function save(doc, mode, pending, choice, stage) {
     }
     minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
-    body = withFront(source, { vault: "true", draft: "true" });
+    body = withFront(source, { draft: "true" });
   } else if (!entry.draft) {
     // A published post, encrypted or not, is never written by a draft save: it
     // forks. Testing `encrypted` here is what sent an encrypted post's draft
@@ -671,14 +675,13 @@ export async function save(doc, mode, pending, choice, stage) {
     minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
     body = withFront(source, {
-      vault: "true",
       draft: "true",
       supersedes: permalinkOf({ date: frontOf(doc).date, path: doc.path }),
     });
   } else if (!entry.encrypted) {
     minted = await mintVaultKey(path);
     keysEnc = minted.keysEnc;
-    body = withFront(source, { vault: "true", draft: "true" });
+    body = withFront(source, { draft: "true" });
   } else {
     const existing = await repo.read(path);
     sha = existing ? existing.sha : "";
@@ -718,7 +721,9 @@ export function newDocument() {
     `sticky: \n` +
     `date: ${now}\n` +
     `updated: ${now}\n` +
-    `vault: true\n` +
+    // What the PUBLISHED post will be, which the Encrypted switch edits. The
+    // document itself is a draft and is withheld whatever this says.
+    `vault: false\n` +
     `draft: true\n` +
     `mathjax: false\n` +
     `categories:\n` +
@@ -825,9 +830,7 @@ export async function unpublishAll(rows) {
           operation: "update",
           path: draftSource,
           sha: current.sha,
-          content: repo.toBase64(
-            withFront(current.text, { vault: "true", draft: "true", supersedes: null })
-          ),
+          content: repo.toBase64(withFront(current.text, { draft: "true", supersedes: null })),
         });
       }
     } else {
@@ -838,9 +841,10 @@ export async function unpublishAll(rows) {
       files.push({
         operation: "create",
         path,
-        content: repo.toBase64(
-          withFront(published.text, { vault: "true", draft: "true", supersedes: null })
-        ),
+        // `vault:` is left exactly as the published post had it: it says what
+        // this article is when it goes back up, and taking it down changes
+        // nothing about that.
+        content: repo.toBase64(withFront(published.text, { draft: "true", supersedes: null })),
       });
     }
 

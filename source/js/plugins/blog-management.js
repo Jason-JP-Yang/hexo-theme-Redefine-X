@@ -1316,7 +1316,10 @@ function watchBuild(sha) {
       setTimeout(() => {
         markStage("deployed", "done");
         barNotice("info", t("p_unpub_land", "Done. Loading the site as readers see it…"));
-        setTimeout(() => location.replace(siteRoot() + "/"), 1200);
+        // The console itself, loaded properly rather than swapped in: every list
+        // on this page was sealed into it by the build that has just been
+        // replaced, so a swup transition would show the same stale rows.
+        setTimeout(() => window.location.assign(siteRoot() + "/blog-management/"), 1200);
       }, DEPLOY_MS);
     } else if (status.state === "failure" || status.state === "error") {
       clearInterval(buildTimer);

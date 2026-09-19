@@ -189,10 +189,27 @@ function dashless(rows) {
   return { lead, rows: [" ".repeat(lead.length) + first.slice(lead.length), ...rows.slice(1)] };
 }
 
+/**
+ * Append one block to another, never letting the two land on one line.
+ *
+ * Only the LAST block of a file may be missing its line terminator, so on an
+ * unedited document nothing is ever inserted and the round trip stays byte
+ * exact. The moment anything is added or moved after that block — a photograph
+ * appended to the last album, an album appended to the last category, the last
+ * photograph dragged up the list — this is what keeps `…e739a.jpg` and the
+ * entry after it from being emitted as one line, which is a masonry.yml that
+ * will not parse.
+ */
+function glue(text, next, eol) {
+  if (!next) return text;
+  if (text && !/\r?\n$/.test(text)) return text + (eol || "\n") + next;
+  return text + next;
+}
+
 function withLead(node) {
   const body = node.body;
-  if (!node.lead) return body + node.tail;
-  return node.lead + body.slice(node.lead.length) + node.tail;
+  const text = node.lead ? node.lead + body.slice(node.lead.length) : body;
+  return glue(text, node.tail, node.eol);
 }
 
 function makeNode(lead, body, tail) {
@@ -310,12 +327,11 @@ function emitItem(node) {
   const width = node.lead.length;
   let body = node.pre;
   if (node.images.length || node.imagesLine) {
-    if (body && !/\r?\n$/.test(body)) body += node.eol;
-    body += node.imagesLine || `${" ".repeat(width)}images:${node.eol}`;
-    for (const image of node.images) body += withLead(image);
+    body = glue(body, node.imagesLine || `${" ".repeat(width)}images:${node.eol}`, node.eol);
+    for (const image of node.images) body = glue(body, withLead(image), node.eol);
   }
-  body += node.post;
-  return node.lead + body.slice(width) + node.tail;
+  body = glue(body, node.post, node.eol);
+  return glue(node.lead + body.slice(width), node.tail, node.eol);
 }
 
 export function itemFields(node) {
@@ -424,14 +440,13 @@ function emitCategory(node) {
   const width = node.lead.length;
   let body = node.pre;
   if (node.items.length || node.listLine) {
-    if (body && !/\r?\n$/.test(body)) body += node.eol;
-    body += node.listLine || `${" ".repeat(width)}list:${node.eol}`;
-    body += node.post;
-    for (const item of node.items) body += emitItem(item);
+    body = glue(body, node.listLine || `${" ".repeat(width)}list:${node.eol}`, node.eol);
+    body = glue(body, node.post, node.eol);
+    for (const item of node.items) body = glue(body, emitItem(item), node.eol);
   } else {
-    body += node.post;
+    body = glue(body, node.post, node.eol);
   }
-  return node.lead + body.slice(width) + node.tail;
+  return glue(node.lead + body.slice(width), node.tail, node.eol);
 }
 
 export function categoryFields(node) {
@@ -519,7 +534,7 @@ export function parseMasonry(text) {
 export function emitMasonry(doc) {
   let out = doc.head;
   for (const node of doc.nodes) {
-    out += node.kind === "category" ? emitCategory(node) : withLead(node);
+    out = glue(out, node.kind === "category" ? emitCategory(node) : withLead(node), doc.eol);
   }
   return out;
 }
@@ -584,8 +599,6 @@ export function insertItem(cat, node, at) {
   if (!node.tail) node.tail = "";
 
   const index = at == null || at > cat.items.length ? cat.items.length : Math.max(0, at);
-  const before = cat.items[index - 1];
-  if (before && !/\r?\n$/.test(emitItem(before))) before.tail += eol;
   cat.items.splice(index, 0, node);
   return node;
 }
@@ -614,6 +627,27 @@ function reindent(node, lead) {
     image.lead = " ".repeat(was.length + delta - 2) + "- ";
     image.body = shift(image.body, delta);
   }
+}
+
+/**
+ * The draft standing in front of the album published at `title`.
+ *
+ * Found by `supersedes` rather than by name, which is the only key that still
+ * holds once the author has renamed the draft — and renaming it is exactly what
+ * a draft is for.
+ */
+export function findAlbumDraftFor(doc, title) {
+  const wanted = String(title || "").trim();
+  if (!wanted) return null;
+  for (const cat of categories(doc)) {
+    for (let i = 0; i < cat.items.length; i++) {
+      const fields = itemFields(cat.items[i]);
+      if (!isTrue(fields.draft)) continue;
+      if (String(fields.supersedes || "").trim() !== wanted) continue;
+      return { cat, item: cat.items[i], index: i, fields };
+    }
+  }
+  return null;
 }
 
 export function findAlbum(doc, title, want) {

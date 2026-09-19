@@ -94,6 +94,19 @@ export function forgetAssets() {
  */
 const previewed = new Set();
 
+/**
+ * Open one sealed picture for the canvas or the browser, whoever owns it.
+ *
+ * The document's own images were registered by `setVaultAssets`; anything else
+ * belongs to another encrypted post or album and is borrowed through the
+ * session, which holds that item's grant. Borrowed keys are recorded so
+ * `relockPreviewed` can take them all back when the editor closes.
+ */
+export function unlockSealed(hash) {
+  if (!hash) return Promise.resolve("");
+  return openSealed(hash);
+}
+
 function openSealed(hash) {
   // The open document's own images were registered by `setVaultAssets` for the
   // canvas, and are the page's to manage; the browser neither unlocks nor locks
