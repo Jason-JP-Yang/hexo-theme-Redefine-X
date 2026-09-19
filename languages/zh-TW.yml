@@ -395,6 +395,7 @@ management:
   p_drafts: 草稿
   p_unpublished: 未發布
   p_new: 撰寫新文章
+  p_new_album: 新增相簿
   p_album: 相簿
   p_draft: 草稿
   p_unpublished_tag: 未發布

@@ -185,13 +185,25 @@ function build(hexo, sealed, albums, prefix) {
   }
 
   // ── albums ────────────────────────────────────────────────────────────────
-  // Public ones come from the masked `locals.data` and encrypted ones from the
-  // stash, which is the same split every other listing on the site makes.
+  //
+  // The same three axes an article has, and the same rule for folding two
+  // entries into one row: public ones come from the masked `locals.data`,
+  // withheld ones from the stash, and a DRAFT album — an entry carrying
+  // `draft: true` — is folded into the album it supersedes exactly as a post's
+  // draft is folded into its published copy. A draft that supersedes nothing IS
+  // its album, and is the one nobody can read yet.
+  const byAlbum = new Map();
+  const addAlbum = (row) => {
+    rows.push(row);
+    if (row.album && row.album.title) byAlbum.set(row.album.title, row);
+    return row;
+  };
+
   const masonry = (hexo.locals.get("data") || {}).masonry;
   for (const category of Array.isArray(masonry) ? masonry : []) {
     for (const item of (category && category.list) || []) {
       const title = item["page-title"] || item.name || "";
-      rows.push({
+      addAlbum({
         key: "album:" + title,
         kind: "album",
         title: item.name || title,
@@ -208,12 +220,14 @@ function build(hexo, sealed, albums, prefix) {
         vaultId: "",
         slug: "",
         draft: null,
+        album: { title, category: category.links_category || "" },
       });
     }
   }
 
   for (const entry of albums) {
-    rows.push({
+    if (entry.item && entry.item.draft === true) continue;
+    addAlbum({
       key: entry.id,
       kind: "album",
       title: entry.item.name || entry.title,
@@ -230,6 +244,37 @@ function build(hexo, sealed, albums, prefix) {
       vaultId: entry.id,
       slug: entry.slug,
       draft: null,
+      album: { title: entry.title, category: entry.category.links_category || "" },
+    });
+  }
+
+  for (const entry of albums) {
+    if (!entry.item || entry.item.draft !== true) continue;
+    const draft = { id: entry.id, slug: entry.slug, href: vaultHref(entry.slug), source: "" };
+    const target = entry.item.supersedes ? byAlbum.get(String(entry.item.supersedes)) : null;
+    if (target) {
+      target.draft = draft;
+      continue;
+    }
+
+    rows.push({
+      key: entry.id,
+      kind: "album",
+      title: entry.item.name || entry.title,
+      date: null,
+      excerpt: plainText(entry.item.description, EXCERPT_CHARS),
+      categories: [entry.category.links_category || ""].filter(Boolean),
+      tags: [],
+      source: "",
+      href: draft.href,
+      permalink: "",
+      published: false,
+      encrypted: false,
+      sticky: false,
+      vaultId: "",
+      slug: entry.slug,
+      draft,
+      album: { title: entry.title, category: entry.category.links_category || "" },
     });
   }
 

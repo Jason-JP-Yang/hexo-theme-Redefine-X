@@ -107,8 +107,14 @@ function asList(value) {
 }
 
 /* ─── rows ─────────────────────────────────────────────────────────────────── */
+//
+// Exported, because the masonry editor's album card is the SAME card over a
+// different set of keys. A second copy of these five templates is a second card
+// that drifts — and the drift would be invisible, because both are styled by the
+// same `.ed-f*` rules and would go on looking identical while behaving
+// differently.
 
-function rowText(field, value, label, type) {
+export function rowText(field, value, label, type) {
   return `<label class="ed-f ${field.wide ? "is-wide" : ""}" data-key="${field.key}">
     <span class="ed-f-label">${label}</span>
     <input class="ed-f-input" type="${type || "text"}" data-key="${field.key}" data-kind="${field.type}"
@@ -116,14 +122,14 @@ function rowText(field, value, label, type) {
   </label>`;
 }
 
-function rowArea(field, value, label) {
+export function rowArea(field, value, label) {
   return `<label class="ed-f is-wide" data-key="${field.key}">
     <span class="ed-f-label">${label}</span>
     <textarea class="ed-f-input" rows="2" data-key="${field.key}" data-kind="area">${escapeHTML(value)}</textarea>
   </label>`;
 }
 
-function rowAsset(field, value, label) {
+export function rowAsset(field, value, label) {
   return `<div class="ed-f ed-f-asset" data-key="${field.key}">
     <span class="ed-f-label">${label}</span>
     <span class="ed-f-assetrow">
@@ -136,7 +142,7 @@ function rowAsset(field, value, label) {
   </div>`;
 }
 
-function rowList(field, value, label) {
+export function rowList(field, value, label) {
   const chips = asList(value)
     .map(
       (item, i) =>
@@ -149,7 +155,7 @@ function rowList(field, value, label) {
   </div>`;
 }
 
-function rowToggle(field, on, label) {
+export function rowToggle(field, on, label) {
   return `<div class="np-row ed-f-toggle" data-key="${field.key}">
     <span class="np-row-main"><span class="np-row-label">${label}</span></span>
     <button type="button" class="np-switch${on ? " is-on" : ""}" role="switch"

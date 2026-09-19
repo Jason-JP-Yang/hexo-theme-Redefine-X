@@ -746,6 +746,11 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
           // notice in their place (pages/page-template.ejs).
           vault: true,
           masonryReactions: null,
+          // Only a sealed page ever carries these: a draft album is withheld
+          // from the public build entirely, so the banner they draw exists
+          // nowhere a reader could reach.
+          albumDraft: item.draft === true,
+          albumSupersedes: item.supersedes || "",
         },
       })
     );
@@ -763,6 +768,8 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
         f: Object.assign({}, item, { link: href }),
         hasThumbnail: entry.category.has_thumbnail === true,
         isVault: true,
+        isDraft: item.draft === true,
+        supersedes: item.supersedes || "",
       })
     );
     if (avifRewrite) card = avifRewrite(card);
@@ -784,6 +791,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
             category: entry.category.links_category,
             thumbs: entry.category.has_thumbnail === true,
             href,
+            // What this album IS, for the one reader who holds the key: a draft
+            // standing in front of a published album, an album never published,
+            // or an encrypted album. The editor opens the draft rather than the
+            // album behind it on the strength of these two, and Posts Management
+            // badges the row from them.
+            draft: item.draft === true,
+            supersedes: item.supersedes ? String(item.supersedes) : "",
             // The same two the post branch writes, and for the same reason: an
             // album's photographs are withheld from build/manifest.json, so
             // this is the ONLY record of what they are called and what they
@@ -835,6 +849,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   //          taxonomy, draft state, where each file lives — so opening the
   //          console costs one blob rather than a request per post.
   //   e.bin  the composer, which is the article layout with nothing in it.
+  //   m.bin  the same for an album: the gallery layout with nothing in it.
   //   o.bin  which repositories the editor commits to. Private coordinates, so
   //          they reach the editor through this key and never through the page.
   const editor = backend.resolve(hexo.theme.config).online_editor;
@@ -859,6 +874,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     routes.set(
       `${p}/${entry.slug}/e.bin`,
       vc.seal(entry.key, avifRewrite ? avifRewrite(composer) : composer)
+    );
+
+    const albumComposerView = hexo.theme.getView("pages/management/album.ejs");
+    const albumComposer = await albumComposerView.render(cardLocals({ page: { type: "album-editor" } }));
+    routes.set(
+      `${p}/${entry.slug}/m.bin`,
+      vc.seal(entry.key, avifRewrite ? avifRewrite(albumComposer) : albumComposer)
     );
     routes.set(`${p}/${entry.slug}/o.bin`, vc.seal(entry.key, JSON.stringify({ providers: editor.providers })));
   }

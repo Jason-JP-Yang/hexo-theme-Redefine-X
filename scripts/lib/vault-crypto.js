@@ -102,6 +102,16 @@ function albumId(pageTitle) {
     .slice(0, 16);
 }
 
+/** A DRAFT album stands in front of a published one and carries its title, so
+ *  it needs an identity of its own or the two would share a key and a slug. */
+function albumDraftId(pageTitle) {
+  return crypto
+    .createHash("sha256")
+    .update("masonry|draft|" + String(pageTitle), "utf8")
+    .digest("hex")
+    .slice(0, 16);
+}
+
 /** iv || ciphertext || tag, base64url. The shape every blob in this system has. */
 function seal(key, plaintext) {
   const iv = crypto.randomBytes(IV_BYTES);
@@ -214,6 +224,7 @@ module.exports = {
   randomSlug,
   postId,
   albumId,
+  albumDraftId,
   pageId,
   seal,
   open,

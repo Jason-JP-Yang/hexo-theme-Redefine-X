@@ -29,7 +29,7 @@ import {
   pageId,
 } from "../tools/vaultCrypto.js";
 
-const BLOBS = { console: "b.bin", composer: "e.bin" };
+const BLOBS = { console: "b.bin", composer: "e.bin", album: "m.bin" };
 
 let wired = false;
 
@@ -95,18 +95,18 @@ export default async function initAdminGate() {
   const grant = await adminGrant();
   if (!grant) return void setState(gate, "denied");
 
-  const kind = gate.dataset.adminKind === "composer" ? "composer" : "console";
+  const kind = BLOBS[gate.dataset.adminKind] ? gate.dataset.adminKind : "console";
   const host = gate.querySelector(".admin-gate-host");
 
   try {
     const sealed = await fetchSealed(`${vaultPrefix()}/${grant.slug}/${BLOBS[kind]}`);
     if (!sealed) throw new Error("missing");
 
-    if (kind === "composer") {
+    if (kind === "composer" || kind === "album") {
       host.innerHTML = await openText(grant.key, sealed);
       setState(gate, "open");
-      const editor = await import("./editor/index.js");
-      await editor.initEditor();
+      const editor = await import(kind === "album" ? "./editor/masonry.js" : "./editor/index.js");
+      await (kind === "album" ? editor.initMasonryEditor() : editor.initEditor());
     } else {
       const record = await openJSON(grant.key, sealed);
       host.innerHTML = String(record.shell || "");

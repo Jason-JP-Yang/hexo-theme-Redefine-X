@@ -34,6 +34,7 @@ import {
   openText,
   openJSON,
   fetchSealed,
+  pageId,
   registerAssetKey,
   vaultPrefix,
   siteRoot,
@@ -351,6 +352,57 @@ export async function entryForPage({ source, slug }) {
 export async function grantFor(id) {
   const rows = await loadGrants(true);
   return rows.find((row) => row.id === id) || null;
+}
+
+/* ─── albums ───────────────────────────────────────────────────────────────── */
+
+/**
+ * Every encrypted album this identity holds a key for.
+ *
+ * `listDocuments` skips them on purpose — an album is not a file in `_posts` and
+ * has no markdown — but the masonry editor needs exactly what it discards: the
+ * grant that opens an album's sealed photographs, and the `assets` / `sizes`
+ * maps that say what those photographs are called and what shape they are. Both
+ * are already in hand; this walks the same cached metadata a second time.
+ */
+export async function listAlbums(force) {
+  const granted = await loadGrants(force !== false);
+  const metas = await Promise.all(granted.map(metaOf));
+
+  const out = [];
+  granted.forEach((grant, i) => {
+    const meta = metas[i];
+    if (!meta || meta.kind !== "album") return;
+    out.push({
+      kind: "album",
+      id: grant.id,
+      slug: grant.slug,
+      grant,
+      title: meta.title || "",
+      name: meta.name || meta.title || "",
+      category: meta.category || "",
+      draft: meta.draft === true,
+      supersedes: meta.supersedes || "",
+      assets: meta.assets || {},
+      sizes: meta.sizes || {},
+    });
+  });
+  return out;
+}
+
+/**
+ * The key the admin surface is sealed under.
+ *
+ * Every identity that can reach the editor at all holds it, and unlike a post
+ * key it exists before anything has been saved — which is what makes it the one
+ * key a brand-new document can seal its local recovery copy under. Without it a
+ * post or an album being written for the first time has no crash net at all,
+ * which is exactly when losing the work costs the most.
+ */
+export async function adminGrant() {
+  const rows = await loadGrants(false);
+  const wanted = await pageId("admin");
+  return rows.find((row) => row.id === wanted) || null;
 }
 
 /* ─── open ─────────────────────────────────────────────────────────────────── */
@@ -711,11 +763,55 @@ function pathForTitle(title) {
  *
  * @param {Array<object>} rows  items of the console's sealed inventory
  */
+export const MASONRY_DATA = "source/_data/masonry.yml";
+
+/**
+ * Take albums down, in the SAME commit as the articles beside them.
+ *
+ * An album is a `list:` entry in one shared file rather than a file of its own,
+ * so withdrawing it is a line edit: `draft: true` is what the build reads as
+ * "withhold this" — the card, the page and every photograph go, and only an
+ * admin holds the key that brings them back. `supersedes` goes with it, because
+ * after this there is no published album for a draft to stand in front of.
+ *
+ * Returns the one file entry, or null when nothing in the selection is an album.
+ */
+async function unpublishAlbumsFile(rows) {
+  const albums = rows.filter((row) => row.kind === "album" && row.album && row.album.title);
+  if (!albums.length) return null;
+
+  // Loaded only when a selection actually holds an album: the post editor
+  // imports this file on every article it opens, and the album document model
+  // is of no use to it.
+  const my = await import("./masonry-yaml.js");
+
+  const current = await repo.read(MASONRY_DATA);
+  if (!current) throw new Error(`${MASONRY_DATA} is not in the repository`);
+
+  const doc = my.parseMasonry(current.text);
+  for (const row of albums) {
+    const found = my.findAlbum(doc, row.album.title, row.draft ? "draft" : "published");
+    if (!found) throw new Error(`${row.album.title} is no longer in ${MASONRY_DATA}`);
+    my.setItemField(found.item, "draft", "true");
+    my.setItemField(found.item, "supersedes", null);
+  }
+
+  return {
+    operation: "update",
+    path: MASONRY_DATA,
+    sha: current.sha,
+    content: repo.toBase64(my.emitMasonry(doc)),
+  };
+}
+
 export async function unpublishAll(rows) {
   const files = [];
   let keysEnc = null;
 
-  for (const row of rows) {
+  const albumFile = await unpublishAlbumsFile(rows);
+  if (albumFile) files.push(albumFile);
+
+  for (const row of rows.filter((row) => row.kind !== "album")) {
     const source = repoPath(row.source);
     const published = source ? await repo.read(source) : null;
     const draftSource = row.draft && row.draft.source ? repoPath(row.draft.source) : "";
@@ -842,23 +938,24 @@ async function withStore(mode, fn) {
   }
 }
 
-export async function stash(doc, grant) {
-  if (!grant) return;
+/** Any text, under any grant, at any key — what the two callers below share. */
+export async function stashText(path, text, grant) {
+  if (!grant || !path) return;
   const key = await keyOf(grant);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const sealed = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    new TextEncoder().encode(docToMarkdown(doc))
+    new TextEncoder().encode(String(text == null ? "" : text))
   );
   const blob = new Uint8Array(iv.length + sealed.byteLength);
   blob.set(iv, 0);
   blob.set(new Uint8Array(sealed), iv.length);
-  await withStore("readwrite", (store) => store.put({ path: doc.path, blob, at: Date.now() }));
+  await withStore("readwrite", (store) => store.put({ path, blob, at: Date.now() }));
 }
 
-export async function recover(path, grant) {
-  if (!grant) return null;
+export async function recoverText(path, grant) {
+  if (!grant || !path) return null;
   const row = await withStore("readonly", (store) => store.get(path));
   if (!row || !row.blob) return null;
   try {
@@ -873,6 +970,14 @@ export async function recover(path, grant) {
   } catch (err) {
     return null;
   }
+}
+
+export function stash(doc, grant) {
+  return stashText(doc.path, docToMarkdown(doc), grant);
+}
+
+export function recover(path, grant) {
+  return recoverText(path, grant);
 }
 
 export async function dropStash(path) {

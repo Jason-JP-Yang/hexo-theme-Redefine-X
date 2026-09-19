@@ -688,16 +688,22 @@ function collapseAway(item, after) {
 //                            a draft is the author's unfinished copy and has
 //                            exactly one reader, which is why the Worker
 //                            refuses to grant one however it is asked.
-//   album                    who may read it, when it is encrypted. Its flag
-//                            lives in masonry.yml, so there is no file here to
-//                            edit and nothing to unpublish.
+//   album                    the same four, and they mean the same things. An
+//                            album is a `list:` entry in masonry.yml rather than
+//                            a file, so Edit opens the gallery editor and
+//                            Unpublish is a line edit — but nothing about that
+//                            is visible here, and nothing about it should be.
 
 const POST_FILTERS = ["", "encrypted", "draft", "unpublished", "pinned"];
 
-/** Where the composer lives. Not a section of its own: writing a post is the
- *  thing this list is for, so the button belongs at the top of the list. */
+/** Where the two composers live. Not sections of their own: making something is
+ *  the thing this list is for, so the buttons belong at the top of the list. */
 function writeHref() {
   return siteRoot() + "/blog-management/write/";
+}
+
+function albumHref() {
+  return siteRoot() + "/blog-management/masonry/";
 }
 
 function renderPostsShell(section) {
@@ -732,10 +738,16 @@ function renderPostsShell(section) {
       </div>
       ${
         canCommit()
-          ? `<a class="bm-write" href="${escapeHTML(writeHref())}">
-               <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
-               <span>${e("p_new", "New post")}</span>
-             </a>`
+          ? `<span class="bm-make">
+               <a class="bm-write" href="${escapeHTML(writeHref())}">
+                 <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
+                 <span>${e("p_new", "New post")}</span>
+               </a>
+               <a class="bm-write bm-write-album" href="${escapeHTML(albumHref())}">
+                 <i class="fa-solid fa-images" aria-hidden="true"></i>
+                 <span>${e("p_new_album", "New album")}</span>
+               </a>
+             </span>`
           : ""
       }
     </div>
@@ -839,24 +851,25 @@ function postRowHTML(row) {
          }</span>`
     : "";
 
-  // An album's `vault:` flag lives in masonry.yml, so there is no markdown file
-  // here to open and nothing to take down.
+  // Albums get the same pair. An album is a `list:` entry rather than a file, so
+  // Edit opens the gallery editor on it and Unpublish writes `draft: true` onto
+  // that entry — but both are still "edit this" and "take this down", and saying
+  // so in two vocabularies would be two things to learn about one.
   const queued = state.posts.queue.includes(row.key);
-  const actions =
-    row.kind === "album" || !canCommit()
-      ? ""
-      : `<a class="bm-quiet bm-post-edit" href="${escapeHTML(editHref(row))}">
-           <i class="fa-solid fa-pen" aria-hidden="true"></i>
-           <span class="np-btn-label">${e("edit", "Edit")}</span></a>
-         ${
-           row.published
-             ? `<button type="button" class="bm-quiet bm-danger bm-post-unpublish${queued ? " is-on" : ""}">
-                  <i class="fa-solid ${queued ? "fa-check" : "fa-eye-slash"}" aria-hidden="true"></i>
-                  <span class="np-btn-label">${
-                    queued ? e("p_unpub_queued", "Queued") : e("p_unpublish", "Unpublish")
-                  }</span></button>`
-             : ""
-         }`;
+  const actions = !canCommit()
+    ? ""
+    : `<a class="bm-quiet bm-post-edit" href="${escapeHTML(editHref(row))}">
+         <i class="fa-solid fa-pen" aria-hidden="true"></i>
+         <span class="np-btn-label">${e("edit", "Edit")}</span></a>
+       ${
+         row.published
+           ? `<button type="button" class="bm-quiet bm-danger bm-post-unpublish${queued ? " is-on" : ""}">
+                <i class="fa-solid ${queued ? "fa-check" : "fa-eye-slash"}" aria-hidden="true"></i>
+                <span class="np-btn-label">${
+                  queued ? e("p_unpub_queued", "Queued") : e("p_unpublish", "Unpublish")
+                }</span></button>`
+           : ""
+       }`;
 
   return `
     <li class="bm-post${row.encrypted ? " is-encrypted" : ""}${row.draft ? " is-draft" : ""}${
@@ -1252,13 +1265,15 @@ async function runUnpublish() {
     markStage("committed", "done");
     barNotice("info", `${t("p_unpub_done", "Committed")} ${result.short || ""}`.trim());
 
-    // Repainted from local state: each article is a draft now, and what changed
-    // about it is known here without asking anything again.
+    // Repainted from local state: each item is a draft now, and what changed
+    // about it is known here without asking anything again. An ALBUM keeps
+    // saying it is encrypted, because it is — `draft:` on a `list:` entry is
+    // what withholds it, and its key is minted by the build that follows.
     for (const row of rows) {
       row.published = false;
-      row.encrypted = false;
+      if (row.kind !== "album") row.encrypted = false;
       row.draft = row.draft || { id: "", slug: row.slug || "", href: row.href, source: row.source };
-      row.vaultId = "";
+      if (row.kind !== "album") row.vaultId = "";
     }
     box.queue = [];
     paintPosts();

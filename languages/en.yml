@@ -394,6 +394,7 @@ management:
   p_drafts: Drafts
   p_unpublished: Unpublished
   p_new: New post
+  p_new_album: New album
   p_album: Album
   p_draft: Draft
   p_unpublished_tag: Unpublished
@@ -402,8 +403,8 @@ management:
   p_empty: Nothing matches this filter.
   p_unpublish: Unpublish
   p_unpub_queued: Queued
-  p_unpub_one: post to withdraw
-  p_unpub_many: posts to withdraw
+  p_unpub_one: item to withdraw
+  p_unpub_many: items to withdraw
   p_unpub_go: Save & publish
   p_unpub_cancel: Cancel
   p_unpub_done: Committed
@@ -652,6 +653,32 @@ editor:
   pick_bytes: File
   pick_served: Served at
   pick_moved: Moving from
+  edit_album: Edit this album
+  no_album: This album is not in the repository you can write to.
+  editing_draft_album: You are editing the draft that stands in front of this album.
+  recover_album: There is a copy of this album that was never committed.
+  need_album_title: Give the album a name before saving it.
+  album_gone: This album is no longer in masonry.yml - it may have been renamed or withdrawn.
+  conflict_album: masonry.yml changed in the repository. Your work is safe here - reload to see what landed, then re-apply.
+  build_failed_album: The build failed. The album is committed; nothing published has changed.
+  publish_album: Commit this straight to the published album?
+  publish_album_draft: Publish this draft over the album it replaces?
+  discard_album: This album has changes that are not committed yet.
+  album_empty: No photographs yet. Add one from the toolbar.
+  add_image: Add a picture
+  g_album: Album
+  g_cat: Category
+  cat_new: + New category...
+  cat_new_title: New category
+  cat_first: Albums
+  cat_note: The two fields below belong to the category, so they change every album in it.
+  f_name: Name
+  f_page_title: Page title
+  f_link: Link
+  f_category: Belongs to
+  f_links_category: Category name
+  f_has_thumbnail: Cards show a thumbnail
+  f_auto_exif: Read EXIF at build time
 analytics:
   activity: Blog Activity
   less: Less

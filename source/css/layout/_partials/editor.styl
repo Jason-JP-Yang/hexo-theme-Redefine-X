@@ -2557,11 +2557,210 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   font-weight 600
   color var(--second-text-color)
 
+// The two composers, side by side. One is the other's sibling rather than a
+// second object: making a post and making an album are the same act on two
+// kinds of thing, and the list they sit above holds both.
+.bm-make
+  display inline-flex
+  flex-wrap wrap
+  align-items center
+  gap 8px
+
+// The album's is the QUIET one of the pair. Two filled buttons of the same
+// weight side by side is a bar that has not said which one is the usual
+// answer, and on this blog the usual answer is a post.
+.bm-write-album
+  background var(--second-background-color)
+  border-color var(--border-color)
+  color var(--second-text-color)
+
+  &.bm-write-album
+    i, span
+      color var(--second-text-color)
+
+  &:hover,
+  &:active
+    color var(--first-text-color)
+
+  &:hover
+    border-color var(--primary-color)
+    filter none
+
+    i, span
+      color var(--primary-color)
+
 .vault-draft
   position relative
 
 .vault-archive-draft .vault-archive-lock
   color var(--box-amber-text)
+
+// ========================================================================================
+//                                   MASONRY EDITOR
+// ========================================================================================
+// Editing happens ON the gallery, exactly as it happens on the article — so
+// almost nothing is needed here. The document bar, the card, the toolbar, the
+// picture browser and the property sheet are all styled above and are the same
+// objects; what follows is only what a GALLERY adds: a photograph you can pick
+// up, and a toolbar wearing one row instead of four faces.
+
+// The pencil an album page carries. It is the ONLY one on that page — a masonry
+// page has no article tools rail — so unlike the article's spare it shows at
+// every width, and `.blog-admin-only` already decides whether it exists at all.
+.tool-edit-album
+  cursor pointer
+
+  &:hover i
+    color var(--primary-color)
+
+html.blog-editing .side-tools-container .tool-edit-album
+  display none !important
+
+// The same clip the article container gets: `position: sticky` needs a scrolling
+// ancestor and `overflow-x: hidden` quietly creates one, which would turn the
+// document bar from pinned into static on exactly the width where pinning
+// matters most. `clip` clips without becoming a scroll container.
+html.blog-editing .page-template-container
+  +redefine-mobile()
+    overflow-x clip
+
+// A gallery with nothing in it is still a page you have to be able to aim at.
+.ed-album-host #masonry-container
+  min-height 32vh
+
+.ed-album-empty
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 10px
+  padding 64px 24px
+  color var(--third-text-color)
+  text-align center
+
+  i
+    font-size 1.6rem
+
+// ─── one photograph ─────────────────────────────────────────
+// The gallery's own `.masonry-item`, with a ring and a number added. Nothing
+// here changes its size, its aspect ratio or its place in the column flow — the
+// tile on screen has to be the tile that gets published.
+.ed-tile
+  position relative
+  cursor pointer
+  transition transform $ed-fade, filter $ed-fade
+
+  &:hover .image-container
+    outline 2px solid var(--shadow-color-1)
+    outline-offset 2px
+
+  // Picked. An outline rather than a wash: what is underneath is a photograph,
+  // and any tint over it is a lie about the picture. The ring is the primary
+  // colour, which reads against a light page, a dark one and a photograph alike
+  // because it is drawn OUTSIDE the image rather than on it.
+  &[data-on="1"] .image-container
+    outline 2.5px solid var(--primary-color)
+    outline-offset 2px
+
+  &[data-on="1"] .ed-tile-n
+    background var(--primary-color)
+    color $ed-on-primary
+
+  &.is-dragging
+    opacity 0.4
+
+  // Where a dropped photograph would land.
+  &[data-drop="1"] .image-container
+    outline 2.5px dashed var(--primary-color)
+    outline-offset 4px
+
+#masonry-container.is-dragging .ed-tile
+  cursor grabbing
+
+// Its position in masonry.yml, which is the order the gallery publishes in.
+// Small, in the corner the overlays do not use, and legible over a photograph
+// of any colour because it carries its own surface.
+.ed-tile-n
+  position absolute
+  top 8px
+  right 8px
+  z-index 2
+  display grid
+  place-items center
+  min-width 22px
+  height 22px
+  padding 0 6px
+  border-radius 999px
+  background var(--background-color-transparent-80)
+  backdrop-filter blur(6px)
+  -webkit-backdrop-filter blur(6px)
+  color var(--second-text-color)
+  font-size 0.68rem
+  font-weight 600
+  font-variant-numeric tabular-nums
+  pointer-events none
+
+// ─── one row of controls ────────────────────────────────────
+// No tab strip, so the two steps are no longer a group beside one — they are
+// the left end of the only row there is, and the row starts where they stop.
+.ed-toolbar.is-simple
+  .ed-toolbar-head
+    gap 0
+
+  .ed-toolbar-tabs
+    display none
+
+// ─── the album card ─────────────────────────────────────────
+// `.ed-front`'s own rows, so nothing here restyles a field. The select is the
+// one control the post's card does not have, and it is built to match the text
+// input beside it exactly — a native select that looked like a native select
+// would be the only unstyled thing in the editor.
+// The chevron is drawn rather than fetched: a data-URI arrow carries a colour
+// baked into it, and this control has to read on a light page, a dark one and a
+// tinted one. Two borders rotated 45° take `currentColor` instead, so it is
+// always exactly as dark as the value beside it.
+.ed-f-select
+  position relative
+
+  &::after
+    content ""
+    position absolute
+    right 12px
+    bottom 15px
+    width 6px
+    height 6px
+    border-right 1.6px solid var(--third-text-color)
+    border-bottom 1.6px solid var(--third-text-color)
+    transform rotate(45deg)
+    pointer-events none
+
+.ed-f-select select.ed-f-input
+  appearance none
+  -webkit-appearance none
+  padding-right 28px
+  cursor pointer
+
+  option
+    background var(--background-color)
+    color var(--first-text-color)
+
+// What the two fields under it actually change. A note rather than a longer
+// label, because the statement is about the CATEGORY and the fields are about
+// this album's copy of it — which is exactly the thing that is easy to get
+// wrong and impossible to see afterwards.
+.ed-f-note
+  display flex
+  align-items flex-start
+  gap 7px
+  margin 8px 0 0
+  color var(--third-text-color)
+  font-size 0.72rem
+  line-height 1.5
+
+  i
+    margin-top 2px
+    flex-shrink 0
+    color var(--primary-color)
 
 @media (prefers-reduced-motion: reduce)
   .ed-block,
@@ -2569,5 +2768,6 @@ for $fc in 'blue' 'cyan' 'green' 'yellow' 'orange' 'red' 'pink' 'purple' 'gray'
   .ed-tool,
   .ed-gutter,
   .ed-stage,
-  .ed-swatch
+  .ed-swatch,
+  .ed-tile
     transition none !important

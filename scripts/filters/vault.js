@@ -116,7 +116,18 @@ function withholdTaxonomy(entries) {
  * no public album at all and therefore no heading in the public build. Both
  * pairs travel INSIDE the sealed metadata, so nothing about them is published —
  * a gap in the public sequence is exactly the disclosure this scheme avoids.
+ *
+ * ── A DRAFT album is withheld whether or not it says `vault:` ────────────────
+ *
+ * `draft: true` is machinery, the same way it is on a post: an unfinished album
+ * has exactly one reader, so its card, its page and every photograph in it go,
+ * and its own `vault:` is left alone because that is the author's decision about
+ * the PUBLISHED album and is read back when it is published. The album a draft
+ * stands in front of — named in `supersedes` — is untouched by any of this and
+ * goes on being published exactly as it was, encrypted or not.
  */
+const withheldAlbum = (item) => !!item && (item.vault === true || item.draft === true);
+
 function markedAlbums() {
   const masonry = (hexo.locals.get("data") || {}).masonry;
   if (!Array.isArray(masonry)) return [];
@@ -131,7 +142,7 @@ function markedAlbums() {
     let pos = 0;
     for (let index = 0; index < category.list.length; index++) {
       const item = category.list[index];
-      if (item && item.vault === true) out.push({ category, item, index, pos, catIndex, catPos });
+      if (withheldAlbum(item)) out.push({ category, item, index, pos, catIndex, catPos });
       else pos++;
     }
 
@@ -187,7 +198,7 @@ function maskMasonry(data) {
       masonry.push(category);
       continue;
     }
-    const list = category.list.filter((item) => !item || item.vault !== true);
+    const list = category.list.filter((item) => !withheldAlbum(item));
     // A category whose albums are ALL encrypted does not exist publicly either:
     // its name is as much of a disclosure as the album's.
     if (list.length) masonry.push(Object.assign({}, category, { list }));
@@ -219,7 +230,7 @@ hexo.extend.filter.register(
 
     if (!vaultEnabled()) {
       store.fail(
-        `${marked.length + albums.length} item(s) carry \`vault:\` but backend encryption is off. ` +
+        `${marked.length + albums.length} item(s) carry \`vault:\` or \`draft:\` but backend encryption is off. ` +
           `Refusing to build them in the clear — set backend.encryption.enable: true (with backend.api_url ` +
           `and giscus comments), or remove the flag.`
       );
@@ -254,7 +265,11 @@ hexo.extend.filter.register(
 
     for (const { category, item, index, pos, catIndex, catPos } of albums) {
       const title = item["page-title"] || item.name;
-      const id = vc.albumId(title);
+      // A draft carries the PUBLISHED album's title — that is what it is a draft
+      // OF — so the two would derive one id, one key and one slug, and the draft
+      // would seal itself over the album it stands in front of. The prefix is
+      // what keeps them two documents.
+      const id = item.draft === true ? vc.albumDraftId(title) : vc.albumId(title);
       const { key, slug, rekeyed } = store.ensurePost(id);
       if (rekeyed) {
         hexo.log.warn(
@@ -415,6 +430,10 @@ function withholdAlbumPages() {
   let removed = 0;
 
   for (const entry of state.albums()) {
+    // A draft shares its title with the album it stands in front of, and that
+    // album is still published at exactly this path. Sweeping it here would
+    // delete the live page the draft exists to replace one day.
+    if (entry.item && entry.item.supersedes) continue;
     const dir = path.join(hexo.public_dir, "masonry", entry.title);
     try {
       // Only the generated page, never the directory wholesale: an album whose

@@ -45,6 +45,7 @@ import { toggleMath } from "./inline.js";
 import { holdTOC, holdTOCActive, releaseTOC, scheduleTOC } from "./toc.js";
 import { getTOC, refreshTOC as measureTOC } from "../../layouts/toc.js";
 import { createFrontCard } from "./frontmatter.js";
+import { PERCH_AT, releaseDocbar as dropDocbar, watchDocbar, watchPerch } from "./chrome.js";
 import { loadComponents, typesetMath } from "./render.js";
 import { vaultPrefix } from "../../tools/vaultCrypto.js";
 import {
@@ -65,7 +66,6 @@ import initLazyLoad, {
   registerSrcResolver,
 } from "../../layouts/lazyload.js";
 import { assetURL } from "../../tools/vaultCrypto.js";
-import { onScroll } from "../../tools/scrollScheduler.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
@@ -176,80 +176,8 @@ function pageIdentity(host) {
 
 /* ─── chrome ───────────────────────────────────────────────────────────────── */
 
-/**
- * Publish the document bar's BOX, so the floating toolbar can sit under it and
- * inside the same column.
- *
- * Three numbers, all measured, none assumed:
- *
- *   --ed-docbar-h  how much vertical room to leave. Zero unless the bar is
- *                  actually pinned — unpinned it is still down in the article
- *                  clearing nothing, and reserving its height left a band of
- *                  empty page under the navbar.
- *   --ed-docbar-x  where the article's column starts.
- *   --ed-docbar-w  how wide it is.
- *
- * The last two are why: the toolbar was centred on the VIEWPORT, and an article
- * with a table of contents is not centred on the viewport — so a toolbar that
- * was 760px wide because the viewport allowed it sat across the contents rail.
- * The document bar is inside the column and already the right width and the
- * right shape, so it is the thing to copy rather than a number to guess.
- *
- * What is published is compared against itself. The earlier version compared
- * the PINNED state and returned early whenever it had not changed — so a bar
- * that grew a notice row while already pinned published nothing, and the
- * toolbar stayed where the shorter bar had left it, underneath the notice.
- */
-function watchDocbar(bar) {
-  let last = "";
-
-  const measure = () => {
-    // Sticky means its top stops at the pin line and goes no further, so being
-    // at the line IS being pinned. One pixel of slack for fractional layout.
-    const style = getComputedStyle(bar);
-    const stick = parseFloat(style.top) || 0;
-    const rect = bar.getBoundingClientRect();
-    const pinned = style.position === "sticky" && rect.top <= stick + 1;
-
-    const h = pinned ? Math.round(bar.offsetHeight) : 0;
-    const x = Math.round(rect.left);
-    const w = Math.round(rect.width);
-    const key = `${h}|${x}|${w}`;
-    if (key === last) return;
-    last = key;
-
-    const root = document.documentElement.style;
-    root.setProperty("--ed-docbar-h", `${h}px`);
-    root.setProperty("--ed-docbar-x", `${x}px`);
-    root.setProperty("--ed-docbar-w", `${w}px`);
-  };
-
-  measure();
-  const ro = new ResizeObserver(measure);
-  ro.observe(bar);
-  // The notice, the progress rail and the tag row are children that appear and
-  // disappear; a ResizeObserver on the bar sees the height they cause, and this
-  // sees the ones that arrive without changing it yet.
-  const mo = new MutationObserver(measure);
-  mo.observe(bar, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
-  const off = onScroll(measure, null, "editor docbar pin");
-  window.addEventListener("resize", measure);
-  return {
-    disconnect: () => {
-      ro.disconnect();
-      mo.disconnect();
-      off();
-      window.removeEventListener("resize", measure);
-    },
-  };
-}
-
 function releaseDocbar() {
-  if (ui && ui.barSize) ui.barSize.disconnect();
-  const root = document.documentElement.style;
-  root.removeProperty("--ed-docbar-h");
-  root.removeProperty("--ed-docbar-x");
-  root.removeProperty("--ed-docbar-w");
+  dropDocbar(ui && ui.barSize);
 }
 
 function buildDocbar() {
@@ -606,42 +534,11 @@ async function activate(host) {
   // IS the editor opening — and only then handed over to the perch rule below.
   ui.toolbar.el.dataset.perch = "show";
   await toolbarIn(ui.toolbar.el);
-  state.perchOff = watchPerch(ui.toolbar.el);
+  state.perchOff = watchPerch(ui.toolbar.el, chromeHidden);
   state.viewportOff = watchViewport();
   syncChrome();
 
   if (identity.fresh) state.titleHost.querySelector(".ed-title").focus();
-}
-
-/**
- * The toolbar belongs to the pinned document bar, so it keeps that bar's hours.
- *
- * At the very top of the page the bar is not pinned — it is still down in the
- * article where it was written — and a floating toolbar hanging under the
- * navbar with nothing above it reads as chrome that has come loose. It shows on
- * the way in, gets out of the way when the page is scrolled back to the top,
- * and comes back the moment it is not.
- *
- * Through the theme's scroll scheduler: `read` measures, `write` mutates, and
- * neither ever does the other's job.
- */
-const PERCH_AT = 24;
-
-function watchPerch(el) {
-  let want = "show";
-  return onScroll(
-    (m) => {
-      want = (m ? m.scrollY : window.scrollY) > PERCH_AT ? "show" : "hide";
-    },
-    () => {
-      // While the bars are put away this is the only chrome left on screen, and
-      // the rule it would be hidden by — "the document bar is not pinned yet" —
-      // is about a page at rest, which this is not.
-      const perch = chromeHidden() ? "show" : want;
-      if (el.dataset.perch !== perch) el.dataset.perch = perch;
-    },
-    "editor toolbar perch"
-  );
 }
 
 /* ─── composing on a phone ────────────────────────────────────────────── */

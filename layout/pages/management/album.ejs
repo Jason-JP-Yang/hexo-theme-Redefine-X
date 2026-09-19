@@ -1,0 +1,24 @@
+<%#
+    A new album, at /blog-management/masonry/.
+
+    The gallery layout with nothing in it — the same container, the same
+    classes, the same measure a published album has — because an album being
+    composed and an album being read are the same page in two states.
+
+    The shell renders for everybody. It is empty until the Worker releases a
+    ticket, and what may be written is the repository's decision, not this
+    template's.
+%>
+<div class="page-template-container">
+	<div class="ed-gate">
+		<%- partial('components/access-probe', { text: __('editor.checking') }) %>
+	</div>
+
+	<%# Contenteditable is put on by the editor, not here: the heading is the
+	    album's name, and on a published album it is the same element. %>
+	<h1 class="page-title-header"></h1>
+
+	<%# `data-album-new` is what tells the editor there is nothing to look up —
+	    arriving here IS the press, exactly as it is on /blog-management/write/. %>
+	<div id="masonry-container" class="markdown-body" data-album-new="1"></div>
+</div>

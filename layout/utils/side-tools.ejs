@@ -42,6 +42,17 @@
 			<i class="fa-regular fa-pen-to-square"></i>
 		</li>
 		<% } %>
+
+		<%# An album has no tools rail of its own — a masonry page is a page, not an
+			article — so this is the ONLY pencil it gets, and it shows at every
+			width rather than only on a phone. A class of its own, so the rule that
+			hides the article's spare pencil on a desktop cannot reach it, and so
+			admin.js can tell which of the two editors to load. %>
+		<% if (backend_config().online_editor.enable && (page.type === "masonry" || (page.type === "vault" && page.vault_kind === "masonry"))) { %>
+		<li class="right-bottom-tools tool-edit-album blog-admin-only flex justify-center items-center" title="<%= __('editor.edit_album') %>">
+			<i class="fa-regular fa-pen-to-square"></i>
+		</li>
+		<% } %>
 		<li class="right-bottom-tools toggle-tools-list flex justify-center items-center">
 			<i class="fa-regular fa-cog <% if (theme.global.side_tools && theme.global.side_tools.gear_rotation !== false) { %>fa-spin<% } %>"></i>
 		</li>

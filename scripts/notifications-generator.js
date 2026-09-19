@@ -285,6 +285,13 @@ hexo.extend.generator.register("redefine_blog_management", function () {
       Object.assign({ path: "blog-management/write/index.html" }, shell("composer", "Write"))
     );
 
+    // The same door for an album. It cannot be the composer's: a post is written
+    // into the article layout and an album into the gallery layout, and the two
+    // shells are what make each editor open in the page it is composing for.
+    pages.push(
+      Object.assign({ path: "blog-management/masonry/index.html" }, shell("album", "New album"))
+    );
+
     // The editor's strings, as a route rather than as part of every page's
     // config block. The editor can now open on ANY article, and this table is
     // the largest in the theme — inlining it would put ~6 KB on every post for

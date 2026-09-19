@@ -5,6 +5,14 @@
     const thumbs = typeof hasThumbnail === "undefined" ? false : hasThumbnail;
     const vault = typeof isVault !== "undefined" && isVault;
 
+    // Which of the three things an encrypted card is saying. Passed through to
+    // the badge rather than decided here, so an album's card and an article's
+    // tile make the statement in one object: Draft for a copy standing in front
+    // of a published album, Unpublished for one that never was, Encrypted
+    // otherwise.
+    const draft = typeof isDraft !== "undefined" && isDraft;
+    const shadows = typeof supersedes !== "undefined" && supersedes;
+
     // An encrypted album is a statement about the card, not an invitation: it
     // drops `group` and the press-scale so nothing under the cursor moves or
     // recolours, and wears the same badge and the same outline the home grid's
@@ -25,7 +33,7 @@
             picture. The flat variant has none, so its badge goes in the row
             (below) rather than on top of the avatar and the album's name. %>
         <% if (vault && thumbs) { %>
-        <%- partial('components/vault-badge') %>
+        <%- partial('components/vault-badge', { isDraft: draft, supersedes: shadows }) %>
         <% } %>
 
         <% if (thumbs) { %>
@@ -61,7 +69,7 @@
                 <div class="text-third-text-color ellipsis"><%= f.description %></div>
             </div>
             <% if (vault) { %>
-            <%- partial('components/vault-badge', { extra: 'is-inline ml-auto mr-3' }) %>
+            <%- partial('components/vault-badge', { extra: 'is-inline ml-auto mr-3', isDraft: draft, supersedes: shadows }) %>
             <% } %>
         </div>
         <% } %>

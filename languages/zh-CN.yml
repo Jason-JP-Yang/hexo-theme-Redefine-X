@@ -396,6 +396,7 @@ management:
   p_drafts: 草稿
   p_unpublished: 未发布
   p_new: 写新文章
+  p_new_album: 新建相册
   p_album: 相册
   p_draft: 草稿
   p_unpublished_tag: 未发布
@@ -404,8 +405,8 @@ management:
   p_empty: 没有符合该筛选条件的内容。
   p_unpublish: 取消发布
   p_unpub_queued: 已选中
-  p_unpub_one: 篇文章待撤下
-  p_unpub_many: 篇文章待撤下
+  p_unpub_one: 项待撤下
+  p_unpub_many: 项待撤下
   p_unpub_go: 保存并发布
   p_unpub_cancel: 取消
   p_unpub_done: 已提交
@@ -654,6 +655,32 @@ editor:
   pick_bytes: 大小
   pick_served: 实际路径
   pick_moved: 移动自
+  edit_album: 编辑这个相册
+  no_album: 这个相册不在你可写入的仓库里。
+  editing_draft_album: 你正在编辑挡在这个相册前面的草稿。
+  recover_album: 本地有一份从未提交过的相册副本。
+  need_album_title: 保存前请先给相册起个名字。
+  album_gone: masonry.yml 里已经没有这个相册了，它可能被改名或撤下了。
+  conflict_album: 仓库里的 masonry.yml 变了。你的改动仍在这里——刷新看看落地的版本，再重新应用。
+  build_failed_album: 构建失败。相册已提交，已发布的内容没有变化。
+  publish_album: 直接提交到已发布的相册？
+  publish_album_draft: 用这份草稿覆盖它所替代的相册？
+  discard_album: 这个相册有尚未提交的改动。
+  album_empty: 还没有照片。从工具栏添加一张。
+  add_image: 添加图片
+  g_album: 相册
+  g_cat: 分类
+  cat_new: ＋ 新建分类…
+  cat_new_title: 新建分类
+  cat_first: 相册
+  cat_note: 下面两项属于分类本身，会影响该分类下的每一个相册。
+  f_name: 名称
+  f_page_title: 页面标题
+  f_link: 链接
+  f_category: 所属分类
+  f_links_category: 分类名称
+  f_has_thumbnail: 卡片显示预览图
+  f_auto_exif: 构建时读取 EXIF
 analytics:
   activity: 博客活跃度
   less: 少

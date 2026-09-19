@@ -164,11 +164,20 @@ function paint(row, items, t) {
 
 /* ─── the toolbar ──────────────────────────────────────────────────────────── */
 
+/**
+ * @param {object} ctx  the editor's handlers. `simple` turns the four faces off:
+ *   the tab strip is not drawn and the one row is whatever `ctx.items()` hands
+ *   back. The masonry editor takes that shape — an album is a list of
+ *   photographs, so there is no selection to format and no block to become
+ *   something else, and a strip of tabs where two of them can never apply is
+ *   chrome that only says "this is not for you".
+ */
 export function createToolbar(ctx) {
   const t = ctx.t;
+  const simple = !!ctx.simple;
 
   const el = document.createElement("div");
-  el.className = "ed-toolbar";
+  el.className = "ed-toolbar" + (simple ? " is-simple" : "");
   el.dataset.tab = "block";
   // The two steps sit BESIDE the tab strip rather than in a row of controls,
   // because they are the only pair here that acts on the document as a whole:
@@ -190,7 +199,7 @@ export function createToolbar(ctx) {
             <i class="fa-solid fa-down-left-and-up-right-to-center" aria-hidden="true"></i>
           </button>
         </div>
-        <div class="ed-toolbar-tabs" role="tablist"></div>
+        <div class="ed-toolbar-tabs" role="tablist"${simple ? " hidden" : ""}></div>
       </div>
       <div class="ed-toolbar-row" data-row="main"></div>
       <div class="ed-toolbar-row ed-toolbar-sub" data-row="sub" hidden></div>
@@ -454,6 +463,7 @@ export function createToolbar(ctx) {
   /* ─── painting ───────────────────────────────────────────────────────── */
 
   function itemsFor(tab) {
+    if (simple) return ctx.items() || [];
     if (tab === "format") return formatItems();
     if (tab === "insert") return insertItems();
     return blockItems();
@@ -474,6 +484,7 @@ export function createToolbar(ctx) {
 
   /** Slot one is Format while there is a selection and Block when there is not. */
   function paintTabs(tab) {
+    if (simple) return;
     const strip = [tab === "format" ? TAB_FORMAT : TAB_BLOCK, TAB_INSERT];
     const html = strip
       .map(
@@ -622,6 +633,10 @@ export function createToolbar(ctx) {
    * next click will act on.
    */
   function sync() {
+    // One row, and it reports whatever is selected on the canvas. There is no
+    // second face to hand over to and no selection to read.
+    if (simple) return void render(true);
+
     const root = ctx.richRoot();
     state = root ? markState(root) : null;
 
@@ -720,7 +735,9 @@ export function createToolbar(ctx) {
 
     const act = button.dataset.act;
     const arg = button.dataset.arg;
-    const root = ctx.richRoot();
+    // A toolbar over something that holds no text — an album's photographs —
+    // has no rich root and emits none of the acts below that need one.
+    const root = ctx.richRoot ? ctx.richRoot() : null;
 
     if (act === "sub") return void openSub(arg);
 
