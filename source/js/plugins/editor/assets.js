@@ -299,6 +299,10 @@ export function buildPreloader(src, alt, list, exif) {
   const el = document.createElement("div");
   el.className = "img-preloader";
   el.dataset.alt = alt || "";
+  // An `<img>` is draggable by default, and dropping one into the
+  // contenteditable beside it makes the browser paste the whole file back in as
+  // a `data:` URI. Carried onto the real image by `transformPreloaderToImage`.
+  el.draggable = false;
   // What the markdown says, kept beside what it resolved to: the repository
   // fallback needs the address, and `data-src` by then is a published route.
   el.dataset.edSrc = String(src || "");

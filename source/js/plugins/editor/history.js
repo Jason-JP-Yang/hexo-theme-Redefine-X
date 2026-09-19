@@ -169,7 +169,7 @@ function frontKey(from, to) {
  * which is a block edit that happens to upload a file, and opening a file
  * manager over that would be answering a question nobody asked.
  */
-function filedPath(from, to) {
+export function filedPath(from, to) {
   const steps = Math.max(from.moves.length, to.moves.length);
   for (let i = 0; i < steps; i++) {
     const a = from.moves[i];
@@ -198,7 +198,7 @@ function filedPath(from, to) {
  * is standing there is the paragraph that did NOT move. The one that moved is
  * the one whose removal leaves the two orders identical.
  */
-function movedId(from, to) {
+export function movedId(from, to) {
   const a = from.map((block) => block.id);
   const b = to.map((block) => block.id);
   const without = (id) => {
@@ -233,7 +233,7 @@ export function propsKey(a, b) {
   return "";
 }
 
-function uploadPath(from, to) {
+export function uploadPath(from, to) {
   const before = new Set(from.pending.map((asset) => asset.path));
   for (const asset of to.pending) if (!before.has(asset.path)) return asset.path;
   const after = new Set(to.pending.map((asset) => asset.path));

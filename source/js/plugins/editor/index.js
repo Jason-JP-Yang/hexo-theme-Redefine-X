@@ -46,6 +46,17 @@ import { holdTOC, holdTOCActive, releaseTOC, scheduleTOC } from "./toc.js";
 import { getTOC, refreshTOC as measureTOC } from "../../layouts/toc.js";
 import { createFrontCard } from "./frontmatter.js";
 import { PERCH_AT, releaseDocbar as dropDocbar, watchDocbar, watchPerch } from "./chrome.js";
+import {
+  anchored,
+  headroom,
+  offScreen,
+  readable,
+  restingY,
+  scrollTween,
+  travelTo,
+  useChrome,
+  viewBottom,
+} from "./travel.js";
 import { loadComponents, typesetMath } from "./render.js";
 import { vaultPrefix } from "../../tools/vaultCrypto.js";
 import {
@@ -328,6 +339,14 @@ async function activate(host) {
     notice: ui.bar.querySelector(".ed-notice"),
     barSize: watchDocbar(ui.bar),
   });
+  // What `travel.js` measures the readable band against. Registered here and
+  // dropped in `forgetSession`, so the shared helpers always read the editor
+  // that is actually open.
+  useChrome(() => ({
+    bar: ui && ui.bar,
+    toolbar: ui && ui.toolbar && ui.toolbar.el,
+    hidden: chromeHidden(),
+  }));
 
   ui.file = document.createElement("input");
   ui.file.type = "file";
@@ -938,6 +957,7 @@ function forgetSession() {
   repo.forgetBlobs();
   credentials.release();
   forgetTree();
+  useChrome(null);
   registerRewind(null);
   registerSrcFallback(null);
   setVaultAssets(null);
@@ -2255,12 +2275,25 @@ function onCanvasDragOver(e) {
   if (e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
 }
 
-// Files only. A block being carried is handled on the document, above.
+/**
+ * Files only. A block being carried is handled on the document, above.
+ *
+ * Everything else is REFUSED rather than ignored. What the browser drops into a
+ * contenteditable is markup of its own making — a picture dragged a few
+ * centimetres lands as an `<img>` carrying the whole file as a `data:` URI, and
+ * the document then held a multi-megabyte line that every read, every step and
+ * every digest had to walk. Refusing the drop is what makes that impossible;
+ * the drag itself is left alone, because cancelling drags here cancelled the
+ * one drag this editor has.
+ */
 async function onCanvasDrop(e) {
   if (state.dragId) return;
 
   const files = e.dataTransfer && e.dataTransfer.files;
-  if (!files || !files.length) return;
+  if (!files || !files.length) {
+    e.preventDefault();
+    return;
+  }
   e.preventDefault();
   for (const file of files) {
     if (!file.type.startsWith("image/")) continue;
@@ -2462,147 +2495,6 @@ function syncSteps() {
   }
 }
 
-/** Where the pinned chrome ends, measured rather than assumed. */
-function headroom() {
-  let y = 0;
-  // The document bar has stepped aside while the bars are away. It is still in
-  // the flow, so it still has a box, and counting that box would reserve a band
-  // of nothing above the line being typed.
-  if (!chromeHidden() && ui && ui.bar && ui.bar.isConnected) {
-    y = Math.max(y, ui.bar.getBoundingClientRect().bottom);
-  }
-  const tool = ui && ui.toolbar && ui.toolbar.el;
-  if (tool && tool.isConnected && tool.dataset.perch !== "hide") {
-    y = Math.max(y, tool.getBoundingClientRect().bottom);
-  }
-  return Math.max(0, y) + 16;
-}
-
-/**
- * The bottom of the band somebody can actually read.
- *
- * On a phone with the keyboard up that is not the bottom of the window: the
- * visual viewport is half the size of the layout one, and a block "brought into
- * view" against `innerHeight` was brought in behind the keyboard.
- */
-function viewBottom() {
-  const vv = window.visualViewport;
-  const seen = vv ? vv.offsetTop + vv.height : window.innerHeight;
-  return Math.max(120, Math.min(window.innerHeight, seen)) - 24;
-}
-
-/** Where `el` should come to rest: just under the pinned chrome, with air. */
-function restingY(el) {
-  const rect = el.getBoundingClientRect();
-  const most = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-  return Math.min(most, Math.max(0, window.scrollY + rect.top - headroom() - 12));
-}
-
-/** Readable, and not by a sliver. Something taller than the band needs its top. */
-function readable(el) {
-  if (!el || !el.isConnected) return true;
-  const rect = el.getBoundingClientRect();
-  const top = headroom();
-  const foot = viewBottom();
-  if (rect.height > foot - top) return rect.top <= top + 8 && rect.bottom >= top + 96;
-  return rect.top >= top - 1 && rect.bottom <= foot + 1;
-}
-
-// Long enough to be followed by the eye, short enough that a step does not feel
-// like it is being waited on. Proportional to the distance between the two.
-const TRAVEL_MIN = 240;
-const TRAVEL_MAX = 620;
-
-/**
- * `EASE` — cubic-bezier(0.32, 0.72, 0, 1) — evaluated in JS.
- *
- * A scroll driven by a different curve from the transforms it travels with is two
- * motions that happen to overlap. This is what lets them be one.
- */
-function easeStep(t) {
-  const cx = 3 * 0.32;
-  const bx = 3 * (0 - 0.32) - cx;
-  const ax = 1 - cx - bx;
-  const cy = 3 * 0.72;
-  const by = 3 * (1 - 0.72) - cy;
-  const ay = 1 - cy - by;
-
-  let u = t;
-  for (let i = 0; i < 6; i++) {
-    const off = ((ax * u + bx) * u + cx) * u - t;
-    const slope = (3 * ax * u + 2 * bx) * u + cx;
-    if (Math.abs(slope) < 1e-6) break;
-    u -= off / slope;
-  }
-  u = Math.min(1, Math.max(0, u));
-  return ((ay * u + by) * u + cy) * u;
-}
-
-/**
- * Take the page somewhere, and KNOW when it has arrived.
- *
- * `scrollTo({ behavior: "smooth" })` cannot be awaited: watching for the page to
- * go still and giving up after 700ms is a bet a long journey routinely wins — and
- * a FLIP that measures while the viewport is still moving reads every rectangle
- * in a viewport that has already moved.
- *
- * Driven here instead: one known duration, one promise, one position written per
- * frame — which also cancels any native smooth scroll started underneath us.
- */
-function scrollTween(to, ms) {
-  return new Promise((done) => {
-    const from = window.scrollY;
-    const delta = to - from;
-    if (Math.abs(delta) < 1) return void done(false);
-
-    const span = ms || Math.min(TRAVEL_MAX, Math.max(TRAVEL_MIN, Math.abs(delta) * 0.55));
-    const began = performance.now();
-    const step = (now) => {
-      const k = Math.min(1, (now - began) / span);
-      window.scrollTo({ top: Math.round(from + delta * easeStep(k)), left: window.scrollX, behavior: "auto" });
-      if (k < 1) requestAnimationFrame(step);
-      else done(true);
-    };
-    requestAnimationFrame(step);
-  });
-}
-
-/**
- * Bring `el` somewhere it can be read, and wait for it.
- *
- * @returns {Promise<boolean>} whether it actually asked the page to travel.
- */
-function travelTo(el, quick) {
-  if (!el || !el.isConnected || readable(el)) return Promise.resolve(false);
-  const to = restingY(el);
-  // A run of presses travels once, at the end. Animating each step of a held
-  // Ctrl-Z is a page that never arrives anywhere.
-  if (quick || reduced()) {
-    window.scrollTo({ top: to, left: window.scrollX, behavior: "auto" });
-    return Promise.resolve(true);
-  }
-  return scrollTween(to);
-}
-
-/**
- * Hold one element still on screen across whatever `fn` does to the article.
- *
- * Opening a folding, switching a tab pane and landing a step all change heights,
- * and a height that changes ABOVE the viewport slides everything under it. The
- * element the step is about is measured, the change happens, and the page is
- * scrolled by exactly the difference — so the only thing that ever moves the
- * reader's view is the deliberate travel that happens before any of this.
- */
-async function anchored(el, fn) {
-  const top = el && el.isConnected ? el.getBoundingClientRect().top : null;
-  const out = await fn();
-  if (top != null && el.isConnected) {
-    const drift = el.getBoundingClientRect().top - top;
-    if (Math.abs(drift) > 0.5) window.scrollBy(0, drift);
-  }
-  return out;
-}
-
 const KEY_NAME = /^[A-Za-z_][\w-]*$/;
 
 /** The one element a step is about, as it stands right now. */
@@ -2731,13 +2623,6 @@ async function goToStep(target, plan) {
 
   // Two. Open what the change is behind, holding the block still while it grows.
   if (home && home.view.reveal) await anchored(at.view.el, () => home.view.reveal(next));
-}
-
-/** Not a pixel of it is in the readable band. */
-function offScreen(el) {
-  if (!el || !el.isConnected) return false;
-  const rect = el.getBoundingClientRect();
-  return rect.bottom <= headroom() || rect.top >= viewBottom();
 }
 
 /**
@@ -2986,7 +2871,7 @@ function subRange(was, now) {
  *   arrived  the block, because the block is the change
  *   left     the seam between the two blocks that remain
  */
-async /** The `+` and the drag handle, which are not part of what a step changed. */
+/** The `+` and the drag handle, which are not part of what a step changed. */
 function gutterOf(view) {
   return view && view.el ? view.el.querySelector(":scope > .ed-gutter") : null;
 }

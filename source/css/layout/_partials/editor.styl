@@ -1286,6 +1286,45 @@ html[data-ed-compose="1"] .article-content-container.is-editing
     color $ed-on-primary
     cursor grabbing
 
+// A picture is draggable by default, and dropping one into the contenteditable
+// beside it is how the browser came to paste a whole file in as a `data:` URI.
+// The JS refuses the drag as well; this is the half Firefox honours first.
+.ed-block img,
+.ed-block .img-preloader,
+.ed-tile img,
+.ed-tile .img-preloader
+  -webkit-user-drag none
+  user-drag none
+
+// ─── a picture, picked ──────────────────────────────────────
+// Clicking a picture has to say WHICH picture, and the block wrapper is
+// dimensionally invisible — it has no box of its own to light. So the ring goes
+// on the image, on the image's own radius and just outside its outline: a sharp
+// rectangle around a rounded photograph is the one shape that reads as a
+// mistake, and a wash over the picture is a lie about the picture.
+//
+// `outline` takes no space at any width, so nothing here can move a line break.
+// The colour is animated rather than the outline, for the same reason.
+// Inert here too, and read for the same reason: the spotlight shapes its mark
+// from this and a picture block is a picture.
+.ed-block[data-type="image"]
+  border-radius $redefine-border-radius-medium
+
+.ed-block[data-type="image"] .ed-figure img,
+.ed-block[data-type="image"] .ed-figure .img-preloader
+  outline 2px solid transparent
+  outline-offset 2px
+  transition outline-color $ed-fade
+
+.ed-block[data-type="image"]:hover .ed-figure img,
+.ed-block[data-type="image"]:hover .ed-figure .img-preloader
+  outline-color var(--shadow-color-1)
+
+.ed-block[data-type="image"][data-on="1"] .ed-figure img,
+.ed-block[data-type="image"][data-on="1"] .ed-figure .img-preloader
+  outline-width 2.5px
+  outline-color var(--primary-color)
+
 // ─── rich text ──────────────────────────────────────────────
 .ed-rich
   outline none
@@ -2624,143 +2663,234 @@ html.blog-editing .page-template-container
   +redefine-mobile()
     overflow-x clip
 
+// ─── the bars fit the gallery, not the article ──────────────
+// `.ed-docbar` and `.ed-front` are inset by the article's own px-2 / sm:px-6 /
+// md:px-8 so they line up with the text column. An album page has no text
+// column: `.page-template-container` already carries the site's gutter and the
+// gallery fills it edge to edge, so that inset made the bar, the card and the
+// toolbar narrower than the thing they belong to — the one misalignment you see
+// without being able to say what it is. The toolbar follows automatically: its
+// left edge and width are the document bar's, measured and republished.
+.ed-docbar.ed-docbar-album,
+.ed-album-host .ed-front
+  margin-left 0
+  margin-right 0
+
 // A gallery with nothing in it is still a page you have to be able to aim at.
+// `relative` is also what a photograph mid-way through LEAVING is placed
+// against: it is taken out of the flow at the rectangle it occupied so the
+// columns can re-flow around a gap that is already empty.
 .ed-album-host #masonry-container
+  position relative
   min-height 32vh
+
+// One column while the album is empty, so the placeholder is centred on the
+// whole measure instead of sitting in a quarter of it.
+.ed-album-host #masonry-container.ed-album-blank
+  column-count 1
 
 .ed-album-empty
   display flex
   flex-direction column
   align-items center
   justify-content center
-  gap 10px
-  padding 64px 24px
+  gap 12px
+  min-height 32vh
+  padding 48px 24px
   color var(--third-text-color)
   text-align center
 
-  i
-    font-size 1.6rem
+  > i
+    font-size 1.8rem
+
+  > span
+    font-size 0.82rem
+
+  .ed-album-add
+    margin-top 4px
+    min-width 190px
+    justify-content center
 
 // ─── one photograph ─────────────────────────────────────────
-// The gallery's own `.masonry-item`, with a ring and a number added. Nothing
+// The gallery's own `.masonry-item`, with a ring and a gutter added. Nothing
 // here changes its size, its aspect ratio or its place in the column flow — the
-// tile on screen has to be the tile that gets published.
+// tile on screen has to be the tile that gets published, so everything added
+// either takes no space (an outline) or is drawn over the picture.
 .ed-tile
   position relative
   cursor pointer
-  transition transform $ed-fade, filter $ed-fade
+  // Nothing here is drawn with a corner — the tile has no background and no
+  // border — but it is what `spotlight` reads to shape the mark it lays over a
+  // stepped-to photograph, and the photograph underneath has this corner.
+  border-radius $redefine-border-radius-medium
 
-  &:hover .image-container
-    outline 2px solid var(--shadow-color-1)
+  // The picture itself, on the picture's own radius. Lighting `.image-container`
+  // instead drew a sharp rectangle around a rounded photograph. Drawn OUTSIDE
+  // the image rather than over it, which is what makes it legible on a light
+  // page, a dark one and a photograph of any colour alike.
+  img, .img-preloader
+    outline 2px solid transparent
     outline-offset 2px
+    transition outline-color $ed-fade
 
-  // Picked. An outline rather than a wash: what is underneath is a photograph,
-  // and any tint over it is a lie about the picture. The ring is the primary
-  // colour, which reads against a light page, a dark one and a photograph alike
-  // because it is drawn OUTSIDE the image rather than on it.
-  &[data-on="1"] .image-container
-    outline 2.5px solid var(--primary-color)
-    outline-offset 2px
+  &:hover img,
+  &:hover .img-preloader
+    outline-color var(--shadow-color-1)
 
-  &[data-on="1"] .ed-tile-n
-    background var(--primary-color)
-    color $ed-on-primary
+  &[data-on="1"] img,
+  &[data-on="1"] .img-preloader
+    outline-width 2.5px
+    outline-color var(--primary-color)
 
+  // The one being carried. It stays legible: you are aiming it at a gap, and a
+  // ghost you cannot read is a gap you cannot aim at.
   &.is-dragging
-    opacity 0.4
+    opacity 0.45
 
-  // Where a dropped photograph would land.
-  &[data-drop="1"] .image-container
-    outline 2.5px dashed var(--primary-color)
-    outline-offset 4px
+// Where a dropped photograph would land — the article's own insertion line, on
+// the edge it would go in at. In the column's own gap, so it never covers a
+// picture and never moves one.
+.ed-tile[data-drop="before"]::before,
+.ed-tile[data-drop="after"]::after
+  content ""
+  position absolute
+  left 0
+  right 0
+  z-index 4
+  height 3px
+  border-radius 3px
+  background var(--primary-color)
+  box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+  animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+
+.ed-tile[data-drop="before"]::before
+  top -6px
+
+.ed-tile[data-drop="after"]::after
+  bottom -6px
 
 #masonry-container.is-dragging .ed-tile
   cursor grabbing
 
-// Its position in masonry.yml, which is the order the gallery publishes in.
-// Small, in the corner the overlays do not use, and legible over a photograph
-// of any colour because it carries its own surface.
-.ed-tile-n
+// ─── the gutter, over the photograph ────────────────────────
+// The article's own `+` and drag handle, same classes and same behaviour. They
+// cannot ride in a margin here: a masonry column has none, and anything that
+// took width would make the layout being edited a different layout from the one
+// being published. So they float over the picture's top-left corner instead.
+//
+// Every property the article's tablet rule sets is set again, because that rule
+// makes the gutter STATIC — which here would push the picture down a row.
+.ed-tile-rail
   position absolute
   top 8px
-  right 8px
-  z-index 2
-  display grid
-  place-items center
-  min-width 22px
-  height 22px
-  padding 0 6px
-  border-radius 999px
-  background var(--background-color-transparent-80)
-  backdrop-filter blur(6px)
-  -webkit-backdrop-filter blur(6px)
-  color var(--second-text-color)
-  font-size 0.68rem
-  font-weight 600
-  font-variant-numeric tabular-nums
-  pointer-events none
+  left 8px
+  right auto
+  z-index 3
+  margin 0
+  flex-direction column
+  opacity 0
+  transform translateX(-4px)
+  transition opacity $ed-fade, transform $ed-morph
+
+// Picked. This is the only way to reach the gutter on a touch screen, and it is
+// also what keeps it up while the property sheet is being used.
+.ed-tile[data-on="1"] > .ed-tile-rail
+  opacity 1
+  transform none
+
+@media (hover: hover)
+  .ed-tile:hover > .ed-tile-rail
+    opacity 1
+    transform none
+
+// No hover to reveal it, so it appears when the photograph is picked — and it
+// lies ALONG THE TOP of the picture rather than down its left edge, which is
+// where a thumb reaches and where it covers least of the photograph.
+@media (pointer: coarse)
+  .ed-tile-rail
+    flex-direction row
+    transform translateY(-4px)
 
 // ─── one row of controls ────────────────────────────────────
-// No tab strip, so the two steps are no longer a group beside one — they are
-// the left end of the only row there is, and the row starts where they stop.
+// No tab strip, so the two steps are not a group beside one — they are the left
+// end of the only row there is. The card is a COLUMN in the article's toolbar,
+// where four faces stack; here there is one face, and putting the steps on a
+// line of their own above eight buttons is two rows saying what one row says.
 .ed-toolbar.is-simple
   .ed-toolbar-head
     gap 0
+    flex 0 0 auto
 
   .ed-toolbar-tabs
     display none
 
-// ─── the album card ─────────────────────────────────────────
-// `.ed-front`'s own rows, so nothing here restyles a field. The select is the
-// one control the post's card does not have, and it is built to match the text
-// input beside it exactly — a native select that looked like a native select
-// would be the only unstyled thing in the editor.
-// The chevron is drawn rather than fetched: a data-URI arrow carries a colour
-// baked into it, and this control has to read on a light page, a dark one and a
-// tinted one. Two borders rotated 45° take `currentColor` instead, so it is
-// always exactly as dark as the value beside it.
-.ed-f-select
-  position relative
+  .ed-toolbar-card
+    flex-direction row
+    flex-wrap wrap
+    align-items center
 
-  &::after
-    content ""
-    position absolute
-    right 12px
-    bottom 15px
-    width 6px
-    height 6px
-    border-right 1.6px solid var(--third-text-color)
-    border-bottom 1.6px solid var(--third-text-color)
-    transform rotate(45deg)
-    pointer-events none
+  .ed-toolbar-row
+    flex 1 1 auto
+    min-width 0
 
-.ed-f-select select.ed-f-input
-  appearance none
-  -webkit-appearance none
-  padding-right 28px
-  cursor pointer
+  // If it ever opens, it opens under the whole row rather than beside it.
+  .ed-toolbar-sub
+    flex 1 0 100%
 
-  option
-    background var(--background-color)
-    color var(--first-text-color)
+  // Three steps, a minimise button and eight controls have to fit one line at a
+  // phone's width. Two pixels each is the difference between one row and two.
+  +redefine-mobile()
+    .ed-tool
+      width 28px
+      height 28px
 
-// What the two fields under it actually change. A note rather than a longer
-// label, because the statement is about the CATEGORY and the fields are about
-// this album's copy of it — which is exactly the thing that is easy to get
-// wrong and impossible to see afterwards.
-.ed-f-note
-  display flex
-  align-items flex-start
-  gap 7px
-  margin 8px 0 0
-  color var(--third-text-color)
-  font-size 0.72rem
+// ─── which category this album is in ────────────────────────
+// The picture browser's own search field, so the only two search boxes in this
+// editor are one control. It differs in three ways and no more: it sits in a
+// card rather than along the foot of a dialogue, so the menu opens DOWNWARD; it
+// takes the card's type rather than the browser's monospace, because what is
+// typed here is a name and not a path; and it carries a tag saying whether the
+// name is a category that exists or one this will make.
+.ed-f-combo .ed-pick-field
+  flex 0 0 auto
+  padding 4px 9px
+  border-radius 8px
+
+.ed-f-combo .ed-pick-input
+  font-family inherit
+  font-size 0.78rem
   line-height 1.5
+  padding 1px 0
 
-  i
-    margin-top 2px
-    flex-shrink 0
-    color var(--primary-color)
+.ed-f-combo .ed-pick-menu
+  top calc(100% + 6px)
+  bottom auto
+  max-height 220px
+
+.ed-f-combo .ed-pick-blank
+  padding 12px 10px
+  font-size 0.72rem
+  text-align center
+
+// Existing or new, said before it is committed rather than found out after.
+.ed-f-tag
+  flex-shrink 0
+  padding 1px 7px
+  border-radius 999px
+  font-size 0.62rem
+  font-weight 650
+  letter-spacing 0.02em
+
+  &:empty
+    display none
+
+  &[data-kind="held"]
+    background var(--box-blue-bg)
+    color var(--box-blue-text)
+
+  &[data-kind="new"]
+    background var(--box-amber-bg)
+    color var(--box-amber-text)
 
 @media (prefers-reduced-motion: reduce)
   .ed-block,
@@ -2769,5 +2899,7 @@ html.blog-editing .page-template-container
   .ed-gutter,
   .ed-stage,
   .ed-swatch,
-  .ed-tile
+  .ed-tile,
+  .ed-tile img,
+  .ed-tile .img-preloader
     transition none !important

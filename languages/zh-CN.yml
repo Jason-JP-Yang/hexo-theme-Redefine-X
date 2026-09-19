@@ -666,19 +666,20 @@ editor:
   publish_album: 直接提交到已发布的相册？
   publish_album_draft: 用这份草稿覆盖它所替代的相册？
   discard_album: 这个相册有尚未提交的改动。
-  album_empty: 还没有照片。从工具栏添加一张。
+  album_empty: 还没有照片
   add_image: 添加图片
+  insert_before_image: 在这里插入图片
   g_album: 相册
   g_cat: 分类
-  cat_new: ＋ 新建分类…
-  cat_new_title: 新建分类
   cat_first: 相册
-  cat_note: 下面两项属于分类本身，会影响该分类下的每一个相册。
+  cat_find: 搜索，或输入新名称
+  cat_here: 已有
+  cat_make: 新建
+  cat_none: 没有匹配的分类，将新建一个
   f_name: 名称
   f_page_title: 页面标题
   f_link: 链接
-  f_category: 所属分类
-  f_links_category: 分类名称
+  f_category: 分类
   f_has_thumbnail: 卡片显示预览图
   f_auto_exif: 构建时读取 EXIF
 analytics:

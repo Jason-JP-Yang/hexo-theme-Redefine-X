@@ -61,6 +61,7 @@ import {
   makeItem,
   parseItemBlock,
   parseMasonry,
+  readKeys,
   setImageField,
   setItemField,
 } from "./masonry-yaml.js";
@@ -71,10 +72,15 @@ import {
   openAsk,
   openPicker,
   openSheet,
+  pickerLive,
   sheetLive,
   siteAddress,
 } from "./picker.js";
 import { PERCH_AT, releaseDocbar, watchDocbar, watchPerch } from "./chrome.js";
+import { filedPath, movedId, uploadPath } from "./history.js";
+import { loadComponents } from "./render.js";
+import { spotClear, spotElement } from "./spotlight.js";
+import { anchored, headroom, readable, travelTo, useChrome } from "./travel.js";
 import {
   bindImage,
   buildPreloader,
@@ -94,13 +100,30 @@ import { assetURL, vaultPrefix } from "../../tools/vaultCrypto.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
-import { contentChanged, crossFade, enter, exit, flip, pop, reduced, toolbarIn } from "./motion.js";
-import { initMasonry } from "../masonry.js";
+import {
+  EASE,
+  contentChanged,
+  createEdgeScroll,
+  crossFade,
+  enter,
+  exit,
+  pop,
+  reduced,
+  setDragImage,
+  toolbarIn,
+} from "./motion.js";
+import { checkMasonryOverflow } from "../masonry.js";
 
 const DATA = "source/_data/masonry.yml";
 const AUTOSTASH_MS = 4000;
 const DEPLOY_MS = 20000;
 const POLL_MS = 6000;
+// The article's own step duration, so a photograph sliding into its new column
+// travels at the same speed a paragraph does.
+const STEP_MS = 380;
+// Separator for the comparison keys below: a control character, because what is
+// being joined is the author's own text.
+const UNIT = String.fromCharCode(1);
 
 /**
  * The masonry.yml key each EXIF field is written under.
@@ -137,6 +160,12 @@ const EXIF_GROUPS = [
   ["g_exposure", "Exposure", ["ExposureTime", "Aperture", "ISOSpeedRatings", "ExposureProgram", "ExposureBias", "MeteringMode"]],
   ["g_other", "Other", ["Flash", "WhiteBalance", "GPSLatitude", "GPSLongitude", "GPSAltitude"]],
 ];
+
+/** masonry.yml's spelling back to the sheet's, so a step can name a field. */
+const YML_EXIF = Object.fromEntries(Object.entries(EXIF_YML).map(([exif, key]) => [key, exif]));
+
+/** Every field the property sheet owns, in the order it prints them. */
+const PROP_KEYS = ["title", "description", "auto-exif", ...Object.values(EXIF_YML)];
 
 const STAGES = [
   { key: "committed", icon: "fa-code-commit", label: "Committed" },
@@ -179,6 +208,7 @@ function blank() {
     barSize: null,
     progressTimer: null,
     dragId: "",
+    dropAt: "",
   };
 }
 
@@ -391,6 +421,27 @@ function hasExif(node) {
 }
 
 /**
+ * What a tile DRAWS, in one string.
+ *
+ * Everything else a photograph carries — seventeen EXIF fields — changes what
+ * the published page prints in its card and nothing about the tile, so a tile
+ * whose signature has not moved is a tile that must not be rebuilt.
+ */
+function tileSig(node) {
+  const fields = imageFields(node);
+  return [fields.image || "", fields.title || "", fields.description || ""].join(UNIT);
+}
+
+function tiles() {
+  return Array.from(state.container.querySelectorAll(":scope > .ed-tile"));
+}
+
+function tileOf(id) {
+  if (!id || !state.container) return null;
+  return state.container.querySelector(`:scope > .ed-tile[data-id="${CSS.escape(id)}"]`);
+}
+
+/**
  * One photograph, drawn exactly as the published gallery draws it.
  *
  * `masonry.ejs`'s own markup — `.masonry-item` around `.image-container` around
@@ -398,84 +449,298 @@ function hasExif(node) {
  * overlays — so what is on screen while the album is edited is the album, not a
  * preview of it. The compact-mode measuring pass and the image viewer are the
  * gallery's own and work on this unchanged.
+ *
+ * The one thing added is the article's own gutter: the `+` that inserts a
+ * photograph in front of this one and the handle a drag starts from. Same two
+ * buttons, same classes, same behaviour as every block in a post — but drawn
+ * OVER the picture rather than in a margin, because a masonry column has no
+ * margin to put them in and anything that took width would change the layout
+ * being edited into one that is not the layout being published.
  */
 function buildTile(node) {
-  const fields = imageFields(node);
   const tile = document.createElement("div");
   tile.className = "masonry-item ed-tile";
   tile.dataset.id = node.id;
-  tile.draggable = true;
-  tile.dataset.on = node.id === state.selected ? "1" : "0";
+  tile.dataset.on = "0";
+
+  const rail = document.createElement("div");
+  rail.className = "ed-gutter ed-tile-rail";
+  rail.innerHTML = `
+    <button type="button" class="ed-gutter-btn ed-add" title="${escapeHTML(
+      t("insert_before_image", "Add a picture here")
+    )}" tabindex="-1"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+    <button type="button" class="ed-gutter-btn ed-handle" title="${escapeHTML(
+      t("drag", "Drag to reorder")
+    )}" draggable="true" tabindex="-1"><i class="fa-solid fa-grip-vertical" aria-hidden="true"></i></button>`;
+  tile.appendChild(rail);
 
   const box = document.createElement("div");
-  box.className = "image-container" + (fields.title && !fields.description ? " masonry-title-only" : "");
-
-  const media = buildPreloader(siteOf(fields.image), fields.title || "", state.pending);
-  // A click on the canvas SELECTS a photograph; the viewer is the toolbar's.
-  media.setAttribute("data-no-viewer", "");
-  box.appendChild(media);
-
-  if (fields.title) {
-    const label = document.createElement("div");
-    label.className = "image-title";
-    label.textContent = fields.title;
-    box.appendChild(label);
-  }
-  if (fields.description) {
-    const label = document.createElement("div");
-    label.className = "image-description";
-    label.textContent = fields.description;
-    box.appendChild(label);
-  }
-
-  const badge = document.createElement("span");
-  badge.className = "ed-tile-n";
-  badge.textContent = String(indexOf(node.id) + 1);
-  box.appendChild(badge);
-
+  box.className = "image-container";
   tile.appendChild(box);
+
+  patchTile(tile, node);
   return tile;
 }
 
-function paintCanvas() {
-  const container = state.container;
-  container.innerHTML = "";
-  for (const node of images()) container.appendChild(buildTile(node));
-  if (!images().length) {
-    const empty = document.createElement("p");
-    empty.className = "ed-album-empty";
-    empty.innerHTML = `<i class="fa-regular fa-images" aria-hidden="true"></i><span>${escapeHTML(
-      t("album_empty", "No photographs yet. Add one from the toolbar.")
-    )}</span>`;
-    container.appendChild(empty);
+/** The one overlay, made to say `text` — or taken away when there is none. */
+function setOverlay(box, cls, text) {
+  let el = box.querySelector(":scope > ." + cls);
+  if (!text) {
+    if (el) el.remove();
+    return;
   }
-  observeImages();
+  if (!el) {
+    el = document.createElement("div");
+    el.className = cls;
+    box.appendChild(el);
+  }
+  if (el.textContent !== text) el.textContent = text;
+}
+
+/**
+ * Bring one tile up to date IN PLACE.
+ *
+ * The picture element is kept unless the address itself changed, which is the
+ * whole point: a caption edited, a photograph moved, a step undone — none of
+ * those may hand the browser a new `<img>`, because a new `<img>` is a fresh
+ * request, a skeleton over a picture that had already arrived, and a column
+ * whose heights collapse and come back. That was the flicker.
+ */
+function patchTile(tile, node) {
+  const fields = imageFields(node);
+  const box = tile.querySelector(":scope > .image-container");
+  if (!box) return false;
+
+  // Toggled, never assigned: `masonry-compact` and `auto-hover` are put there by
+  // the gallery's own passes, and rewriting the whole list takes them off under
+  // the pass that had just decided them.
+  box.classList.toggle("masonry-title-only", !!(fields.title && !fields.description));
+
+  const want = siteOf(fields.image);
+  const media = box.querySelector(".img-preloader, img");
+  if (!media || tile.dataset.src !== want) {
+    const fresh = buildPreloader(want, fields.title || "", state.pending);
+    // A click on the canvas SELECTS a photograph; the viewer is the toolbar's.
+    fresh.setAttribute("data-no-viewer", "");
+    if (media) media.replaceWith(fresh);
+    else box.insertBefore(fresh, box.firstChild);
+  } else if (media.tagName === "IMG") {
+    media.alt = fields.title || "";
+  } else {
+    media.dataset.alt = fields.title || "";
+  }
+  tile.dataset.src = want;
+
+  setOverlay(box, "image-title", fields.title || "");
+  setOverlay(box, "image-description", fields.description || "");
+  tile.dataset.sig = tileSig(node);
+  return true;
+}
+
+/**
+ * An album with nothing in it.
+ *
+ * Centred on the whole measure rather than dropped into the first column — the
+ * container is a multi-column box, so a placeholder left in the flow sits in a
+ * quarter of the page and reads as a photograph that failed to load. The button
+ * is the docbar's own primary action, and it does exactly what the toolbar's
+ * add does, because at this point it is the only thing there is to do.
+ */
+function buildEmpty() {
+  const empty = document.createElement("div");
+  empty.className = "ed-album-empty";
+  empty.innerHTML =
+    `<i class="fa-regular fa-images" aria-hidden="true"></i>` +
+    `<span>${escapeHTML(t("album_empty", "No photographs yet."))}</span>` +
+    `<button type="button" class="ed-act ed-act-primary ed-album-add">
+       <i class="fa-solid fa-image" aria-hidden="true"></i><span>${escapeHTML(
+         t("add_image", "Add a picture")
+       )}</span>
+     </button>`;
+  return empty;
+}
+
+/**
+ * The canvas, made to MATCH the album — never rebuilt from it.
+ *
+ * `reconcile` in the post editor, over photographs: a tile whose signature is
+ * unchanged keeps its element and may only move; one that says something else
+ * is patched; one that is gone is removed. Emptying the container and drawing
+ * every tile again was four lines and it cost a full re-layout of the columns
+ * and a fresh request for every picture on every edit — an album flashing white
+ * each time a caption was typed into.
+ *
+ * Synchronous, and it must stay that way: a FLIP is measure, mutate, measure,
+ * with no frame between them.
+ */
+function syncTiles() {
+  const container = state.container;
+  const held = new Map();
+  for (const el of tiles()) held.set(el.dataset.id, el);
+
+  // The gallery the page arrived with. It is kept in `state.snapshot` to be put
+  // back on close, and until the first reconcile it is still IN the container —
+  // so without this every photograph was drawn twice, once as the published
+  // tile nothing could edit and once as the editable one.
+  for (const node of Array.from(container.childNodes)) {
+    if (node.nodeType !== 1) node.remove();
+    else if (!node.classList.contains("ed-tile") && !node.classList.contains("ed-album-empty")) node.remove();
+  }
+
+  const rows = [];
+  for (const node of images()) {
+    let el = held.get(node.id);
+    if (el) {
+      held.delete(node.id);
+      if (el.dataset.sig !== tileSig(node)) patchTile(el, node);
+    } else {
+      el = buildTile(node);
+    }
+    el.dataset.on = node.id === state.selected ? "1" : "0";
+    rows.push(el);
+  }
+  for (const el of held.values()) el.remove();
+
+  // Placed from the end, so a tile already standing where it belongs is never
+  // touched — and moving one out of the tree and back in would take its picture
+  // with it.
+  let anchor = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const el = rows[i];
+    if (el.parentNode !== container || el.nextSibling !== anchor) container.insertBefore(el, anchor);
+    anchor = el;
+  }
+
+  const empty = container.querySelector(":scope > .ed-album-empty");
+  if (rows.length && empty) empty.remove();
+  if (!rows.length && !empty) container.appendChild(buildEmpty());
+  // One column while there is nothing in it, so the placeholder has the whole
+  // measure to be centred on.
+  container.classList.toggle("ed-album-blank", !rows.length);
+
   settleGallery();
+}
+
+/**
+ * One FLIP over every tile: what moved travels from where it was, what arrived
+ * grows into place, and the page is held still by `anchor` while the columns
+ * re-flow above it.
+ */
+async function flipTiles(mutate, anchor) {
+  if (reduced()) {
+    mutate();
+    return;
+  }
+
+  const was = new Map();
+  for (const el of tiles()) was.set(el, el.getBoundingClientRect());
+  const top = anchor && anchor.isConnected ? anchor.getBoundingClientRect().top : null;
+
+  mutate();
+
+  // Removing one photograph re-balances EVERY column, so a tile can travel from
+  // the bottom of the page to the top. Correcting for that is what threw the
+  // viewport to the top of the album: the pin is only honest while the anchor
+  // moved a little, and past that the honest answer is to leave the page where
+  // the author left it and let the FLIP show what moved.
+  if (top != null && anchor.isConnected) {
+    const drift = anchor.getBoundingClientRect().top - top;
+    if (Math.abs(drift) > 0.5 && Math.abs(drift) < window.innerHeight * 0.6) window.scrollBy(0, drift);
+  }
+
+  const runs = [];
+  for (const el of tiles()) {
+    const from = was.get(el);
+    const now = el.getBoundingClientRect();
+    if (!from) {
+      runs.push(
+        el.animate([{ opacity: 0, transform: "scale(0.94)" }, { opacity: 1, transform: "none" }], {
+          duration: Math.round(STEP_MS * 0.7),
+          easing: EASE,
+        })
+      );
+      continue;
+    }
+    const dx = from.left - now.left;
+    const dy = from.top - now.top;
+    if (!dx && !dy) continue;
+    runs.push(
+      el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], {
+        duration: STEP_MS,
+        easing: EASE,
+      })
+    );
+  }
+  await Promise.all(runs.map((run) => run.finished.catch(() => {})));
+}
+
+/** Reconcile, with the travel. `anchor` is what the page is held still by. */
+async function paintCanvas(animate, anchor) {
+  if (animate === false) syncTiles();
+  else await flipTiles(() => syncTiles(), anchor || steadyTile());
+  observeImages();
   contentChanged();
 }
 
-/** Repaint one tile in place, so the pictures around it are never re-requested. */
-function repaintTile(node) {
-  const old = state.container.querySelector(`.ed-tile[data-id="${CSS.escape(node.id)}"]`);
-  if (!old) return void paintCanvas();
-  const next = buildTile(node);
-  old.replaceWith(next);
-  observeImages();
-  settleGallery();
-  contentChanged();
+/**
+ * What the reader is looking at, when the change itself has nothing to offer.
+ *
+ * The first tile still on screen. Without it, a photograph restored above the
+ * fold slides everything the author was looking at down by its height.
+ */
+function steadyTile(skip) {
+  const top = headroom();
+  for (const el of tiles()) {
+    if (skip && el === skip) continue;
+    if (el.getBoundingClientRect().bottom > top + 1) return el;
+  }
+  return null;
 }
 
-function renumber() {
-  const tiles = state.container.querySelectorAll(".ed-tile .ed-tile-n");
-  tiles.forEach((badge, i) => (badge.textContent = String(i + 1)));
+/**
+ * A photograph leaving, in two beats.
+ *
+ * It goes first, where it stands and while nothing else has moved; the gap then
+ * closes and everything travels into it. Running the two together — the tile
+ * fading over a page that was already re-flowing around it — is two motions
+ * with no relationship, which is what read as a jolt rather than a deletion.
+ */
+const GONE_MS = 190;
+
+async function dropTile(id, mutate, keep) {
+  const el = tileOf(id);
+  if (!el || reduced()) {
+    mutate();
+    return void (await paintCanvas(false));
+  }
+
+  el.style.pointerEvents = "none";
+  await el
+    .animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(0.92)" }], {
+      duration: GONE_MS,
+      easing: "ease-in",
+      fill: "forwards",
+    })
+    .finished.catch(() => {});
+  if (!state.on) return;
+
+  // The photograph that takes its place, which is standing where the author is
+  // already looking. Any other tile is somewhere the columns may throw it.
+  const anchor = (keep && tileOf(keep)) || steadyTile(el);
+  await flipTiles(() => {
+    el.remove();
+    mutate();
+    syncTiles();
+  }, anchor);
+
+  observeImages();
+  contentChanged();
 }
 
 function select(id) {
   if (state.selected === id) return;
   state.selected = id || "";
-  for (const tile of state.container.querySelectorAll(".ed-tile")) {
-    tile.dataset.on = tile.dataset.id === state.selected ? "1" : "0";
-  }
+  for (const tile of tiles()) tile.dataset.on = tile.dataset.id === state.selected ? "1" : "0";
   if (ui && ui.toolbar) ui.toolbar.sync();
 }
 
@@ -491,10 +756,16 @@ function observeImages() {
   });
 }
 
-/** The gallery's own compact-overlay measuring pass, for tiles it never saw. */
+/**
+ * The gallery's own compact-overlay measuring pass, for tiles it never saw.
+ *
+ * The pass itself, not `initMasonry` — that one also registers a `resize`
+ * listener, and calling it after every edit left one listener per keystroke.
+ */
 function settleGallery() {
+  if (!state.container) return;
   try {
-    initMasonry();
+    checkMasonryOverflow(state.container);
   } catch (err) {
     /* one dead subsystem must not take the album down with it */
   }
@@ -518,6 +789,9 @@ function openViewer(tile) {
 function toolbarItems() {
   const node = selectedNode();
   const off = !node;
+  // Icons only. The row carries the two steps, the minimise button and eight
+  // controls, and it has to be ONE row at a phone's width — three of these
+  // wearing their labels is two rows everywhere below a desktop.
   return [
     {
       kind: "btn",
@@ -525,7 +799,6 @@ function toolbarItems() {
       icon: "fa-folder-open",
       label: "Open folder",
       tt: "open_folder",
-      wide: true,
       disabled: off,
     },
     {
@@ -534,7 +807,6 @@ function toolbarItems() {
       icon: "fa-sliders",
       label: "Properties",
       tt: "properties",
-      wide: true,
       disabled: off,
       on: !!node && hasExif(node),
     },
@@ -547,7 +819,7 @@ function toolbarItems() {
     // Last, and to the right of Remove: adding is the one thing here that does
     // not need a photograph picked first, so it is the one control that never
     // greys out — and it is where the eye ends up after deleting one.
-    { kind: "btn", act: "add", icon: "fa-image", label: "Add a picture", tt: "add_image", wide: true },
+    { kind: "btn", act: "add", icon: "fa-image", label: "Add a picture", tt: "add_image" },
   ];
 }
 
@@ -556,9 +828,7 @@ async function act(action, arg) {
   if (action === "add") return void addImage();
   if (!node) return;
 
-  if (action === "view") {
-    return void openViewer(state.container.querySelector(`.ed-tile[data-id="${CSS.escape(node.id)}"]`));
-  }
+  if (action === "view") return void openViewer(tileOf(node.id));
   if (action === "props") return void imageProps(node);
 
   if (action === "folder") {
@@ -566,7 +836,7 @@ async function act(action, arg) {
     if (!picked) return;
     setImageField(node, "image", storedOf(picked.site));
     markDirty("image", node.id);
-    repaintTile(node);
+    await paintCanvas(true, tileOf(node.id));
     if (ui.toolbar) ui.toolbar.refresh();
     return;
   }
@@ -578,23 +848,25 @@ async function act(action, arg) {
     const clone = makeImage(node.lead, node.eol, "");
     clone.body = node.body;
     insertImage(clone, indexOf(node.id) + 1);
+    state.selected = clone.id;
     markDirty("images", clone.id);
-    paintCanvas();
-    select(clone.id);
+    await paintCanvas(true, tileOf(node.id));
+    if (ui.toolbar) ui.toolbar.sync();
     return;
   }
 
   if (action === "delete") {
     const at = indexOf(node.id);
-    const tile = state.container.querySelector(`.ed-tile[data-id="${CSS.escape(node.id)}"]`);
-    dropFrom(images(), at, (tail) => (state.item.post = tail + state.item.post));
-    markDirty("images", node.id);
-    const next = images()[Math.min(at, images().length - 1)];
+    const next = images()[at + 1] || images()[at - 1];
     state.selected = next ? next.id : "";
-    if (tile && !reduced()) {
-      await flip(Array.from(state.container.querySelectorAll(".ed-tile")), () => tile.remove());
-    }
-    paintCanvas();
+    await dropTile(
+      node.id,
+      () => {
+        dropFrom(images(), at, (tail) => (state.item.post = tail + state.item.post));
+        markDirty("images", node.id);
+      },
+      state.selected
+    );
     if (ui.toolbar) ui.toolbar.sync();
     return;
   }
@@ -602,20 +874,30 @@ async function act(action, arg) {
   if (action === "move") {
     const delta = Number(arg) || 0;
     const at = indexOf(node.id);
-    const to = at + delta;
-    if (to < 0 || to >= images().length) return;
-    const list = images();
-    // The tails stay with their POSITIONS, not with the nodes: the blank line
-    // after the last photograph closes the list, and carrying it along with a
-    // photograph being moved up would open a gap in the middle of it.
-    const tails = list.map((n) => n.tail);
-    list.splice(to, 0, list.splice(at, 1)[0]);
-    list.forEach((n, i) => (n.tail = tails[i]));
-    markDirty("images", node.id);
-    await flip(Array.from(state.container.querySelectorAll(".ed-tile")), () => paintCanvas());
-    renumber();
-    return;
+    return void (await moveImage(at, at + delta));
   }
+}
+
+/**
+ * Put the photograph at `from` in at `to`, and let everything travel.
+ *
+ * The tails stay with their POSITIONS, not with the nodes: the blank line after
+ * the last photograph closes the list, and carrying it along with a photograph
+ * being moved up would open a gap in the middle of it.
+ */
+async function moveImage(from, to) {
+  const list = images();
+  if (from < 0 || from >= list.length) return;
+  const index = Math.max(0, Math.min(to, list.length - 1));
+  if (index === from) return;
+
+  const node = list[from];
+  const tails = list.map((n) => n.tail);
+  list.splice(index, 0, list.splice(from, 1)[0]);
+  list.forEach((n, i) => (n.tail = tails[i]));
+
+  markDirty("images", node.id);
+  await paintCanvas(true, tileOf(node.id));
 }
 
 /**
@@ -634,14 +916,21 @@ function insertImage(node, at) {
   return node;
 }
 
-async function addImage() {
+/**
+ * @param {number} [at]  where it goes. A `+` on a tile says "in front of this
+ *                       one"; the toolbar's button says "after the one picked",
+ *                       which is where the eye already is.
+ */
+async function addImage(at) {
+  const anchor = at == null ? null : tileOf((images()[at] || {}).id);
   const picked = await pickImage("");
-  if (!picked) return;
+  if (!picked || !state.on) return;
   const node = makeImage(state.item.imageLead, state.item.eol, storedOf(picked.site));
-  insertImage(node, state.selected ? indexOf(state.selected) + 1 : images().length);
+  insertImage(node, at == null ? (state.selected ? indexOf(state.selected) + 1 : images().length) : at);
+  state.selected = node.id;
   markDirty("images", node.id);
-  paintCanvas();
-  select(node.id);
+  await paintCanvas(true, anchor && anchor.isConnected ? anchor : undefined);
+  if (ui && ui.toolbar) ui.toolbar.sync();
 }
 
 /* ─── the property sheet ───────────────────────────────────────────────────── */
@@ -661,11 +950,15 @@ function propsOf(node) {
  * same seventeen fields — so the caption, the description and the camera data
  * are asked for in one place on this site rather than two that look alike.
  */
-function imageProps(node) {
+function imageProps(node, quiet) {
   const held = sheetLive();
-  if (held && held.id === node.id) return;
+  if (held && held.id === node.id) return held;
   if (held) held.close();
 
+  // `components.js` carries the labels the published EXIF card is printed with.
+  // It is fetched when the editor opens; a field whose label has not arrived is
+  // still drawn, under its own name, because a sheet missing fourteen of its
+  // seventeen fields is worse than one with a plain label on them.
   const api = window.RedefineComponents;
   const labels = (api && api.EXIF_LABELS) || {};
   const id = node.id;
@@ -674,6 +967,7 @@ function imageProps(node) {
     { t },
     {
       id,
+      quiet,
       title: t("properties", "Picture properties"),
       values: propsOf(node),
       groups: [
@@ -694,11 +988,11 @@ function imageProps(node) {
         },
         ...EXIF_GROUPS.map(([key, label, keys]) => ({
           label: t(key, label),
-          fields: keys.filter((k) => labels[k]).map((k) => ({ key: k, label: labels[k] })),
+          fields: keys.map((k) => ({ key: k, label: labels[k] || k })),
         })),
       ],
     }
-  ).then((answer) => {
+  ).then(async (answer) => {
     if (!answer || !state.on) return;
     const live = nodeOf(id);
     if (!live) return;
@@ -713,14 +1007,23 @@ function imageProps(node) {
     }
 
     markDirty("props", id);
-    repaintTile(live);
-    if (ui.toolbar) ui.toolbar.refresh();
+    // The picture itself is untouched, so only the overlays are rewritten and
+    // the column heights travel to whatever the caption made them.
+    await paintCanvas(true, tileOf(id));
+    if (ui && ui.toolbar) ui.toolbar.refresh();
   });
+
+  return sheetLive();
+}
+
+function closeSheet() {
+  const held = sheetLive();
+  if (held) held.close();
 }
 
 /* ─── pictures ─────────────────────────────────────────────────────────────── */
 
-async function pickImage(current) {
+async function pickImage(current, browse) {
   const had = state.pending.length;
   const opened = history.mark();
   const picked = await openPicker(
@@ -733,9 +1036,12 @@ async function pickImage(current) {
       naturalSize: (src) => naturalSize(src, state.pending),
       bindImage: (img, src) => bindImage(img, src, state.pending),
     },
-    { current }
+    { current, browse }
   );
-  if (state.stage.dirty) markDirty("assets", "");
+  // Tidying is a change to the album even when nothing was chosen: the renames
+  // travel in this album's commit. `browse` is the browser opened BY a step, on
+  // its way to somewhere else, and nothing it shows is a decision.
+  if (!browse && state.stage.dirty) markDirty("assets", "");
   if (!picked) return null;
   if (history.mark() !== opened && state.pending.length === had) history.fold();
 
@@ -827,18 +1133,122 @@ function applyStagedMoves() {
  *
  * The same bargain history.js makes for a post, at the scale an album needs: the
  * document here is one `list:` entry and a handful of category keys, so a
- * snapshot is two short strings rather than a tree — small enough that sharing
- * structure between steps would cost more than it saved. Restoring re-parses the
- * text, which is exactly what a commit would have written, so a step can never
- * put the album into a state a save could not reproduce.
+ * snapshot is a few short strings rather than a tree — small enough that sharing
+ * structure between steps would cost more than it saved. What is stored is the
+ * text `emitItem` would have written, so a step can never put the album into a
+ * state a save could not reproduce.
  *
  * Typing merges the way it does there: consecutive bursts naming the same field
  * collapse into the step already on top, and anything structural is a step of
  * its own.
+ *
+ * ── A step is a journey ─────────────────────────────────────────────────────
+ *
+ * The same four moves a post's step makes, for the same reason: a change that
+ * lands somewhere the author is not looking is a change they watched do nothing.
+ * `decide` says where and how, `goToStep` gets there — opening the picture
+ * browser or the property sheet when that is where the work happened — the
+ * canvas then travels, and `spotlight` lights the place once it has settled.
+ * Presses are counted rather than dropped, so the buttons can be hammered.
  */
 const LIMIT = 200;
 const RUN_MS = 1500;
 const LIVE = new Set(["text", "front", "props"]);
+
+/** A photograph's keys, read back from a snapshot's copy of its text. */
+function rowFields(row) {
+  return readKeys(row.body, row.lead.length);
+}
+
+/** The first property two versions of one photograph disagree on. */
+function propsField(a, b) {
+  const x = rowFields(a);
+  const y = rowFields(b);
+  for (const key of PROP_KEYS) {
+    if ((x[key] || "") !== (y[key] || "")) return YML_EXIF[key] || key;
+  }
+  return "";
+}
+
+/** The first album key two versions of the album's own block disagree on. */
+function frontField(a, b) {
+  const x = readKeys(a.pre, a.lead.length);
+  const y = readKeys(b.pre, b.lead.length);
+  for (const key of new Set([...Object.keys(x), ...Object.keys(y)])) {
+    if ((x[key] || "") !== (y[key] || "")) return key;
+  }
+  return "";
+}
+
+/**
+ * What a step is about, and what shape it has.
+ *
+ * The picture browser is read first: renaming a picture and then choosing it is
+ * one step, and naming the photograph would take the author to a tile whose
+ * address changed for a reason they could not see.
+ */
+function decide(from, to, cause) {
+  const filed = filedPath(from, to);
+  if (filed) return { kind: "asset", path: filed.path, was: filed.was };
+
+  const now = new Map(from.imgs.map((row) => [row.id, row]));
+  const want = new Map(to.imgs.map((row) => [row.id, row]));
+  const named = cause && cause.target ? String(cause.target) : "";
+
+  // What the author actually DID, taken from the edit that made the step. Two
+  // orderings of one list cannot say which photograph was the one dragged.
+  if (cause && cause.kind === "images" && named && want.has(named) && now.has(named)) {
+    return { kind: "image", id: named, how: "move" };
+  }
+  if (cause && cause.kind === "props" && want.has(named) && now.has(named)) {
+    const key = propsField(now.get(named), want.get(named));
+    if (key) return { kind: "props", id: named, key };
+  }
+  if (cause && cause.kind === "assets") {
+    const added = uploadPath(from, to);
+    if (added) return { kind: "asset", path: added, was: added };
+  }
+
+  for (const row of to.imgs) {
+    const here = now.get(row.id);
+    if (here && here.body !== row.body) return { kind: "image", id: row.id, how: "edit" };
+  }
+  for (const row of to.imgs) if (!now.has(row.id)) return { kind: "image", id: row.id, how: "add" };
+
+  // One left. There is nothing left to light, so the GAP it left is marked
+  // instead: lighting a neighbour would say the neighbour had changed.
+  for (let i = 0; i < from.imgs.length; i++) {
+    if (want.has(from.imgs[i].id)) continue;
+    let above = "";
+    for (let j = i - 1; j >= 0; j--) {
+      if (want.has(from.imgs[j].id)) {
+        above = from.imgs[j].id;
+        break;
+      }
+    }
+    let below = "";
+    for (let j = i + 1; j < from.imgs.length; j++) {
+      if (want.has(from.imgs[j].id)) {
+        below = from.imgs[j].id;
+        break;
+      }
+    }
+    return { kind: "seam", above, below };
+  }
+
+  const moved = movedId(from.imgs, to.imgs);
+  if (moved) return { kind: "image", id: moved, how: "move" };
+
+  if (from.pre !== to.pre) {
+    const key = frontField(from, to);
+    return key === "name" || key === "page-title" ? { kind: "title", key } : { kind: "front", key };
+  }
+  if (from.cat !== to.cat) return { kind: "front", key: "links_category" };
+
+  const path = uploadPath(from, to);
+  if (path) return { kind: "asset", path, was: path };
+  return { kind: "canvas" };
+}
 
 const history = (() => {
   let stack = [];
@@ -848,22 +1258,44 @@ const history = (() => {
   let revision = 0;
   let foldUntil = 0;
   let shut = false;
+  let queue = 0;
+  let running = false;
 
+  /**
+   * Every photograph's own id, kept beside its text.
+   *
+   * Re-parsing the album as one block was correct and unusable: every node came
+   * back with a fresh id, so the canvas could not recognise a single tile,
+   * rebuilt all of them, and every step cost a full re-layout of the columns and
+   * a new request for every picture in the album.
+   */
   function take() {
+    const item = state.item;
     return {
-      item: emitItem(state.item),
+      lead: item.lead,
+      eol: item.eol,
+      imageLead: item.imageLead,
+      pre: item.pre,
+      imagesLine: item.imagesLine,
+      post: item.post,
+      tail: item.tail,
+      imgs: item.images.map((n) => ({ id: n.id, lead: n.lead, body: n.body, tail: n.tail, eol: n.eol })),
       cat: state.cat ? state.cat.pre : "",
       catName: state.cat ? state.cat.openedName : "",
       pending: state.pending.slice(),
       moves: (state.stage ? state.stage.moves : []).map((m) => ({ from: m.from, to: m.to, noted: !!m.noted })),
       folders: state.stage ? Array.from(state.stage.folders) : [],
-      sel: Math.max(0, indexOf(state.selected)),
+      sel: state.selected,
     };
   }
 
   function digest(snap) {
     return [
-      snap.item,
+      snap.pre,
+      snap.imagesLine,
+      snap.post,
+      snap.tail,
+      snap.imgs.map((r) => r.id + UNIT + r.lead + UNIT + r.body + UNIT + r.tail).join(UNIT),
       snap.cat,
       snap.catName,
       snap.pending.map((a) => a.path).join(","),
@@ -872,35 +1304,118 @@ const history = (() => {
     ].join("");
   }
 
-  function apply(snap) {
-    shut = true;
-    try {
-      const rebuilt = parseItemBlock(snap.item, state.item.eol);
-      rebuilt.id = state.item.id;
-      state.item = rebuilt;
-      if (state.cat) state.cat.pre = snap.cat;
-      state.pending = snap.pending.slice();
-      if (state.stage) {
-        state.stage.moves.length = 0;
-        for (const move of snap.moves) state.stage.moves.push({ ...move });
-        state.stage.folders.clear();
-        for (const path of snap.folders) state.stage.folders.add(path);
-      }
-      const at = images()[Math.min(snap.sel, images().length - 1)];
-      state.selected = at ? at.id : "";
-      paintCanvas();
-      syncTitle();
-      repaintCard();
-      state.dirty = index !== base;
-      syncHeader();
-      if (ui.toolbar) ui.toolbar.sync();
-    } finally {
-      shut = false;
+  /** The model only. What is on screen is reconciled against it afterwards. */
+  function restore(snap) {
+    const item = state.item;
+    item.lead = snap.lead;
+    item.eol = snap.eol;
+    item.imageLead = snap.imageLead;
+    item.pre = snap.pre;
+    item.imagesLine = snap.imagesLine;
+    item.post = snap.post;
+    item.tail = snap.tail;
+    item.images = snap.imgs.map((r) => ({ id: r.id, lead: r.lead, body: r.body, tail: r.tail, eol: r.eol }));
+
+    if (state.cat) state.cat.pre = snap.cat;
+    state.pending = snap.pending.slice();
+    if (state.stage) {
+      state.stage.moves.length = 0;
+      for (const move of snap.moves) state.stage.moves.push({ ...move });
+      state.stage.folders.clear();
+      for (const path of snap.folders) state.stage.folders.add(path);
     }
+    state.selected = item.images.some((n) => n.id === snap.sel) ? snap.sel : "";
+  }
+
+  /** One step, landed: travel, reconcile, light. */
+  async function land(snap, target, quick) {
+    if (!state.on || !ui) return;
+    const chrome = ui;
+
+    // One. Get to where it happened, and WAIT for it: a canvas rearranged while
+    // the viewport is still travelling is a FLIP measured in two places.
+    await goToStep(target, quick);
+    if (!state.on || ui !== chrome) return;
+
+    // Two. The page is held still by the tile the step is about, because that is
+    // the one thing being looked at and everything else may move around it.
+    const anchor = (target.id ? tileOf(target.id) : null) || steadyTile();
+    const wasPre = state.item.pre;
+    const wasCat = state.cat ? state.cat.pre : "";
+    restore(snap);
+    if (quick) await anchored(anchor, () => syncTiles());
+    else await flipTiles(() => syncTiles(), anchor);
+    if (!state.on || ui !== chrome) return;
+
+    syncTitle();
+    // Only when the album's own keys moved: the card is rebuilt from its
+    // markup, and rebuilding it under a field being typed into takes the caret
+    // out of that field.
+    if (wasPre !== state.item.pre || wasCat !== (state.cat ? state.cat.pre : "")) repaintCard();
+    syncHeader();
+    observeImages();
+    contentChanged();
+    if (ui.toolbar) ui.toolbar.sync();
+
+    // Three. Light the place, now that the album has stopped moving.
+    await spotlight(target, quick);
   }
 
   function changed() {
     if (ui && ui.toolbar) ui.toolbar.history(api.can());
+    const want = api.dirtyState();
+    if (want !== null && state.on && state.dirty !== want) {
+      state.dirty = want;
+      syncHeader();
+    }
+  }
+
+  /**
+   * Work the queue down.
+   *
+   * A step takes a few hundred milliseconds to animate and the buttons can be
+   * hammered, so presses are COUNTED rather than dropped and every step but the
+   * last is applied without its animation. The alternative was an editor that
+   * ignores four presses out of five and then arrives somewhere unexpected.
+   */
+  async function pump() {
+    running = true;
+    try {
+      while (queue !== 0) {
+        const dir = queue > 0 ? 1 : -1;
+        const to = index + dir;
+        if (to < 0 || to >= stack.length) {
+          queue = 0;
+          break;
+        }
+        queue -= dir;
+
+        // Undoing takes back the edit that made the step we are ON; redoing
+        // re-applies the one that made the step we are going TO.
+        const cause = dir < 0 ? stack[index].by : stack[to].by;
+        const target = decide(stack[index], stack[to], cause);
+        shut = true;
+        try {
+          await land(stack[to], target, queue !== 0);
+          index = to;
+        } finally {
+          shut = false;
+          run = null;
+        }
+        changed();
+      }
+    } finally {
+      running = false;
+    }
+    return true;
+  }
+
+  function drive(dir) {
+    foldUntil = 0;
+    if (index < 0 || state.saving) return Promise.resolve(false);
+    queue += dir;
+    if (running) return Promise.resolve(true);
+    return pump();
   }
 
   const api = {
@@ -911,6 +1426,9 @@ const history = (() => {
       run = null;
       revision = 0;
       foldUntil = 0;
+      queue = 0;
+      running = false;
+      shut = false;
       changed();
     },
     record(kind, target) {
@@ -925,6 +1443,10 @@ const history = (() => {
         (folding ||
           (run && LIVE.has(kind) && run.kind === kind && run.target === target && now - run.at < RUN_MS));
       foldUntil = 0;
+
+      // What made this step, kept with it. `decide` reads it back when the shape
+      // of the change cannot say on its own what the author acted on.
+      snap.by = { kind: kind || "text", target: target == null ? "" : String(target) };
 
       if (merge) {
         stack[index] = snap;
@@ -941,29 +1463,17 @@ const history = (() => {
       run = { kind, target, at: now };
       changed();
     },
-    undo() {
-      if (index <= 0) return;
-      index -= 1;
-      run = null;
-      apply(stack[index]);
-      changed();
-    },
-    redo() {
-      if (index < 0 || index >= stack.length - 1) return;
-      index += 1;
-      run = null;
-      apply(stack[index]);
-      changed();
-    },
+    undo: () => drive(-1),
+    redo: () => drive(1),
     can() {
-      return { undo: index > 0, redo: index >= 0 && index < stack.length - 1 };
+      return { undo: index + queue > 0, redo: index >= 0 && index + queue < stack.length - 1 };
     },
     mark: () => revision,
     fold() {
       if (index > 0) foldUntil = Date.now() + 2000;
     },
     dirtyState() {
-      if (index < 0 || base < 0) return null;
+      if (index < 0 || base < 0 || !stack[index] || !stack[base]) return null;
       return digest(stack[index]) !== digest(stack[base]);
     },
     /**
@@ -978,7 +1488,11 @@ const history = (() => {
         snap.pending = [];
         snap.moves = snap.moves.map((m) => ({ ...m, noted: true }));
       }
-      if (index >= 0) stack[index] = take();
+      if (index >= 0) {
+        const by = stack[index].by;
+        stack[index] = take();
+        stack[index].by = by;
+      }
       base = index;
       changed();
     },
@@ -987,11 +1501,142 @@ const history = (() => {
       index = -1;
       base = -1;
       run = null;
+      queue = 0;
+      running = false;
+      spotClear();
       changed();
     },
   };
   return api;
 })();
+
+/* ─── getting to where a step happened ─────────────────────────────────────── */
+
+function closeBrowser() {
+  const held = pickerLive();
+  if (held) held.close();
+}
+
+/**
+ * The picture browser, standing on the file this step is about.
+ *
+ * Not awaited as a dialogue — it stays up until the author closes it — but its
+ * tree IS awaited, because a step that lands before the folders have been read
+ * would rebuild them from a stage that is about to be replaced.
+ */
+async function openBrowserAt(path) {
+  let held = pickerLive();
+  if (!held) {
+    pickImage(path ? siteAddress(path) : "", true).catch(() => {});
+    held = pickerLive();
+  }
+  if (held && held.ready) await held.ready;
+  // Already open, on something else: walk it to the file this step is about
+  // before the step lands, so what changes is a name and not the whole panel.
+  if (held && path) held.goto(path);
+}
+
+/**
+ * Get to where the step happens, before it happens.
+ *
+ * A step that lands behind a closed dialogue is a step the author watched do
+ * nothing. A run of presses skips all of it: five reveals in a row is five
+ * animations nobody asked for.
+ */
+async function goToStep(target, quick) {
+  // The browser opens on the name the file has RIGHT NOW — `target.path` is
+  // where the step is about to put it — so a rename is visible AS a rename.
+  if (target.kind === "asset") {
+    closeSheet();
+    return void (await openBrowserAt(target.was || target.path));
+  }
+  closeBrowser();
+
+  // The picture first, then its sheet, then the field, so what changes is a
+  // value the author is already looking at.
+  if (target.kind === "props") {
+    const tile = tileOf(target.id);
+    const node = nodeOf(target.id);
+    if (!tile || !node) return void closeSheet();
+    if (!quick && !readable(tile)) await travelTo(tile);
+    const held = imageProps(node, true);
+    if (held) await held.reveal(target.key, !quick);
+    return;
+  }
+
+  closeSheet();
+  if (quick) return;
+
+  if (target.kind === "image" || target.kind === "seam") {
+    const tile = tileOf(target.id || target.below || target.above);
+    if (tile && !readable(tile)) await travelTo(tile);
+    return;
+  }
+  const el = fieldNode(target);
+  if (el && !readable(el)) await travelTo(el);
+}
+
+const KEY_NAME = /^[A-Za-z_][\w-]*$/;
+
+/** The one element an album-level step is about, as it stands right now. */
+function fieldNode(target) {
+  if (target.kind === "title") return state.titleHost;
+  if (target.kind !== "front" || !ui || !ui.card) return null;
+  const row = KEY_NAME.test(target.key || "") ? ui.card.el.querySelector(`[data-key="${target.key}"]`) : null;
+  return row || ui.card.el;
+}
+
+/**
+ * Light what the step actually did, once the canvas has stopped moving.
+ *
+ * Four shapes, because four things want four different marks: a photograph that
+ * arrived or moved wants the tile; one whose caption changed wants the tile too,
+ * since the caption is drawn ON it; one that LEFT has nothing to light and gets
+ * the gap it left; and an album key gets the row it lives in.
+ */
+async function spotlight(target, quick) {
+  if (target.kind === "props") {
+    const held = sheetLive();
+    const node = nodeOf(target.id);
+    if (!held || !node || held.id !== target.id) return;
+    held.set(propsOf(node));
+    return void held.flash(target.key);
+  }
+
+  if (target.kind === "asset") {
+    const held = pickerLive();
+    if (!held) return;
+    // Rebuilt from the stage as it NOW stands: the tree was drawn before the
+    // step, under the names the step has just taken away.
+    held.goto(target.path);
+    return void held.flash(target.path);
+  }
+
+  // A photograph left. The article marks the gap between the two that remain,
+  // but a gap in a multi-column gallery is not a place: the two survivors may be
+  // in different columns, so the bar between them is drawn across the page at a
+  // height nothing happened at. The one that MOVED INTO the gap is the place.
+  if (target.kind === "seam") {
+    const tile = tileOf(target.below) || tileOf(target.above);
+    if (!tile) return;
+    await travelTo(tile, quick);
+    return void spotElement(tile, "move");
+  }
+
+  if (target.kind === "image") {
+    const tile = tileOf(target.id);
+    if (!tile) return;
+    await travelTo(tile, quick);
+    // No strip to trim: the gutter is drawn OVER the photograph here rather
+    // than in a margin beside it, so the whole tile is the change.
+    return void spotElement(tile, target.how === "move" ? "move" : "block");
+  }
+
+  const el = fieldNode(target);
+  if (!el) return;
+  await travelTo(el, quick);
+  spotElement(el, "field");
+}
 
 /* ─── dirty ────────────────────────────────────────────────────────────────── */
 
@@ -1056,6 +1701,12 @@ async function activate(container) {
     notice: ui.bar.querySelector(".ed-notice"),
   });
   state.barSize = watchDocbar(ui.bar);
+  // What `travel.js` measures the readable band against.
+  useChrome(() => ({
+    bar: ui && ui.bar,
+    toolbar: ui && ui.toolbar && ui.toolbar.el,
+    hidden: chromeHidden(),
+  }));
 
   ui.close.addEventListener("click", () => deactivate());
   watchNavigation();
@@ -1085,7 +1736,10 @@ async function activate(container) {
   settleBackend(opened);
 
   try {
-    await loadManifest();
+    // The manifest sizes the pictures; `components.js` carries the EXIF labels
+    // the property sheet is printed with. Neither is fatal, and the sheet draws
+    // its fields either way.
+    await Promise.all([loadManifest(), loadComponents().catch(() => null)]);
     // False means the page is going somewhere else — the draft standing in front
     // of this album — and nothing more should be built on top of a page that is
     // about to be replaced.
@@ -1107,8 +1761,7 @@ async function activate(container) {
   ui.card = createAlbumCard(cardModel, {
     t,
     onChange: onCardChange,
-    onMove: moveToCategory,
-    onNewCategory: newCategory,
+    onCategory: setCategory,
     pickImage: () => pickImage(""),
     bindImage: (img, src) => bindImage(img, src, state.pending),
   });
@@ -1127,7 +1780,7 @@ async function activate(container) {
   });
   document.body.appendChild(ui.toolbar.el);
 
-  await crossFade(container, () => paintCanvas());
+  await crossFade(container, () => paintCanvas(false));
   wireTitle();
   enter(ui.card.el);
   syncHeader();
@@ -1246,12 +1899,21 @@ function onCardChange(scope, key, value) {
   markDirty(scope === "category" ? "front" : "text", `${scope}:${key}`);
 }
 
-/** Move this album into another category that already exists. */
-function moveToCategory(name) {
-  const target = categories(state.doc).find(
-    (node) => String(categoryFields(node).links_category || "") === name
-  );
-  if (!target || target === state.cat) return;
+/**
+ * Put this album in the category called `name` — making it if nothing is.
+ *
+ * One act, because from the card's side there is one question. A name that
+ * matches moves the album; a name that does not is a new category appended to
+ * the file with this album as its first entry.
+ */
+function setCategory(name) {
+  const wanted = String(name || "").trim();
+  if (!wanted || wanted === String(categoryFields(state.cat).links_category || "")) return;
+
+  const target =
+    categories(state.doc).find((node) => String(categoryFields(node).links_category || "") === wanted) ||
+    appendCategory(state.doc, makeCategory(state.doc.eol, wanted, true));
+  if (target === state.cat) return;
 
   const at = state.cat.items.indexOf(state.item);
   if (at >= 0) dropFrom(state.cat.items, at, (tail) => (state.cat.post = state.cat.post + tail));
@@ -1260,85 +1922,6 @@ function moveToCategory(name) {
 
   repaintCard();
   markDirty("front", "category");
-}
-
-async function newCategory() {
-  const name = await askName(t("cat_new_title", "New category"), "");
-  if (!name) return;
-  const existing = categories(state.doc).find(
-    (node) => String(categoryFields(node).links_category || "") === name
-  );
-  const target = existing || appendCategory(state.doc, makeCategory(state.doc.eol, name, true));
-
-  const at = state.cat.items.indexOf(state.item);
-  if (at >= 0) dropFrom(state.cat.items, at, (tail) => (state.cat.post = state.cat.post + tail));
-  insertItem(target, state.item, target.items.length);
-  state.cat = target;
-
-  repaintCard();
-  markDirty("front", "category");
-}
-
-/** A name, asked for in the dialogue every other question here uses. */
-function askName(title, current) {
-  return new Promise((resolve) => {
-    const mask = document.createElement("div");
-    mask.className = "ed-picker-mask";
-    mask.innerHTML = `
-      <section class="ed-prompt" role="dialog" aria-modal="true">
-        <header class="ed-picker-bar">
-          <span class="ed-picker-name"><i class="fa-solid fa-folder-plus" aria-hidden="true"></i>${escapeHTML(title)}</span>
-          <span class="ed-picker-acts">
-            <button type="button" data-act="close" title="${escapeHTML(t("close", "Close"))}"><i class="fa-solid fa-xmark"></i></button>
-          </span>
-        </header>
-        <div class="ed-prompt-body">
-          <label class="ed-f is-wide">
-            <span class="ed-f-label">${escapeHTML(t("ask_name", "Name"))}</span>
-            <input class="ed-f-input ed-ask-name" spellcheck="false" value="${escapeHTML(current || "")}">
-          </label>
-        </div>
-        <footer class="ed-picker-foot ed-prompt-foot">
-          <button type="button" class="ed-act" data-key="no"><span>${escapeHTML(t("cancel", "Cancel"))}</span></button>
-          <button type="button" class="ed-act ed-act-primary" data-key="yes">
-            <i class="fa-solid fa-check" aria-hidden="true"></i><span>${escapeHTML(t("apply", "Apply"))}</span>
-          </button>
-        </footer>
-      </section>`;
-
-    const input = mask.querySelector(".ed-ask-name");
-    let done = false;
-    const finish = (value) => {
-      if (done) return;
-      done = true;
-      mask.remove();
-      document.removeEventListener("keydown", onKeyDown, true);
-      resolve(value);
-    };
-    const onKeyDown = (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        finish(null);
-      }
-      if (e.key === "Enter" && mask.contains(document.activeElement)) {
-        e.preventDefault();
-        finish(input.value.trim() || null);
-      }
-    };
-
-    mask.addEventListener("click", (e) => {
-      if (e.target === mask || e.target.closest('[data-act="close"]')) return finish(null);
-      const answer = e.target.closest("[data-key]");
-      if (!answer) return;
-      finish(answer.dataset.key === "yes" ? input.value.trim() || null : null);
-    });
-
-    document.addEventListener("keydown", onKeyDown, true);
-    document.body.appendChild(mask);
-    pop(mask.querySelector(".ed-prompt"));
-    input.focus();
-    input.select();
-  });
 }
 
 /* ─── save ─────────────────────────────────────────────────────────────────── */
@@ -1723,6 +2306,8 @@ async function teardown(restore) {
   clearInterval(state.progressTimer);
   unwire();
   closeDialogs();
+  spotClear();
+  useChrome(null);
   if (state.perchOff) state.perchOff();
   releaseDocbar(state.barSize);
 
@@ -1805,8 +2390,6 @@ function wire() {
   state.container.addEventListener("click", onCanvasClick);
   state.container.addEventListener("dblclick", onCanvasDouble);
   state.container.addEventListener("dragstart", onDragStart);
-  state.container.addEventListener("dragover", onDragOver);
-  state.container.addEventListener("drop", onDrop);
   state.container.addEventListener("dragend", onDragEnd);
   document.addEventListener("keydown", onKey, true);
   document.addEventListener("click", onNavAway, true);
@@ -1825,23 +2408,33 @@ function unwire() {
     state.container.removeEventListener("click", onCanvasClick);
     state.container.removeEventListener("dblclick", onCanvasDouble);
     state.container.removeEventListener("dragstart", onDragStart);
-    state.container.removeEventListener("dragover", onDragOver);
-    state.container.removeEventListener("drop", onDrop);
     state.container.removeEventListener("dragend", onDragEnd);
   }
+  dragOff();
   document.removeEventListener("keydown", onKey, true);
   document.removeEventListener("click", onNavAway, true);
   window.removeEventListener("beforeunload", onLeave);
 }
 
 function onCanvasClick(e) {
+  if (e.target.closest(".ed-album-add")) {
+    e.preventDefault();
+    return void addImage();
+  }
+  const add = e.target.closest(".ed-tile .ed-add");
+  if (add) {
+    e.preventDefault();
+    const tile = add.closest(".ed-tile");
+    return void addImage(indexOf(tile.dataset.id));
+  }
+  if (e.target.closest(".ed-tile .ed-handle")) return;
   const tile = e.target.closest(".ed-tile");
   select(tile ? tile.dataset.id : "");
 }
 
 function onCanvasDouble(e) {
   const tile = e.target.closest(".ed-tile");
-  if (!tile) return;
+  if (!tile || e.target.closest(".ed-gutter")) return;
   e.preventDefault();
   const node = nodeOf(tile.dataset.id);
   if (node) imageProps(node);
@@ -1849,9 +2442,19 @@ function onCanvasDouble(e) {
 
 /* ─── drag to reorder ──────────────────────────────────────────────────────── */
 
+/**
+ * A drag starts from the HANDLE, never from the picture.
+ *
+ * The same rule the article follows: a tile you can pick up anywhere is a tile
+ * you pick up by accident every time you mean to select it, and on a touch
+ * screen it is a gallery that cannot be scrolled. The handle is the one thing
+ * here that is `draggable`.
+ */
 function onDragStart(e) {
-  const tile = e.target.closest(".ed-tile");
+  const handle = e.target.closest && e.target.closest(".ed-handle");
+  const tile = handle && handle.closest(".ed-tile");
   if (!tile) return;
+
   state.dragId = tile.dataset.id;
   state.container.classList.add("is-dragging");
   tile.classList.add("is-dragging");
@@ -1861,43 +2464,100 @@ function onDragStart(e) {
   } catch (err) {
     /* Safari refuses the custom type; the id is held in state anyway */
   }
+  // The tile, not the handle: a 26px square is not something you can aim.
+  setDragImage(e, tile);
+
+  // On the DOCUMENT, so a pointer that wanders into the page margin or over the
+  // document bar is still holding a photograph. Bound only for the drag.
+  document.addEventListener("dragover", onDocDragOver);
+  document.addEventListener("drop", onDocDrop);
 }
 
-function onDragOver(e) {
-  if (!state.dragId) return;
-  e.preventDefault();
-  e.dataTransfer.dropEffect = "move";
-  const tile = e.target.closest(".ed-tile");
-  for (const node of state.container.querySelectorAll(".ed-tile")) {
-    node.dataset.drop = node === tile && node.dataset.id !== state.dragId ? "1" : "0";
+function dragOff() {
+  document.removeEventListener("dragover", onDocDragOver);
+  document.removeEventListener("drop", onDocDrop);
+  if (edge) edge.stop();
+}
+
+/**
+ * Where a dropped photograph would land, as a POSITION IN THE LIST.
+ *
+ * The nearest tile to the pointer, and then which half of it the pointer is in
+ * — a masonry column is a column, so "above this one" and "below it" are the
+ * only two answers a tile can give, and a line drawn on its edge says exactly
+ * which. Distance is measured to the RECTANGLE rather than to its centre, so a
+ * pointer inside a tall tile always chooses that tile.
+ */
+function dropAt(x, y) {
+  let best = null;
+  for (const el of tiles()) {
+    if (el.dataset.id === state.dragId) continue;
+    const rect = el.getBoundingClientRect();
+    const dx = Math.max(rect.left - x, 0, x - rect.right);
+    const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+    const gap = Math.hypot(dx, dy);
+    if (!best || gap < best.gap) best = { gap, el, rect };
+  }
+  if (!best) return null;
+  return { el: best.el, side: y > (best.rect.top + best.rect.bottom) / 2 ? "after" : "before" };
+}
+
+/**
+ * Paint the insertion line, and ONLY when it moves.
+ *
+ * Clearing every tile's `data-drop` on each `dragover` tore the pseudo-element
+ * down and built it again several times a second, which restarted its entrance
+ * animation each time — the flicker was the indicator being recreated.
+ */
+function paintDrop(target) {
+  const key = target ? target.el.dataset.id + ":" + target.side : "";
+  if (key === state.dropAt) return;
+  state.dropAt = key;
+  for (const el of tiles()) {
+    const want = target && el === target.el ? target.side : "";
+    if (el.dataset.drop !== want) el.dataset.drop = want;
   }
 }
 
-async function onDrop(e) {
+let edge = null;
+
+function onDocDragOver(e) {
   if (!state.dragId) return;
   e.preventDefault();
-  const tile = e.target.closest(".ed-tile");
-  const from = indexOf(state.dragId);
-  const to = tile ? indexOf(tile.dataset.id) : images().length - 1;
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  if (!edge) edge = createEdgeScroll(null);
+  edge.track(e.clientY);
+  paintDrop(dropAt(e.clientX, e.clientY));
+}
+
+async function onDocDrop(e) {
+  const dragId = state.dragId;
+  if (!dragId) return;
+  e.preventDefault();
+
+  const target = dropAt(e.clientX, e.clientY);
   onDragEnd();
-  if (from < 0 || to < 0 || from === to) return;
+  if (!target) return;
 
-  const list = images();
-  const tails = list.map((n) => n.tail);
-  list.splice(to, 0, list.splice(from, 1)[0]);
-  list.forEach((n, i) => (n.tail = tails[i]));
-
-  markDirty("images", state.selected || "");
-  await flip(Array.from(state.container.querySelectorAll(".ed-tile")), () => paintCanvas());
-  renumber();
+  const from = indexOf(dragId);
+  const to = indexOf(target.el.dataset.id);
+  if (from < 0 || to < 0) return;
+  // The slot counts the photograph being carried while it is still in the list,
+  // so taking it out of an earlier position shifts every later one down.
+  let at = to + (target.side === "after" ? 1 : 0);
+  if (from < at) at -= 1;
+  await moveImage(from, at);
 }
 
 function onDragEnd() {
   state.dragId = "";
+  state.dropAt = "";
+  dragOff();
+  if (!state.container) return;
   state.container.classList.remove("is-dragging");
-  for (const node of state.container.querySelectorAll(".ed-tile")) {
-    node.classList.remove("is-dragging");
-    node.dataset.drop = "0";
+  for (const el of state.container.querySelectorAll(".ed-tile")) {
+    el.classList.remove("is-dragging");
+    el.dataset.drop = "";
   }
 }
 

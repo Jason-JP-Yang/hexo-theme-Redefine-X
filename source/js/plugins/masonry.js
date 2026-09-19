@@ -15,7 +15,7 @@
  * Check masonry overlay overflow and apply compact mode if needed.
  * Compact mode hides description and centers title at bottom.
  */
-function checkMasonryOverflow(container) {
+export function checkMasonryOverflow(container) {
   const items = container.querySelectorAll('.image-container');
   items.forEach(item => {
     const desc = item.querySelector('.image-description');

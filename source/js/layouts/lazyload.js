@@ -194,6 +194,9 @@ export function transformPreloaderToImage(preloader, img) {
   // the lightbox. The mark has to survive the swap or it stops meaning anything
   // the moment the image actually loads.
   if (preloader.hasAttribute("data-no-viewer")) img.setAttribute("data-no-viewer", "");
+  // Same reason, same survival: the editor's pictures may not be dragged into
+  // the text beside them.
+  if (preloader.getAttribute("draggable") === "false") img.draggable = false;
 
   return img;
 }

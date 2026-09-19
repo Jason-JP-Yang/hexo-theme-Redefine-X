@@ -121,7 +121,7 @@ function follow(read, pad, mine, until) {
   });
 }
 
-function paint(read, kind, mine) {
+function paint(read, kind, mine, round) {
   const rects = read();
   if (!rects || !rects.length) return;
 
@@ -133,6 +133,10 @@ function paint(read, kind, mine) {
     if (!rect || (!rect.width && !rect.height)) continue;
     const mark = document.createElement("span");
     mark.className = "ed-spot-mark is-" + kind;
+    // The marked element's own corner, when it has one. A photograph is drawn
+    // with a 14px radius and a square mark over it reads as a second, wrong
+    // box rather than as the picture being pointed at.
+    if (round) mark.style.borderRadius = round;
     host.appendChild(mark);
     geometry(mark, rect, pad, base);
     live.push(mark);
@@ -158,16 +162,26 @@ function paint(read, kind, mine) {
 }
 
 /** Wait for the article to stop moving, then light the place once. */
-function schedule(read, kind) {
+function schedule(read, kind, round) {
   spotClear();
   const mine = token;
   let left = SETTLE_FRAMES;
   const tick = () => {
     if (mine !== token) return;
     if (left-- > 0) return void requestAnimationFrame(tick);
-    paint(read, kind, mine);
+    paint(read, kind, mine, round);
   };
   requestAnimationFrame(tick);
+}
+
+/** The corner the marked box is drawn with, or nothing when it is square. */
+function roundOf(el) {
+  try {
+    const r = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
+    return r > 1 ? r + "px" : "";
+  } catch (err) {
+    return "";
+  }
 }
 
 /* ─── what a range is actually worth drawing ───────────────────────────────── */
@@ -278,7 +292,7 @@ export function spotElement(el, kind, skip) {
 
     const top = cut.bottom;
     return [{ left: rect.left, top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.bottom - top }];
-  }, kind || "block");
+  }, kind || "block", roundOf(el));
 }
 
 /**

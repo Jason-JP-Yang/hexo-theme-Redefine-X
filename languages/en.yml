@@ -664,19 +664,20 @@ editor:
   publish_album: Commit this straight to the published album?
   publish_album_draft: Publish this draft over the album it replaces?
   discard_album: This album has changes that are not committed yet.
-  album_empty: No photographs yet. Add one from the toolbar.
+  album_empty: No photographs yet.
   add_image: Add a picture
+  insert_before_image: Add a picture here
   g_album: Album
   g_cat: Category
-  cat_new: + New category...
-  cat_new_title: New category
   cat_first: Albums
-  cat_note: The two fields below belong to the category, so they change every album in it.
+  cat_find: Search, or type a new name
+  cat_here: Existing
+  cat_make: New
+  cat_none: No category matches, so this makes a new one
   f_name: Name
   f_page_title: Page title
   f_link: Link
-  f_category: Belongs to
-  f_links_category: Category name
+  f_category: Category
   f_has_thumbnail: Cards show a thumbnail
   f_auto_exif: Read EXIF at build time
 analytics:
