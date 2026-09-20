@@ -278,6 +278,13 @@ app.use("/api/admin/*", apiCors);
 app.use("/api/push/*", apiCors);
 app.use("/api/me/*", apiCors);
 app.use("/api/vault/*", apiCors);
+// Every prefix the browser calls has to be listed here, and that is the whole
+// trap: a route added under a NEW prefix answers perfectly to curl and is
+// blocked by the browser before the response is ever read. What the page then
+// reports is whatever it says when the network fails — which is never "CORS",
+// so the search starts in the wrong place. /api/editor/* is the console's and
+// the editor's whole surface.
+app.use("/api/editor/*", apiCors);
 // The webhook is deliberately NOT in this list: it is called server-to-server by
 // GitHub, authenticated by HMAC, and must not be reachable from a browser.
 
