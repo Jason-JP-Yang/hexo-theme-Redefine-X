@@ -91,7 +91,13 @@ let reduced = false;
 const state = {
   compose: { mode: "all" },
   notifications: { type: "", items: [], cursor: 0, more: false, error: false, loading: false },
-  followers: { items: [], cursor: 0, more: false, orphans: [], totals: null, error: false, loading: false },
+  // `me` and `role` come from the Worker with the first page, never from a
+  // claim the page could read off its own session: they decide which controls
+  // exist, and the routes enforce the same rule server-side.
+  followers: {
+    items: [], cursor: 0, more: false, orphans: [], totals: null,
+    error: false, loading: false, me: null, role: "admin",
+  },
   // `items` arrives sealed with the page and is never fetched; only `audiences`
   // is asked for, because only the Worker knows it. `queue` is what the next
   // unpublish commit will carry — one commit for the whole selection.
@@ -1422,7 +1428,15 @@ async function saveBlocklist(topic, picker) {
       : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
     if (result.ok) setTimeout(() => (flag.innerHTML = ""), 1800);
   }
-  if (result.ok) state.blocklists[topic] = picker.ids;
+  if (!result.ok) return;
+
+  // What the Worker STORED, not what was typed. It refuses an admin outright,
+  // and refuses a collaborator's own identity — repainting from the answer is
+  // the only way that refusal reaches the screen instead of a field that looks
+  // saved and is not.
+  const users = (result.data && result.data.users) || [];
+  state.blocklists[topic] = users;
+  if (users.length !== picker.ids.length) picker.set(users);
 }
 
 function stateTag(value) {
@@ -1431,8 +1445,25 @@ function stateTag(value) {
   return "";
 }
 
-function moderationButtons(scope, id, value, isAdmin) {
-  if (isAdmin) return `<span class="bm-tag is-admin">${e("admin", "Admin")}</span>`;
+/**
+ * Why this identity has no controls, or "" when it has them.
+ *
+ * An admin is out of reach for everybody, including another admin — nobody
+ * demotes the owner here. A COLLABORATOR is additionally out of reach of
+ * themselves: a console where silencing or banning yourself is one click away
+ * offers a mistake that only somebody else can undo, dressed as a right.
+ */
+function lockOn(row) {
+  if (row && row.is_admin) return "admin";
+  const box = state.followers;
+  const id = row && (row.id != null ? row.id : row.github_id);
+  if (box.role === "collab" && box.me != null && String(id) === String(box.me)) return "you";
+  return "";
+}
+
+function moderationButtons(scope, id, value, lock) {
+  if (lock === "admin") return `<span class="bm-tag is-admin">${e("admin", "Admin")}</span>`;
+  if (lock === "you") return `<span class="bm-tag is-you">${e("you", "You")}</span>`;
   const muted = value === "muted";
   const banned = value === "banned";
   return `
@@ -1448,7 +1479,7 @@ function moderationButtons(scope, id, value, isAdmin) {
     </button>`;
 }
 
-function deviceHTML(row, ownerIsAdmin) {
+function deviceHTML(row, ownerLock) {
   const info = describeDevice(row);
   return `
     <li class="bm-device" data-device="${escapeHTML(row.id)}">
@@ -1461,11 +1492,12 @@ function deviceHTML(row, ownerIsAdmin) {
           `${t("subscribed", "Subscribed")} ${timeAgo(row.created_at)}`
         )}<span class="bm-sep"></span>…${escapeHTML(row.tail || "")}</div>
       </div>
-      <div class="bm-device-actions">${moderationButtons("device", row.id, row.state, ownerIsAdmin)}</div>
+      <div class="bm-device-actions">${moderationButtons("device", row.id, row.state, ownerLock)}</div>
     </li>`;
 }
 
 function followerHTML(row) {
+  const lock = lockOn(row);
   const blocked = String(row.blocked || "")
     .split(",")
     .filter(Boolean)
@@ -1488,6 +1520,7 @@ function followerHTML(row) {
             ${escapeHTML(row.name || row.login)}
             <a class="bm-login" href="https://github.com/${encodeURIComponent(row.login)}"
                target="_blank" rel="noopener">@${escapeHTML(row.login)}</a>
+            ${row.is_collab ? `<span class="bm-tag is-collab">${e("collab", "Collaborator")}</span>` : ""}
             ${stateTag(row.state)}
           </div>
           <div class="bm-follower-meta">${meta
@@ -1495,13 +1528,13 @@ function followerHTML(row) {
             .join('<span class="bm-sep"></span>')}</div>
         </div>
         <div class="bm-follower-actions">
-          ${moderationButtons("follower", row.id, row.state, row.is_admin)}
+          ${moderationButtons("follower", row.id, row.state, lock)}
         </div>
       </div>
       ${
         row.devices.length
           ? `<ul class="bm-devices">${row.devices
-              .map((d) => deviceHTML(d, row.is_admin))
+              .map((d) => deviceHTML(d, lock))
               .join("")}</ul>`
           : `<p class="bm-blank bm-no-devices">${e("no_devices", "No push device registered.")}</p>`
       }
@@ -1545,7 +1578,7 @@ function paintFollowers() {
          "orphans_hint",
          "Subscriptions whose owner unfollowed. Only banned ones are kept — the daily sweep removes the rest."
        )}</p>
-       <ul class="bm-devices">${box.orphans.map((d) => deviceHTML(d, false)).join("")}</ul>`
+       <ul class="bm-devices">${box.orphans.map((d) => deviceHTML(d, lockOn(d))).join("")}</ul>`
     : "";
 
   contentChanged();
@@ -1568,6 +1601,8 @@ async function loadFollowers({ reset = false, trigger = null } = {}) {
 
   if (result.ok && result.data) {
     const data = result.data;
+    if (data.me != null) box.me = data.me;
+    if (data.role) box.role = data.role;
     box.items = box.items.concat(data.items || []);
     box.more = data.cursor != null;
     box.cursor = data.cursor || box.cursor;

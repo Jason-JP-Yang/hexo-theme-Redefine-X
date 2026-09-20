@@ -21,6 +21,9 @@
  * Eight values, no more, and nothing here reads anything else off `env`:
  *
  *   ADMIN_LOGINS          who gets the isAdmin claim
+ *   COLLABORATORS         who gets the same claim as a COLLABORATOR: identical
+ *                         rights everywhere except moderation, where they may
+ *                         not act on an admin or on themselves
  *   ALLOWED_ORIGIN        the CORS allowlist (kept in the dashboard, so it can
  *                         be edited without a redeploy)
  *   SITE_URL              the site this backend belongs to — the ONE place a URL
@@ -39,7 +42,14 @@
  */
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { fetchGitHubUser, isAdminUser, signSession, verifySession } from "./auth.js";
+import {
+  allowList,
+  fetchGitHubUser,
+  isAdminUser,
+  isCollaborator,
+  signSession,
+  verifySession,
+} from "./auth.js";
 import {
   ingestEntries,
   fanOut,
@@ -381,7 +391,13 @@ app.post("/api/auth/login", async (c) => {
   const user = await fetchGitHubUser(githubToken);
   if (!user) return c.json({ error: "GitHub verification failed" }, 401);
 
-  const isAdmin = isAdminUser(user, c.env.ADMIN_LOGINS);
+  // A collaborator carries the SAME claim as an admin — that is the whole point
+  // of the role — and `collab` rides alongside it so the one place the two
+  // differ, moderation, can tell them apart without a second lookup. An identity
+  // on both lists is an admin: the narrower role cannot take rights away.
+  const admin = isAdminUser(user, c.env.ADMIN_LOGINS);
+  const collab = !admin && isCollaborator(user, c.env.COLLABORATORS);
+  const isAdmin = admin || collab;
 
   let token = null;
   let exp = null;
@@ -390,7 +406,7 @@ app.post("/api/auth/login", async (c) => {
     // `name` rides along so that upserting a follower — which happens on routes
     // that never see GitHub — can store the display name without a second call.
     token = await signSession(
-      { id: user.id, login: user.login, name: user.name || "", isAdmin, exp },
+      { id: user.id, login: user.login, name: user.name || "", isAdmin, collab, exp },
       c.env.SESSION_SECRET
     );
   }
@@ -401,6 +417,7 @@ app.post("/api/auth/login", async (c) => {
     name: user.name || "",
     avatar: user.avatar_url,
     isAdmin,
+    isCollaborator: collab,
     token,
     exp,
   });
@@ -972,25 +989,40 @@ app.delete("/api/admin/notifications/:id", authMiddleware, async (c) => {
 
 /** ADMIN_LOGINS as a list of bindable tokens (numeric ids and/or login names). */
 function adminTokens(env) {
-  return String(env.ADMIN_LOGINS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return allowList(env.ADMIN_LOGINS);
 }
 
 /**
- * A SQL fragment that is FALSE for any admin identity, with its parameters.
+ * Every identity the SESSION may not moderate.
+ *
+ * Admins, always — nobody demotes the owner. Plus, for a collaborator, their own
+ * identity: a role that can silence or ban itself is a control whose most likely
+ * use is a mistake nobody else can undo, and one that reads like a right when it
+ * is a trap. An admin is still free to moderate a collaborator.
+ */
+function protectedTokens(env, session) {
+  const tokens = adminTokens(env);
+  if (session && session.collab) {
+    tokens.push(String(session.id));
+    if (session.login) tokens.push(String(session.login));
+  }
+  return tokens;
+}
+
+/**
+ * A SQL fragment that is FALSE for any protected identity, with its parameters.
  *
  * Written as SQL rather than as a JS check because the JS version would need a
  * round trip to learn the target's login first. This way "an admin cannot be
- * muted or banned" is a property of the statement itself.
+ * muted or banned, and a collaborator cannot silence themselves" is a property
+ * of the statement itself.
  *
  * @param {string} idCol     column holding the numeric GitHub id
  * @param {string} loginExpr expression yielding the login for that row
  * @param {number} from      first free parameter number
  */
-function notAdmin(env, idCol, loginExpr, from) {
-  const tokens = adminTokens(env);
+function notModerable(env, session, idCol, loginExpr, from) {
+  const tokens = protectedTokens(env, session);
   if (tokens.length === 0) return { clause: "1", params: [] };
   const list = tokens.map((_, i) => `?${from + i}`).join(", ");
   return {
@@ -1101,21 +1133,34 @@ app.get("/api/admin/followers", authMiddleware, async (c) => {
 
   const [page, orphanRows, blockRows, totalRow] = await db.batch(statements);
 
+  const session = c.get("admin");
   const rows = page.results || [];
   const more = rows.length > ADMIN_PAGE;
-  const items = (more ? rows.slice(0, ADMIN_PAGE) : rows).map((row) => ({
-    id: row.id,
-    login: row.login,
-    name: row.name || "",
-    created_at: row.created_at,
-    unread: row.unread || 0,
-    state: row.state || "",
-    blocked: row.blocked || "",
-    is_admin: isAdminUser({ id: row.id, login: row.login }, c.env.ADMIN_LOGINS),
-    devices: unpackDevices(row.devices),
-  }));
+  const items = (more ? rows.slice(0, ADMIN_PAGE) : rows).map((row) => {
+    const who = { id: row.id, login: row.login };
+    return {
+      id: row.id,
+      login: row.login,
+      name: row.name || "",
+      created_at: row.created_at,
+      unread: row.unread || 0,
+      state: row.state || "",
+      blocked: row.blocked || "",
+      is_admin: isAdminUser(who, c.env.ADMIN_LOGINS),
+      is_collab: isCollaborator(who, c.env.COLLABORATORS),
+      devices: unpackDevices(row.devices),
+    };
+  });
 
-  const body = { items, cursor: more ? offset + ADMIN_PAGE : null };
+  // Who is reading, and as what. The console draws the same rule the routes
+  // enforce — a collaborator sees no controls over an admin or over themselves —
+  // and it must not infer that from a claim the page could only guess at.
+  const body = {
+    items,
+    cursor: more ? offset + ADMIN_PAGE : null,
+    me: session ? session.id : null,
+    role: session && session.collab ? "collab" : "admin",
+  };
 
   if (first) {
     const blocklists = { posts: [], notes: [], announcements: [] };
@@ -1167,10 +1212,12 @@ app.put("/api/admin/moderation", authMiddleware, async (c) => {
   if (!MODERATION_STATES.has(state)) return c.json({ error: "Unknown state" }, 400);
 
   const db = c.env.DB;
+  const session = c.get("admin");
 
   if (body.device_id != null) {
-    const guard = notAdmin(
+    const guard = notModerable(
       c.env,
+      session,
       "github_id",
       "COALESCE((SELECT login FROM followers WHERE github_id = push_devices.github_id), '')",
       3
@@ -1180,7 +1227,7 @@ app.put("/api/admin/moderation", authMiddleware, async (c) => {
       .bind(Number(body.device_id) || 0, state, ...guard.params)
       .run();
     if (!(result.meta && result.meta.changes)) {
-      return c.json({ error: "Unknown device, or it belongs to an admin" }, 404);
+      return c.json({ error: "Unknown device, or its owner may not be moderated by you" }, 404);
     }
     return c.json({ ok: true, device_id: Number(body.device_id), state });
   }
@@ -1189,9 +1236,9 @@ app.put("/api/admin/moderation", authMiddleware, async (c) => {
   if (!id) return c.json({ error: "github_id or device_id is required" }, 400);
 
   // The login is taken from the follower row when there is one, and only falls
-  // back to what the client sent — which the admin guard must not trust alone.
+  // back to what the client sent — which the guard must not trust alone.
   const login = `COALESCE((SELECT login FROM followers WHERE github_id = ?1), ?3, '')`;
-  const guard = notAdmin(c.env, "?1", login, 4);
+  const guard = notModerable(c.env, session, "?1", login, 4);
 
   // Nothing cascades onto push_devices: a moderated identity is already dropped
   // by the fan-out's own probe, and its devices hang off that same join. Writing
@@ -1215,7 +1262,7 @@ app.put("/api/admin/moderation", authMiddleware, async (c) => {
   ]);
 
   if (!(written.meta && written.meta.changes)) {
-    return c.json({ error: "That identity is an admin" }, 403);
+    return c.json({ error: "That identity may not be moderated by you" }, 403);
   }
   return c.json({ ok: true, github_id: id, state });
 });
@@ -1246,10 +1293,17 @@ app.put("/api/admin/blocklists", authMiddleware, async (c) => {
       .all(),
   ]);
 
-  const admins = adminTokens(c.env);
+  // The same rule the moderation route enforces, on the other control that can
+  // silence somebody: an admin is never blockable, and a collaborator may not
+  // add or remove THEMSELVES — in either direction, so a list saved by a
+  // collaborator leaves their own row exactly as the admin left it.
+  const guarded = new Set(protectedTokens(c.env, c.get("admin")).map((v) => String(v).toLowerCase()));
+  const shielded = (row) =>
+    guarded.has(String(row.id)) || guarded.has(String(row.login || "").toLowerCase());
+
   const wanted = new Map();
   for (const row of resolved.matched) {
-    if (isAdminUser({ id: row.id, login: row.login }, c.env.ADMIN_LOGINS)) continue;
+    if (shielded(row)) continue;
     wanted.set(row.id, row.login);
   }
 
@@ -1259,6 +1313,12 @@ app.put("/api/admin/blocklists", authMiddleware, async (c) => {
   // Rows that already carry this topic: keep it, or take it away.
   for (const row of current.results || []) {
     held.add(row.id);
+    // A shielded row that is already blocked stays blocked, and is reported back
+    // so the field repaints with it rather than appearing to have dropped it.
+    if (shielded(row)) {
+      wanted.set(row.id, row.login);
+      continue;
+    }
     if (wanted.has(row.id)) continue;
     const kept = String(row.blocked)
       .split(",")

@@ -44,11 +44,12 @@ the message already carries everything it needs.
 
 ## Configuration
 
-Eight values run this Worker and nothing reads a ninth.
+A short, closed set of values runs this Worker and nothing reads another.
 
 | | Location | Use |
 | --- | --- | --- |
 | `ADMIN_LOGINS` | `wrangler.toml` | Comma-separated GitHub **numeric ids** (immutable — a login name can be released and re-registered by someone else). Decides the `isAdmin` claim. |
+| `COLLABORATORS` | `wrangler.toml` | Same shape, same claim. A collaborator differs from an admin in one place only: moderation, where they may not act on an admin or on themselves. Names, emails and avatars are site config (`backend.collaborators`), not Worker config. |
 | `ALLOWED_ORIGIN` | **dashboard** | CORS allowlist. Deliberately not in `wrangler.toml` so it can be changed without a redeploy. |
 | `SITE_URL` | `wrangler.toml` | The site this backend belongs to. The **one** place a URL comes from. |
 | `VAPID_PUBLIC_KEY` | `wrangler.toml` | Shipped to every subscribing browser; not a secret. |
@@ -638,7 +639,7 @@ npx wrangler secret put SESSION_SECRET
 npx wrangler secret put VAPID_PRIVATE_KEY
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
 
-# 7. Fill in wrangler.toml [vars]: ADMIN_LOGINS, SITE_URL, VAPID_PUBLIC_KEY
+# 7. Fill in wrangler.toml [vars]: ADMIN_LOGINS, COLLABORATORS, SITE_URL, VAPID_PUBLIC_KEY
 
 # 8. Set ALLOWED_ORIGIN in the Cloudflare dashboard (NOT in wrangler.toml)
 #    Workers & Pages → <worker> → Settings → Variables and Secrets

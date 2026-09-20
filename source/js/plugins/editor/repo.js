@@ -34,6 +34,14 @@
  * `done` is the third value and it is not decoration: CI's own reseal commit is
  * pushed to main and re-evaluated by the very workflow that made it.
  *
+ * ── Whose commit it is ──────────────────────────────────────────────────────
+ *
+ * The admin's, unless a collaborator is signed in — then it is THEIRS, with the
+ * admin as `Co-authored-by:`. Every commit the editor makes goes through this
+ * module, so a post save, an album save and an unpublish are all signed the same
+ * way without any of them knowing about it. CI then carries that authorship into
+ * the deploy by reading it off the commit it is building.
+ *
  * ── Where the tokens live, and for how long ─────────────────────────────────
  *
  * Both backends hand over a standing credential — Gitea's tokens carry no
@@ -78,6 +86,8 @@ let chosen = null;
 let forced = "";
 let idleTimer = 0;
 let providers = null;
+let roster = [];
+let signer = null; // { author, coauthor } once the ticket has been resolved
 
 /**
  * A ticket nobody has touched for the session bound is ERASED, not merely
@@ -112,7 +122,16 @@ export function checkPath(path) {
 
 /* ─── the ticket ───────────────────────────────────────────────────────────── */
 
-/** The configured providers, opened with the admin key. Held for the session only. */
+/**
+ * The configured providers AND the collaborator roster, opened with the admin
+ * key. Held for the session only.
+ *
+ * The roster is here rather than in the page config because half of each entry
+ * is a person's login and email address — the identity a commit is signed with.
+ * The half the site actually prints, their name and their picture, is already in
+ * the markup of every post they worked on; the rest travels behind the same key
+ * the repository coordinates do.
+ */
 async function sealedProviders(base, auth) {
   if (providers) return providers;
 
@@ -133,7 +152,21 @@ async function sealedProviders(base, auth) {
   if (!sealed) throw new Error("ticket unavailable");
   const opened = await openJSON(await importAesKey(b64urlToBytes(grant.key)), sealed);
   providers = Array.isArray(opened.providers) ? opened.providers : [];
+  roster = Array.isArray(opened.collaborators) ? opened.collaborators : [];
   return providers;
+}
+
+/**
+ * The signed-in identity, when it is a collaborator's rather than the admin's.
+ *
+ * Matched on the GitHub NUMERIC id, which is what `backend.collaborators` is
+ * keyed by and what the Worker's allowlist decided on — a login can be released
+ * and re-registered, an id cannot.
+ */
+export function collaborator() {
+  const id = window.blogAuth && window.blogAuth.githubId;
+  if (!id) return null;
+  return roster.find((row) => String(row.id) === String(id)) || null;
 }
 
 async function fetchTicket() {
@@ -157,6 +190,23 @@ async function fetchTicket() {
     if (row && row.token) issued.set(row.kind || row.id, row);
   }
 
+  // Whose work this is. The Worker hands over ONE identity — the blog's — and
+  // that is right for the admin and wrong for anybody else: a collaborator's
+  // commits should carry their own name and address, with the admin recorded
+  // beside them, because the two of them wrote it together and a history that
+  // says otherwise is a history that has to be corrected later.
+  //
+  // Decided here rather than at the Worker because the Worker would have to hold
+  // the roster to decide it, and holding a roster is the one thing this design
+  // keeps out of it. Nothing is lost: the browser already holds a write token,
+  // so the author line was never a control this side could be trusted with.
+  const me = collaborator();
+  const house = (body.backends && body.backends[0] && body.backends[0].author) || null;
+  signer = {
+    author: me ? { name: me.username, email: me.email } : null,
+    coauthor: me && house && house.name && house.email ? `${house.name} <${house.email}>` : "",
+  };
+
   const rows = [];
   for (const provider of wanted) {
     const credential = issued.get(provider.id);
@@ -171,6 +221,7 @@ async function fetchTicket() {
       repo: name,
       branch: provider.branch,
       driver: DRIVERS[provider.id],
+      ...(signer.author ? { author: signer.author } : {}),
     });
   }
   if (!rows.length) throw new Error("ticket unavailable");
@@ -329,6 +380,8 @@ export function forget() {
   chosen = null;
   forced = "";
   providers = null;
+  roster = [];
+  signer = null;
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = 0;
   forgetBlobs();
@@ -458,7 +511,11 @@ export async function commit(files, message) {
   }
 
   return guard(async (backend) => {
-    const body = `${message}\n\nBuild-on: ${backend.id}\n`;
+    // Both trailers in ONE block at the end, which is what makes them trailers:
+    // git reads only the last paragraph, and a blank line between them would
+    // leave `Build-on:` in a paragraph of its own that no consumer parses.
+    const coauthor = signer && signer.coauthor ? `Co-authored-by: ${signer.coauthor}\n` : "";
+    const body = `${message}\n\nBuild-on: ${backend.id}\n${coauthor}`;
     const result = await backend.driver.commit(backend, files, body);
     return { ...result, backend: backend.id };
   });

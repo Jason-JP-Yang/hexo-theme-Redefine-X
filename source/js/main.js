@@ -14,6 +14,7 @@ import initTileSpotlight from "./layouts/tileSpotlight.js";
 import initCoverParallax from "./layouts/coverParallax.js";
 import initHomePagination from "./layouts/homePagination.js";
 import initPulseCard from "./layouts/pulseCard.js";
+import initProfilePager from "./layouts/profilePager.js";
 import initUxEvents from "./tools/uxEvents.js";
 import initFrameFit from "./tools/frameFit.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
@@ -112,6 +113,11 @@ export const main = {
     // After the row is pinned: the card solves its calendar against the box it
     // has actually been given, and re-solves on its own from there.
     initPulseCard();
+
+    // After the row is pinned, for the same reason the activity card is: the
+    // pager translates by a measured width, and measuring it before the grid
+    // has settled would measure the wrong box.
+    initProfilePager();
 
     initTileSpotlight();
 

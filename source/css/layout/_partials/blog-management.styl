@@ -713,6 +713,18 @@ textarea.bm-field
     background var(--third-background-color-transparent)
     color var(--third-text-color)
 
+  // The two tags that stand where controls would be. Tinted from the theme
+  // colour rather than a fixed hue, so they read the same in light, in dark, and
+  // under whatever primary the site is set to.
+  &.is-collab
+    background unquote('color-mix(in oklab, var(--primary-color) 14%, var(--background-color))')
+    color var(--primary-color)
+
+  &.is-you
+    background unquote('color-mix(in oklab, var(--primary-color) 10%, var(--background-color))')
+    color var(--primary-color)
+    border 1px dashed unquote('color-mix(in oklab, var(--primary-color) 38%, transparent)')
+
 // The tree: devices hang off their owner on a rule, so the nesting is one line
 // rather than another box.
 .bm-devices

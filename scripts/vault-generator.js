@@ -923,6 +923,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
         page: {
           type: "masonry",
           title: entry.title,
+          contributor: item.contributor || "",
           images,
           content: "",
           comment: false,
@@ -1041,9 +1042,11 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
   //          console costs one blob rather than a request per post.
   //   e.bin  the composer, which is the article layout with nothing in it.
   //   m.bin  the same for an album: the gallery layout with nothing in it.
-  //   o.bin  which repositories the editor commits to. Private coordinates, so
-  //          they reach the editor through this key and never through the page.
-  const editor = backend.resolve(hexo.theme.config).online_editor;
+  //   o.bin  which repositories the editor commits to, and who the
+  //          collaborators are. Private coordinates and private addresses, so
+  //          both reach the editor through this key and never through the page.
+  const resolved = backend.resolve(hexo.theme.config);
+  const editor = resolved.online_editor;
   for (const entry of state.pages()) {
     const consoleView = hexo.theme.getView("pages/management/blog-management.ejs");
     const shell = await consoleView.render(cardLocals({ page: { type: "blog-management" } }));
@@ -1073,7 +1076,13 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
       `${p}/${entry.slug}/m.bin`,
       vc.seal(entry.key, avifRewrite ? avifRewrite(albumComposer) : albumComposer)
     );
-    routes.set(`${p}/${entry.slug}/o.bin`, vc.seal(entry.key, JSON.stringify({ providers: editor.providers })));
+    routes.set(
+      `${p}/${entry.slug}/o.bin`,
+      vc.seal(
+        entry.key,
+        JSON.stringify({ providers: editor.providers, collaborators: resolved.collaborators })
+      )
+    );
   }
 
   // ── pre-solved geometry ───────────────────────────────────────────────────

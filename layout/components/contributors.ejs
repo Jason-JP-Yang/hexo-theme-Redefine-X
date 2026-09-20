@@ -1,0 +1,28 @@
+<%#
+	Who worked on this besides the site author.
+
+	One partial for both surfaces — an article's header and an album's — because
+	they are the same statement about the same people, and two copies of it would
+	be two that drift. `item` is whatever carries `contributor:`: the post, or the
+	album entry masonry.yml holds.
+
+	Nothing is rendered for an id with no complete roster entry; see
+	scripts/lib/backend.js for why a half-filled collaborator is not one.
+%>
+<% const people = contributorsOf(item); %>
+<% if (people.length) { %>
+<div class="article-contributors">
+	<span class="article-contributors-label">
+		<i class="fa-regular fa-user-pen" aria-hidden="true"></i>
+		<span><%= people.length > 1 ? __('collab.label_plural') : __('collab.label') %></span>
+	</span>
+	<ul class="article-contributors-list">
+		<% people.forEach((person) => { %>
+		<li class="article-contributor">
+			<img class="article-contributor-avatar" src="<%= person.avatar %>" alt="" loading="lazy" decoding="async">
+			<span class="article-contributor-name"><%= person.name %></span>
+		</li>
+		<% }); %>
+	</ul>
+</div>
+<% } %>

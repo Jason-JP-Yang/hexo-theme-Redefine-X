@@ -16,9 +16,7 @@
 <li class="home-feature-tile feature-<%= tile.name %>" style="<%= bentoStyle(tile) %>">
     <% if (tile.name === "info") { %>
         <div class="sidebar-content" data-ux="bento" data-ux-card="profile">
-            <%- partial("components/sidebar/avatar") %>
-            <%- partial("components/sidebar/author") %>
-            <%- partial('components/sidebar/statistics') %>
+            <%- partial("components/sidebar/profile") %>
         </div>
     <% } else if (tile.name === "pulse") { %>
         <%- partial("components/sidebar/pulse") %>

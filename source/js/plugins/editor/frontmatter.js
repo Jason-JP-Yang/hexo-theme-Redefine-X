@@ -62,10 +62,16 @@ const BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 // Never shown. Hexo or the vault generator writes these, or a button does:
 // `draft` and `supersedes` are what Save draft and Publish mean, and offering
 // them as fields is offering two ways to say one thing.
+//
+// `contributor` is here for a stronger reason than tidiness. It is a RECORD of
+// who saved this file, written by the save itself, and a field that could be
+// typed into would let anybody with the editor open put somebody else's name on
+// their work, or take their own off it. It survives every save untouched
+// because writing edits the front-matter text in place.
 const HIDDEN = new Set([
   "layout", "type", "template", "partial", "vault_kind", "vault_slug",
   "masonry_items", "masonryReactions", "permalink", "_content",
-  "draft", "supersedes",
+  "draft", "supersedes", "contributor",
 ]);
 
 const GROUPS = [

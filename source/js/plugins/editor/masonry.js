@@ -2077,6 +2077,17 @@ function insertAfterAlbum(cat, index, node) {
   return insertItem(cat, node, index + 1);
 }
 
+/** `contributor:` with the signed-in collaborator added once, or unchanged. */
+function stampContributor(held) {
+  const ids = String(held == null ? "" : held)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const me = repo.collaborator();
+  if (me && !ids.includes(String(me.id))) ids.push(String(me.id));
+  return ids.length ? ids.join(",") : null;
+}
+
 async function buildCommit(mode) {
   const file = await repo.read(DATA);
   if (!file) throw new Error(`${DATA} is not in the repository`);
@@ -2106,13 +2117,21 @@ async function buildCommit(mode) {
     );
   }
 
+  // Who worked on this album. The same record a post keeps, written by the save
+  // rather than typed — masonry.yml holds it as ONE comma-separated scalar
+  // because its writer emits scalars, and the helper that reads it back takes
+  // either spelling. The admin is never added; they are the author.
+  const contributor = stampContributor(fields.contributor);
+
   /**
    * The album as the canvas has it, plus the flags this save means. Round-tripped
    * through the parser so what lands in the file is exactly what was on screen.
    */
   const shaped = (extra) => {
     const node = parseItemBlock(emitItem(state.item), fresh.eol);
-    for (const [key, value] of Object.entries(extra)) setItemField(node, key, value);
+    for (const [key, value] of Object.entries({ contributor, ...extra })) {
+      setItemField(node, key, value);
+    }
     return node;
   };
 

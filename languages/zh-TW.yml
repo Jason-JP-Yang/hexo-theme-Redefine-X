@@ -29,6 +29,12 @@ top: 頂端
 sticky: 置頂
 go-back-home: 回到首頁
 
+# 協作者 —— 作者旁的署名，以及資料卡片的分頁
+collab:
+  label: 協作者
+  label_plural: 協作者
+  photos: 張照片
+
 # ----------------------------------------
 # 選單翻譯
 # ----------------------------------------
@@ -381,6 +387,8 @@ management:
   banned: 已封鎖
   muted: 已靜音
   admin: 管理員
+  collab: 協作者
+  you: 你自己
   mute: 靜音
   unmute: 取消靜音
   ban: 封鎖

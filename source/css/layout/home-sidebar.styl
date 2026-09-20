@@ -15,6 +15,11 @@
     20px,
     0
   )
+  // The positioning context the pager's dots sit in — unconditional, because
+  // `position: relative` with no z-index changes nothing about a card that has
+  // no pager, while asking `:has()` for it would leave the dots loose wherever
+  // that selector is not understood.
+  position relative
 
   &[marginTop]
     margin-top: $spacing-unit * 0.6
@@ -42,6 +47,117 @@
       text-align center
       font-size 0.8rem
       color var(--third-text-color)
+
+// ── The profile card's pager ─────────────────────────────────────────────────
+// Present only when a collaborator has actually contributed something; without
+// one the card above is the whole card, unchanged.
+//
+// The size contract, which is the point of the whole arrangement: every page
+// carries the same three rows, so the track is exactly as tall as the card
+// already was, and the dots live INSIDE the card's own bottom padding rather
+// than adding a row under it. Nothing here can move the bento row this card is
+// furniture in.
+.sb-pager
+  position relative
+  display flex
+  flex-direction column
+  justify-content center
+  min-width 0
+  min-height 0
+  // `clip`, never `hidden`: hidden establishes a block formatting context, which
+  // would stop the pages' own margins collapsing the way they do in the card
+  // without one — and that difference IS a height change.
+  overflow clip
+  // The horizontal gesture is ours; the vertical one is the page's.
+  touch-action pan-y
+  // A flex item of the bento card, so it takes the slack the card is given and
+  // centres the track in it.
+  flex 1 1 auto
+
+  &.is-dragging
+    cursor grabbing
+    user-select none
+
+.sb-track
+  display flex
+  flex 0 0 auto
+  align-items center
+  will-change transform
+
+// A block, not a flex item's own column: the three rows inside must collapse
+// their margins exactly as they do in a card with no pager, or the page is a
+// different height from the card it replaced.
+.sb-page
+  flex 0 0 100%
+  max-width 100%
+  min-width 0
+  display block
+
+  // The name and the role marker share ONE line box. Putting the marker under
+  // the name would be a fourth row, and a fourth row is a taller card. Scoped to
+  // the collaborator pages' own class so the author's page keeps the plain
+  // centred block it has always been — a flex row and a centred block resolve
+  // the same line box, and "should" is not a size guarantee.
+  .sb-name-row
+    display flex
+    align-items baseline
+    justify-content center
+    gap 6px
+    min-width 0
+
+  .sb-name
+    min-width 0
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+  .sb-role
+    flex 0 0 auto
+    padding 1px 7px
+    border-radius 999px
+    font-size 0.62rem
+    font-weight 600
+    letter-spacing 0.02em
+    text-transform uppercase
+    line-height 1.5
+    color var(--primary-color)
+    background unquote('color-mix(in oklab, var(--primary-color) 12%, var(--background-color))')
+    border 1px solid unquote('color-mix(in oklab, var(--primary-color) 24%, transparent)')
+
+.sb-dots
+  position absolute
+  left 0
+  right 0
+  bottom 5px
+  display flex
+  justify-content center
+  align-items center
+  gap 6px
+  pointer-events none
+
+.sb-dot
+  pointer-events auto
+  width 6px
+  height 6px
+  padding 0
+  border 0
+  border-radius 999px
+  cursor pointer
+  background var(--third-text-color)
+  opacity 0.32
+  // Longhands rather than the transition-t mixin: it splits its arguments on
+  // commas, and a cubic-bezier's own commas would be split with them.
+  transition-property width, opacity, background-color
+  transition-duration 0.32s, 0.2s, 0.2s
+  transition-timing-function cubic-bezier(0.22, 0.61, 0.36, 1), ease, ease
+
+  &:hover
+    opacity 0.6
+
+  &.is-on
+    width 16px
+    opacity 1
+    background var(--primary-color)
 
 .sidebar-links
   overflow hidden

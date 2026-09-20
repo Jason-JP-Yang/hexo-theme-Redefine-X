@@ -1,0 +1,105 @@
+@require '../../common/variables'
+
+// Who worked on a post or an album besides its author.
+//
+// Written at the top level, not under `.article-content-container`, because the
+// same cluster appears on an album page, which is not an article container. Tier
+// 1 of the material vocabulary throughout: a translucent colour, a hairline, no
+// backdrop-filter — nothing here floats over live content.
+
+.article-contributors
+  display flex
+  align-items center
+  gap 8px
+  min-width 0
+  flex-wrap wrap
+
+  .article-contributors-label
+    display inline-flex
+    align-items center
+    gap 5px
+    font-size 0.72rem
+    font-weight 600
+    letter-spacing 0.04em
+    text-transform uppercase
+    color var(--third-text-color)
+    white-space nowrap
+
+    i
+      font-size 0.8rem
+      // The one accent in the cluster. It reads on white, on the dark ground and
+      // on a tinted one, because it IS the theme colour rather than a fixed hue
+      // chosen to sit on one of them.
+      color var(--primary-color)
+
+  .article-contributors-list
+    display flex
+    align-items center
+    flex-wrap wrap
+    gap 6px
+    margin 0
+    padding 0
+    list-style none
+    min-width 0
+
+  .article-contributor
+    display inline-flex
+    align-items center
+    gap 6px
+    max-width 100%
+    min-width 0
+    padding 3px 10px 3px 3px
+    border-radius 999px
+    border 1px solid var(--border-color)
+    // A tint of the theme colour over the page's own ground, so the chip is the
+    // same distance from its background in light, in dark, and under a primary
+    // colour of any hue.
+    background unquote('color-mix(in oklab, var(--primary-color) 7%, var(--background-color))')
+    box-shadow var(--redefine-box-shadow-flat)
+
+  .article-contributor-avatar
+    width 24px
+    height 24px
+    flex-shrink 0
+    border-radius 999px
+    object-fit cover
+    background var(--third-background-color)
+    border 1px solid var(--border-color)
+
+  .article-contributor-name
+    font-size 0.85rem
+    font-weight 500
+    color var(--second-text-color)
+    white-space nowrap
+    overflow hidden
+    text-overflow ellipsis
+    min-width 0
+
+  +redefine-mobile()
+    gap 6px
+
+    .article-contributor
+      padding 2px 8px 2px 2px
+
+    .article-contributor-avatar
+      width 20px
+      height 20px
+
+    .article-contributor-name
+      font-size 0.8rem
+
+// The header an album page borrows from an article. Only what the article's own
+// rules give it through `.article-content-container` has to be restated here;
+// everything else is the same utility classes on the same markup.
+.album-header
+  margin 0 0 24px 0
+
+  .avatar img
+    width 100%
+    height 100%
+    border-radius: $redefine-border-radius-medium * 0.87
+
+  +redefine-tablet()
+    margin-bottom 18px
+    transform scale(0.9)
+    transform-origin left top

@@ -32,6 +32,12 @@ top: TOP
 sticky: Sticky
 go-back-home: Retour à l'accueil
 
+# Collaborateurs — la signature à côté de l'auteur, et les pages de la carte
+collab:
+  label: Collaborateur
+  label_plural: Collaborateurs
+  photos: photos
+
 # ----------------------------------------
 # Traduction du menu
 # ----------------------------------------
@@ -379,6 +385,8 @@ management:
   banned: Bloque
   muted: Silencieux
   admin: Administrateur
+  collab: Collaborateur
+  you: Vous
   mute: Couper
   unmute: Reactiver
   ban: Bloquer

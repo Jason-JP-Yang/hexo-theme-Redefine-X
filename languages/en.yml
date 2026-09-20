@@ -32,6 +32,12 @@ top: TOP
 sticky: Sticky
 go-back-home: Go Back Home
 
+# Collaborators — the byline beside the author, and the profile card's pages
+collab:
+  label: Collaborator
+  label_plural: Collaborators
+  photos: photos
+
 
 # ----------------------------------------
 # Menu Translation
@@ -380,6 +386,8 @@ management:
   banned: Banned
   muted: Muted
   admin: Admin
+  collab: Collaborator
+  you: You
   mute: Mute
   unmute: Unmute
   ban: Ban

@@ -1,0 +1,53 @@
+<%#
+    The profile card: who this blog is by, and who else has written in it.
+
+    With no collaborator who has contributed anything, this is the card that was
+    always here — the same three partials, in the same order, emitting the same
+    markup. Nothing is wrapped, nothing is measured differently, and the bento
+    row that is pinned to this card's own height is unchanged.
+
+    With collaborators, the card becomes a PAGER over the same three rows. Each
+    page is avatar, name and the tags/categories/posts count, so every page is
+    the same height as the one the card already had — the role marker rides
+    INSIDE the name's line box rather than under it, and the dots sit in the
+    card's own bottom padding. The card therefore keeps its size exactly, which
+    is what lets it stay furniture in a grid row it does not negotiate for.
+
+    See source/js/layouts/profilePager.js for the movement.
+%>
+<% const crew = collaboratorContributions(); %>
+<% if (!crew.length) { %>
+    <%- partial("components/sidebar/avatar") %>
+    <%- partial("components/sidebar/author") %>
+    <%- partial('components/sidebar/statistics') %>
+<% } else { %>
+    <div class="sb-pager" data-profile-pager>
+        <div class="sb-track" data-profile-track>
+            <div class="sb-page">
+                <%- partial("components/sidebar/avatar") %>
+                <%- partial("components/sidebar/author") %>
+                <%- partial('components/sidebar/statistics') %>
+            </div>
+            <% crew.forEach((person) => { %>
+            <div class="sb-page">
+                <div class="avatar flex justify-center">
+                    <%- image_tag(person.avatar, { alt: person.name, loading: "lazy", decoding: "async" }) %>
+                </div>
+                <div class="author flex flex-col justify-center my-2.5 mx-0">
+                    <div class="name sb-name-row">
+                        <span class="sb-name"><%= person.name %></span>
+                        <span class="sb-role"><%= __('collab.label') %></span>
+                    </div>
+                </div>
+                <%- partial('components/sidebar/statistics', { stats: person }) %>
+            </div>
+            <% }); %>
+        </div>
+    </div>
+    <div class="sb-dots" data-profile-dots>
+        <% for (let i = 0; i <= crew.length; i++) { %>
+        <button type="button" class="sb-dot<%= i === 0 ? ' is-on' : '' %>" data-profile-dot="<%= i %>"
+                aria-label="<%= i === 0 ? (theme.info.author || config.author) : crew[i - 1].name %>"></button>
+        <% } %>
+    </div>
+<% } %>

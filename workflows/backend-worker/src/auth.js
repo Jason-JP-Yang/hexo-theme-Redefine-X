@@ -7,11 +7,12 @@
  *
  *   1. fetchGitHubUser()  — verifies the token by asking GitHub "who am I?".
  *   2. signSession()      — mints a short-lived HMAC-signed session token for
- *                           EVERY verified user, carrying `isAdmin` in the
- *                           payload, so that each later request is authorized
- *                           LOCALLY (no extra GitHub call per request). Admin
- *                           routes additionally require isAdmin; follower routes
- *                           (/api/me/*, /api/push/*) take any valid token.
+ *                           EVERY verified user, carrying `isAdmin` and `collab`
+ *                           in the payload, so that each later request is
+ *                           authorized LOCALLY (no extra GitHub call per
+ *                           request). Admin routes additionally require isAdmin;
+ *                           follower routes (/api/me/*, /api/push/*) take any
+ *                           valid token.
  *   3. verifySession()    — validates that HMAC token + its expiry.
  *
  * The session token is a compact JWT-ish string: base64url(payload).base64url(sig)
@@ -125,16 +126,43 @@ export async function fetchGitHubUser(token) {
   }
 }
 
+/** A comma-separated allowlist as a list of tokens. */
+export function allowList(raw) {
+  return String(raw || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Is this identity named by that allowlist, by numeric id or by login? */
+function listed(user, raw) {
+  if (!user) return false;
+  const allowed = allowList(raw);
+  return allowed.includes(String(user.id)) || allowed.includes(user.login);
+}
+
 /**
  * Decide whether a GitHub identity is an admin.
  * ADMIN_LOGINS is a comma-separated list of GitHub numeric ids (preferred,
  * immutable) and/or login names.
  */
 export function isAdminUser(user, adminLoginsRaw) {
-  if (!user) return false;
-  const admins = (adminLoginsRaw || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return admins.includes(String(user.id)) || admins.includes(user.login);
+  return listed(user, adminLoginsRaw);
+}
+
+/**
+ * Decide whether a GitHub identity is a collaborator.
+ *
+ * COLLABORATORS has the same shape and the same meaning as ADMIN_LOGINS, and a
+ * collaborator carries the SAME `isAdmin` claim — the two roles differ in
+ * exactly one place, moderation, where a collaborator may not act on an admin
+ * or on themselves. Everything else an admin can reach, a collaborator can.
+ *
+ * The roster of names, emails and avatars is site configuration
+ * (`backend.collaborators`), not Worker configuration: it is what the build
+ * renders and what the editor signs a commit with. Only the ids live here,
+ * because authorization is the only question this Worker answers.
+ */
+export function isCollaborator(user, collaboratorsRaw) {
+  return listed(user, collaboratorsRaw);
 }

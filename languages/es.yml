@@ -32,6 +32,12 @@ top: PRINCIPAL
 sticky: Fijado
 go-back-home: Volver al inicio
 
+# Colaboradores — la firma junto al autor y las paginas de la tarjeta de perfil
+collab:
+  label: Colaborador
+  label_plural: Colaboradores
+  photos: fotos
+
 # ----------------------------------------
 # Traducción del menú
 # ----------------------------------------
@@ -379,6 +385,8 @@ management:
   banned: Bloqueado
   muted: Silenciado
   admin: Administrador
+  collab: Colaborador
+  you: Tu
   mute: Silenciar
   unmute: Reactivar
   ban: Bloquear

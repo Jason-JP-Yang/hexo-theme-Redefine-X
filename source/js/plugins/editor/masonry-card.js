@@ -54,8 +54,10 @@ export const ALBUM_FIELDS = [
 const BY_KEY = new Map(ALBUM_FIELDS.map((f) => [f.key, f]));
 
 // Written by a button, not typed: `draft` and `supersedes` are what Save draft
-// and Publish mean, and `images` is the canvas.
-const HIDDEN = new Set(["images", "draft", "supersedes"]);
+// and Publish mean, and `images` is the canvas. `contributor` is a record of who
+// saved the album, written by the save — a field would let anyone with the
+// editor open put a name on work that is not theirs, or take one off.
+const HIDDEN = new Set(["images", "draft", "supersedes", "contributor"]);
 
 const CATEGORY_FIELDS = [
   { key: "has_thumbnail", type: "toggle", group: "cat", label: "Cards show a thumbnail", on: false },

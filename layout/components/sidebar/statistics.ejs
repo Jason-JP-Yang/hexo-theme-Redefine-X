@@ -1,4 +1,29 @@
+<%#
+    Tags, categories and posts, as three numbers.
+
+    One emitter, two subjects. Without `stats` it is the SITE's count and each
+    number is a way into its index; with `stats` it is one collaborator's, and
+    the numbers are counts rather than doors — there is no per-person archive to
+    open, and a link that landed on the whole site's would be a lie in the shape
+    of a link. The markup is otherwise identical, deliberately: the profile card
+    pages between the two and they have to measure the same.
+%>
+<% const stat = typeof stats === "undefined" ? null : stats; %>
 <div class="statistics flex justify-around my-2.5">
+    <% if (stat) { %>
+    <span class="item tag-count-item flex flex-col justify-center items-center w-20">
+        <div class="number text-2xl sm:text-xl text-second-text-color font-semibold"><%= stat.tags %></div>
+        <div class="label text-third-text-color text-sm"><%- __('tags') %></div>
+    </span>
+    <span class="item tag-count-item flex flex-col justify-center items-center w-20">
+        <div class="number text-2xl sm:text-xl text-second-text-color font-semibold"><%= stat.categories %></div>
+        <div class="label text-third-text-color text-sm"><%- __('categories') %></div>
+    </span>
+    <span class="item tag-count-item flex flex-col justify-center items-center w-20">
+        <div class="number text-2xl sm:text-xl text-second-text-color font-semibold"><%= stat.posts %></div>
+        <div class="label text-third-text-color text-sm"><%- __('posts') %></div>
+    </span>
+    <% } else { %>
     <a class="item tag-count-item flex flex-col justify-center items-center w-20" href="<%- url_for(config.tag_dir) %>"
        data-ux="tags" data-ux-from="bento" data-ux-action="open-index">
         <div class="number text-2xl sm:text-xl text-second-text-color font-semibold"><%= site.tags.length %></div>
@@ -14,4 +39,5 @@
         <div class="number text-2xl sm:text-xl text-second-text-color font-semibold"><%= site.posts.length %></div>
         <div class="label text-third-text-color text-sm"><%- __('posts') %></div>
     </a>
+    <% } %>
 </div>

@@ -33,6 +33,37 @@ function getContainerClass(image) {
 	<%- getPageTitle(page) %>
 </h1>
 
+<%# An album has an author and collaborators exactly as an article does, so it
+	says so in the same row, with the same classes and the same stylesheet. The
+	only difference is what the meta line under the name carries: an album's
+	measure is how many pictures are in it. %>
+<% if (theme.info.author || config.author) { %>
+<div class="article-header album-header flex flex-row flex-wrap gap-2 items-center justify-between">
+	<div class="article-header-author flex flex-row gap-2 items-center min-w-0">
+		<div class="avatar w-[46px] h-[46px] flex-shrink-0 rounded-medium border border-border-color p-[1px]">
+			<%- image_tag(theme.defaults.avatar) %>
+		</div>
+		<div class="info flex flex-col justify-between min-w-0">
+			<div class="author flex items-center">
+				<span class="name text-default-text-color text-lg font-semibold"><%= theme.info.author || config.author %></span>
+				<% if (theme.hasOwnProperty('articles') && theme.articles.author_label.enable === true) { %>
+				<span class="author-label ml-1.5 text-xs px-2 py-0.5 rounded-small text-third-text-color border border-shadow-color-1"><%- getAuthorLabel(site.posts.length, theme.articles.author_label.auto, theme.articles.author_label.list) %></span>
+				<% } %>
+			</div>
+			<div class="meta-info">
+				<div class="article-meta-info">
+					<span class="article-meta-item">
+						<i class="fa-regular fa-images"></i>&nbsp;<span><%= images.length %> <%- __('collab.photos') %></span>
+					</span>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<%- partial('components/contributors', { item: page }) %>
+</div>
+<% } %>
+
 <%# Which version of this album you are looking at, in the same object an
 	article uses. Only a DRAFT ever renders it, and a draft album is never
 	published — so this markup only exists inside the sealed page its author

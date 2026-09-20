@@ -591,12 +591,42 @@ async function movedFiles(stage) {
   ];
 }
 
+/**
+ * Add the signed-in collaborator to `contributor:`, once.
+ *
+ * Both halves of a save reach here — a draft and a publish — because both are
+ * work on the post, and a name that only appeared once it went live would say
+ * nothing about who wrote it. The admin is never added: they are the author, and
+ * an author listed among their own collaborators is a byline that has lost track
+ * of what it is for.
+ *
+ * Ids already there are kept in the order the file has them, so a save by one
+ * person never reorders anybody else's line. The value is only written when it
+ * actually changes, so an ordinary save by an existing contributor produces no
+ * front-matter diff at all.
+ */
+function stampContributor(front) {
+  const me = repo.collaborator();
+  if (!me) return front;
+
+  const held = parseFrontMatter(front).contributor;
+  const ids = (Array.isArray(held) ? held : String(held == null ? "" : held).split(","))
+    .map((v) => String(v).trim())
+    .filter(Boolean);
+  if (ids.includes(String(me.id))) return front;
+
+  return setFrontMatterKey(front, "contributor", ids.concat(String(me.id)));
+}
+
 export async function save(doc, mode, pending, choice, stage) {
   const files = [];
   const entry = doc.entry || {};
   // Stamped here rather than offered as a field: `updated` means "when this was
-  // last saved", and the only moment that is known is this one.
+  // last saved", and the only moment that is known is this one. `contributor` is
+  // stamped for the same reason and is not a field either — see the editor's
+  // front-matter card, which refuses to render it.
   doc.front = setFrontMatterKey(doc.front, "updated", localStamp());
+  doc.front = stampContributor(doc.front);
   doc.frontDirty = true;
   const source = docToMarkdown(doc);
   let minted = null;

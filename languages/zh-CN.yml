@@ -29,6 +29,12 @@ top: 置顶
 sticky: 置顶
 go-back-home: 回到首页
 
+# 协作者 —— 作者旁的署名，以及资料卡片的分页
+collab:
+  label: 协作者
+  label_plural: 协作者
+  photos: 张照片
+
 # ----------------------------------------
 # 菜单翻译
 # ----------------------------------------
@@ -382,6 +388,8 @@ management:
   banned: 已封禁
   muted: 已静音
   admin: 管理员
+  collab: 协作者
+  you: 你自己
   mute: 静音
   unmute: 取消静音
   ban: 封禁

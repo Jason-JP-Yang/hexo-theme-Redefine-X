@@ -6,9 +6,7 @@
         %>
         <% if (theme.home.sidebar.first_item === "info") { %>
             <div class="sidebar-content">
-                <%- partial("components/sidebar/avatar") %>
-                <%- partial("components/sidebar/author") %>
-                <%- partial('components/sidebar/statistics')%>
+                <%- partial("components/sidebar/profile") %>
             </div>
             <% if (hasSidebarLinks || hasSidebarAnnouncement) {%>
                 <div class="sidebar-links"  <% if (hasSidebarLinks || hasSidebarAnnouncement) { %> marginTop <% } %>>
@@ -72,9 +70,7 @@
                 </div>
             <% } %>
             <div class="sidebar-content" <% if (hasSidebarLinks || hasSidebarAnnouncement) { %> marginTop <% } %>>
-                <%- partial("components/sidebar/avatar") %>
-                <%- partial("components/sidebar/author") %>
-                <%- partial('components/sidebar/statistics')%>
+                <%- partial("components/sidebar/profile") %>
             </div>
         <% } %>
 

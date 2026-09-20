@@ -40,8 +40,11 @@
 		<%# A row, not a huddle: the author sits at one end and what can be done
 		    with this version of the article at the other. On every post but a
 		    draft the right-hand end is empty and the row reads exactly as it
-		    always did. %>
-		<div class="article-header flex flex-row gap-2 items-center justify-between px-2 sm:px-6 md:px-8">
+		    always did — and anyone who worked on it WITH the author sits between
+		    the two, close enough to read as part of the byline. It wraps rather
+		    than squeezes: a narrow screen puts the collaborators on their own
+		    line instead of shrinking a face to nothing. %>
+		<div class="article-header flex flex-row flex-wrap gap-2 items-center justify-between px-2 sm:px-6 md:px-8">
 			<div class="article-header-author flex flex-row gap-2 items-center min-w-0">
 				<div class="avatar w-[46px] h-[46px] flex-shrink-0 rounded-medium border border-border-color p-[1px]">
 					<%- image_tag((typeof page.avatar === "string" && (page.avatar)) || page.author?.avatar || theme.defaults.avatar) %>
@@ -58,6 +61,8 @@
 					</div>
 				</div>
 			</div>
+
+			<%- partial('components/contributors', { item: page }) %>
 
 			<%# Which version you are reading, and the way to the other one.
 			    A draft that stands in front of a published post offers the swap;
@@ -91,6 +96,7 @@
 			<div class="meta-info">
 				<%- partial('pages/post/article-info', {articleObject: page, index: true}) %>
 			</div>
+			<%- partial('components/contributors', { item: page }) %>
 		</div>
 		<% } %>
 

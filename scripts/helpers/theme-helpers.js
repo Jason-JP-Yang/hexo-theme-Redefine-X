@@ -243,6 +243,98 @@ hexo.extend.helper.register("backend_config", function () {
 });
 
 /**
+ * `contributor:` as a list of ids, however it was spelled.
+ *
+ * Front matter gives a YAML list, masonry.yml gives one comma-separated scalar
+ * (its writer only emits scalars), and a single id may arrive bare. All three
+ * mean the same thing, and the id is compared as TEXT — it is a GitHub numeric
+ * id, which YAML would otherwise hand over as a number here and a string there.
+ */
+function contributorIds(value) {
+  const raw = Array.isArray(value) ? value : [value];
+  const out = [];
+  for (const item of raw) {
+    for (const part of String(item == null ? "" : item).split(",")) {
+      const id = part.trim();
+      if (id && !out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
+
+/** The roster, by id — resolved once per build. */
+let roster = null;
+
+function rosterOf(theme) {
+  if (!roster) {
+    roster = new Map();
+    for (const row of require("../lib/backend").resolve(theme).collaborators) {
+      roster.set(row.id, row);
+    }
+  }
+  return roster;
+}
+
+/**
+ * Who, besides the site author, worked on this post or album.
+ *
+ * An id with no complete roster entry renders NOTHING — a contributor whose
+ * config was half-filled is a nameless face beside the author, and a blank chip
+ * says less than no chip at all. Publicly this emits only a name and an avatar;
+ * see scripts/lib/backend.js for why the rest stays sealed.
+ */
+hexo.extend.helper.register("contributorsOf", function (item) {
+  const known = rosterOf(this.theme || hexo.theme.config);
+  if (!known.size || !item) return [];
+  return contributorIds(item.contributor)
+    .map((id) => known.get(id))
+    .filter(Boolean);
+});
+
+/**
+ * What each collaborator has actually contributed to, counted off the posts.
+ *
+ * Posts, and the tags and categories those posts carry — the same three numbers
+ * the site card already shows for the blog as a whole, so the card can page
+ * between them without a second vocabulary. A collaborator with nothing to their
+ * name is left out entirely rather than shown as three zeroes.
+ *
+ * Counted from `locals.posts`, which the vault filter has already withheld from,
+ * so a contribution that exists only on an encrypted or draft post is not
+ * announced on the home page.
+ */
+let contributions = null;
+
+hexo.extend.helper.register("collaboratorContributions", function () {
+  if (contributions) return contributions;
+
+  const known = rosterOf(this.theme || hexo.theme.config);
+  const tally = new Map();
+  for (const row of known.values()) {
+    tally.set(row.id, { ...row, posts: 0, tags: new Set(), categories: new Set() });
+  }
+
+  if (tally.size) {
+    this.site.posts.forEach((post) => {
+      for (const id of contributorIds(post.contributor)) {
+        const row = tally.get(id);
+        if (!row) continue;
+        row.posts += 1;
+        // Guarded: the vault filter empties a withheld post's taxonomy in
+        // place, and a post whose tags were taken away has none to read.
+        if (post.tags) post.tags.forEach((tag) => row.tags.add(tag.name));
+        if (post.categories) post.categories.forEach((c) => row.categories.add(c.name));
+      }
+    });
+  }
+
+  contributions = [...tally.values()]
+    .filter((row) => row.posts > 0)
+    .map((row) => ({ ...row, tags: row.tags.size, categories: row.categories.size }));
+  return contributions;
+});
+
+/**
  * The activity card's numbers, for the page to carry.
  *
  * `source/_data/analytics.json` is the whole archive and grows forever; the page

@@ -77,9 +77,10 @@ max_batch_timeout = 0
 max_retries = 1
 
 # ─── Environment Variables ──────────────────────────────────
-# Seven values run this Worker and nothing reads an eighth. Anything that used to
-# be a feature flag is now simply how the Worker behaves — a flag whose only
-# correct value is "on" is not configuration, it is an unexercised code path.
+# A short, closed set of values runs this Worker and nothing reads another.
+# Anything that used to be a feature flag is now simply how the Worker behaves —
+# a flag whose only correct value is "on" is not configuration, it is an
+# unexercised code path.
 [vars]
 # ─── ALLOWED_ORIGIN is deliberately NOT declared here ───────
 # It lives in the Cloudflare dashboard instead (Workers & Pages → <worker> →
@@ -104,6 +105,13 @@ max_retries = 1
 # immutable, whereas a login name can be released and re-registered by someone
 # else. Find yours at https://api.github.com/users/<you>
 ADMIN_LOGINS = ""
+
+# Comma-separated collaborator allowlist, same shape as ADMIN_LOGINS. A
+# collaborator gets the SAME rights everywhere except moderation, where they may
+# not act on an admin or on themselves. Their names, emails and avatars are site
+# configuration (`backend.collaborators`); only the ids decide access, and that
+# is the only question this Worker answers.
+COLLABORATORS = ""
 
 # The site this backend belongs to. The ONE place a URL comes from: the changelog
 # fallback source, the click target of a note notification and of a test push,

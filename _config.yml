@@ -506,6 +506,14 @@ backend:
   mode: production
   # The Worker used when mode is local. Must be a localhost or private address
   local_api_url: http://localhost:8787
+  # People with the same rights as the admin. Every field is required, and the same
+  # ids must be in the Worker's COLLABORATORS — a rebuild and a deploy, never live
+  collaborators:
+    # - id: 12345678
+    #   username: octocat
+    #   email: octocat@users.noreply.github.com
+    #   name: Octo Cat
+    #   avatar: https://avatars.githubusercontent.com/u/12345678?v=4
   # Encrypted posts (`vault:` front matter). Blog Management and the online editor need it
   encryption:
     enable: false
