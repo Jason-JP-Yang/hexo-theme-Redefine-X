@@ -2,6 +2,7 @@ import { requestScrollPass, invalidateMetrics } from "../tools/scrollScheduler.j
 import initAutoHover, { syncHomeAutoHover } from "./autoHover.js";
 import initBentoFit, { syncBentoFit } from "./bentoFit.js";
 import initPulseCard from "./pulseCard.js";
+import initProfilePager from "./profilePager.js";
 import initTileSpotlight from "./tileSpotlight.js";
 import initCoverParallax, {
   setCoverParallaxSuspended,
@@ -385,6 +386,9 @@ async function swapAndFlipIn(payload, n, options, oldCards, animate, scroll, app
   // node with it. Re-wired here, while the cards are still edge-on, it redraws
   // from the series already in hand and is never seen arriving.
   initPulseCard();
+  // Same reason, same row: the profile card's pager went with the swap, and the
+  // list that arrived carries a fresh, unwired copy of it.
+  initProfilePager();
   initCoverParallax();
   syncCoverParallax();
   initAutoHover();

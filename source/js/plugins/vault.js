@@ -2,6 +2,7 @@ import { runFlip, primeForFlipIn, animateHeight, setHomeVaultHook } from "../lay
 import initAutoHover, { syncHomeAutoHover } from "../layouts/autoHover.js";
 import initBentoFit, { syncBentoFit } from "../layouts/bentoFit.js";
 import initTileSpotlight from "../layouts/tileSpotlight.js";
+import initProfilePager from "../layouts/profilePager.js";
 import initCoverParallax, { syncCoverParallax } from "../layouts/coverParallax.js";
 import initLazyLoad, { registerSrcResolver } from "../layouts/lazyload.js";
 import { initTOC } from "../layouts/toc.js";
@@ -1203,6 +1204,145 @@ async function unlockCategoryTree(map) {
   settle();
 }
 
+/* ─── the profile card's collaborator pages ────────────────────────────────── */
+
+/**
+ * What a collaborator has written, answered for THIS reader.
+ *
+ * The build can only publish the public half: two readers hold different vault
+ * grants, so "how many posts has this person written that YOU may open" has as
+ * many answers as there are readers. The page carries the public baseline —
+ * counts, and tag and category NAMES, because the two halves must be unioned
+ * rather than added — and this adds whatever the keyring in hand opens.
+ *
+ * A page whose public count was zero is in the markup and hidden; it appears
+ * only for a reader whose grants give it something to say, and goes back when
+ * they sign out. Nothing leaks by being there: the roster is already public
+ * config, and the number is the only part a grant decides.
+ *
+ * Albums count as posts, and carry no taxonomy of their own.
+ */
+function contributorList(value) {
+  const raw = Array.isArray(value) ? value : [value];
+  const out = [];
+  for (const item of raw) {
+    for (const part of String(item == null ? "" : item).split(",")) {
+      const id = part.trim();
+      if (id && !out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
+
+/** Like `bumpCount`, but the value is computed rather than added to. */
+function setCount(el, value) {
+  if (!el) return;
+  if (el.dataset.vaultBase === undefined) el.dataset.vaultBase = el.textContent.trim();
+  el.textContent = String(value);
+}
+
+function parseNames(json) {
+  try {
+    const list = JSON.parse(json || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * @param {Map} map   the keyring
+ * @param {ParentNode} root  the live document, or a home list still off-document
+ *   after a page turn — the profile card travels inside that list, so a turn
+ *   brings a fresh baseline copy of it that has to be answered again.
+ * @returns {boolean} whether a hidden page was revealed
+ */
+function applyContributions(map, root) {
+  const pager = root.querySelector("[data-profile-pager]");
+  if (!pager || pager.dataset.vaultApplied === "1") return false;
+
+  const pages = Array.from(pager.querySelectorAll(".sb-page[data-collab]"));
+  if (!pages.length) return false;
+  pager.dataset.vaultApplied = "1";
+
+  const rail = pager.parentElement
+    ? pager.parentElement.querySelector("[data-profile-dots]")
+    : null;
+
+  const delta = new Map();
+  const add = (contributor, tags, categories) => {
+    for (const id of contributorList(contributor)) {
+      let row = delta.get(id);
+      if (!row) delta.set(id, (row = { posts: 0, tags: new Set(), categories: new Set() }));
+      row.posts += 1;
+      for (const tag of tags || []) row.tags.add(tag.name);
+      for (const category of categories || []) row.categories.add(category.name);
+    }
+  };
+
+  // `articles` is already one row per ARTICLE: a readable draft has replaced the
+  // post it stands in front of. A draft that stands in front of nothing is not
+  // a contribution — it has never been published — which is the same rule the
+  // build applies to the public half.
+  for (const entry of articles(map)) {
+    const meta = entry.meta;
+    if (meta.draft && !meta.supersedes) continue;
+    add(meta.contributor, meta.tags, meta.categories);
+  }
+
+  // Albums have no `articles`-style fold, so the draft and the album it
+  // supersedes are deduped here, by the album they are both a version of.
+  const seenAlbums = new Set();
+  for (const entry of readableAlbums(map)) {
+    const meta = entry.meta;
+    if (meta.draft && !meta.supersedes) continue;
+    const key = meta.supersedes || meta.title;
+    if (seenAlbums.has(key)) continue;
+    seenAlbums.add(key);
+    add(meta.contributor, null, null);
+  }
+
+  let revealed = false;
+  for (const page of pages) {
+    const row = delta.get(page.dataset.collab);
+    const posts = Number(page.dataset.collabPosts || 0) + (row ? row.posts : 0);
+    const tags = new Set(parseNames(page.dataset.collabTags));
+    const categories = new Set(parseNames(page.dataset.collabCategories));
+    if (row) {
+      for (const name of row.tags) tags.add(name);
+      for (const name of row.categories) categories.add(name);
+    }
+
+    // Same order the statistics row is emitted in: tags, categories, posts.
+    const numbers = page.querySelectorAll(".statistics .number");
+    setCount(numbers[0], tags.size);
+    setCount(numbers[1], categories.size);
+    setCount(numbers[2], posts);
+
+    if (posts > 0 && page.hidden) {
+      page.hidden = false;
+      page.setAttribute("data-vault-shown", "1");
+      const dot = rail && rail.querySelector(`[data-collab="${page.dataset.collab}"]`);
+      if (dot) {
+        dot.hidden = false;
+        dot.setAttribute("data-vault-shown", "1");
+      }
+      revealed = true;
+    }
+  }
+
+  return revealed;
+}
+
+async function unlockContributions(map) {
+  // The pager holds the page list, the wrap clone and the dot map it was built
+  // with, so a page that has just appeared means building it again.
+  if (applyContributions(map, document)) {
+    initProfilePager();
+    settle();
+  }
+}
+
 function bumpAttr(el, attr, by) {
   const base = el.getAttribute("data-vault-base-" + attr);
   if (base === null) el.setAttribute("data-vault-base-" + attr, el.getAttribute(attr) || "0");
@@ -1458,9 +1598,18 @@ function revertListings() {
     el.setAttribute("data-weight", el.getAttribute("data-vault-base-data-weight"));
     el.removeAttribute("data-vault-base-data-weight");
   });
+  // A collaborator page that only this reader had anything to put in goes back
+  // to hidden, and the pager is rebuilt around what is left.
+  const shown = document.querySelectorAll("[data-vault-shown]");
+  shown.forEach((el) => {
+    el.hidden = true;
+    el.removeAttribute("data-vault-shown");
+  });
+
   document.querySelectorAll("[data-vault-applied]").forEach((el) => {
     if (!el.classList.contains("home-article-list")) delete el.dataset.vaultApplied;
   });
+  if (shown.length || document.querySelector("[data-profile-pager]")) initProfilePager();
   settle();
 }
 
@@ -1548,9 +1697,17 @@ export default async function initVault() {
     // build, which has no encrypted card in it. The paginator hands the list
     // over before it is inserted, so the reflow happens inside the page turn
     // rather than as a second, visible one after it.
+    // A page turn replaces the whole list, and the profile card is furniture
+    // INSIDE it — so the incoming copy carries the public baseline again and has
+    // to be answered before it is adopted, exactly as the grid arrangement is.
     setHomeVaultHook(async (source) => {
       const map = await loadGrants(false);
-      return map && map.size ? prepareHome(map, source) : null;
+      if (!map || !map.size) return null;
+      const plan = await prepareHome(map, source);
+      return (incoming) => {
+        if (plan) plan(incoming);
+        applyContributions(map, incoming);
+      };
     });
 
     window.addEventListener("hashchange", () => {
@@ -1569,6 +1726,7 @@ export default async function initVault() {
   if (!map || !map.size) return;
 
   await hydrateMeta(map);
+  await unlockContributions(map);
   mountDraftSwap(supersedingMap(map));
   if (isAdmin) mountAlbumSwap(map);
   await unlockHome(map);

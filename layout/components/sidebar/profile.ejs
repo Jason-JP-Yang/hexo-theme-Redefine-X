@@ -13,6 +13,18 @@
     card's own bottom padding. The card therefore keeps its size exactly, which
     is what lets it stay furniture in a grid row it does not negotiate for.
 
+    ── Two halves, and only one of them is in this file ────────────────────────
+
+    What is written here is the PUBLIC count. The encrypted half is not the same
+    number for two readers — they hold different vault grants — so the baseline
+    ships as data attributes and source/js/plugins/vault.js adds whatever THIS
+    reader may open. Tags and categories travel as names rather than counts
+    because the two halves have to be unioned; a private post carrying a tag a
+    public one already carries must not count twice.
+
+    A page whose public count is zero is rendered `hidden`, so the vault pass has
+    a page to fill in rather than a page to invent.
+
     See source/js/layouts/profilePager.js for the movement.
 %>
 <% const crew = collaboratorContributions(); %>
@@ -29,7 +41,11 @@
                 <%- partial('components/sidebar/statistics') %>
             </div>
             <% crew.forEach((person) => { %>
-            <div class="sb-page">
+            <div class="sb-page" data-collab="<%= person.id %>"
+                 data-collab-posts="<%= person.posts %>"
+                 data-collab-tags="<%= JSON.stringify(person.tags) %>"
+                 data-collab-categories="<%= JSON.stringify(person.categories) %>"
+                 <%= person.hidden ? 'hidden' : '' %>>
                 <div class="avatar flex justify-center">
                     <%- image_tag(person.avatar, { alt: person.name, loading: "lazy", decoding: "async" }) %>
                 </div>
@@ -39,15 +55,23 @@
                         <span class="sb-role"><%= __('collab.label') %></span>
                     </div>
                 </div>
-                <%- partial('components/sidebar/statistics', { stats: person }) %>
+                <%- partial('components/sidebar/statistics', {
+                    stats: { tags: person.tags.length, categories: person.categories.length, posts: person.posts }
+                }) %>
             </div>
             <% }); %>
         </div>
     </div>
-    <div class="sb-dots" data-profile-dots>
-        <% for (let i = 0; i <= crew.length; i++) { %>
-        <button type="button" class="sb-dot<%= i === 0 ? ' is-on' : '' %>" data-profile-dot="<%= i %>"
-                aria-label="<%= i === 0 ? (theme.info.author || config.author) : crew[i - 1].name %>"></button>
-        <% } %>
+    <%# Hidden until at least one collaborator page has something to say, so a
+        reader with no grants never sees a single dot flash before the pager
+        wires itself up and takes the rail away. %>
+    <div class="sb-dots" data-profile-dots <%= crew.some((p) => !p.hidden) ? '' : 'hidden' %>>
+        <button type="button" class="sb-dot is-on" data-profile-dot="0"
+                aria-label="<%= theme.info.author || config.author %>"></button>
+        <% crew.forEach((person, i) => { %>
+        <button type="button" class="sb-dot" data-profile-dot="<%= i + 1 %>"
+                data-collab="<%= person.id %>"
+                aria-label="<%= person.name %>" <%= person.hidden ? 'hidden' : '' %>></button>
+        <% }); %>
     </div>
 <% } %>

@@ -670,6 +670,10 @@ function metaFor(entry, href, coverAsset, body) {
     assets: entry.assetMap || {},
     sizes: entry.assetSizes || {},
     draft: entry.post.draft === true,
+    // Who worked on it. The home card's collaborator pages add this post to
+    // their counts only for a reader who holds the key that opened this record
+    // — which is the whole reason the number is not settled at build time.
+    contributor: entry.post.contributor || "",
     supersedes: entry.supersedes || "",
     // The published post's real page, which is the vault gate when it carries
     // `vault:` — see `supersededHref`.
@@ -982,6 +986,9 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
             category: entry.category.links_category,
             thumbs: entry.category.has_thumbnail === true,
             href,
+            // Same as a post's: an album counts towards its collaborators' Posts
+            // number, for the readers who can open it.
+            contributor: item.contributor || "",
             // What this album IS, for the one reader who holds the key: a draft
             // standing in front of a published album, an album never published,
             // or an encrypted album. The editor opens the draft rather than the

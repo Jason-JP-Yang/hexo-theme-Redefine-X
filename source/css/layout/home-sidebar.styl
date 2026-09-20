@@ -15,12 +15,6 @@
     20px,
     0
   )
-  // The positioning context the pager's dots sit in — unconditional, because
-  // `position: relative` with no z-index changes nothing about a card that has
-  // no pager, while asking `:has()` for it would leave the dots loose wherever
-  // that selector is not understood.
-  position relative
-
   &[marginTop]
     margin-top: $spacing-unit * 0.6
 
@@ -70,9 +64,13 @@
   overflow clip
   // The horizontal gesture is ours; the vertical one is the page's.
   touch-action pan-y
-  // A flex item of the bento card, so it takes the slack the card is given and
-  // centres the track in it.
-  flex 1 1 auto
+  // CONTENT height, not the card's. A pager that filled the cell would put the
+  // dots at the far bottom edge with a hand's width of nothing above them,
+  // because the bento row is pinned by the taller card beside this one. Sized to
+  // its content, the pager and the dots are centred TOGETHER by the card's own
+  // `justify-content: center`, and the dots stay where they belong: under the
+  // numbers they page.
+  flex 0 0 auto
 
   &.is-dragging
     cursor grabbing
@@ -93,6 +91,12 @@
   min-width 0
   display block
 
+  // `display: block` above would beat the UA's `[hidden] { display: none }`, and
+  // a page hidden from this reader would take a full slide of width. This is
+  // what makes "visible page k sits at k × 100%" true.
+  &[hidden]
+    display none
+
   // The name and the role marker share ONE line box. Putting the marker under
   // the name would be a fourth row, and a fourth row is a taller card. Scoped to
   // the collaborator pages' own class so the author's page keeps the plain
@@ -102,8 +106,9 @@
     display flex
     align-items baseline
     justify-content center
-    gap 6px
+    gap 2px
     min-width 0
+    flex-direction column
 
   .sb-name
     min-width 0
@@ -124,19 +129,26 @@
     background unquote('color-mix(in oklab, var(--primary-color) 12%, var(--background-color))')
     border 1px solid unquote('color-mix(in oklab, var(--primary-color) 24%, transparent)')
 
+// In the flow, and then given straight back. The negative bottom margin is the
+// size contract: the rail is 6px tall with 12px above it, and the -18px hands
+// all 18 of them back to the card, so the card's content box is EXACTLY the
+// height it was before the pager existed. The dots then sit in the card's own
+// bottom padding — occupying space that was already empty rather than asking
+// for more.
 .sb-dots
-  position absolute
-  left 0
-  right 0
-  bottom 5px
+  flex 0 0 auto
   display flex
   justify-content center
   align-items center
   gap 6px
-  pointer-events none
+  height 6px
+  margin-top 12px
+  margin-bottom -18px
+
+  &[hidden]
+    display none
 
 .sb-dot
-  pointer-events auto
   width 6px
   height 6px
   padding 0
@@ -158,6 +170,9 @@
     width 16px
     opacity 1
     background var(--primary-color)
+
+  &[hidden]
+    display none
 
 .sidebar-links
   overflow hidden

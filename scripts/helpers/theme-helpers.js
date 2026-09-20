@@ -292,16 +292,37 @@ hexo.extend.helper.register("contributorsOf", function (item) {
 });
 
 /**
- * What each collaborator has actually contributed to, counted off the posts.
+ * What each collaborator has contributed to — the PUBLIC half of it.
  *
- * Posts, and the tags and categories those posts carry — the same three numbers
- * the site card already shows for the blog as a whole, so the card can page
- * between them without a second vocabulary. A collaborator with nothing to their
- * name is left out entirely rather than shown as three zeroes.
+ * Posts (articles and albums together, because an album is a thing they made
+ * too) and the tags and categories those posts carry: the same three numbers the
+ * site card already shows for the blog as a whole, so the card can page between
+ * them without a second vocabulary.
  *
- * Counted from `locals.posts`, which the vault filter has already withheld from,
- * so a contribution that exists only on an encrypted or draft post is not
- * announced on the home page.
+ * ── Why this answer is only half, and why the page carries NAMES ────────────
+ *
+ * The encrypted half of a collaborator's work is not the same number for
+ * everybody. Two readers hold different vault grants, so "how many posts has
+ * this person written that YOU may read" is a question no build can answer — and
+ * answering it with the public count alone makes a collaborator whose work
+ * happens to be encrypted disappear from the card entirely, which is exactly
+ * what the first build of this feature did.
+ *
+ * So the build emits the public baseline and the browser adds what that reader
+ * may open, from the sealed record it already fetches for every grant
+ * (plugins/vault.js). The baseline ships as tag and category NAMES rather than
+ * counts because the two halves have to be UNIONED — a private post carrying a
+ * tag a public one already carries must not count twice. Those names are public
+ * by construction: they belong to public posts and are already on the page.
+ *
+ * `hidden` is the row whose public count is zero. It is rendered, so the vault
+ * pass has something to fill in, and hidden until it has something to say. The
+ * roster itself is already public (it is in the page config), so what stays
+ * private is the count, which is what the grant decides.
+ *
+ * A DRAFT is never counted, public or sealed: unfinished work is not a
+ * contribution, and a draft standing in front of a published post would be
+ * counted twice.
  */
 let contributions = null;
 
@@ -311,26 +332,68 @@ hexo.extend.helper.register("collaboratorContributions", function () {
   const known = rosterOf(this.theme || hexo.theme.config);
   const tally = new Map();
   for (const row of known.values()) {
-    tally.set(row.id, { ...row, posts: 0, tags: new Set(), categories: new Set() });
+    tally.set(row.id, { ...row, posts: 0, tags: new Set(), categories: new Set(), sealed: 0 });
   }
+
+  const credit = (contributor, tags, categories, field) => {
+    for (const id of contributorIds(contributor)) {
+      const row = tally.get(id);
+      if (!row) continue;
+      row[field] += 1;
+      for (const tag of tags || []) row.tags.add(tag.name);
+      for (const category of categories || []) row.categories.add(category.name);
+    }
+  };
 
   if (tally.size) {
+    // ── public ────────────────────────────────────────────────────────────
     this.site.posts.forEach((post) => {
-      for (const id of contributorIds(post.contributor)) {
-        const row = tally.get(id);
-        if (!row) continue;
-        row.posts += 1;
-        // Guarded: the vault filter empties a withheld post's taxonomy in
-        // place, and a post whose tags were taken away has none to read.
-        if (post.tags) post.tags.forEach((tag) => row.tags.add(tag.name));
-        if (post.categories) post.categories.forEach((c) => row.categories.add(c.name));
-      }
+      credit(
+        post.contributor,
+        post.tags && post.tags.toArray(),
+        post.categories && post.categories.toArray(),
+        "posts"
+      );
     });
+
+    // Albums count as posts and carry no taxonomy. `site.data.masonry` is
+    // already the MASKED copy on an encrypted site, so an album that is only
+    // in the sealed half cannot be counted here by accident.
+    for (const category of (this.site.data || {}).masonry || []) {
+      for (const item of (category && category.list) || []) {
+        if (item && item.draft !== true) credit(item.contributor, null, null, "posts");
+      }
+    }
+
+    // ── sealed ────────────────────────────────────────────────────────────
+    // Counted only to decide whether the row EXISTS. What it is worth is the
+    // reader's question, answered in the browser against their own grants.
+    const state = require("../lib/vault-state");
+    for (const entry of state.sorted()) {
+      if (!entry.post || entry.post.draft === true) continue;
+      credit(entry.post.contributor, null, null, "sealed");
+    }
+    for (const entry of state.albums()) {
+      if (!entry.item || entry.item.draft === true) continue;
+      credit(entry.item.contributor, null, null, "sealed");
+    }
   }
 
+  // Sorted names, never insertion order: Hexo reads source files concurrently,
+  // so an unsorted list is a different page on every machine.
+  const names = (set) => [...set].sort();
+
   contributions = [...tally.values()]
-    .filter((row) => row.posts > 0)
-    .map((row) => ({ ...row, tags: row.tags.size, categories: row.categories.size }));
+    .filter((row) => row.posts > 0 || row.sealed > 0)
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      avatar: row.avatar,
+      posts: row.posts,
+      tags: names(row.tags),
+      categories: names(row.categories),
+      hidden: row.posts === 0,
+    }));
   return contributions;
 });
 
