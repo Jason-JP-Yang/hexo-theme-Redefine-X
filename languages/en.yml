@@ -425,6 +425,25 @@ management:
   p_s_pushed: Artifact pushed
   p_s_deployed: Deployed
   v_badge: Encrypted
+  v_editors: Who can edit this
+  ed_placeholder: Collaborator login or numeric id, then Enter
+  c_title: Collaborators
+  c_lede: What each collaborator sees in this console. Posts management is always theirs and always scoped to the items they were given; everything else starts denied.
+  c_empty: No collaborators are configured. Add them to backend.collaborators and to the Worker's COLLABORATORS, then rebuild.
+  g_none: Denied
+  g_r: Read
+  g_rw: Read & write
+  part_posts: Posts management
+  part_analytics: Analytics
+  part_announce: Announce
+  part_notifications: Notifications
+  part_followers: Followers
+  part_buildlog: Build log
+  l_title: Build log
+  l_lede: What the last deploy actually did. The runner prints nothing in public, so its output is sealed here, and it is written even when the build failed.
+  l_empty: No build has written a log yet.
+  l_failed: Failed
+  l_ok: Succeeded
   v_audience: Who can read this
   v_reader: reader
   v_readers: readers

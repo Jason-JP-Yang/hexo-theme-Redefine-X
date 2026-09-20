@@ -32,7 +32,15 @@ import {
 } from "./notifications-inbox.js";
 import { initManagementAnalytics } from "./management-analytics.js";
 import { Picker, avatarOf } from "../tools/chipPicker.js";
-import { siteRoot } from "../tools/vaultCrypto.js";
+import {
+  b64urlToBytes,
+  fetchSealed,
+  importAesKey,
+  openJSON,
+  openText,
+  siteRoot,
+  vaultPrefix,
+} from "../tools/vaultCrypto.js";
 import { enter, exit, pop } from "./editor/motion.js";
 
 // The morph used for inline editing: content fades out, the box resizes, content
@@ -101,8 +109,18 @@ const state = {
   // `items` arrives sealed with the page and is never fetched; only `audiences`
   // is asked for, because only the Worker knows it. `queue` is what the next
   // unpublish commit will carry — one commit for the whole selection.
-  posts: { items: [], audiences: {}, filter: "", loading: false, queue: [], bar: null, busy: false },
+  posts: {
+    items: [], audiences: {}, editors: {}, filter: "",
+    loading: false, queue: [], bar: null, busy: false,
+  },
   blocklists: { posts: [], notes: [], announcements: [] },
+  // Who is looking, and at what. `admin` and `panels` come from the Worker with
+  // the first request and decide which sections exist at all; every route the
+  // console then calls checks the same grades again, so hiding a section is
+  // presentation and refusing one is the control.
+  me: { admin: false, panels: {}, grades: {}, id: 0, login: "" },
+  collab: { people: [], roster: [], loading: false, error: false },
+  log: { record: null, loading: false, error: false },
 };
 
 // Every chip picker on the page, by key: "audience" for the composer, then one
@@ -797,7 +815,19 @@ function matchesFilter(row, filter) {
  * still see, and the draft standing in front of it changes nothing about that.
  */
 function canGrant(row) {
-  return !!(row.published && row.encrypted && row.vaultId);
+  return !!(state.me.admin && row.published && row.encrypted && row.vaultId);
+}
+
+/**
+ * Who may CHANGE this item — the other half of a post's permissions, and the
+ * only one that applies to a public article as well as an encrypted one.
+ *
+ * Admin-only, and not merely hidden: the route behind it takes an admin session
+ * and nothing else. A collaborator looking at an article they may edit sees
+ * that they may edit it; they do not see, and cannot set, who else can.
+ */
+function canAssign(row) {
+  return !!(state.me.admin && row.vaultId);
 }
 
 /**
@@ -917,6 +947,17 @@ function postRowHTML(row) {
              </div>`
           : ""
       }
+      ${
+        canAssign(row)
+          ? `<div class="bm-post-audience">
+               <label class="bm-blocklist-label">
+                 ${e("v_editors", "Who can edit this")}
+                 <span class="bm-save-state" data-save="edit:${escapeHTML(row.vaultId)}"></span>
+               </label>
+               <div class="bm-picker-host" data-picker="edit:${escapeHTML(row.vaultId)}"></div>
+             </div>`
+          : ""
+      }
     </li>`;
 }
 
@@ -940,16 +981,31 @@ function paintPosts() {
   // autosave on every keystroke: a half-typed audience must not silently take
   // someone's access away.
   for (const row of shown) {
-    if (!canGrant(row)) continue;
-    const key = `vault:${row.vaultId}`;
-    const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
-    if (!host) continue;
-    const picker = makePicker(key, host, {
-      placeholder: t("aud_placeholder", "GitHub login or numeric id, then Enter"),
-      onCommit: (p) => saveAudience(row.vaultId, p),
-    });
-    picker.set(box.audiences[row.vaultId] || []);
-    pickers.set(key, picker);
+    if (canGrant(row)) {
+      const key = `vault:${row.vaultId}`;
+      const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
+      if (host) {
+        const picker = makePicker(key, host, {
+          placeholder: t("aud_placeholder", "GitHub login or numeric id, then Enter"),
+          onCommit: (p) => saveAudience(row.vaultId, p),
+        });
+        picker.set(box.audiences[row.vaultId] || []);
+        pickers.set(key, picker);
+      }
+    }
+
+    if (canAssign(row)) {
+      const key = `edit:${row.vaultId}`;
+      const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
+      if (host) {
+        const picker = makePicker(key, host, {
+          placeholder: t("ed_placeholder", "Collaborator login or numeric id, then Enter"),
+          onCommit: (p) => saveEditors(row.vaultId, p),
+        });
+        picker.set(box.editors[row.vaultId] || []);
+        pickers.set(key, picker);
+      }
+    }
   }
 
   contentChanged();
@@ -963,13 +1019,50 @@ function setPostFilter(value) {
   paintPosts();
 }
 
-/** The one question the build could not answer. */
+/**
+ * The two questions the build could not answer: who may READ each encrypted
+ * item, and who may CHANGE each item at all.
+ *
+ * Both are the admin's to see. A collaborator's console skips this entirely —
+ * the routes refuse them anyway, and a request made only to be refused is a
+ * spinner that resolves into nothing.
+ */
 async function loadAudiences() {
+  if (!state.me.admin) return;
   state.posts.loading = true;
-  const result = await api("/api/admin/vault");
+  const [audiences, collab] = await Promise.all([api("/api/admin/vault"), api("/api/admin/collab")]);
   state.posts.loading = false;
-  if (result.ok && result.data) state.posts.audiences = result.data.audiences || {};
+  if (audiences.ok && audiences.data) state.posts.audiences = audiences.data.audiences || {};
+  if (collab.ok && collab.data) {
+    state.posts.editors = collab.data.editors || {};
+    state.collab.people = collab.data.people || [];
+    state.me.grades = collab.data.grades || state.me.grades;
+    paintCollab();
+  }
   paintPosts();
+}
+
+async function saveEditors(itemId, picker) {
+  const flag = root.querySelector(`[data-save="${CSS.escape("edit:" + itemId)}"]`);
+  if (!picker.settled) {
+    if (flag) flag.innerHTML = "";
+    return;
+  }
+  if (flag) flag.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`;
+
+  const editors = picker.entries;
+  const result = await api(`/api/admin/vault/${encodeURIComponent(itemId)}/editors`, {
+    method: "PUT",
+    body: { editors },
+  });
+
+  if (flag) {
+    flag.innerHTML = result.ok
+      ? `<i class="fa-solid fa-check" aria-hidden="true"></i>`
+      : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
+    if (result.ok) setTimeout(() => (flag.innerHTML = ""), 1800);
+  }
+  if (result.ok) state.posts.editors[itemId] = editors;
 }
 
 async function saveAudience(postId, picker) {
@@ -1703,6 +1796,13 @@ function wire() {
       return;
     }
 
+    // One grade for one section of one collaborator. No confirm step: it takes
+    // effect at once and is as easily put back, and a section somebody can see
+    // for a moment longer than intended is not the kind of mistake a second
+    // click prevents.
+    const grade = target.closest(".bm-grade");
+    if (grade && !grade.disabled) return void setGrade(grade);
+
     // Not armed and not confirmed: this only adds the row to the bar's
     // selection, and the bar is where it becomes a commit.
     const unpublish = target.closest(".bm-post-unpublish");
@@ -1712,23 +1812,279 @@ function wire() {
   });
 }
 
-/**
- * Paint everything, then fetch only what the build could not settle.
+/* ─── the collaborator matrix ────────────────────────────────
  *
- * Posts is on screen before a single request is made — it was sealed into this
- * page — and the three Worker-backed sections fill in independently, so a slow
- * follower list never holds up the rest. There is no gate here: the page only
- * exists at all because plugins/admin-gate.js already had the key and the blob
- * opened under it.
+ * Who may see which section of this console, and at what grade. Admin-only, and
+ * not merely hidden: the route behind it takes an admin session, so a
+ * collaborator who reached this markup finds the section absent and the answer
+ * refused if they ask for it another way.
+ *
+ * Every grade is drawn for every section, including the ones that section does
+ * not have — those are shown disabled rather than left out. A control that is
+ * simply missing reads as a control somebody forgot; a control that is there
+ * and greyed says what the rule is.
  */
-function boot() {
+const PANEL_ROWS = [
+  ["posts", "fa-newspaper", "Posts management"],
+  ["analytics", "fa-chart-simple", "Analytics"],
+  ["announce", "fa-bullhorn", "Announce"],
+  ["notifications", "fa-bell", "Notifications"],
+  ["followers", "fa-users", "Followers"],
+  ["buildlog", "fa-terminal", "Build log"],
+];
+
+const GRADES = [
+  ["", "fa-ban", "Denied"],
+  ["r", "fa-eye", "Read"],
+  ["rw", "fa-pen-to-square", "Read & write"],
+];
+
+// Posts Management is not a grade anybody sets. A collaborator always has it,
+// scoped by `itemsFor` to the items they may actually open — so it is drawn
+// fixed at read-and-write rather than left out, because the question "can they
+// see my posts" deserves an answer on this page.
+const FIXED = { posts: "rw" };
+
+function renderCollabShell(section) {
+  section.innerHTML = `
+    <h2 class="bm-section-title">
+      <i class="fa-solid fa-user-shield" aria-hidden="true"></i>${e("c_title", "Collaborators")}
+      <span class="bm-count bm-collab-count"></span>
+    </h2>
+    <p class="bm-lede">${e(
+      "c_lede",
+      "What each collaborator sees in this console. Posts management is always theirs and always scoped to the items they were given; everything else starts denied."
+    )}</p>
+    <div class="bm-collab-list">${SPINNER_ROW}</div>`;
+}
+
+function collabRowHTML(person) {
+  const cells = PANEL_ROWS.map(([key, icon, label]) => {
+    const allowed = (state.me.grades && state.me.grades[key]) || ["", "r", "rw"];
+    const fixed = FIXED[key];
+    const now = fixed || person.panels[key] || "";
+    const buttons = GRADES.map(([grade, gicon, glabel]) => {
+      const off = !!fixed || !allowed.includes(grade);
+      return `<button type="button" class="bm-grade${now === grade ? " is-on" : ""}"
+        data-grade="${escapeHTML(grade)}" data-panel="${escapeHTML(key)}"
+        ${off ? "disabled" : ""} title="${escapeHTML(t("g_" + (grade || "none"), glabel))}">
+        <i class="fa-solid ${gicon}" aria-hidden="true"></i></button>`;
+    }).join("");
+    return `<div class="bm-collab-cell">
+        <span class="bm-collab-panel"><i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHTML(
+          t("part_" + key, label)
+        )}</span>
+        <span class="bm-seg bm-collab-grades">${buttons}</span>
+      </div>`;
+  }).join("");
+
+  return `<li class="bm-collab" data-id="${escapeHTML(String(person.id))}">
+      <div class="bm-collab-head">
+        <img class="bm-collab-avatar" alt="" loading="lazy"
+             src="https://avatars.githubusercontent.com/u/${escapeHTML(String(person.id))}?s=64">
+        <span class="bm-collab-name">${escapeHTML(person.name || person.login || person.id)}</span>
+        <span class="bm-collab-login">@${escapeHTML(person.login || person.id)}</span>
+        <span class="bm-save-state" data-save="collab:${escapeHTML(String(person.id))}"></span>
+      </div>
+      <div class="bm-collab-grid">${cells}</div>
+    </li>`;
+}
+
+/**
+ * The roster comes from the page and the grades come from the Worker, and both
+ * halves are needed: a collaborator an admin has never decided anything about
+ * has no row in the database, and leaving them off the list would make them
+ * look like somebody who had been removed.
+ */
+function paintCollab() {
+  const section = root.querySelector('[data-part="collab"]');
+  if (!section) return;
+  const list = section.querySelector(".bm-collab-list");
+
+  const known = new Map(state.collab.people.map((row) => [String(row.id), row]));
+  const rows = (state.collab.roster || []).map((row) => {
+    const held = known.get(String(row.id));
+    return { id: row.id, login: row.username || (held && held.login) || "", name: row.name || "", panels: (held && held.panels) || {} };
+  });
+  for (const [id, held] of known) {
+    if (!rows.some((row) => String(row.id) === id)) {
+      rows.push({ id: held.id, login: held.login, name: "", panels: held.panels || {} });
+    }
+  }
+
+  section.querySelector(".bm-collab-count").textContent = rows.length || "";
+  list.innerHTML = rows.length
+    ? `<ul class="bm-list">${rows.map(collabRowHTML).join("")}</ul>`
+    : `<p class="bm-blank">${e("c_empty", "No collaborators are configured. Add them to backend.collaborators and to the Worker's COLLABORATORS, then rebuild.")}</p>`;
+  contentChanged();
+}
+
+async function setGrade(button) {
+  const row = button.closest(".bm-collab");
+  if (!row) return;
+  const id = row.dataset.id;
+  const panel = button.dataset.panel;
+  const grade = button.dataset.grade;
+
+  const panels = {};
+  for (const cell of row.querySelectorAll(".bm-collab-cell")) {
+    const on = cell.querySelector(".bm-grade.is-on");
+    const key = cell.querySelector(".bm-grade").dataset.panel;
+    if (FIXED[key]) continue;
+    panels[key] = key === panel ? grade : (on && on.dataset.grade) || "";
+  }
+
+  for (const sibling of button.parentElement.querySelectorAll(".bm-grade")) {
+    sibling.classList.toggle("is-on", sibling === button);
+  }
+
+  const flag = row.querySelector(`[data-save="${CSS.escape("collab:" + id)}"]`);
+  if (flag) flag.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`;
+
+  const login = (row.querySelector(".bm-collab-login").textContent || "").replace(/^@/, "");
+  const result = await api(`/api/admin/collab/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: { login, panels },
+  });
+
+  if (flag) {
+    flag.innerHTML = result.ok
+      ? `<i class="fa-solid fa-check" aria-hidden="true"></i>`
+      : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
+    if (result.ok) setTimeout(() => (flag.innerHTML = ""), 1800);
+  }
+  if (!result.ok) return;
+
+  const held = state.collab.people.find((p) => String(p.id) === String(id));
+  if (held) held.panels = result.data.panels || panels;
+  else state.collab.people.push({ id: Number(id), login, panels: result.data.panels || panels });
+}
+
+/* ─── the build log ──────────────────────────────────────────
+ *
+ * The last build's output, sealed by the runner under a key of its own and
+ * published with the site. Nothing about it is fetched from the Worker: the key
+ * is, once, with everything else this session may open.
+ *
+ * Only the most recent is kept. A log is read by somebody who has just been
+ * told a build failed, and a history of them would be a growing pile of
+ * ciphertext in the deploy tree that nobody opens.
+ */
+function renderLogShell(section) {
+  section.innerHTML = `
+    <h2 class="bm-section-title">
+      <i class="fa-solid fa-terminal" aria-hidden="true"></i>${e("l_title", "Build log")}
+      <span class="bm-count bm-log-when"></span>
+    </h2>
+    <p class="bm-lede">${e(
+      "l_lede",
+      "What the last deploy actually did. The runner prints nothing in public — this is where its output goes, sealed, and it is written even when the build failed."
+    )}</p>
+    <div class="bm-log-body">${SPINNER_ROW}</div>`;
+}
+
+function paintLog() {
+  const section = root.querySelector('[data-part="buildlog"]');
+  if (!section) return;
+  const body = section.querySelector(".bm-log-body");
+  const when = section.querySelector(".bm-log-when");
+  const record = state.log.record;
+
+  if (state.log.loading) return;
+  if (!record) {
+    when.textContent = "";
+    body.innerHTML = `<p class="bm-blank">${e(
+      "l_empty",
+      "No build has written a log yet."
+    )}</p>`;
+    return contentChanged();
+  }
+
+  const failed = record.status && record.status !== "success";
+  when.textContent = String(record.at || "").replace("T", " ").slice(0, 16);
+  body.innerHTML = `
+    <div class="bm-log-head">
+      <span class="bm-bubble is-${failed ? "danger" : "ok"}">
+        <i class="fa-regular ${failed ? "fa-circle-xmark" : "fa-circle-check"}" aria-hidden="true"></i>
+        ${escapeHTML(failed ? t("l_failed", "Failed") : t("l_ok", "Succeeded"))}
+      </span>
+      ${record.reason ? `<span class="bm-bubble"><i class="fa-regular fa-play"></i>${escapeHTML(record.reason)}</span>` : ""}
+      ${record.sha ? `<span class="bm-bubble"><i class="fa-regular fa-code-commit"></i>${escapeHTML(record.sha)}</span>` : ""}
+    </div>
+    <pre class="bm-log-text"><code>${escapeHTML(record.text || "")}</code></pre>`;
+  contentChanged();
+}
+
+/**
+ * Open the sealed log with the key the Worker released for it.
+ *
+ * `/api/editor/keys` has already been asked once by the gate in front of this
+ * page, so this is the second call and the only one that needs the `log` row —
+ * which arrives only for an identity whose Build log grade is not denied.
+ */
+async function loadBuildLog() {
+  state.log.loading = true;
+  paintLog();
+  try {
+    const result = await api("/api/editor/keys", { method: "POST", body: {} });
+    const row = ((result.data && result.data.items) || []).find((item) => item.kind === "log");
+    if (!row) throw new Error("no key");
+    const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/log.bin`);
+    state.log.record = sealed
+      ? JSON.parse(await openText(await importAesKey(b64urlToBytes(row.key)), sealed))
+      : null;
+  } catch (err) {
+    state.log.record = null;
+  }
+  state.log.loading = false;
+  paintLog();
+}
+
+/**
+ * Paint everything this identity may see, then fetch only what the build could
+ * not settle.
+ *
+ * The section list is decided BEFORE anything is drawn, because a section that
+ * appeared and then disappeared would be a moment in which somebody saw a
+ * heading they were not entitled to. A denied section is removed from the
+ * document, not hidden — and the routes behind it refuse the same identity
+ * anyway, which is the control this is only the appearance of.
+ */
+async function boot() {
+  await loadMe();
+
   const sections = {
     posts: root.querySelector('[data-part="posts"]'),
     analytics: root.querySelector('[data-part="analytics"]'),
     announce: root.querySelector('[data-part="announce"]'),
     notifications: root.querySelector('[data-part="notifications"]'),
     followers: root.querySelector('[data-part="followers"]'),
+    collab: root.querySelector('[data-part="collab"]'),
+    buildlog: root.querySelector('[data-part="buildlog"]'),
   };
+
+  const grade = (name) => (state.me.admin ? "rw" : state.me.panels[name] || "");
+  const keep = {
+    posts: true,
+    analytics: !!grade("analytics"),
+    announce: !!grade("announce"),
+    notifications: !!grade("notifications"),
+    followers: !!grade("followers"),
+    collab: state.me.admin,
+    buildlog: !!grade("buildlog"),
+  };
+
+  for (const [name, node] of Object.entries(sections)) {
+    if (!node) continue;
+    if (!keep[name]) {
+      node.remove();
+      sections[name] = null;
+      // The contents rail is written out with the page, so the entry for a
+      // section that is not there has to go with it or it scrolls to nothing.
+      const link = root.parentElement && root.parentElement.querySelector(`a[href="#bm-${name}"]`);
+      if (link && link.closest(".nav-item")) link.closest(".nav-item").remove();
+    }
+  }
 
   if (sections.posts) {
     renderPostsShell(sections.posts);
@@ -1740,10 +2096,38 @@ function boot() {
   if (sections.announce) renderCompose(sections.announce);
   if (sections.notifications) renderNotificationsShell(sections.notifications);
   if (sections.followers) renderFollowersShell(sections.followers);
+  if (sections.collab) renderCollabShell(sections.collab);
+  if (sections.buildlog) renderLogShell(sections.buildlog);
 
   if (sections.posts) loadAudiences();
   if (sections.notifications) loadNotifications({ reset: true });
   if (sections.followers) loadFollowers({ reset: true });
+  if (sections.buildlog) loadBuildLog();
+}
+
+/**
+ * Who is looking, and what they may see.
+ *
+ * Asked of the Worker rather than read off the session token, because the token
+ * says only that somebody is a collaborator — which sections that is worth is a
+ * decision stored against their identity and changeable without a new sign-in.
+ */
+async function loadMe() {
+  const result = await api("/api/editor/session");
+  if (!result.ok || !result.data) return;
+  state.me = {
+    // Never demoted by this call. The gate established the role by OPENING a
+    // blob under the admin key, which the Worker releases to one identity and
+    // to no other — so a request that comes back slow, refused or malformed
+    // cannot take the console away from the person who holds that key.
+    admin: state.me.admin || !!result.data.admin,
+    panels: result.data.panels || {},
+    grades: result.data.grades || {},
+    id: result.data.id || 0,
+    login: result.data.login || "",
+  };
+  state.followers.me = state.me.id;
+  state.followers.role = state.me.admin ? "admin" : "collaborator";
 }
 
 /** Writing, editing and unpublishing are commits, and commits need an editor provider. */
@@ -1753,20 +2137,60 @@ function canCommit() {
 }
 
 /**
- * @param {{items: Array}} inventory  sealed with the page by the build
+ * Every item this session may open, as Posts Management rows.
+ *
+ * The admin's rows arrive sealed with the page — one blob for the whole site.
+ * A collaborator's cannot: that blob names every article there is, which is
+ * exactly what a person scoped to three of them must not be handed. So theirs
+ * are fetched one at a time, from the items the Worker actually released, which
+ * is a request per row and three requests for three rows.
  */
-export function initBlogManagement(inventory) {
+async function scopedInventory() {
+  const result = await api("/api/editor/keys", { method: "POST", body: {} });
+  const items = ((result.data && result.data.items) || []).filter(
+    (row) => row.kind === "post" || row.kind === "album"
+  );
+
+  const rows = await Promise.all(
+    items.map(async (row) => {
+      try {
+        const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/r.bin`);
+        if (!sealed) return null;
+        const meta = await openJSON(await importAesKey(b64urlToBytes(row.key)), sealed);
+        return { ...meta, vaultId: meta.vaultId || row.id, slug: meta.slug || row.slug };
+      } catch (err) {
+        return null;
+      }
+    })
+  );
+  return rows.filter(Boolean);
+}
+
+/**
+ * @param {{items: Array}|null} inventory  sealed with the page by the build,
+ *   and absent for a collaborator — see `scopedInventory`.
+ * @param {{admin: boolean}} [who]  what the GATE established by opening a blob
+ *   under the admin key. That is proof, not a hint: the Worker releases that
+ *   key to one identity and to no other. Taken as the floor so that a slow or
+ *   refused `/api/editor/session` cannot leave the owner of the blog looking at
+ *   a console with every section removed.
+ */
+export async function initBlogManagement(inventory, who) {
   const el = document.getElementById("blog-management");
   if (!el) return;
 
   root = el;
   pickers.clear();
+  state.me = { admin: !!(who && who.admin), panels: {}, grades: {}, id: 0, login: "" };
   state.compose.mode = "all";
   state.notifications.type = "";
   state.notifications.loading = false;
   state.followers.loading = false;
   state.posts.items = (inventory && inventory.items) || [];
   state.posts.audiences = {};
+  state.posts.editors = {};
+  state.collab.roster = ((window.theme && window.theme.backend) || {}).collaborators || [];
+  state.log.record = null;
   state.posts.filter = "";
   state.posts.queue = [];
   state.posts.bar = null;
@@ -1782,5 +2206,12 @@ export function initBlogManagement(inventory) {
   // The page lives INSIDE #swup, so this element is new markup on every visit —
   // the listener goes with it and nothing has to be torn down.
   wire();
-  boot();
+  await boot();
+
+  // A collaborator's list is built after the sections are up, so the console
+  // appears at once and fills in — the same bargain every other section makes.
+  if (!inventory && root.querySelector('[data-part="posts"]')) {
+    state.posts.items = await scopedInventory();
+    paintPosts();
+  }
 }

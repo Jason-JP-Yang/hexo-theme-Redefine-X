@@ -1,11 +1,14 @@
 /**
- * How long the page is allowed to hold the repository tokens.
+ * How long the page is allowed to hold what it was lent.
  *
- * The editor commits from the browser, so the Gitea and GitHub tokens are handed
- * to this page. Neither carries an expiry — Gitea's tokens have none, and the
- * GitHub PAT is fine-grained but standing — so what bounds the exposure is not a
- * stamp on the credential. It is how long this page keeps it, and that is the
- * whole of this file.
+ * Two things, and neither has an expiry of its own. The token that pushes a
+ * save is a standing fine-grained PAT on the PUBLIC repository; the keys that
+ * open the sealed items are keys, and a key is good until it is rotated. So
+ * what bounds the exposure is not a stamp on the credential. It is how long
+ * this page keeps it, and that is the whole of this file.
+ *
+ * Nothing here holds a credential for the repository the site is WRITTEN in any
+ * more — there is no such credential in a browser to bound.
  *
  * Two rules, and the second is what makes the first worth anything:
  *

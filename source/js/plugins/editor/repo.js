@@ -1,100 +1,72 @@
 /**
- * The repository layer — one façade over two build backends.
+ * The repository layer — what is left of it once the browser stopped having one.
  *
- * The site's source can live in two places at once: a Gitea instance and a
- * GitHub repository, each configured under `backend.online_editor`. Either can
- * build and publish, and whichever one takes a commit is the one that builds
- * it. This module decides which, and every other part of the editor talks only
- * to it.
+ * The editor used to hold a write token for the repository the site is written
+ * in, and read and commit to it directly. It holds nothing of the kind now.
+ * What it holds is:
  *
- * WHERE each repository is comes from the build, sealed under the admin key
- * (`o.bin`) so a private repository's name is never in a public page; the
- * TOKEN for it comes from the Worker. A provider needs both.
+ *   to READ    a key per item, released by the Worker to whoever that item's
+ *              permissions name, and a sealed copy of the item published
+ *              beside the site. There is no repository to read from, so there
+ *              is nothing a stolen session could read beyond what it was given.
  *
- * ── Which backend, and why ──────────────────────────────────────────────────
+ *   to WRITE   a token for the PUBLIC repository, and a signed receipt naming
+ *              who asked and what they were cleared for. A save is one sealed
+ *              payload pushed to a branch of its own; the runner opens it,
+ *              checks every path against the receipt, and applies it to the
+ *              private repository or refuses the whole of it.
  *
- * Reachability first, Gitea preferred. Build SPEED is deliberately not a
- * criterion: a home runner's queue has nothing to do with how fast its API
- * answers, so measuring latency would pick the wrong one confidently.
- *
- * The one thing that can go wrong is divergence. Gitea goes down, a post is
- * committed to GitHub, Gitea comes back — now it is behind, and committing to
- * it would fork the history. So selection compares the two heads and picks the
- * one that is AHEAD, not merely the one that answers.
- *
- * ── Who builds a commit ─────────────────────────────────────────────────────
- *
- * `Build-on:` is written into the commit message here and read by both
- * workflows. It is what stops the mirror step on either side from triggering a
- * build on the other, which would then mirror back — and it guarantees one
- * source commit is built exactly once, which matters because a vault blob's
- * nonce is redrawn every build, so two builds of one commit publish two
- * different artifacts that overwrite each other.
- *
- * `done` is the third value and it is not decoration: CI's own reseal commit is
- * pushed to main and re-evaluated by the very workflow that made it.
- *
- * ── Whose commit it is ──────────────────────────────────────────────────────
- *
- * The admin's, unless a collaborator is signed in — then it is THEIRS, with the
- * admin as `Co-authored-by:`. Every commit the editor makes goes through this
- * module, so a post save, an album save and an unpublish are all signed the same
- * way without any of them knowing about it. CI then carries that authorship into
- * the deploy by reading it off the commit it is building.
+ * Nothing in this module can write to the source. That is the point of it.
  *
  * ── Where the tokens live, and for how long ─────────────────────────────────
  *
- * Both backends hand over a standing credential — Gitea's tokens carry no
- * expiry and the GitHub PAT is fine-grained but permanent — so nothing about
- * the token itself bounds it. What bounds it is this module's closure and
- * nothing else: never localStorage, never sessionStorage, never IndexedDB,
- * never a cookie, for the same reason post keys never touch storage.
- *
- * `forget()` is the erase, and credentials.js is the complete list of events
- * that call it.
+ * The same bargain as before, and for the same reason: this module's closure
+ * and nowhere else. Never localStorage, never sessionStorage, never IndexedDB,
+ * never a cookie. `forget()` is the erase and credentials.js is the complete
+ * list of events that call it.
  */
 
-import * as giteaDriver from "./repo-gitea.js";
 import * as githubDriver from "./repo-github.js";
-import { b64urlToBytes, fetchSealed, importAesKey, openJSON, pageId, vaultPrefix } from "../../tools/vaultCrypto.js";
+import {
+  b64urlToBytes,
+  bytesToB64url,
+  fetchSealed,
+  importAesKey,
+  openText,
+  postId,
+  sha256Hex,
+  vaultPrefix,
+} from "../../tools/vaultCrypto.js";
 
 export { toBase64, fromBase64, decodeText } from "./repo-bytes.js";
 
-const DRIVERS = { gitea: giteaDriver, github: githubDriver };
+const TICKET_MS = 90 * 60 * 1000;
 
-const ALLOWED = [/^source\//, /^\.vault\/keys\.enc$/, /^scaffolds\//];
+const POSTS_DIR = "source/_posts";
+const MASONRY = "source/_data/masonry.yml";
+const KEYRING = ".vault/keys.enc";
+const JOURNAL = "source/_data/image-moves.json";
+
+const ALLOWED = [/^source\//, /^\.vault\/keys\.enc$/];
 const FORBIDDEN = [
   /^\.github\//,
   /^\.gitea\//,
   /^themes\//,
   /^bin\//,
+  /^ci\//,
   /^package(-lock)?\.json$/,
   /^_config[^/]*\.yml$/,
-  // A submodule URL is a code path: point `themes/redefine-x` somewhere else
-  // and the next build runs that repository's scripts on a runner holding
-  // VAULT_MASTER.
   /^\.gitmodules$/,
   /(^|\/)\.\.(\/|$)/,
 ];
 
-const PROBE_MS = 6000;
-const TICKET_MS = 90 * 60 * 1000;
-
-let ticket = null;
+let ticket = null; // { me, repo, verify }
 let ticketAt = 0;
-let chosen = null;
-let forced = "";
 let idleTimer = 0;
-let providers = null;
+let itemsById = null; // id -> { id, slug, kind, enc, draft, write, raw }
 let roster = [];
-let signer = null; // { author, coauthor } once the ticket has been resolved
+let textCache = new Map(); // repo path -> { text, sha }
 
-/**
- * A ticket nobody has touched for the session bound is ERASED, not merely
- * refused. The bound already existed; this is what makes reaching it mean the
- * credential is gone rather than stale — a page left open overnight holds no
- * repository token in the morning.
- */
 function touch() {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(forget, TICKET_MS);
@@ -105,12 +77,11 @@ function touch() {
 /**
  * The client-side half of the write limit.
  *
- * The real control is at the token: the Gitea account holds `write:repository`
- * on the content repository and `main` carries Protected File Patterns, while
- * the GitHub PAT is fine-grained, scoped to the one repository, and has no
- * `Workflows` permission — so GitHub itself refuses any write under
- * `.github/workflows/`. This list turns a mistake into an error message instead
- * of a rejected push; it is a courtesy, not the control.
+ * The real control is the runner, which re-derives the owner of every path in a
+ * save and checks it against the signed receipt — and the token, which is
+ * fine-grained on the PUBLIC repository and carries no `Workflows` permission,
+ * so GitHub itself refuses any write under `.github/workflows/`. This turns a
+ * mistake into an error message instead of a refused save.
  */
 export function checkPath(path) {
   const clean = String(path || "").replace(/^\/+/, "");
@@ -122,387 +93,295 @@ export function checkPath(path) {
 
 /* ─── the ticket ───────────────────────────────────────────────────────────── */
 
+async function auth() {
+  if (!window.blogAuth) throw new Error("not signed in");
+  const session = await window.blogAuth.getSession();
+  const base = window.blogAuth.resolveApiBase();
+  if (!session || !session.token || !base) throw new Error("not signed in");
+  return { base, headers: { Authorization: "Bearer " + session.token } };
+}
+
 /**
- * The configured providers AND the collaborator roster, opened with the admin
- * key. Held for the session only.
+ * The collaborator roster, opened with the admin key.
  *
- * The roster is here rather than in the page config because half of each entry
- * is a person's login and email address — the identity a commit is signed with.
- * The half the site actually prints, their name and their picture, is already in
- * the markup of every post they worked on; the rest travels behind the same key
- * the repository coordinates do.
+ * Half of each entry is a person's login and email address — the identity a
+ * commit is signed with. The half the site actually prints, their name and
+ * their picture, is already in the markup of every post they worked on; the
+ * rest travels behind the same key the console does.
+ *
+ * Absent for a collaborator, who does not hold that key. Nothing is lost: the
+ * only thing the roster is used for is attributing a save, and the Worker signs
+ * a receipt with the identity it verified rather than with one this page typed.
  */
-async function sealedProviders(base, auth) {
-  if (providers) return providers;
+async function loadRoster(item) {
+  if (!item) return [];
+  try {
+    const sealed = await fetchSealed(`${vaultPrefix()}/${item.slug}/o.bin`);
+    if (!sealed) return [];
+    const body = JSON.parse(await openText(await importAesKey(item.raw), sealed));
+    return Array.isArray(body.collaborators) ? body.collaborators : [];
+  } catch (err) {
+    return [];
+  }
+}
 
-  const res = await fetch(base + "/api/vault/keys", {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: "{}",
-  });
-  if (res.status === 401 || res.status === 403) throw new Error("forbidden");
-  if (!res.ok) throw new Error("ticket unavailable");
+async function fetchTicket() {
+  const { base, headers } = await auth();
 
-  const body = await res.json().catch(() => ({}));
-  const wanted = await pageId("admin");
-  const grant = (body.posts || []).find((row) => row.id === wanted);
-  if (!grant) throw new Error("forbidden");
+  const [sessionRes, keysRes] = await Promise.all([
+    fetch(base + "/api/editor/session", { headers }),
+    fetch(base + "/api/editor/keys", {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: "{}",
+    }),
+  ]);
 
-  const sealed = await fetchSealed(`${vaultPrefix()}/${grant.slug}/o.bin`);
-  if (!sealed) throw new Error("ticket unavailable");
-  const opened = await openJSON(await importAesKey(b64urlToBytes(grant.key)), sealed);
-  providers = Array.isArray(opened.providers) ? opened.providers : [];
-  roster = Array.isArray(opened.collaborators) ? opened.collaborators : [];
-  return providers;
+  if (sessionRes.status === 401 || sessionRes.status === 403) throw new Error("forbidden");
+  if (!sessionRes.ok || !keysRes.ok) throw new Error("ticket unavailable");
+
+  const me = await sessionRes.json();
+  const keys = await keysRes.json().catch(() => ({ items: [] }));
+
+  itemsById = new Map();
+  for (const row of keys.items || []) {
+    itemsById.set(row.id, { ...row, raw: b64urlToBytes(row.key), key: null });
+  }
+
+  roster = await loadRoster(Array.from(itemsById.values()).find((row) => row.kind === "page"));
+
+  return { me, repo: me.repo || null, verify: me.verify || "" };
 }
 
 /**
  * The signed-in identity, when it is a collaborator's rather than the admin's.
- *
- * Matched on the GitHub NUMERIC id, which is what `backend.collaborators` is
- * keyed by and what the Worker's allowlist decided on — a login can be released
- * and re-registered, an id cannot.
+ * Matched on the GitHub NUMERIC id — a login can be released and re-registered.
  */
 export function collaborator() {
   const id = window.blogAuth && window.blogAuth.githubId;
-  if (!id) return null;
+  if (!id || (ticket && ticket.me && ticket.me.admin)) return null;
   return roster.find((row) => String(row.id) === String(id)) || null;
 }
 
-async function fetchTicket() {
-  if (!window.blogAuth) throw new Error("not signed in");
-
-  const session = await window.blogAuth.getSession();
-  const base = window.blogAuth.resolveApiBase();
-  if (!session || !session.token || !base) throw new Error("not signed in");
-  const auth = { Authorization: "Bearer " + session.token };
-
-  const [res, wanted] = await Promise.all([
-    fetch(base + "/api/admin/repo/ticket", { headers: auth }),
-    sealedProviders(base, auth),
-  ]);
-  if (res.status === 401 || res.status === 403) throw new Error("forbidden");
-  if (!res.ok) throw new Error("ticket unavailable");
-
-  const body = await res.json();
-  const issued = new Map();
-  for (const row of body.backends || []) {
-    if (row && row.token) issued.set(row.kind || row.id, row);
-  }
-
-  // Whose work this is. The Worker hands over ONE identity — the blog's — and
-  // that is right for the admin and wrong for anybody else: a collaborator's
-  // commits should carry their own name and address, with the admin recorded
-  // beside them, because the two of them wrote it together and a history that
-  // says otherwise is a history that has to be corrected later.
-  //
-  // Decided here rather than at the Worker because the Worker would have to hold
-  // the roster to decide it, and holding a roster is the one thing this design
-  // keeps out of it. Nothing is lost: the browser already holds a write token,
-  // so the author line was never a control this side could be trusted with.
-  const me = collaborator();
-  const house = (body.backends && body.backends[0] && body.backends[0].author) || null;
-  signer = {
-    author: me ? { name: me.username, email: me.email } : null,
-    coauthor: me && house && house.name && house.email ? `${house.name} <${house.email}>` : "",
-  };
-
-  const rows = [];
-  for (const provider of wanted) {
-    const credential = issued.get(provider.id);
-    if (!credential || !DRIVERS[provider.id]) continue;
-    const [owner, name] = String(provider.repo || "").split("/");
-    rows.push({
-      ...credential,
-      id: provider.id,
-      kind: provider.id,
-      api: provider.api_url || credential.api || "https://api.github.com",
-      owner,
-      repo: name,
-      branch: provider.branch,
-      driver: DRIVERS[provider.id],
-      ...(signer.author ? { author: signer.author } : {}),
-    });
-  }
-  if (!rows.length) throw new Error("ticket unavailable");
-
-  return {
-    prefer: rows.some((row) => row.id === body.prefer) ? body.prefer : rows[0].id,
-    backends: rows,
-  };
+/** What this session may see in the console, and whether it is the admin's. */
+export function session() {
+  return ticket ? ticket.me : null;
 }
 
-/* ─── selection ────────────────────────────────────────────────────────────── */
-
-function withTimeout(ms) {
-  const control = new AbortController();
-  const timer = setTimeout(() => control.abort(), ms);
-  return { signal: control.signal, done: () => clearTimeout(timer) };
+/** Every item this session may open, as the Worker released them. */
+export function items() {
+  return itemsById ? Array.from(itemsById.values()) : [];
 }
 
-/** Ask both backends where their branch tip is, in parallel. */
-async function probe(backends) {
-  return Promise.all(
-    backends.map(async (backend) => {
-      const gate = withTimeout(PROBE_MS);
-      try {
-        const head = await backend.driver.head(backend, gate.signal);
-        return { backend, head, up: !!head };
-      } catch (err) {
-        return { backend, head: "", up: false };
-      } finally {
-        gate.done();
-      }
-    })
-  );
-}
-
-/**
- * Which of two reachable backends is ahead.
- *
- * Asked as "does yours contain mine?" rather than by comparing dates or
- * counting commits: a repository either has a commit object or it does not, and
- * that answer is one request and cannot be wrong. Both containing the other is
- * only possible when the heads are equal, which is handled before this runs.
- */
-async function order(a, b) {
-  const [bHasA, aHasB] = await Promise.all([
-    b.backend.driver.hasCommit(b.backend, a.head).catch(() => false),
-    a.backend.driver.hasCommit(a.backend, b.head).catch(() => false),
-  ]);
-  if (bHasA && !aHasB) return { ahead: b, behind: a };
-  if (aHasB && !bHasA) return { ahead: a, behind: b };
-  return null; // diverged, or neither could answer
-}
-
-/**
- * Open a session: resolve the ticket, then pick a backend.
- *
- * @returns {Promise<{active: object, rows: Array, behind: object|null, diverged: boolean}>}
- */
 export async function open(force) {
-  if (!force && ticket && chosen && Date.now() - ticketAt < TICKET_MS) {
-    return { active: chosen, rows: ticket.backends, behind: null, diverged: false };
+  if (!force && ticket && Date.now() - ticketAt < TICKET_MS) {
+    return { active: ticket.repo, rows: [], behind: null, diverged: false };
   }
-
   ticket = await fetchTicket();
   ticketAt = Date.now();
-  chosen = null;
+  textCache = new Map();
   touch();
-
-  const probed = await probe(ticket.backends);
-  for (const row of probed) row.backend.up = row.up;
-
-  const live = probed.filter((row) => row.up);
-  if (!live.length) throw new Error("unreachable");
-
-  // A forced choice still has to be reachable; silently honouring a dead one
-  // would report "not signed in" three requests later.
-  if (forced) {
-    const pick = live.find((row) => row.backend.id === forced);
-    if (pick) {
-      chosen = pick.backend;
-      return { active: chosen, rows: ticket.backends, behind: null, diverged: false };
-    }
-    forced = "";
-  }
-
-  const preferred = live.find((row) => row.backend.id === ticket.prefer) || live[0];
-
-  if (live.length === 1 || live.every((row) => row.head === live[0].head)) {
-    chosen = preferred.backend;
-    return { active: chosen, rows: ticket.backends, behind: null, diverged: false };
-  }
-
-  const [a, b] = live;
-  const ranked = await order(a, b);
-  if (!ranked) {
-    chosen = preferred.backend;
-    return { active: chosen, rows: ticket.backends, behind: null, diverged: true };
-  }
-
-  chosen = ranked.ahead.backend;
-  return {
-    active: chosen,
-    rows: ticket.backends,
-    // Only worth catching up when the side that fell behind is the preferred
-    // one; the other direction heals itself on the next build's mirror step.
-    behind: ranked.behind.backend.id === ticket.prefer ? ranked.behind.backend : null,
-    diverged: false,
-  };
+  return { active: ticket.repo, rows: [], behind: null, diverged: false };
 }
 
 export function active() {
-  if (!chosen) throw new Error("not signed in");
-  return chosen;
-}
-
-export function activeId() {
-  return chosen ? chosen.id : "";
-}
-
-export function backends() {
-  return ticket ? ticket.backends : [];
-}
-
-/** Force a backend for the rest of the session. Re-runs selection. */
-export async function use(id) {
-  forced = String(id || "");
-  return open(true);
-}
-
-/** Move to an already-probed backend without asking the Worker again. */
-export function adopt(id) {
-  const row = backends().find((backend) => backend.id === id);
-  if (!row) return false;
-  chosen = row;
-  return true;
+  if (!ticket || !ticket.repo) throw new Error("not signed in");
+  return ticket.repo;
 }
 
 /**
- * Erase the credentials.
+ * There is one backend now, so there is nothing to choose between.
  *
- * The token strings are blanked ON THE ROWS before the ticket is released,
- * because a driver call already in flight holds its `backend` object by
- * reference rather than by lookup — dropping the ticket alone would leave that
- * one live. A string cannot be zeroed in JavaScript; dropping every reference to
- * it is the whole of what can be done, and keeping one in a closure is the thing
- * that undoes it.
- *
- * The blob cache goes too. Those are the contents of files from a private
- * repository, held as object URLs that outlive the page that made them unless
- * they are revoked.
+ * These four are kept because every surface that used to offer the choice still
+ * calls them, and an empty list is the honest answer: the picker renders
+ * nothing and the catch-up control never appears.
  */
+export function activeId() {
+  return ticket && ticket.repo ? "github" : "";
+}
+
+export function backends() {
+  return [];
+}
+
+export function use() {
+  return open(true);
+}
+
+export function adopt() {
+  return false;
+}
+
+export function catchUp() {
+  return Promise.resolve(false);
+}
+
 export function forget() {
-  for (const backend of (ticket && ticket.backends) || []) backend.token = "";
+  if (ticket && ticket.repo) ticket.repo.token = "";
   ticket = null;
   ticketAt = 0;
-  chosen = null;
-  forced = "";
-  providers = null;
+  itemsById = null;
   roster = [];
-  signer = null;
+  textCache = new Map();
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = 0;
   forgetBlobs();
 }
 
-/* ─── catching the preferred backend up ────────────────────────────────────── */
+/* ─── which sealed item holds which path ───────────────────────────────────── */
+
+async function ready() {
+  if (!ticket) await open(false);
+  touch();
+  return ticket;
+}
+
+function pick(kind) {
+  for (const row of itemsById ? itemsById.values() : []) if (row.kind === kind) return row;
+  return null;
+}
 
 /**
- * Fast-forward the backend that fell behind.
+ * The sealed item a repository path lives in.
  *
- * The catch-up itself is a push, and only a runner can make it: the browser
- * holds a content token, not a git client. So the Worker fires the ahead
- * backend's sync workflow — which pushes and does NOT build — and this polls
- * until the heads agree.
- *
- * It does NOT move the session onto the backend it caught up. This takes up to
- * two minutes, an editing session is live the whole time, and changing which
- * repository a save goes to underneath a half-typed post is not something to do
- * without looking at what the author is doing. The caller decides; see
- * `adopt`.
- *
- * A timeout is not an error. The editor is already on a working backend, and
- * the only cost of giving up is that this session commits to the mirror.
+ * An article is found by hashing its own path, which is the identity every side
+ * of this system derives independently — so no index has to be published and
+ * none can go stale. masonry.yml is a single item in two versions and the
+ * Worker has already decided which of them this session holds.
  */
-export async function catchUp(target, timeoutMs = 120000) {
-  if (!window.blogAuth || !target) return false;
+async function itemFor(path) {
+  await ready();
+  const rel = String(path || "").replace(/^\/+/, "");
 
-  const session = await window.blogAuth.getSession();
-  const base = window.blogAuth.resolveApiBase();
-  if (!session || !session.token || !base) return false;
+  if (rel === MASONRY) return pick("masonry") || pick("masonry-open");
+  if (rel.startsWith(POSTS_DIR + "/")) return itemsById.get(await postId(rel)) || null;
+  return null;
+}
 
-  const res = await fetch(base + "/api/admin/repo/sync", {
-    method: "POST",
-    headers: { Authorization: "Bearer " + session.token, "Content-Type": "application/json" },
-    body: JSON.stringify({ to: target.id }),
-  });
-  if (!res.ok) return false;
+/** The blob one item's source lives in. */
+function blobName(item) {
+  if (item.kind === "masonry" || item.kind === "masonry-open") return "y.bin";
+  if (item.kind === "album") return "y.bin";
+  return "s.bin";
+}
 
-  const want = chosen ? await chosen.driver.head(chosen).catch(() => "") : "";
-  if (!want) return false;
-
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    const head = await target.driver.head(target).catch(() => "");
-    if (head === want) return true;
-  }
-  return false;
+async function decrypt(item, name) {
+  if (!item.key) item.key = await importAesKey(item.raw);
+  const sealed = await fetchSealed(`${vaultPrefix()}/${item.slug}/${name}`);
+  if (!sealed) return null;
+  return openText(item.key, sealed);
 }
 
 /* ─── reads ────────────────────────────────────────────────────────────────── */
 
 /**
- * A backend rejecting the ticket means the whole selection is stale — the
- * token is gone, not this one request — so the next call re-opens rather than
- * spending the session on a credential nothing will accept.
+ * One file, as `{ text, sha, path }`.
+ *
+ * `sha` is the digest of what was read rather than a git blob id, because there
+ * is no git object here to name. It serves the purpose the blob sha served: the
+ * save carries it, and a file that changed underneath the editor is a rejection
+ * at the runner rather than a silent overwrite.
  */
-async function guard(fn) {
-  // Erased — by the idle timer, by a 401, by anything. The credential is meant
-  // to be short-lived in the page, so getting one back has to be ordinary rather
-  // than an error the author has to work around.
-  if (!chosen) await open(false);
+export async function read(path) {
+  const rel = String(path || "").replace(/^\/+/, "");
+  if (!rel) return null;
+  if (textCache.has(rel)) return textCache.get(rel);
 
-  const backend = active();
-  touch();
-  try {
-    return await fn(backend);
-  } catch (err) {
-    if (err && err.status === 401) forget();
-    throw err;
-  }
-}
+  // The keyring and the move journal are build bookkeeping, not content. The
+  // editor never needs to see either: a new keyring comes back from the mint
+  // that produced it, and a move is APPENDED by the runner rather than
+  // rewritten here.
+  if (rel === KEYRING || rel === JOURNAL) return null;
 
-/** One directory listing: `{ name, path, type, sha, size }`. */
-export function list(dir) {
-  return guard((backend) => backend.driver.list(backend, dir));
-}
+  const item = await itemFor(rel);
+  if (!item) return null;
 
-/** One file: `{ text, sha, path }`. Returns null when it does not exist. */
-export function read(path) {
-  return guard((backend) => backend.driver.read(backend, path));
+  const text = await decrypt(item, blobName(item));
+  if (text == null) return null;
+
+  const row = { text, sha: await sha256Hex(text), path: rel };
+  textCache.set(rel, row);
+  return row;
 }
 
 /**
- * Where the build for one commit has got to.
+ * A directory listing, for the one directory anything still lists.
  *
- * The two backends report it in different places and neither is the obvious
- * one. Gitea Actions writes a COMMIT STATUS per job, because its `/actions/*`
- * endpoints are owner-or-admin and this token is a content token — every poll
- * came back 403 and the rail stopped at "Committed". GitHub Actions writes no
- * commit status at all, so there the answer is the workflow run itself, which a
- * fine-grained PAT can read with `Actions: read`.
- *
- * @returns {Promise<{state: string, url: string, count: number}|null>}
- *   `state` is pending / success / failure, or "" when no job has reported yet.
- *   null means the request itself failed — ask again.
+ * Every post has a sealed source copy now, so the list of articles is the list
+ * of items — there is no repository to enumerate and no request to make. Any
+ * other directory answers empty, which is the truthful answer: this session
+ * cannot see a directory, only the items it was given.
  */
-export function commitStatus(sha) {
-  const backend = active();
-  return backend.driver.runStatus(backend, sha);
+export async function list(dir) {
+  await ready();
+  const clean = String(dir || "").replace(/^\/+|\/+$/g, "");
+  if (clean !== POSTS_DIR) return [];
+
+  const rows = [];
+  for (const item of itemsById.values()) {
+    if (item.kind !== "post" || !item.source) continue;
+    const path = item.source;
+    rows.push({ name: path.split("/").pop(), path, type: "file", sha: "", size: 0 });
+  }
+  return rows;
+}
+
+/**
+ * Let a caller that already has the inventory fill in what `list` needs.
+ *
+ * Blog Management opens with the whole inventory sealed into its own page, so
+ * making this module fetch a metadata blob per item to learn the same thing
+ * would be a request per post for something already in hand.
+ */
+export function seedSources(rows) {
+  if (!itemsById) return;
+  for (const row of rows || []) {
+    const item = itemsById.get(row.vaultId || row.id);
+    if (item && row.source) item.source = row.source;
+  }
 }
 
 /* ─── the commit ───────────────────────────────────────────────────────────── */
 
+/** Which item a path belongs to, for the owner list a receipt is issued against. */
+async function ownerOf(file) {
+  const rel = String(file.path || "").replace(/^\/+/, "");
+  if (rel === KEYRING || rel === JOURNAL) return "";
+  if (rel === MASONRY) {
+    // Declared by the caller: only the album editor knows which album it just
+    // changed, and the runner re-derives the true set from the file itself and
+    // refuses anything the receipt did not name.
+    return Array.isArray(file.owners) ? file.owners : file.owner ? [file.owner] : [];
+  }
+  if (rel.startsWith(POSTS_DIR + "/")) return postId(rel);
+  return file.owner || "";
+}
+
 /**
- * One commit carrying every change.
+ * Does this save publish or unpublish something?
  *
- * `files` is `[{ operation, path, content, sha }]` where `content` is already
- * base64 — text and images travel in the same array, which is what makes a save
- * atomic: a post is never committed without the image it references, and the
- * build never sees a half-written state.
+ * Creating an article at a published path, or removing one, is the decision
+ * that changes what the SITE shows — and that is never a collaborator's. Read
+ * off the files rather than off the caller's intent, so the same test runs
+ * whichever surface asked, and refused again at the Worker and at the runner.
+ */
+function publishes(files) {
+  return files.some((file) => {
+    const rel = String(file.path || "");
+    if (!rel.startsWith(POSTS_DIR + "/") || !/\.md$/i.test(rel) || /\.draft\.md$/i.test(rel)) {
+      return false;
+    }
+    return file.operation === "create" || file.operation === "delete";
+  });
+}
+
+/**
+ * One save: sealed, signed, and pushed to a branch of its own.
  *
- * `sha` on an update is the blob sha the editor loaded, so a file that moved
- * underneath us is a rejection rather than a silent overwrite. Gitea enforces
- * that itself; the GitHub driver reproduces it, because a backend that quietly
- * accepted what the other refuses is worse than either behaviour alone.
- *
- * Nothing is ever committed by reference — a file appears here only as bytes
- * the editor holds. That rules out a server-side rename, which is why a picture
- * move is committed as a note for the build to act on. See `movedFiles` in
- * session.js.
+ * `files` is the same shape every caller already builds —
+ * `[{ operation, path, content, sha }]` with `content` already base64 — so a
+ * post, its pictures and the keyring that opens it travel together and the
+ * runner applies all of them or none.
  */
 export async function commit(files, message) {
   for (const file of files) {
@@ -510,25 +389,149 @@ export async function commit(files, message) {
     if (bad) throw Object.assign(new Error(bad), { path: file.path, kind: "path" });
   }
 
-  return guard(async (backend) => {
-    // Both trailers in ONE block at the end, which is what makes them trailers:
-    // git reads only the last paragraph, and a blank line between them would
-    // leave `Build-on:` in a paragraph of its own that no consumer parses.
-    const coauthor = signer && signer.coauthor ? `Co-authored-by: ${signer.coauthor}\n` : "";
-    const body = `${message}\n\nBuild-on: ${backend.id}\n${coauthor}`;
-    const result = await backend.driver.commit(backend, files, body);
-    return { ...result, backend: backend.id };
+  await ready();
+  const repo = active();
+  if (!repo || !repo.token) throw new Error("saving is not configured");
+
+  await refuseWhileBuilding(repo);
+
+  // ── who owns what in this save ───────────────────────────────────────────
+  //
+  // Articles and albums name themselves: a post's identity IS the hash of its
+  // path, and an album's is declared by the one surface that knows which album
+  // it just changed. A picture names nothing, and it does not have to — it
+  // belongs to the document being saved, and that document is in this same
+  // payload. So an asset with no owner of its own takes the first one, which is
+  // what makes a save atomic in permissions as well as in files: the picture
+  // and the post it is for are cleared together or not at all.
+  const owners = new Set();
+  const resolved = new Map();
+  for (const file of files) {
+    const owner = await ownerOf(file);
+    resolved.set(file, owner);
+    for (const id of Array.isArray(owner) ? owner : [owner]) if (id) owners.add(id);
+  }
+  const [first] = owners;
+  if (!first) throw new Error("this save names nothing that can be checked");
+
+  const payload = JSON.stringify({
+    v: 1,
+    message: String(message || ""),
+    files: files.map((file) => {
+      const owner = resolved.get(file);
+      const one = Array.isArray(owner) ? owner[0] : owner;
+      return {
+        op: file.operation === "delete" ? "delete" : file.operation === "append" ? "append" : "write",
+        path: String(file.path).replace(/^\/+/, ""),
+        owner: one || first,
+        ...(file.operation === "delete" ? {} : { data: file.content }),
+      };
+    }),
   });
+
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  const sealed = await sealPayload(key, payload);
+  const hash = await sha256Bytes(sealed);
+
+  const { base, headers } = await auth();
+  const res = await fetch(base + "/api/editor/submit", {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      owners: Array.from(owners),
+      hash,
+      key: bytesToB64url(key),
+      publish: publishes(files),
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "this save was not authorised");
+  }
+  const receipt = await res.json();
+
+  // Whose work this is. The receipt already names the identity the Worker
+  // verified — that is what the runner reads — so this trailer is the ordinary
+  // git courtesy beside it, not a claim anything acts on.
+  const me = collaborator();
+  const trailers =
+    `Editor-Receipt: ${receipt.receipt}\n` +
+    `Editor-Signature: ${receipt.signature}\n` +
+    `Editor-Key: ${receipt.wrapped}\n` +
+    (me ? `Co-authored-by: ${me.name} <${me.email}>\n` : "");
+
+  const result = await githubDriver.pushQueue(repo, bytesToB64(sealed), `${message}\n\n${trailers}`);
+  textCache = new Map();
+  return { ...result, backend: "github" };
 }
 
 /**
- * Where an image the editor uploaded will live.
+ * Refuse to push while a run is still going.
  *
- * Content-addressed, so the same picture pasted twice is committed once — and
- * the digest is stripped off the stem before it is put back on, because a
- * picture already carrying one is exactly what you get by saving a file the
- * editor named and adding it again.
+ * Two saves in flight at once would have the second one's payload verified
+ * against a queue branch the first is about to empty, and the second build
+ * would clone a source the first has not finished writing. Waiting is not worth
+ * the machinery: one look at the runs, and an author who is told to try again
+ * in a minute.
  */
+async function refuseWhileBuilding(repo) {
+  const busy = await githubDriver.running(repo);
+  if (busy) {
+    throw Object.assign(
+      new Error("a build is still running — try again when it has finished"),
+      { kind: "busy" }
+    );
+  }
+}
+
+/* ─── sealing ──────────────────────────────────────────────────────────────── */
+
+async function sealPayload(rawKey, text) {
+  const key = await crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const body = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text))
+  );
+  const out = new Uint8Array(iv.length + body.length);
+  out.set(iv, 0);
+  out.set(body, iv.length);
+  return out;
+}
+
+async function sha256Bytes(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Base64 for the wire, in chunks — a megabyte of photographs in one
+ *  `String.fromCharCode(...bytes)` overflows the argument stack. */
+function bytesToB64(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+/* ─── where the build has got to ───────────────────────────────────────────── */
+
+/**
+ * The public repository's own runs, read WITHOUT a credential.
+ *
+ * It is a public repository, so its workflow runs are public — which means the
+ * build rail needs no token at all, and goes on working after the session's
+ * credentials have been erased.
+ */
+export function commitStatus(sha) {
+  const repo = ticket && ticket.repo;
+  if (!repo) return Promise.resolve(null);
+  return githubDriver.runStatus(repo, sha);
+}
+
+/* ─── pictures the site does not serve yet ─────────────────────────────────── */
+
 export async function assetPath(name, bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hash = Array.from(new Uint8Array(digest).slice(0, 6))
@@ -546,19 +549,17 @@ export async function assetPath(name, bytes) {
   return `source/images/posts/${stem}-${hash}.${ext}`;
 }
 
-/* ─── reading bytes the site does not serve yet ─────────────────────────────── */
-
 /**
- * A repository file as an object URL.
+ * A picture as an object URL.
  *
- * The site is the right place to fetch a picture from — it is the copy the
- * reader gets, compressed where the build compressed it. But between committing
- * an image and the deploy that publishes it there is a window, minutes long,
- * where the site does not have it. This is the second answer, used only when
- * the first one fails.
+ * The site is the only place these come from now. A public post's images are
+ * published in the clear, so this is a plain fetch; an encrypted post's are
+ * sealed, and those never reach here at all — they go through `unlockAsset` in
+ * session.js, which holds the key for one picture at a time.
  *
- * Cached per path for the session, and revoked with the rest of the session's
- * object URLs.
+ * Between committing an image and the deploy that publishes it there is a
+ * window, minutes long, in which neither answer exists. The editor shows the
+ * bytes it still holds from the upload; this is what is left afterwards.
  */
 const blobs = new Map();
 
@@ -569,9 +570,10 @@ export function blobURL(path) {
 
   const pending = (async () => {
     try {
-      const backend = active();
-      const blob = await backend.driver.raw(backend, key);
-      return blob ? URL.createObjectURL(blob) : "";
+      const root = String((window.config && window.config.root) || "/").replace(/\/+$/, "");
+      const res = await fetch(`${root}/${key.replace(/^source\//, "")}`);
+      if (!res.ok) return "";
+      return URL.createObjectURL(await res.blob());
     } catch (err) {
       return "";
     }

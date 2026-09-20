@@ -409,6 +409,25 @@ management:
   p_empty: この絞り込みに一致するものはありません。
   p_unpublish: 公開を取り消す
   v_badge: 暗号化
+  v_editors: 編集できる人
+  ed_placeholder: 協力者のログイン名または数値 ID を入力して Enter
+  c_title: 協力者
+  c_lede: 各協力者がこのコンソールで見られるもの。記事管理は常に利用でき、権限のある項目だけに限られます。それ以外は既定で拒否されます。
+  c_empty: 協力者が設定されていません。backend.collaborators と Worker の COLLABORATORS に追加して再ビルドしてください。
+  g_none: 拒否
+  g_r: 閲覧
+  g_rw: 閲覧と編集
+  part_posts: 記事管理
+  part_analytics: アクセス解析
+  part_announce: お知らせ送信
+  part_notifications: 通知履歴
+  part_followers: フォロワー
+  part_buildlog: ビルドログ
+  l_title: ビルドログ
+  l_lede: 直前のデプロイが実際に行ったこと。ランナーは何も公開に出力せず、暗号化してここに置きます。ビルドが失敗した場合でも書き込まれます。
+  l_empty: まだログを書き込んだビルドがありません。
+  l_failed: 失敗
+  l_ok: 成功
   v_audience: 読める人
   v_reader: 人
   v_readers: 人

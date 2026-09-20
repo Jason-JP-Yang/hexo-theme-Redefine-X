@@ -409,6 +409,25 @@ management:
   p_empty: Nada coincide con este filtro.
   p_unpublish: Retirar
   v_badge: Cifrado
+  v_editors: Quien puede editarla
+  ed_placeholder: Usuario o id numerico del colaborador, luego Enter
+  c_title: Colaboradores
+  c_lede: Lo que cada colaborador ve en esta consola. La gestion de articulos siempre es suya y limitada a los elementos que se le asignaron; todo lo demas empieza denegado.
+  c_empty: No hay colaboradores configurados. Anadelos a backend.collaborators y a COLLABORATORS del Worker, y vuelve a construir.
+  g_none: Denegado
+  g_r: Lectura
+  g_rw: Lectura y escritura
+  part_posts: Gestion de articulos
+  part_analytics: Analitica
+  part_announce: Anuncio
+  part_notifications: Notificaciones
+  part_followers: Seguidores
+  part_buildlog: Registro de build
+  l_title: Registro de build
+  l_lede: Lo que hizo realmente el ultimo despliegue. El runner no imprime nada en publico, su salida se sella aqui, y se escribe incluso cuando el build fallo.
+  l_empty: Ninguna construccion ha escrito todavia un registro.
+  l_failed: Fallo
+  l_ok: Correcto
   v_audience: Quien puede leerla
   v_reader: lector
   v_readers: lectores

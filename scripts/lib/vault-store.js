@@ -160,19 +160,28 @@ function flush() {
 /**
  * The whole keyring as the Worker wants it: id, slug, and the wrapped key.
  *
- * `draft` is passed IN rather than stored here. The keyring is a key store and
- * nothing else — the Worker rebuilds `.vault/keys.enc` from its own rows every
- * time the editor mints, so any field the two sides did not both write would
- * churn the file on alternate saves.
+ * `draft`, `kind` and `enc` are passed IN rather than stored here. The keyring
+ * is a key store and nothing else — the Worker rebuilds `.vault/keys.enc` from
+ * its own rows every time the editor mints, so any field the two sides did not
+ * both write would churn the file on alternate saves.
+ *
+ * An id the build did not describe is still sent, as an encrypted post: that is
+ * what every row in the table was before this build learnt to say otherwise,
+ * and guessing the safer of the two is the guess that never publishes anything.
  */
-function rows(draftIds) {
+function rows(meta) {
   const s = load();
-  return Object.entries(s.keys).map(([id, e]) => ({
-    id,
-    slug: e.slug,
-    draft: !!(draftIds && draftIds.has(id)),
-    wrapped: vc.wrapKey(s.master, vc.fromB64url(e.key)),
-  }));
+  return Object.entries(s.keys).map(([id, e]) => {
+    const about = (meta && meta.get(id)) || {};
+    return {
+      id,
+      slug: e.slug,
+      draft: !!about.draft,
+      kind: about.kind || "post",
+      enc: about.enc === undefined ? 1 : about.enc ? 1 : 0,
+      wrapped: vc.wrapKey(s.master, vc.fromB64url(e.key)),
+    };
+  });
 }
 
 /**
@@ -200,13 +209,20 @@ function rows(draftIds) {
  * @returns {Promise<{registered:number, revoked:number}|null>} null when the
  *          backend is not configured
  */
-async function sync(apiBase, draftIds) {
+async function sync(apiBase, meta) {
   const base = String(apiBase || "").replace(/\/+$/, "");
   if (!base) return null;
 
-  const live = rows(draftIds);
+  const live = rows(meta);
   const body = JSON.stringify({
-    posts: live.map((r) => ({ id: r.id, slug: r.slug, wrapped: r.wrapped, draft: r.draft })),
+    posts: live.map((r) => ({
+      id: r.id,
+      slug: r.slug,
+      wrapped: r.wrapped,
+      draft: r.draft,
+      kind: r.kind,
+      enc: r.enc,
+    })),
   });
 
   const res = await fetch(`${base}/api/admin/vault/sync`, {

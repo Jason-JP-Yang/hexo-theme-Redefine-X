@@ -26,7 +26,6 @@ import {
   fetchSealed,
   vaultPrefix,
   siteRoot,
-  pageId,
 } from "../tools/vaultCrypto.js";
 
 const BLOBS = { console: "b.bin", composer: "e.bin", album: "m.bin" };
@@ -39,8 +38,16 @@ function setState(gate, phase) {
   gate.querySelector(".admin-gate-notfound").hidden = phase !== "denied";
 }
 
-/** The grant that opens the admin surface, or null. */
-async function adminGrant() {
+/**
+ * The two grants this page can be opened with.
+ *
+ * `console` is the markup, and a collaborator holds it — the console is their
+ * page too, showing whichever sections an admin gave them. `admin` is the
+ * INVENTORY sealed beside it, which names every post on the site and is
+ * therefore the admin's alone. A collaborator gets the first and not the
+ * second, and builds their Posts list from the items they were actually given.
+ */
+async function grants() {
   if (!window.blogAuth) return null;
 
   const session = await window.blogAuth.getSession();
@@ -49,7 +56,7 @@ async function adminGrant() {
 
   let data;
   try {
-    const res = await fetch(base + "/api/vault/keys", {
+    const res = await fetch(base + "/api/editor/keys", {
       method: "POST",
       headers: { Authorization: "Bearer " + session.token, "Content-Type": "application/json" },
       body: "{}",
@@ -60,12 +67,25 @@ async function adminGrant() {
     return null;
   }
 
-  const wanted = await pageId("admin");
-  const row = (data.posts || []).find((p) => p.id === wanted);
-  if (!row) return null;
+  const open = async (row) => {
+    if (!row) return null;
+    const raw = b64urlToBytes(row.key);
+    return { id: row.id, slug: row.slug, raw, key: await importAesKey(raw) };
+  };
 
-  const raw = b64urlToBytes(row.key);
-  return { id: row.id, slug: row.slug, raw, key: await importAesKey(raw) };
+  const items = data.items || [];
+  const admin = await open(items.find((row) => row.kind === "page"));
+  const shared = await open(items.find((row) => row.kind === "console"));
+
+  // The ADMIN key first when this session holds one. It carries the same markup
+  // and has since before collaborators existed, so the owner of the blog
+  // depends on exactly one key rather than on two and on a build having
+  // registered the second. Preferring the other way round is what let a
+  // half-applied deploy lock the admin out of the page they would use to find
+  // out why.
+  const shell = admin || shared;
+  if (!shell) return null;
+  return { shell, admin, shared };
 }
 
 /**
@@ -92,33 +112,76 @@ export default async function initAdminGate() {
   wireSignOut();
   setState(gate, "probing");
 
-  const grant = await adminGrant();
-  if (!grant) return void setState(gate, "denied");
+  const held = await grants();
+  if (!held) return void setState(gate, "denied");
 
+  const grant = held.shell;
   const kind = BLOBS[gate.dataset.adminKind] ? gate.dataset.adminKind : "console";
   const host = gate.querySelector(".admin-gate-host");
 
+  /**
+   * The blob, under whichever of the two keys this session holds it under.
+   *
+   * An artifact built before the markup was sealed twice has it under only one
+   * of them, and so does a session that holds only one. Trying both is one
+   * extra request in the rare case and the difference between a console that
+   * opens and a 404 that says nothing about why.
+   */
+  const other = grant === held.admin ? held.shared : held.admin;
+  const fetchUnder = async (name) => {
+    for (const key of [grant, other].filter(Boolean)) {
+      const sealed = await fetchSealed(`${vaultPrefix()}/${key.slug}/${name}`);
+      if (sealed) return { sealed, key: key.key, slug: key.slug };
+    }
+    return null;
+  };
+
   try {
-    const sealed = await fetchSealed(`${vaultPrefix()}/${grant.slug}/${BLOBS[kind]}`);
-    if (!sealed) throw new Error("missing");
+    const found = await fetchUnder(BLOBS[kind]);
+    if (!found) throw new Error("missing");
 
     if (kind === "composer" || kind === "album") {
-      host.innerHTML = await openText(grant.key, sealed);
+      host.innerHTML = await openText(found.key, found.sealed);
       setState(gate, "open");
       const editor = await import(kind === "album" ? "./editor/masonry.js" : "./editor/index.js");
       await (kind === "album" ? editor.initMasonryEditor() : editor.initEditor());
     } else {
-      const record = await openJSON(grant.key, sealed);
+      const record = await openJSON(found.key, found.sealed);
       host.innerHTML = String(record.shell || "");
       setState(gate, "open");
-      const panel = await import("./blog-management.js");
-      await panel.initBlogManagement(record.inventory || { items: [] });
 
-      // The contents rail is wired on page view, which for markup mounted
-      // inside an already-open page has been and gone — the same reason an
-      // encrypted article re-runs it after decrypting.
-      const toc = await import("../layouts/toc.js");
-      toc.initTOC();
+      // ── past this line the page is AUTHORISED ─────────────────────────────
+      //
+      // The key was released and the blob opened under it, which is the whole
+      // of the test. Anything that goes wrong while PAINTING is a bug in the
+      // console, not a permission — and turning it into "denied" took the
+      // markup back off the screen and told the one person who could fix it
+      // that they were not allowed in.
+      try {
+        // The inventory is a second blob under a second key, and its absence is
+        // not a failure: it means a collaborator opened the console, and Posts
+        // Management builds itself from the items they were given instead.
+        let inventory = record.inventory || null;
+        if (!inventory && held.admin && held.admin.slug !== found.slug) {
+          const book = await fetchSealed(`${vaultPrefix()}/${held.admin.slug}/b.bin`);
+          if (book) inventory = (await openJSON(held.admin.key, book)).inventory || null;
+        }
+
+        const panel = await import("./blog-management.js");
+        // Holding the admin key IS being the admin: the Worker releases it to
+        // one identity and to no other. So the console starts from that fact
+        // rather than from a request that might not answer, and nothing it
+        // learns later can take it away.
+        await panel.initBlogManagement(inventory, { admin: !!held.admin });
+
+        // The contents rail is wired on page view, which for markup mounted
+        // inside an already-open page has been and gone — the same reason an
+        // encrypted article re-runs it after decrypting.
+        const toc = await import("../layouts/toc.js");
+        toc.initTOC();
+      } catch (err) {
+        console.error("[blog-management] the console failed to paint", err);
+      }
     }
 
     host.animate(

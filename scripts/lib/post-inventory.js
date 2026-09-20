@@ -81,10 +81,20 @@ function taxonomyNames(list) {
  * @param {Array}  albums   state.albums()
  * @param {string} prefix   the vault path prefix, without slashes
  */
-function build(hexo, sealed, albums, prefix) {
+/**
+ * @param {{posts: Map<string, {id, slug}>, albums: Map<string, {id, slug}>}} keyed
+ *   Where a PUBLIC item's sealed source copy lives. A public post is published
+ *   in the clear and always was; what it has now is a key of its own, and the
+ *   console needs the id to address the item at all — to show who may edit it,
+ *   and to open its markdown. Without this every public row carried an empty
+ *   `vaultId` and Posts Management could only describe it, never open it.
+ */
+function build(hexo, sealed, albums, prefix, keyed) {
   const root = String(hexo.config.root || "/");
   const withRoot = (p) => (root + String(p)).replace(/\/{2,}/g, "/");
   const vaultHref = (slug) => withRoot(`${prefix}/${slug}/`);
+  const bySource = (keyed && keyed.posts) || new Map();
+  const byTitle = (keyed && keyed.albums) || new Map();
 
   const rows = [];
   const byPermalink = new Map();
@@ -97,6 +107,7 @@ function build(hexo, sealed, albums, prefix) {
 
   // ── published articles ────────────────────────────────────────────────────
   for (const post of hexo.locals.get("posts").toArray()) {
+    const sealedCopy = bySource.get(post.source) || {};
     add({
       key: post.source,
       kind: "post",
@@ -112,8 +123,8 @@ function build(hexo, sealed, albums, prefix) {
       published: true,
       encrypted: false,
       sticky: !!post.sticky,
-      vaultId: "",
-      slug: "",
+      vaultId: sealedCopy.id || "",
+      slug: sealedCopy.slug || "",
       draft: null,
     });
   }
@@ -203,6 +214,7 @@ function build(hexo, sealed, albums, prefix) {
   for (const category of Array.isArray(masonry) ? masonry : []) {
     for (const item of (category && category.list) || []) {
       const title = item["page-title"] || item.name || "";
+      const sealedCopy = byTitle.get(title) || {};
       addAlbum({
         key: "album:" + title,
         kind: "album",
@@ -217,8 +229,8 @@ function build(hexo, sealed, albums, prefix) {
         published: true,
         encrypted: false,
         sticky: false,
-        vaultId: "",
-        slug: "",
+        vaultId: sealedCopy.id || "",
+        slug: sealedCopy.slug || "",
         draft: null,
         album: { title, category: category.links_category || "" },
       });

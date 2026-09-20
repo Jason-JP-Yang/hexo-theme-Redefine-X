@@ -545,19 +545,16 @@ backend:
     pulse: true
     # Custom events, named in source/js/tools/uxEvents.js
     events: true
-  # The in-browser post editor. A provider is on once all of its fields are filled;
-  # its token stays a Worker secret (GITEA_TOKEN / GITHUB_EDITOR_TOKEN)
+  # The in-browser post editor. It saves by pushing a sealed payload to the PUBLIC
+  # repository below; its token stays a Worker secret (PUBLIC_REPO_TOKEN)
   online_editor:
-    gitea:
-      # API base, e.g. https://gitea.example.com/api/v1
-      api_url:
-      # owner/name
-      repo:
-      branch: main
-    github:
-      # owner/name
-      repo:
-      branch: main
+    # owner/name of the public repository the site is published from
+    repo:
+    # The branch GitHub Pages serves
+    branch: main
+    # Ed25519 public key from `npm run editor:keygen`, matching EDITOR_PUBLIC_KEY
+    # in the Worker. Published so a save's receipt can be checked by anyone
+    verify_key:
 # BACKEND <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # PAGE TEMPLATES >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start

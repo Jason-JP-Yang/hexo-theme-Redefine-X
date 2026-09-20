@@ -1,0 +1,455 @@
+# The blog's one workflow. It lives in the PUBLIC repository, which is also the
+# published site, and it is the only thing anywhere that holds a credential for
+# the private repository the site is written in.
+#
+# ── Why there is only one ───────────────────────────────────────────────────
+#
+# There used to be three — a build on Gitea, the same build mirrored on GitHub,
+# and a static deploy — and the interesting question was always "which of them
+# is going to run, and why". Now every route ends up here and the answer is in
+# one place: `verify` decides what this push IS, and the two jobs after it act
+# on that decision. The console's build rail reads those three jobs directly, so
+# what a person watching sees is what actually happened.
+#
+# ── The four ways a run starts ──────────────────────────────────────────────
+#
+#   push to editor-queue   somebody saved in the online editor. The payload is
+#                          sealed and carries an Ed25519 receipt from the Worker
+#                          naming who asked and what they were cleared for.
+#                          Verified, applied, built, published.
+#   push to main           the admin built at home and pushed the artifact.
+#                          Published as-is if it carries `Deploy-Signature:`;
+#                          force-reset if it does not.
+#   workflow_dispatch      the Worker, either on the nightly cron or relaying a
+#                          push to the private repository. Builds and publishes.
+#   anything else          refused, and the branch put back where it was.
+#
+# ── Why the admin is not identified by being the admin ──────────────────────
+#
+# The token an editing session holds belongs to the owner's account, so
+# `sender.login == owner` would be true for exactly the push this gate exists to
+# stop. The signature is over the TREE and is made with VAULT_MASTER, which no
+# browser has ever held.
+#
+# ── What this file cannot become ────────────────────────────────────────────
+#
+# The editor's token is a fine-grained PAT with no `Workflows` permission, so
+# GitHub itself refuses any write under `.github/workflows/`. That refusal is
+# load-bearing: everything below is the thing that decides whether a push is
+# legitimate, and a push that could edit it would decide for itself. It is also
+# why `ci/` is taken from `main` rather than from the branch being verified.
+#
+# ── Configuration ───────────────────────────────────────────────────────────
+#
+# Variables (Settings → Secrets and variables → Actions → Variables):
+#   SOURCE_REPO          owner/name of the private repository (required)
+#   SOURCE_BRANCH        default main
+#   QUEUE_BRANCH         default editor-queue
+#   RDFX_EDITOR_PUBKEY   Ed25519 public key, from `npm run editor:keygen` in the
+#                        Worker directory. Must match EDITOR_PUBLIC_KEY there
+#                        and backend.online_editor.verify_key in the theme config
+#   NODE_VERSION         default 24
+#
+# Secrets:
+#   VAULT_MASTER         32-byte base64url key. Opens .vault/keys.enc, unwraps a
+#                        save's one-time key, and checks a local build's signature
+#   SOURCE_REPO_TOKEN    fine-grained PAT on SOURCE_REPO with `Contents: read and
+#                        write` and `Metadata: read`. NOT `Workflows` — the private
+#                        repository has no workflows and must not gain any
+#   UMAMI_TOKEN          optional. Brings source/_data/analytics.json up to
+#                        yesterday; without it the archive is left as committed
+
+name: Build and deploy
+
+on:
+  push:
+    branches: [main, editor-queue]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this run exists (nightly, source, manual)"
+        default: manual
+      source_sha:
+        description: "The private-repo commit that asked for it, if any"
+        default: ""
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Never cancel: a half-published artifact is worse than a queued one, and the
+# editor refuses to push while a run is in flight for exactly this reason.
+concurrency:
+  group: blog
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: ${{ vars.NODE_VERSION || '24' }}
+  QUEUE_BRANCH: ${{ vars.QUEUE_BRANCH || 'editor-queue' }}
+  GIT_TERMINAL_PROMPT: "0"
+  TZ: UTC
+
+jobs:
+  # ════════════════════════════════════════════════════════════
+  # 1. What is this push, and is it allowed to be here
+  # ════════════════════════════════════════════════════════════
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.decide.outputs.mode }}
+      login: ${{ steps.receipt.outputs.login }}
+      sub: ${{ steps.receipt.outputs.sub }}
+      admin: ${{ steps.receipt.outputs.admin }}
+      ids: ${{ steps.receipt.outputs.ids }}
+    steps:
+      # ── a push to the published branch ────────────────────────────────────
+      #
+      # Written inline rather than as a script in `ci/`, and that is the whole
+      # reason it is inline: `ci/` lives on this branch, so a gate that ran from
+      # there would be guarding itself. This file cannot be changed by the token
+      # it is guarding against; `ci/` can only be changed by a push that gets
+      # past this.
+      - name: Account for a push to the published branch
+        id: published
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+          VAULT_MASTER: ${{ secrets.VAULT_MASTER }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if printf '%s' "$MESSAGE" | grep -qiE '^Built-by:[[:space:]]*ci[[:space:]]*$'; then
+            echo "this branch is where the runner puts the artifact — nothing to do"
+            echo "verdict=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CLAIM=$(printf '%s' "$MESSAGE" | grep -iE '^Deploy-Signature:[[:space:]]*sha256=[0-9a-f]{64}[[:space:]]*$' | tail -1 | sed 's/.*sha256=/sha256=/' | tr -d '[:space:]')
+          TREE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '.commit.tree.sha')
+
+          EXPECT=$(TREE="$TREE" node -e '
+            const c = require("node:crypto");
+            const k = c.hkdfSync("sha256", Buffer.from(process.env.VAULT_MASTER, "base64url"),
+                                 Buffer.alloc(0), Buffer.from("rdfx-deploy"), 32);
+            process.stdout.write("sha256=" + c.createHmac("sha256", Buffer.from(k))
+              .update(process.env.TREE, "utf8").digest("hex"));
+          ')
+
+          if [ -n "$CLAIM" ] && [ "$CLAIM" = "$EXPECT" ]; then
+            echo "signed by a build that holds VAULT_MASTER — publishing it"
+            echo "verdict=deploy" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::this commit carries no valid Deploy-Signature. Putting the branch back."
+          BEFORE='${{ github.event.before }}'
+          case "$BEFORE" in
+            ""|0000000000000000000000000000000000000000)
+              echo "::error::and there is nothing to put it back TO — reset it by hand."
+              exit 1 ;;
+          esac
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "$BEFORE"
+          git push -q --force origin "${BEFORE}:refs/heads/${GITHUB_REF_NAME}"
+          echo "::error::reset ${GITHUB_REF_NAME} to ${BEFORE}"
+          exit 1
+
+      # ── a save from the online editor ─────────────────────────────────────
+      - name: Take the verifier from the published branch
+        if: github.event_name == 'push' && github.ref_name == env.QUEUE_BRANCH
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          sparse-checkout: ci
+          path: verifier
+
+      # The queue branch is rootless and holds one file, because the runner
+      # resets it to an empty commit after every save. So this is a few hundred
+      # kilobytes or a few megabytes, never the site.
+      - name: Take the save off the queue branch
+        if: github.event_name == 'push' && github.ref_name == env.QUEUE_BRANCH
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.QUEUE_BRANCH }}
+          fetch-depth: 1
+          path: queue
+
+      - name: Check the receipt the save carries
+        id: receipt
+        if: github.event_name == 'push' && github.ref_name == env.QUEUE_BRANCH
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+          VAULT_MASTER: ${{ secrets.VAULT_MASTER }}
+          RDFX_EDITOR_PUBKEY: ${{ vars.RDFX_EDITOR_PUBKEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$MESSAGE" > "${RUNNER_TEMP}/message.txt"
+          if node verifier/ci/verify-receipt.mjs queue/payload.bin "${RUNNER_TEMP}/message.txt"; then
+            exit 0
+          fi
+
+          # A save that does not verify is not an error to investigate, it is a
+          # push that should not have happened. The branch goes back to where it
+          # was so the next legitimate save starts from a clean tip.
+          echo "::error::refusing this save and clearing the queue"
+          BEFORE='${{ github.event.before }}'
+          cd queue
+          case "$BEFORE" in
+            ""|0000000000000000000000000000000000000000) ;;
+            *) git push -q --force origin "${BEFORE}:refs/heads/${QUEUE_BRANCH}" || true ;;
+          esac
+          exit 1
+
+      - name: Say what this run is
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_name }}" = "${QUEUE_BRANCH}" ]; then
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=${{ steps.published.outputs.verdict || 'none' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ════════════════════════════════════════════════════════════
+  # 2. Build the site from the private repository
+  # ════════════════════════════════════════════════════════════
+  build:
+    needs: verify
+    if: needs.verify.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    outputs:
+      # Whether there is a site to publish at all. A build that FAILED still
+      # has one — the previous artifact, with this run's log sealed into it —
+      # and publishing that is the whole point of sealing a failed build's log.
+      # A run that fell over before the handover has nothing, and the deploy
+      # job must not try.
+      handed: ${{ steps.handover.outcome }}
+    env:
+      VAULT_MASTER: ${{ secrets.VAULT_MASTER }}
+      # AVIF bytes depend on the machine's ffmpeg and libaom, so no encoder is
+      # started here: img-optimizer serves what source/build/ already holds, and
+      # an image with no cached transcode gets a quick `sharp` AVIF that is
+      # marked in the index, committed back, and re-encoded properly by the next
+      # build at home. Animated GIFs wait for that build.
+      RDFX_SKIP_AVIF: "1"
+    steps:
+      - name: Clone the private source
+        env:
+          TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+          REPO: ${{ vars.SOURCE_REPO }}
+        run: |
+          [ -n "$REPO" ] || { echo "::error::SOURCE_REPO is not set"; exit 1; }
+          [ -n "$TOKEN" ] || { echo "::error::SOURCE_REPO_TOKEN is not set"; exit 1; }
+          git clone -q --depth 1 --branch "${{ vars.SOURCE_BRANCH || 'main' }}" \
+            "https://x-access-token:${TOKEN}@github.com/${REPO}.git" src
+          # Only the theme. `public` is a submodule too, and initialising it
+          # would pull the artifact into the tree Hexo is about to write over.
+          # Not shallow: a submodule pins a commit, which may not be on a tip.
+          git -C src submodule update --init themes/redefine-x
+
+      # Cloned rather than generated, so the artifact keeps its history — and so
+      # a failed build can put the previous one back instead of publishing an
+      # empty tree. `hexo clean` wipes public/ but preserves public/.git.
+      - name: Fetch the published artifact into public/
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: src/public
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - run: npm ci
+        working-directory: src
+
+      # ── apply the save, if this run is one ────────────────────────────────
+      #
+      # Fetched again rather than handed over from `verify`. The one-time key
+      # would have had to travel with it, and both a workflow output and a
+      # workflow artifact are readable by anybody on a public repository — so
+      # the key is unwrapped from the commit message here instead, inside the
+      # only process that uses it.
+      - name: Take the save off the queue branch
+        if: needs.verify.outputs.login != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.QUEUE_BRANCH }}
+          fetch-depth: 1
+          path: queue
+
+      - name: Apply the save, or refuse the whole of it
+        id: apply
+        if: needs.verify.outputs.login != ''
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          WRAPPED=$(printf '%s' "$MESSAGE" | grep -iE '^Editor-Key:' | tail -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '[:space:]')
+          node src/themes/redefine-x/workflows/ci/apply.mjs \
+            --payload queue/payload.bin \
+            --wrapped "$WRAPPED" \
+            --ids '${{ needs.verify.outputs.ids }}' \
+            --admin '${{ needs.verify.outputs.admin }}' \
+            --src src > "${RUNNER_TEMP}/applied.json"
+          node -e 'const r=JSON.parse(require("fs").readFileSync(process.env.RUNNER_TEMP+"/applied.json","utf8"));console.log(`applied ${r.wrote} write(s) and ${r.removed} removal(s) across ${r.items.length} item(s)`);require("fs").appendFileSync(process.env.GITHUB_OUTPUT,`message=${String(r.message||"").replace(/\r?\n/g," ")}\n`)'
+
+      # ── the build itself ──────────────────────────────────────────────────
+      #
+      # Nothing it prints reaches the run log. The log names every file the
+      # build touched, which for a site with encrypted articles is a list of
+      # things whose names are the thing being protected — and this run log is
+      # public. It is captured, sealed under the build log's own key and
+      # published where only the console can open it.
+      - name: Render the site
+        id: render
+        continue-on-error: true
+        working-directory: src
+        env:
+          UMAMI_TOKEN: ${{ secrets.UMAMI_TOKEN }}
+        run: |
+          set -o pipefail
+          { npm run clean && npm run build; } > "${RUNNER_TEMP}/build.log" 2>&1
+
+      - name: Put the previous artifact back if the build failed
+        if: steps.render.outcome != 'success'
+        working-directory: src/public
+        run: |
+          echo "::warning::the build failed — republishing the previous artifact with the log"
+          git checkout -q -- .
+          git clean -qfd
+
+      - name: Seal the build log into the site
+        if: always()
+        run: |
+          node src/themes/redefine-x/workflows/ci/seal-log.mjs \
+            --src src --out src/public --log "${RUNNER_TEMP}/build.log" \
+            --status '${{ steps.render.outcome }}' \
+            --reason '${{ github.event.inputs.reason || github.ref_name }}'
+
+      # ── publish ───────────────────────────────────────────────────────────
+      #
+      # Authorship comes from the receipt when there is one: a collaborator's
+      # save is signed with their own name, with the blog's own identity beside
+      # it, because a site published under one name from work committed under
+      # another is a history that has to be corrected later.
+      - name: Commit the artifact
+        if: always()
+        working-directory: src/public
+        env:
+          WHO: ${{ needs.verify.outputs.login }}
+        run: |
+          NAME="${WHO:-${{ vars.COMMIT_AUTHOR_NAME || 'Jason-JP-Yang' }}}"
+          MAIL="${{ vars.COMMIT_AUTHOR_EMAIL || 'jiepengyang@outlook.com' }}"
+          git add -A
+          # The runner's token is a GitHub App token, which GitHub refuses to
+          # let write under .github/workflows/. A theme release that changes a
+          # workflow file therefore reaches this repository from a build at
+          # home, never from here — so it is unstaged rather than allowed to
+          # fail the push.
+          if ! git diff --cached --quiet -- .github; then
+            echo "::warning::.github/ changed — push it from a local build; unstaged here"
+            git reset -q -- .github
+          fi
+          if git diff --cached --quiet; then
+            echo "artifact unchanged"
+            exit 0
+          fi
+          git -c user.name="$NAME" -c user.email="$MAIL" commit -q -F - <<EOF
+          Site updated: $(date -u +'%Y-%m-%d %H:%M:%SZ')
+
+          Built-by: ci
+          EOF
+          git push -q origin "HEAD:${{ github.event.repository.default_branch }}"
+
+      # Four things the build produced that the SOURCE has to keep: the resealed
+      # keyring (a build that mints a key must not leave the reseal on the
+      # runner, or the next clone mints a SECOND key for the same post and
+      # everything published under the first stops opening), the save itself,
+      # the picture moves the build settled, and the artifact pointer.
+      #
+      # `Built-by: ci` is what stops the private repository's webhook relaying
+      # this straight back into another build.
+      - name: Return the source's half of the build
+        if: always()
+        working-directory: src
+        env:
+          TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+          REPO: ${{ vars.SOURCE_REPO }}
+          WHO: ${{ needs.verify.outputs.login }}
+          SUBJECT: ${{ steps.apply.outputs.message }}
+        run: |
+          git add -A -- .vault source public
+          if git diff --cached --quiet; then
+            echo "the source has nothing to take back"
+            exit 0
+          fi
+          git diff --cached --name-only | head -40 | sed 's/^/  /'
+          NAME="${WHO:-${{ vars.COMMIT_AUTHOR_NAME || 'Jason-JP-Yang' }}}"
+          MAIL="${{ vars.COMMIT_AUTHOR_EMAIL || 'jiepengyang@outlook.com' }}"
+          git -c user.name="$NAME" -c user.email="$MAIL" commit -q -F - <<EOF
+          ${SUBJECT:-build: reseal the keyring and settle the artifact pointer}
+
+          Built-by: ci
+          EOF
+          git push -q "https://x-access-token:${TOKEN}@github.com/${REPO}.git" \
+            "HEAD:${{ vars.SOURCE_BRANCH || 'main' }}"
+
+      # The queue is emptied by resetting it to a commit with no parent and no
+      # files, which is also what keeps the next save's checkout small.
+      - name: Empty the queue
+        if: always() && needs.verify.outputs.login != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf "${RUNNER_TEMP}/empty" && mkdir -p "${RUNNER_TEMP}/empty"
+          cd "${RUNNER_TEMP}/empty"
+          git init -q -b "$QUEUE_BRANCH" .
+          git -c user.name=ci -c user.email=ci@localhost commit -q --allow-empty -m "queue: empty"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${QUEUE_BRANCH}"
+
+      - name: Hand the site to Pages
+        id: handover
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: src/public
+
+      - name: Fail the run if the build failed
+        if: steps.render.outcome != 'success'
+        run: |
+          echo "::error::hexo generate failed. The log is in Blog Management; the previous site is still published."
+          exit 1
+
+  # ════════════════════════════════════════════════════════════
+  # 3. Publish
+  # ════════════════════════════════════════════════════════════
+  deploy:
+    needs: [verify, build]
+    if: >-
+      always() &&
+      (needs.build.outputs.handed == 'success' ||
+       (needs.build.result == 'skipped' && needs.verify.outputs.mode == 'deploy'))
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Only on the path where nothing was built: the build job has already
+      # handed its tree over, and uploading a second artifact would replace it.
+      - uses: actions/checkout@v4
+        if: needs.verify.outputs.mode == 'deploy'
+        with:
+          fetch-depth: 1
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        if: needs.verify.outputs.mode == 'deploy'
+        with:
+          path: "."
+      - id: deployment
+        uses: actions/deploy-pages@v4

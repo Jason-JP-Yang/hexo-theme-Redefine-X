@@ -12,7 +12,9 @@
     "db:backup": "wrangler d1 export instant-notes-db --remote --output ./d1-backup.sql",
     "db:init": "wrangler d1 execute instant-notes-db --remote --file=./schema.sql",
     "db:init:local": "wrangler d1 execute instant-notes-db --local --file=./schema.sql",
-    "vapid:keygen": "node scripts/vapid-keygen.mjs"
+    "vapid:keygen": "node scripts/vapid-keygen.mjs",
+    "editor:keygen": "node scripts/editor-keygen.mjs",
+    "db:migrate": "wrangler d1 execute instant-notes-db --remote --file=./migrations/0004-collab.sql"
   },
   "dependencies": {
     "hono": "^4.4.0"

@@ -412,6 +412,25 @@ management:
   p_empty: 沒有符合該篩選條件的內容。
   p_unpublish: 取消發布
   v_badge: 加密
+  v_editors: 可以編輯的人
+  ed_placeholder: 協作者帳號或數字 ID，按 Enter 確認
+  c_title: 協作者
+  c_lede: 每位協作者在這個控制台裡能看到什麼。文章管理永遠屬於他們，且僅限於獲授權的項目；其餘部分預設全部拒絕。
+  c_empty: 尚未設定協作者。請先寫入 backend.collaborators 與 Worker 的 COLLABORATORS，然後重新建置。
+  g_none: 拒絕
+  g_r: 唯讀
+  g_rw: 讀寫
+  part_posts: 文章管理
+  part_analytics: 訪問統計
+  part_announce: 發布公告
+  part_notifications: 通知紀錄
+  part_followers: 訂閱者
+  part_buildlog: 建置日誌
+  l_title: 建置日誌
+  l_lede: 上一次部署實際做了什麼。建置過程不向外輸出任何內容，日誌加密後存放在這裡；即使建置失敗也會寫入。
+  l_empty: 還沒有任何一次建置寫入過日誌。
+  l_failed: 失敗
+  l_ok: 成功
   v_audience: 可以閱讀的人
   v_reader: 人
   v_readers: 人

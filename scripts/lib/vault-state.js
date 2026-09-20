@@ -51,6 +51,31 @@ function pages() {
   return all().filter((entry) => entry.kind === "page");
 }
 
+/**
+ * PUBLIC posts, sealed only so the editor can open their source.
+ *
+ * These are not withheld from anything. The article is published exactly as it
+ * always was; what is added is a sealed copy of the markdown beside it, under a
+ * key of its own, so that editing a post no longer requires a credential for
+ * the repository it lives in. A key here opens one file and nothing else — it
+ * is not the key to the site, and it is not the key to a neighbouring post.
+ */
+function sources() {
+  return all()
+    .filter((entry) => entry.kind === "source")
+    .sort((a, b) => b.post.date.valueOf() - a.post.date.valueOf());
+}
+
+/** The same for a public album: its slice of masonry.yml, sealed on its own. */
+function albumSources() {
+  return all().filter((entry) => entry.kind === "album-source");
+}
+
+/** Every album, encrypted or not, in the order masonry.yml lists them. */
+function everyAlbum() {
+  return albums().concat(albumSources());
+}
+
 function withhold(routePath) {
   withheld.add(routePath);
 }
@@ -64,4 +89,17 @@ function clear() {
   withheld.clear();
 }
 
-module.exports = { put, get, all, sorted, albums, pages, withhold, withheldPaths, clear };
+module.exports = {
+  put,
+  get,
+  all,
+  sorted,
+  albums,
+  pages,
+  sources,
+  albumSources,
+  everyAlbum,
+  withhold,
+  withheldPaths,
+  clear,
+};

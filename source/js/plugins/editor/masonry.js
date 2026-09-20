@@ -110,6 +110,7 @@ import initLazyLoad, {
 } from "../../layouts/lazyload.js";
 import * as session from "./session.js";
 import * as repo from "./repo.js";
+import { albumId, albumDraftId } from "../../tools/vaultCrypto.js";
 import * as credentials from "./credentials.js";
 import {
   EASE,
@@ -2205,19 +2206,50 @@ async function buildCommit(mode) {
   // the collection generator dies on.
   pruneEmptyCategories(fresh);
 
+  // Which albums this save claims to change, declared so the Worker can decide
+  // whether this identity may. The runner re-derives the true set from the file
+  // itself and refuses anything not named here, so the declaration is a
+  // permission request rather than something taken on trust.
+  //
+  // Both halves of a publish are named: a draft writing back over the album it
+  // stands in front of touches two identities, and a receipt for one of them
+  // would refuse the save at the runner rather than half-apply it.
+  const owners = await albumOwners({ title, publishing, forked });
+
   const files = state.pending.map((asset) => ({
     operation: "create",
     path: state.stage.resolve(asset.path),
     content: repo.toBase64(asset.bytes),
+    owner: owners[0] || "",
   }));
   files.push({
     operation: "update",
     path: DATA,
     sha: file.sha,
+    owners,
     content: repo.toBase64(emitMasonry(fresh)),
   });
 
   return { files, message, title, published: publishing, forked };
+}
+
+/**
+ * Every album identity one save can move.
+ *
+ * A draft and the album it supersedes carry the SAME title and are two
+ * documents — that is what the `masonry|draft|` prefix is for — so a publish,
+ * a fork and a plain edit each touch a different pair of them.
+ */
+async function albumOwners({ title, publishing, forked }) {
+  const ids = new Set();
+  const opened = state.opened.title || title;
+
+  ids.add(await (publishing || !state.opened.draft ? albumId(title) : albumDraftId(title)));
+  if (publishing || forked) ids.add(await albumDraftId(opened));
+  if (publishing || forked) ids.add(await albumId(opened));
+  if (state.opened.draft) ids.add(await albumDraftId(opened));
+
+  return Array.from(ids).filter(Boolean);
 }
 
 async function doSave(mode) {

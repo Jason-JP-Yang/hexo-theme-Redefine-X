@@ -89,15 +89,30 @@ function joinList(ids) {
 }
 
 /**
- * Every post this session may open, with its key already unwrapped.
+ * One unwrapping function bound to this deployment's master key, for callers
+ * that hold rows of their own. Nothing else in the Worker may import the master.
+ */
+export async function unwrapper(env) {
+  const master = await importMaster(env.VAULT_MASTER);
+  return (wrapped) => unwrap(master, wrapped);
+}
+
+/**
+ * Every ENCRYPTED post this session may open, with its key already unwrapped.
  * An admin gets all of them; anyone else gets exactly what their grant names.
+ *
+ * `enc = 1` is the whole filter, and it is not a refinement. Every post on the
+ * site now has a row in this table — that is what lets the editor read an
+ * article's source without a token for the repository it lives in — so without
+ * it this route would hand every reader the key to every public post's sealed
+ * source copy and the page would try to render each of them as a vault item.
  */
 export async function grantedPosts(db, env, session) {
   const master = await importMaster(env.VAULT_MASTER);
 
   if (session.isAdmin) {
     const { results } = await db
-      .prepare("SELECT id, slug, wrapped FROM vault_posts ORDER BY created_at DESC")
+      .prepare("SELECT id, slug, wrapped FROM vault_posts WHERE enc = 1 ORDER BY created_at DESC")
       .all();
     return unwrapAll(master, results);
   }
@@ -116,7 +131,7 @@ export async function grantedPosts(db, env, session) {
   const slice = ids.slice(0, 90);
   const holes = slice.map((_, i) => `?${i + 1}`).join(",");
   const { results } = await db
-    .prepare(`SELECT id, slug, wrapped FROM vault_posts WHERE id IN (${holes})`)
+    .prepare(`SELECT id, slug, wrapped FROM vault_posts WHERE enc = 1 AND id IN (${holes})`)
     .bind(...slice)
     .all();
 
@@ -204,7 +219,7 @@ function randomSlug() {
  * rather than a second one, because a post's key is stable forever and minting
  * a new one would orphan everything already sealed under the old.
  */
-export async function mintPost(db, env, { source }) {
+export async function mintPost(db, env, { source, enc = 1, owner = 0 }) {
   const master = await importMaster(env.VAULT_MASTER);
   const id = await postId(source);
 
@@ -213,7 +228,11 @@ export async function mintPost(db, env, { source }) {
     .bind(id)
     .first();
 
-  if (existing) {
+  // A row with no wrapped key is a CLAIM, not a registration: the editor writes
+  // one when a collaborator creates something, so that whoever made it may open
+  // it afterwards. It carries an editor list and nothing else, and it is filled
+  // in here rather than treated as a key that fails to open.
+  if (existing && existing.wrapped) {
     return {
       id,
       slug: existing.slug,
@@ -224,7 +243,7 @@ export async function mintPost(db, env, { source }) {
   }
 
   const taken = await db.prepare("SELECT slug FROM vault_posts").all();
-  const used = new Set((taken.results || []).map((r) => r.slug));
+  const used = new Set((taken.results || []).map((r) => r.slug).filter(Boolean));
   let slug = randomSlug();
   while (used.has(slug)) slug = randomSlug();
 
@@ -232,9 +251,21 @@ export async function mintPost(db, env, { source }) {
 
   // Always a draft: the editor mints only on the draft branch of a save, and a
   // published post's key comes from the build. The next build confirms it.
+  //
+  // `editors` is the one thing the build cannot decide for itself. Whoever
+  // created the item is written in here at the moment of creation, because a
+  // collaborator who just made something and cannot then open it would be a
+  // permission system that only ever gets in the way. The build preserves this
+  // column across every later reconcile.
   await db
-    .prepare("INSERT INTO vault_posts (id, slug, wrapped, draft) VALUES (?1, ?2, ?3, 1)")
-    .bind(id, slug, await seal(master, postKey))
+    .prepare(
+      `INSERT INTO vault_posts (id, slug, wrapped, draft, kind, enc, editors)
+       VALUES (?1, ?2, ?3, 1, 'post', ?4, ?5)
+       ON CONFLICT(id) DO UPDATE SET
+         slug = ?2, wrapped = ?3, draft = 1, kind = 'post', enc = ?4,
+         editors = CASE WHEN vault_posts.editors != '' THEN vault_posts.editors ELSE ?5 END`
+    )
+    .bind(id, slug, await seal(master, postKey), enc ? 1 : 0, owner ? String(owner) : "")
     .run();
 
   return {
@@ -340,6 +371,11 @@ export async function verifyBuildSignature(rawBody, header, secret) {
  * Grants are left alone. A stale id in `moderation.vault` matches no row on the
  * next read, and rewriting every reader's grant list here would be a write per
  * follower, on the scarce side of a free plan, to save nothing.
+ *
+ * `editors` is left alone too, and for a stronger reason: it is the only column
+ * here the BUILD does not know. Who may change a post is an admin's decision
+ * made in the console, and a reconcile that wrote the column would erase that
+ * decision on the very next build.
  */
 export async function reconcile(db, posts) {
   const { results } = await db.prepare("SELECT id FROM vault_posts").all();
@@ -349,11 +385,12 @@ export async function reconcile(db, posts) {
   const statements = posts.map((p) =>
     db
       .prepare(
-        `INSERT INTO vault_posts (id, slug, wrapped, draft) VALUES (?1, ?2, ?3, ?4)
+        `INSERT INTO vault_posts (id, slug, wrapped, draft, kind, enc) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(id) DO UPDATE SET
-           slug = excluded.slug, wrapped = excluded.wrapped, draft = excluded.draft`
+           slug = excluded.slug, wrapped = excluded.wrapped, draft = excluded.draft,
+           kind = excluded.kind, enc = excluded.enc`
       )
-      .bind(p.id, p.slug, p.wrapped, p.draft ? 1 : 0)
+      .bind(p.id, p.slug, p.wrapped, p.draft ? 1 : 0, p.kind || "post", p.enc ? 1 : 0)
   );
   for (const id of revoked) {
     statements.push(db.prepare("DELETE FROM vault_posts WHERE id = ?1").bind(id));
@@ -382,9 +419,14 @@ export async function deletePost(db, id) {
  * the console, so the rule does not depend on which client asked.
  */
 export async function setAudience(db, postId, ids) {
-  const row = await db.prepare("SELECT draft FROM vault_posts WHERE id = ?1").bind(postId).first();
+  const row = await db.prepare("SELECT draft, enc FROM vault_posts WHERE id = ?1").bind(postId).first();
   if (!row) return { error: "no such post" };
   if (row.draft) return { error: "a draft has no audience" };
+  // A public post has no audience either. Its row exists so the editor can open
+  // its source; granting somebody "permission to read" what the whole internet
+  // already reads would put a meaningless id in a list that is checked on every
+  // page view.
+  if (!row.enc) return { error: "a public post has no audience" };
 
   const logins = new Map(ids.map((v) => [String(v.id || v), String(v.login || "")]));
   const wanted = new Set(logins.keys());

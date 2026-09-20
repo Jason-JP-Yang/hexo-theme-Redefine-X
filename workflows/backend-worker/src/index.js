@@ -18,12 +18,28 @@
  * take any valid session.
  *
  * ─── configuration ──────────────────────────────────────────
- * Eight values, no more, and nothing here reads anything else off `env`:
+ * A short, closed set, and nothing here reads anything else off `env`:
  *
- *   ADMIN_LOGINS          who gets the isAdmin claim
- *   COLLABORATORS         who gets the same claim as a COLLABORATOR: identical
- *                         rights everywhere except moderation, where they may
- *                         not act on an admin or on themselves
+ *   ADMIN_LOGINS          who gets the isAdmin claim — the blog's owner
+ *   COLLABORATORS         who may be GIVEN a slice of the console. What slice
+ *                         is a per-person decision stored in `moderation.panels`
+ *                         and made by an admin; this list only says who can be
+ *                         on the receiving end of one
+ *   PUBLIC_REPO           owner/name of the repository the site is PUBLISHED
+ *                         from, which is also where the one workflow lives
+ *   PUBLIC_REPO_TOKEN     secret — handed to an authorised browser so it can
+ *                         push a sealed save onto the queue branch. It can
+ *                         write nothing else that matters: the runner refuses
+ *                         anything without a signature made here
+ *   PUBLIC_DISPATCH_TOKEN secret — Actions:write, for the nightly build and the
+ *                         relayed source push. Never leaves this Worker
+ *   EDITOR_SIGNING_KEY    secret — Ed25519 seed. Signs the receipt a save
+ *                         carries
+ *   EDITOR_PUBLIC_KEY     the matching public key, published so anybody can
+ *                         check a commit was really authorised for the identity
+ *                         it names
+ *   SOURCE_WEBHOOK_SECRET secret — authenticates the private repository's push
+ *                         webhook, and is what says which repository it is
  *   ALLOWED_ORIGIN        the CORS allowlist (kept in the dashboard, so it can
  *                         be edited without a redeploy)
  *   SITE_URL              the site this backend belongs to — the ONE place a URL
@@ -68,7 +84,19 @@ import {
   mintPost,
   keyringBlob,
   verifyBuildSignature,
+  unwrapper,
 } from "./vault.js";
+import {
+  PANELS,
+  panelsFor,
+  setPanels,
+  listPanels,
+  parsePanels,
+  itemsFor,
+  setEditors,
+  listEditors,
+  issueSubmission,
+} from "./collab.js";
 import { sendWebPush, checkVapidKeys } from "./webpush.js";
 
 const app = new Hono();
@@ -338,8 +366,18 @@ app.get("/api/notes", async (c) => {
 });
 
 // ─── Auth middleware ────────────────────────────────────────
-// Both middlewares verify the SAME HMAC session token locally — no GitHub
-// round-trip per request. They differ only in what they require of the payload.
+// Every middleware here verifies the SAME HMAC session token locally — no
+// GitHub round-trip per request. They differ only in what they require of the
+// payload, and in what they then read out of D1.
+//
+// ── Why a collaborator is no longer an admin ────────────────
+//
+// `isAdmin` used to be true for both roles, and every /api/admin/* route took
+// it. That was right while the two roles differed in one place; it is wrong now
+// that an admin decides, per person and per section, what a collaborator may
+// even see. So the claim means what it says again, `collab` carries the second
+// role, and the routes that a collaborator may reach say so themselves through
+// `panel()` rather than by all sharing one gate.
 const authMiddleware = async (c, next) => {
   const authHeader = c.req.header("Authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -352,6 +390,54 @@ const authMiddleware = async (c, next) => {
   c.set("admin", session);
   await next();
 };
+
+/** Admin or collaborator. The route decides what that is worth. */
+const staffMiddleware = async (c, next) => {
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const session = await verifySession(authHeader.slice(7), c.env.SESSION_SECRET);
+  if (!session || !(session.isAdmin || session.collab)) {
+    return c.json({ error: "Invalid credentials" }, 403);
+  }
+  c.set("admin", session);
+  await next();
+};
+
+/**
+ * One section of Blog Management, at a grade.
+ *
+ * An admin passes without a read. A collaborator costs one primary-key probe on
+ * `moderation`, which is the same row the moderation checks already read, so a
+ * request that goes on to do moderation work pays for it once.
+ *
+ * The grade is checked as a PREFIX: "rw" satisfies a need of "r", and "r" does
+ * not satisfy "rw". A panel with no write grade at all (analytics, the build
+ * log) therefore cannot be reached by a write route by construction, whatever
+ * the string in the database says.
+ */
+function panel(name, need) {
+  return async (c, next) => {
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    const session = await verifySession(authHeader.slice(7), c.env.SESSION_SECRET);
+    if (!session || !(session.isAdmin || session.collab)) {
+      return c.json({ error: "Invalid credentials" }, 403);
+    }
+    if (!session.isAdmin) {
+      const { panels, banned } = await panelsFor(c.env.DB, session);
+      const have = panels[name] || "";
+      if (banned || !have || (need === "rw" && have !== "rw")) {
+        return c.json({ error: "Not permitted" }, 403);
+      }
+    }
+    c.set("admin", session);
+    await next();
+  };
+}
 
 // Same signed session, weaker requirement: any verified GitHub user, admin or
 // not. Guards /api/me/* and /api/push/* — a reader managing their OWN inbox,
@@ -391,13 +477,12 @@ app.post("/api/auth/login", async (c) => {
   const user = await fetchGitHubUser(githubToken);
   if (!user) return c.json({ error: "GitHub verification failed" }, 401);
 
-  // A collaborator carries the SAME claim as an admin — that is the whole point
-  // of the role — and `collab` rides alongside it so the one place the two
-  // differ, moderation, can tell them apart without a second lookup. An identity
-  // on both lists is an admin: the narrower role cannot take rights away.
-  const admin = isAdminUser(user, c.env.ADMIN_LOGINS);
-  const collab = !admin && isCollaborator(user, c.env.COLLABORATORS);
-  const isAdmin = admin || collab;
+  // The two claims are now separate. `isAdmin` is the blog's owner and nobody
+  // else; `collab` is somebody an admin has given a defined, per-section slice
+  // of the console to. An identity on both lists is an admin — the narrower role
+  // cannot take rights away.
+  const isAdmin = isAdminUser(user, c.env.ADMIN_LOGINS);
+  const collab = !isAdmin && isCollaborator(user, c.env.COLLABORATORS);
 
   let token = null;
   let exp = null;
@@ -424,7 +509,7 @@ app.post("/api/auth/login", async (c) => {
 });
 
 // ─── ADMIN API: List ALL notes (not just 48h) ──────────────
-app.get("/api/admin/notes", authMiddleware, async (c) => {
+app.get("/api/admin/notes", staffMiddleware, async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, text, emoji, color, created_at, updated_at
        FROM notes
@@ -439,7 +524,7 @@ app.get("/api/admin/notes", authMiddleware, async (c) => {
 // editing a note is a correction, not news, and re-alerting for a typo fix is
 // how a notification channel teaches people to mute it. `notify: false` in the
 // request opts one note out.
-app.post("/api/admin/notes", authMiddleware, async (c) => {
+app.post("/api/admin/notes", staffMiddleware, async (c) => {
   let body;
   try {
     body = await c.req.json();
@@ -486,7 +571,7 @@ app.post("/api/admin/notes", authMiddleware, async (c) => {
 });
 
 // ─── ADMIN API: Update note ────────────────────────────────
-app.put("/api/admin/notes/:id", authMiddleware, async (c) => {
+app.put("/api/admin/notes/:id", staffMiddleware, async (c) => {
   const id = c.req.param("id");
   const { text, emoji, color } = await c.req.json();
   if (!text || text.length === 0) return c.json({ error: "Text is required" }, 400);
@@ -502,7 +587,7 @@ app.put("/api/admin/notes/:id", authMiddleware, async (c) => {
 });
 
 // ─── ADMIN API: Delete note ────────────────────────────────
-app.delete("/api/admin/notes/:id", authMiddleware, async (c) => {
+app.delete("/api/admin/notes/:id", staffMiddleware, async (c) => {
   await c.env.DB.prepare(`DELETE FROM notes WHERE id = ?1`).bind(c.req.param("id")).run();
   return c.json({ ok: true });
 });
@@ -875,7 +960,7 @@ app.put("/api/me/preferences", userMiddleware, async (c) => {
 // receipt can say which ids matched. Delivery does not depend on it: an id that
 // matches nobody is reported and then ignored, never a reason to refuse the
 // whole send.
-app.post("/api/admin/notifications", authMiddleware, async (c) => {
+app.post("/api/admin/notifications", panel("announce", "rw"), async (c) => {
   let body;
   try {
     body = await c.req.json();
@@ -907,7 +992,7 @@ app.post("/api/admin/notifications", authMiddleware, async (c) => {
 // A plain indexed read, paged. The recipient and device counts were written by
 // the fan-out that produced them, so this no longer aggregates over join tables
 // — which is the whole reason those tables could be deleted.
-app.get("/api/admin/notifications", authMiddleware, async (c) => {
+app.get("/api/admin/notifications", panel("notifications", "r"), async (c) => {
   const db = c.env.DB;
   const type = String(c.req.query("type") || "");
   const offset = Math.max(0, Number(c.req.query("cursor")) || 0);
@@ -949,7 +1034,7 @@ app.get("/api/admin/notifications", authMiddleware, async (c) => {
 // Corrects what the inbox shows from here on. It does NOT re-announce: the copy
 // already in an OS notification tray cannot be recalled, and a second buzz for a
 // fixed typo is how a channel teaches people to mute it.
-app.put("/api/admin/notifications/:id", authMiddleware, async (c) => {
+app.put("/api/admin/notifications/:id", panel("notifications", "rw"), async (c) => {
   let body;
   try {
     body = await c.req.json();
@@ -977,7 +1062,7 @@ app.put("/api/admin/notifications/:id", authMiddleware, async (c) => {
 });
 
 // ─── ADMIN: delete one notification ─────────────────────────
-app.delete("/api/admin/notifications/:id", authMiddleware, async (c) => {
+app.delete("/api/admin/notifications/:id", panel("notifications", "rw"), async (c) => {
   const stats = await deleteNotification(c.env.DB, c.req.param("id"));
   if (!stats.removed) return c.json({ error: "Unknown notification" }, 404);
   return c.json({ ok: true, ...stats });
@@ -1000,9 +1085,14 @@ function adminTokens(env) {
  * use is a mistake nobody else can undo, and one that reads like a right when it
  * is a trap. An admin is still free to moderate a collaborator.
  */
+// An admin is never moderable. For a COLLABORATOR the whole collaborator
+// allowlist joins the set, not merely their own two tokens: muting a peer is
+// the same act as muting yourself one step removed, and a permission that can
+// be reached by asking somebody else to do it is not a permission.
 function protectedTokens(env, session) {
   const tokens = adminTokens(env);
   if (session && session.collab) {
+    for (const token of allowList(env.COLLABORATORS)) tokens.push(String(token));
     tokens.push(String(session.id));
     if (session.login) tokens.push(String(session.login));
   }
@@ -1072,7 +1162,7 @@ async function resolveIdentities(db, raw) {
 }
 
 // ─── ADMIN: name the ids typed into an audience field ───────
-app.post("/api/admin/lookup", authMiddleware, async (c) => {
+app.post("/api/admin/lookup", staffMiddleware, async (c) => {
   let body = {};
   try {
     body = await c.req.json();
@@ -1084,7 +1174,7 @@ app.post("/api/admin/lookup", authMiddleware, async (c) => {
 // The first page carries everything the management screen paints once — orphan
 // devices, the three blocklists, the totals — and later pages carry only more
 // followers, because that is the only part that grows.
-app.get("/api/admin/followers", authMiddleware, async (c) => {
+app.get("/api/admin/followers", panel("followers", "r"), async (c) => {
   const db = c.env.DB;
   const offset = Math.max(0, Number(c.req.query("cursor")) || 0);
   const first = offset === 0;
@@ -1200,7 +1290,7 @@ function unpackDevices(json) {
 // ─── ADMIN: mute / ban one follower or one device ───────────
 // `{ github_id, state }` moderates an identity, `{ device_id, state }` a single
 // subscription. Three states, mutually exclusive: '' | 'muted' | 'banned'.
-app.put("/api/admin/moderation", authMiddleware, async (c) => {
+app.put("/api/admin/moderation", panel("followers", "rw"), async (c) => {
   let body;
   try {
     body = await c.req.json();
@@ -1270,7 +1360,7 @@ app.put("/api/admin/moderation", authMiddleware, async (c) => {
 // ─── ADMIN: the three global blocklists ─────────────────────
 // One topic per call, sent as the WHOLE intended list. Saving a diff instead
 // would make two admins editing the same list silently merge their mistakes.
-app.put("/api/admin/blocklists", authMiddleware, async (c) => {
+app.put("/api/admin/blocklists", panel("followers", "rw"), async (c) => {
   let body;
   try {
     body = await c.req.json();
@@ -1372,7 +1462,7 @@ app.put("/api/admin/blocklists", authMiddleware, async (c) => {
 // The deliberate override of the dedupe rule. Ingest refuses to resend because
 // nearly every repeat is accidental; this route exists so the rare intentional
 // one does not require touching the database by hand.
-app.post("/api/admin/notifications/:id/resend", authMiddleware, async (c) => {
+app.post("/api/admin/notifications/:id/resend", panel("notifications", "rw"), async (c) => {
   const id = c.req.param("id");
   const db = c.env.DB;
 
@@ -1397,7 +1487,7 @@ app.post("/api/admin/notifications/:id/resend", authMiddleware, async (c) => {
 // The webhook path cannot be exercised from localhost — GitHub has no route to
 // it — so this is the same ingest, triggered by an admin instead of by a
 // deployment. Reads `url` from the body, else SITE_URL/changelog.json.
-app.post("/api/admin/notify/ingest", authMiddleware, async (c) => {
+app.post("/api/admin/notify/ingest", panel("announce", "rw"), async (c) => {
   let body = {};
   try {
     body = await c.req.json();
@@ -1515,7 +1605,7 @@ app.get("/api/admin/notify/diagnose", authMiddleware, async (c) => {
 // ─── ADMIN: send a test push to your own devices ────────────
 // Bypasses ingest entirely, so it proves the VAPID keys and the aes128gcm
 // encryption in isolation before any of the pipeline depends on them.
-app.post("/api/admin/notify/test", authMiddleware, async (c) => {
+app.post("/api/admin/notify/test", staffMiddleware, async (c) => {
   const admin = c.get("admin");
   const { results: devices } = await c.env.DB.prepare(
     `SELECT endpoint, p256dh, auth FROM push_devices WHERE github_id = ?1`
@@ -1622,19 +1712,25 @@ app.post("/api/admin/vault/sync", async (c) => {
   } catch {
     return c.json({ error: "Bad request" }, 400);
   }
-  if (!Array.isArray(posts) || posts.length > 200) return c.json({ error: "Bad request" }, 400);
+  // The ceiling is one row per editable item, not one per ENCRYPTED item: every
+  // post on the site is registered here now, because that is what lets the
+  // editor open an article's source without a token for the repository.
+  if (!Array.isArray(posts) || posts.length > 4000) return c.json({ error: "Bad request" }, 400);
 
   // Validated in full BEFORE anything is written: a malformed row half way down
   // the set would otherwise revoke every post that was not reached.
+  const KINDS = new Set(["post", "album", "page", "console", "log", "masonry", "masonry-open"]);
   const clean = [];
   for (const row of posts) {
     const id = String(row?.id || "").trim();
     const slug = String(row?.slug || "").trim();
     const wrapped = String(row?.wrapped || "").trim();
+    const kind = String(row?.kind || "post").trim();
     if (!/^[0-9a-f]{16}$/.test(id)) return c.json({ error: `Bad id: ${id}` }, 400);
     if (!/^[0-9a-z]{4,32}$/.test(slug)) return c.json({ error: `Bad slug for ${id}` }, 400);
     if (!/^[A-Za-z0-9_-]{40,}$/.test(wrapped)) return c.json({ error: `Bad key for ${id}` }, 400);
-    clean.push({ id, slug, wrapped });
+    if (!KINDS.has(kind)) return c.json({ error: `Bad kind for ${id}` }, 400);
+    clean.push({ id, slug, wrapped, kind, enc: row?.enc ? 1 : 0, draft: row?.draft ? 1 : 0 });
   }
 
   return c.json({ ok: true, ...(await reconcile(c.env.DB, clean)) });
@@ -1668,7 +1764,7 @@ app.put("/api/admin/vault/:id/audience", authMiddleware, async (c) => {
 //
 // Idempotent: a path that already has a key gets that key, because a post key is
 // stable forever and a second one would orphan everything sealed under the first.
-app.post("/api/admin/vault/mint", authMiddleware, async (c) => {
+app.post("/api/admin/vault/mint", staffMiddleware, async (c) => {
   if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
 
   let body;
@@ -1685,7 +1781,15 @@ app.post("/api/admin/vault/mint", authMiddleware, async (c) => {
     return c.json({ error: "Bad source path" }, 400);
   }
 
-  const minted = await mintPost(c.env.DB, c.env, { source });
+  const session = c.get("admin");
+  // Whoever minted it may open it. Without this a collaborator would create an
+  // article and be locked out of it by the next request — the row exists, their
+  // id is in no `editors` list, and nothing else would ever put it there.
+  const minted = await mintPost(c.env.DB, c.env, {
+    source,
+    enc: body?.enc === false ? 0 : 1,
+    owner: session.isAdmin ? 0 : session.id,
+  });
 
   c.header("Cache-Control", "no-store");
   return c.json(minted);
@@ -1693,7 +1797,7 @@ app.post("/api/admin/vault/mint", authMiddleware, async (c) => {
 
 // Retire a draft's key when the draft is published or deleted. The keyring comes
 // back re-sealed so the same commit that removes the file removes the key.
-app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
+app.delete("/api/admin/vault/mint", staffMiddleware, async (c) => {
   if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
 
   const id = String(c.req.query("id") || "").trim();
@@ -1706,84 +1810,167 @@ app.delete("/api/admin/vault/mint", authMiddleware, async (c) => {
   return c.json({ ok: true, keysEnc });
 });
 
-// ─── EDITOR: the repository ticket ──────────────────────────
+// ─── EDITOR: the session ────────────────────────────────────
 //
-// After this the Worker is OUT of the commit path: the browser talks to the
-// repository host directly, so a save carrying twenty megabytes of images costs
-// this Worker nothing at all. One request per editing session.
+// Everything the console needs to decide what to draw, in one request: which
+// sections this identity may open, whether they are the admin, where the
+// PUBLIC repository is, and the token for it.
 //
-// The source lives in two places — a Gitea instance on the author's machine and
-// a private GitHub mirror — and either can build. Both tickets are handed over
-// at once and the browser picks; deciding here would mean this Worker probing
-// two hosts on a 10 ms budget to answer a question the browser can answer for
-// itself, about reachability from where it is actually standing.
+// ── Why the token is for the public repository ──────────────
 //
-// ── Each token is contained where it is SPENT ───────────────
+// It used to be a write token for the repository the site is written in, which
+// meant every authorised browser held a credential that could rewrite the
+// source of the blog. Now the browser holds a token for the repository the
+// site is PUBLISHED from, scoped to one branch's worth of work, and the only
+// thing it can do with it is push a sealed payload that the runner will refuse
+// unless it carries a signature this Worker made. The private repository has no
+// token in a browser at all, and this Worker no longer holds one either: the
+// runner's copy lives in that public repository's Actions secrets, where a
+// browser cannot reach it.
 //
-// Gitea: a dedicated account with write on the content repository only, scope
-// `write:repository`, plus branch protection with Protected File Patterns
-// covering `.github/**`, `.gitea/**`, `themes/**`, `bin/**`, `.gitmodules`,
-// `package.json` and `_config.yml`.
+// One D1 read for a collaborator, none for an admin.
+app.get("/api/editor/session", staffMiddleware, async (c) => {
+  const session = c.get("admin");
+  const { panels, banned } = await panelsFor(c.env.DB, session);
+  if (banned) return c.json({ error: "Not permitted" }, 403);
+
+  const [owner, repo] = String(c.env.PUBLIC_REPO || "").split("/");
+  const api = String(c.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+
+  c.header("Cache-Control", "no-store");
+  return c.json({
+    id: session.id,
+    login: session.login,
+    name: session.name || "",
+    admin: !!session.isAdmin,
+    panels,
+    grades: Object.fromEntries(Object.entries(PANELS).map(([k, v]) => [k, v.grades])),
+    // Absent means the editor is read-only for this deployment, which is a
+    // state worth being able to reach: a misconfigured token should stop saves,
+    // not stop somebody reading their own drafts.
+    repo:
+      owner && repo && c.env.PUBLIC_REPO_TOKEN
+        ? {
+            api,
+            owner,
+            repo,
+            branch: c.env.PUBLIC_BRANCH || "main",
+            queue: c.env.PUBLIC_QUEUE_BRANCH || "editor-queue",
+            workflow: c.env.PUBLIC_DEPLOY_WORKFLOW || "deploy.yml",
+            token: c.env.PUBLIC_REPO_TOKEN,
+          }
+        : null,
+    // Published so a commit's receipt can be checked by anybody, not only by
+    // the runner. It is a public key; shipping it is what it is for.
+    verify: c.env.EDITOR_PUBLIC_KEY || "",
+  });
+});
+
+// ─── EDITOR: every item this identity may open ──────────────
 //
-// GitHub: a fine-grained PAT scoped to that one repository with `Contents:
-// write`, `Metadata: read` and `Actions: read` — and NO `Workflows` permission,
-// which is what makes GitHub itself refuse every write under
-// `.github/workflows/`. It must not be the CI's token, which needs `Workflows:
-// write` to mirror and therefore could rewrite the very job that holds
-// VAULT_MASTER.
-// Who a commit is BY. One identity for both backends and for CI, because the
-// author of a post is a person and not the machinery that carried it — a
-// history split between `blog-updater`, `blog-ci` and a name attaches the work
-// to whichever route it happened to take that day.
+// The list Posts Management is drawn from, and the keys that open each item's
+// sealed source. An admin gets everything; a collaborator gets the union of
+// what they may read and what they may write, and nothing else exists as far as
+// this answer is concerned — an article they were not given is not returned as
+// a locked row, it is not returned.
 //
-// GITEA_AUTHOR_* is the old spelling, read as a fallback so a Worker deploy and
-// a variable edit need not be the same instant.
-function commitAuthor(env) {
-  return {
-    name: env.COMMIT_AUTHOR_NAME || env.GITEA_AUTHOR_NAME || "blog-editor",
-    email: env.COMMIT_AUTHOR_EMAIL || env.GITEA_AUTHOR_EMAIL || "blog-editor@localhost",
-  };
-}
+// One scan of `vault_posts`, which holds one row per editable item, plus one
+// primary-key probe on `moderation` for a collaborator. No writes.
+app.post("/api/editor/keys", staffMiddleware, async (c) => {
+  if (!c.env.VAULT_MASTER) return c.json({ error: "Vault not configured" }, 503);
 
-// WHERE the editor commits is the site's `backend.online_editor`, sealed under
-// the admin key by the build; a token is issued on its own. The repository
-// variables are echoed when set, for a page built before that config existed.
-function where(api, repo, branch) {
-  const [owner, name] = String(repo || "").split("/");
-  return api && owner && name ? { api, owner, repo: name, branch: branch || "main" } : {};
-}
+  const session = c.get("admin");
+  const { panels, banned } = await panelsFor(c.env.DB, session);
+  if (banned) return c.json({ error: "Not permitted" }, 403);
 
-function giteaTicket(env) {
-  if (!env.GITEA_TOKEN) return null;
+  const open = await unwrapper(c.env);
+  const items = await itemsFor(c.env.DB, c.env, session, open, panels);
 
-  return {
-    id: "gitea",
-    kind: "gitea",
-    label: env.GITEA_LABEL || "Gitea",
-    ...where(String(env.GITEA_API_URL || "").replace(/\/+$/, ""), env.GITEA_REPO, env.GITEA_BRANCH),
-    token: env.GITEA_TOKEN,
-    author: commitAuthor(env),
-  };
-}
+  c.header("Cache-Control", "no-store");
+  return c.json({ items, admin: !!session.isAdmin });
+});
 
-function githubTicket(env) {
-  if (!env.GITHUB_EDITOR_TOKEN) return null;
-  const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+// ─── EDITOR: clear one save ─────────────────────────────────
+//
+// The browser sends the SHA-256 of the sealed payload it is about to push and
+// the ids of the items that payload touches. It gets back a one-time key to
+// seal with, that key wrapped for the runner, and a signed receipt naming who
+// asked and what they were cleared for.
+//
+// The payload itself never comes here. A save carrying twenty megabytes of
+// photographs costs this Worker one signature and at most one D1 read.
+app.post("/api/editor/submit", staffMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
 
-  return {
-    id: "github",
-    kind: "github",
-    label: env.GITHUB_LABEL || "GitHub",
-    api,
-    ...where(api, env.GITHUB_REPO, env.GITHUB_BRANCH),
-    token: env.GITHUB_EDITOR_TOKEN,
-    // Which workflow's runs answer "where has the build got to". GitHub Actions
-    // writes no commit status, so there is nothing else to read.
-    workflow: env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml",
-    author: commitAuthor(env),
-  };
-}
+  const session = c.get("admin");
+  const issued = await issueSubmission(c.env.DB, c.env, session, {
+    owners: Array.isArray(body?.owners) ? body.owners : [],
+    hash: body?.hash,
+    key: body?.key,
+    publish: !!body?.publish,
+  });
+  if (issued.error) return c.json({ error: issued.error }, issued.status || 400);
 
+  c.header("Cache-Control", "no-store");
+  return c.json(issued);
+});
+
+// ─── ADMIN: the collaborator matrix ─────────────────────────
+//
+// Who may see which section of the console, and who may write which item. Both
+// halves in one answer because the console draws them in one table, and both
+// are small: a row per moderated identity, and a row per item that has any
+// editor at all.
+app.get("/api/admin/collab", authMiddleware, async (c) => {
+  const [people, editors] = await Promise.all([listPanels(c.env.DB), listEditors(c.env.DB)]);
+  return c.json({ people, editors, grades: Object.fromEntries(Object.entries(PANELS).map(([k, v]) => [k, v.grades])) });
+});
+
+// The complete new grade set for ONE identity, not a delta.
+app.put("/api/admin/collab/:id", authMiddleware, async (c) => {
+  const id = Number(c.req.param("id")) || 0;
+  if (!id) return c.json({ error: "Bad id" }, 400);
+
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+
+  // An admin's own grades are a constant, so writing them would store something
+  // nothing reads and leave a row that looks like a decision.
+  if (allowList(c.env.ADMIN_LOGINS).includes(String(id))) {
+    return c.json({ error: "An admin already has every section" }, 400);
+  }
+
+  // `formatPanels` drops anything that is not a grade that panel actually has,
+  // so a client asking for write on the build log stores nothing rather than
+  // storing a grade the gate would later have to know to ignore.
+  const panels = await setPanels(c.env.DB, id, String(body?.login || ""), body?.panels || {});
+  return c.json({ ok: true, panels: parsePanels(panels) });
+});
+
+// The complete new editor list for ONE item, not a delta.
+app.put("/api/admin/vault/:id/editors", authMiddleware, async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Bad request" }, 400);
+  }
+  const ids = Array.isArray(body?.editors) ? body.editors : [];
+  if (ids.length > ADMIN_LOOKUP_MAX) return c.json({ error: "Too many" }, 400);
+
+  const result = await setEditors(c.env.DB, c.req.param("id"), ids);
+  if (result.error) return c.json({ error: result.error }, 400);
+  return c.json({ ok: true });
+});
 // ─── ANALYTICS: release the Umami credential ────────────────
 //
 // The same shape as the repository ticket above, and for the same reason: the
@@ -1798,7 +1985,7 @@ function githubTicket(env) {
 //
 // No fetch, no database read. The whole handler is a signature check that has
 // already happened in authMiddleware.
-app.get("/api/admin/analytics/ticket", authMiddleware, (c) => {
+app.get("/api/admin/analytics/ticket", panel("analytics", "r"), (c) => {
   const token = c.env.UMAMI_TOKEN;
   const host = String(c.env.UMAMI_API_URL || "").replace(/\/+$/, "");
   const websiteId = c.env.UMAMI_WEBSITE_ID;
@@ -1811,64 +1998,6 @@ app.get("/api/admin/analytics/ticket", authMiddleware, (c) => {
   return c.json({ token, host, websiteId });
 });
 
-app.get("/api/admin/repo/ticket", authMiddleware, (c) => {
-  const backends = [giteaTicket(c.env), githubTicket(c.env)].filter(Boolean);
-  if (!backends.length) {
-    return c.json({ error: "Repository access is not configured" }, 503);
-  }
-
-  c.header("Cache-Control", "no-store");
-  return c.json({ prefer: c.env.REPO_PREFER || "gitea", backends });
-});
-
-// ─── EDITOR: fast-forward the backend that fell behind ──────
-//
-// Gitea goes down, a post is committed to GitHub, Gitea comes back one commit
-// behind. Only a runner can settle that — the browser holds a content token,
-// not a git client — so this fires the GitHub workflow that pushes to Gitea and
-// does NOT build. The editor polls Gitea afterwards; nothing is reported here
-// beyond "the run was accepted", because a dispatch is asynchronous and this
-// Worker has 10 ms.
-app.post("/api/admin/repo/sync", authMiddleware, async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  if (String(body.to || "") !== "gitea") {
-    return c.json({ error: "Only the Gitea side can be caught up from here" }, 400);
-  }
-
-  const [owner, name] = String(c.env.GITHUB_REPO || "").split("/");
-  if (!owner || !name || !c.env.GITHUB_SYNC_TOKEN) {
-    return c.json({ error: "Sync is not configured" }, 503);
-  }
-
-  const file = c.env.GITHUB_SYNC_WORKFLOW || "sync-to-gitea.yml";
-  const api = String(c.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
-  const res = await fetch(
-    `${api}/repos/${owner}/${name}/actions/workflows/${file}/dispatches`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${c.env.GITHUB_SYNC_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-        "User-Agent": "backend-blog",
-      },
-      body: JSON.stringify({ ref: c.env.GITHUB_BRANCH || "main" }),
-    }
-  );
-
-  c.header("Cache-Control", "no-store");
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    return c.json({ error: "Could not start the sync", status: res.status, detail: text.slice(0, 200) }, 502);
-  }
-  return c.json({ ok: true });
-});
-
-// ─── WEBHOOK: the deploy repo finished deploying ────────────
-// The only route the backend acts on without a human. Authenticated by HMAC over
-// the raw body; the changelog is then read at the deployed SHA so what we ingest
-// is exactly what that deployment published.
 //
 // GitHub abandons a webhook delivery after ten seconds, so the response goes out
 // as soon as the durable writes land and the pushes follow in the background.
@@ -1912,168 +2041,105 @@ app.post("/api/hooks/github", async (c) => {
   return c.json({ ok: true, source: changelog.url, sha, ...result });
 });
 
+// ─── WEBHOOK: the source repository moved ───────────────────
+//
+// The private repository holds no workflow of its own any more — nothing there
+// may run code, because the credentials a build needs are exactly the ones an
+// editing session must never reach. So a push there is relayed: GitHub calls
+// this, and this starts the one workflow that exists, in the public repository.
+//
+// The shared secret in the webhook form is also what says WHICH repository is
+// trusted, so there is no repository name to configure and no second thing to
+// keep in step.
+//
+// ── Why a marked commit is ignored ──────────────────────────
+//
+// The build's last act is to push the resealed keyring and the new artifact
+// pointer BACK to the private repository. That push is a push like any other
+// and would be relayed straight back into another build, which would push
+// again. The trailer the runner writes is what stops the loop, and it is read
+// here rather than in the workflow so the run is never started at all.
+app.post("/api/hooks/source", async (c) => {
+  const raw = await c.req.text();
+  const ok = await verifySignature(raw, c.req.header("X-Hub-Signature-256"), c.env.SOURCE_WEBHOOK_SECRET);
+  if (!ok) return c.json({ error: "Bad signature" }, 401);
+
+  const event = c.req.header("X-GitHub-Event");
+  if (event === "ping") return c.json({ ok: true, pong: true });
+  if (event !== "push") return c.json({ ok: true, ignored: event });
+
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return c.json({ error: "Bad payload" }, 400);
+  }
+
+  const branch = String(payload.ref || "").replace(/^refs\/heads\//, "");
+  if (branch !== (c.env.SOURCE_BRANCH || "main")) return c.json({ ok: true, ignored: branch });
+
+  const message = String((payload.head_commit && payload.head_commit.message) || "");
+  if (/^Built-by:\s*ci\s*$/im.test(message)) return c.json({ ok: true, ignored: "ci" });
+
+  const started = await startBuild(c.env, { reason: "source", sha: payload.after || "" });
+  return c.json(started.ok ? { ok: true } : { error: started.why }, started.ok ? 200 : 502);
+});
+
 // ─── Health root (no front-end; just a liveness probe) ─────
 app.get("/", (c) => c.json({ service: "redefine-x backend worker", ok: true }));
 
-// ─── The nightly build ──────────────────────────────────────
+// ─── Starting the one build ─────────────────────────────────
 //
-// The site's activity card is drawn from days the BUILD read out of Umami and
-// committed, so a day only reaches the page once something rebuilds the site
-// after it has finished. Nothing else guarantees that: a week with no post is a
-// week with no build. This is what wakes it up.
+// There is exactly one workflow now and it lives in the public repository, so
+// "which side builds this" is no longer a question anybody has to answer. What
+// used to probe two hosts, compare their heads and decide which was ahead is a
+// single dispatch: one subrequest, no reads, and nothing that can be wrong
+// about it.
 //
-// ── Which side builds it ────────────────────────────────────
-//
-// The same rule the editor uses, for the same reason: REACHABILITY and then WHO
-// IS AHEAD, never speed. A home runner's queue has nothing to do with how fast
-// its API answers, so latency picks the wrong side confidently. Diverged is
-// surfaced and nothing is dispatched — guessing there would publish one history
-// and strand the other.
-//
-// Five subrequests at the very most, against a budget of fifty.
-//
-// ── Two tokens, each where it is already contained ──────────
-//
-// Reading a branch head needs `Contents: read`, which the editor's PAT has and
-// the sync PAT deliberately does not; starting a workflow needs `Actions:
-// write`, which is the sync PAT's whole purpose. So the probe and the dispatch
-// use different credentials, and neither gains a capability it did not have.
+// `reason` travels as a workflow input so the run can say why it exists —
+// the console's build rail reads it, and a run nobody can account for is the
+// thing this design exists to make impossible.
 const GH = {
   Accept: "application/vnd.github+json",
   "X-GitHub-Api-Version": "2022-11-28",
   "User-Agent": "backend-blog",
 };
 
-async function json(url, headers) {
-  const res = await fetch(url, { headers });
-  if (!res.ok) return null;
-  return res.json().catch(() => null);
-}
-
-function sides(env) {
-  const gitea = (() => {
-    const api = String(env.GITEA_API_URL || "").replace(/\/+$/, "");
-    const [owner, repo] = String(env.GITEA_REPO || "").split("/");
-    if (!api || !owner || !repo || !env.GITEA_TOKEN) return null;
-    const auth = { Authorization: `token ${env.GITEA_TOKEN}` };
-    const base = `${api}/repos/${owner}/${repo}`;
-    return {
-      id: "gitea",
-      head: () => json(`${base}/branches/${env.GITEA_BRANCH || "main"}`, auth)
-        .then((b) => (b && b.commit && (b.commit.id || b.commit.sha)) || null),
-      holds: (sha) => json(`${base}/git/commits/${sha}`, auth).then(Boolean),
-      start: () =>
-        fetch(
-          `${base}/actions/workflows/${env.GITEA_DEPLOY_WORKFLOW || "deploy.yml"}/dispatches`,
-          {
-            method: "POST",
-            headers: { ...auth, "Content-Type": "application/json" },
-            body: JSON.stringify({ ref: env.GITEA_BRANCH || "main" }),
-          }
-        ),
-    };
-  })();
-
-  const github = (() => {
-    const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
-    const [owner, repo] = String(env.GITHUB_REPO || "").split("/");
-    if (!api || !owner || !repo) return null;
-    const base = `${api}/repos/${owner}/${repo}`;
-    const read = { ...GH, Authorization: `Bearer ${env.GITHUB_EDITOR_TOKEN}` };
-    if (!env.GITHUB_EDITOR_TOKEN || !env.GITHUB_SYNC_TOKEN) return null;
-    return {
-      id: "github",
-      head: () => json(`${base}/branches/${env.GITHUB_BRANCH || "main"}`, read)
-        .then((b) => (b && b.commit && b.commit.sha) || null),
-      holds: (sha) => json(`${base}/commits/${sha}`, read).then(Boolean),
-      start: () =>
-        fetch(
-          `${base}/actions/workflows/${env.GITHUB_DEPLOY_WORKFLOW || "deploy.yml"}/dispatches`,
-          {
-            method: "POST",
-            headers: {
-              ...GH,
-              Authorization: `Bearer ${env.GITHUB_SYNC_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ ref: env.GITHUB_BRANCH || "main" }),
-          }
-        ),
-    };
-  })();
-
-  return { gitea, github };
-}
-
-async function nightlyBuild(env) {
-  const { gitea, github } = sides(env);
-  if (!gitea && !github) return { ok: false, why: "no backend is configured" };
-
-  const [giteaHead, githubHead] = await Promise.all([
-    gitea ? gitea.head().catch(() => null) : null,
-    github ? github.head().catch(() => null) : null,
-  ]);
-
-  const up = [];
-  if (giteaHead) up.push(gitea);
-  if (githubHead) up.push(github);
-  if (!up.length) return { ok: false, why: "neither backend answered" };
-
-  let pick;
-  if (up.length === 1) {
-    pick = up[0];
-  } else if (giteaHead === githubHead) {
-    pick = (env.REPO_PREFER || "gitea") === "github" ? github : gitea;
-  } else {
-    // One request each, and it cannot be wrong: the side that HOLDS the other's
-    // commit is the side that is ahead.
-    const [giteaHasGithub, githubHasGitea] = await Promise.all([
-      gitea.holds(githubHead).catch(() => false),
-      github.holds(giteaHead).catch(() => false),
-    ]);
-    if (giteaHasGithub && !githubHasGitea) pick = gitea;
-    else if (githubHasGitea && !giteaHasGithub) pick = github;
-    else {
-      return {
-        ok: false,
-        why: `diverged: gitea ${String(giteaHead).slice(0, 7)} vs github ${String(githubHead).slice(0, 7)} — nothing dispatched`,
-      };
-    }
+async function startBuild(env, { reason, sha }) {
+  const [owner, repo] = String(env.PUBLIC_REPO || "").split("/");
+  if (!owner || !repo || !env.PUBLIC_DISPATCH_TOKEN) {
+    return { ok: false, why: "the public repository is not configured" };
   }
 
-  const res = await pick.start();
+  const api = String(env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+  const file = env.PUBLIC_DEPLOY_WORKFLOW || "deploy.yml";
+  const res = await fetch(`${api}/repos/${owner}/${repo}/actions/workflows/${file}/dispatches`, {
+    method: "POST",
+    headers: {
+      ...GH,
+      Authorization: `Bearer ${env.PUBLIC_DISPATCH_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ref: env.PUBLIC_BRANCH || "main",
+      inputs: { reason: String(reason || "manual"), source_sha: String(sha || "").slice(0, 40) },
+    }),
+  });
+
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    return { ok: false, on: pick.id, why: `dispatch ${res.status} ${detail.slice(0, 160)}` };
+    return { ok: false, why: `dispatch ${res.status} ${detail.slice(0, 160)}` };
   }
-  return { ok: true, on: pick.id };
+  return { ok: true };
 }
 
-/**
- * Cron entry point — once a day, 03:40 UTC. ONE trigger, two jobs.
- *
- * It used to run every five minutes because it owned the second half of
- * SENDING: a fan-out too large for one invocation, and the retry for a push
- * service that was down. Queues owns both of those now, and owns them better —
- * it starts within seconds instead of on the next tick, and it scales out
- * instead of draining a fixed batch.
- *
- * What is left is the inbox retention sweep and the nightly build. The build
- * shares the trigger rather than adding one, because the hour it needs is the
- * same hour this already runs at: safely past UTC midnight, which is the moment
- * yesterday's analytics stopped moving and became something worth committing.
- *
- * Neither half can fail the other — a build dispatch that does not land is a day
- * the archive picks up tomorrow, since the next build fetches every day it is
- * missing rather than just the last one.
- */
 async function scheduled(event, env, ctx) {
   const stats = await pruneInboxes(env.DB);
   console.log("[notify] prune", JSON.stringify(stats));
 
   let build;
   try {
-    build = await nightlyBuild(env);
+    build = await startBuild(env, { reason: "nightly", sha: "" });
   } catch (err) {
     build = { ok: false, why: String((err && err.message) || err) };
   }

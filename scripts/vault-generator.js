@@ -783,6 +783,80 @@ function subsets(items) {
   return out;
 }
 
+/**
+ * What the editor needs to know about a PUBLIC post, in the shape an encrypted
+ * one's record already has.
+ *
+ * Only the fields the document list reads. There is no card and no sealed
+ * image: the article is published, so its body and its pictures are wherever
+ * the reader gets them, and duplicating either behind a key would double the
+ * size of the site to protect something the site already serves.
+ */
+function sourceMeta(entry) {
+  const post = entry.post;
+  const href = withRoot(post.path || "");
+  return {
+    id: entry.id,
+    slug: entry.slug,
+    title: post.title || "",
+    date: post.date ? post.date.toISOString() : null,
+    updated: post.updated ? post.updated.toISOString() : null,
+    href,
+    source: post.source || "",
+    draft: false,
+    supersedes: "",
+    supersedesHref: "",
+    contributor: post.contributor || "",
+    cover: "",
+    excerpt: plainExcerpt(post, post.content || ""),
+    assets: {},
+    sizes: {},
+    tags: post.tags.toArray().map((tag) => ({ name: tag.name, path: withRoot(tag.path), href: withRoot(tag.path), published: true })),
+    categories: post.categories.toArray().map((cat) => ({ name: cat.name, path: withRoot(cat.path), href: withRoot(cat.path), published: true })),
+  };
+}
+
+/**
+ * Seal the two copies of masonry.yml the editor opens.
+ *
+ * `strip` and the runner's merge share one scanner (workflows/ci/lib/masonry.mjs),
+ * which is the whole reason this imports from there rather than cutting the file
+ * up here: the two have to agree about where an album's block begins and ends,
+ * or a round trip through the editor would put one album's lines over another's.
+ */
+async function sealMasonrySource(routes, p) {
+  const pages = state.pages().filter((entry) => entry.page === "masonry" || entry.page === "masonry-open");
+  if (!pages.length) return;
+
+  const file = path.join(hexo.source_dir, "_data", "masonry.yml");
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    return; // a site with no albums has nothing to seal
+  }
+
+  const hidden = new Set(state.albums().map((entry) => entry.id));
+  const yaml = require("js-yaml");
+  // Hexo loads scripts in a VM without a dynamic-import callback.  Use the
+  // CommonJS loader instead; recent Node versions can synchronously load this
+  // ESM module and this also keeps the generator compatible with Hexo's VM.
+  const { strip } = require("../workflows/ci/lib/masonry.mjs");
+
+  let masked = text;
+  try {
+    masked = hidden.size ? strip(yaml, text, hidden) : text;
+  } catch (err) {
+    // A file the shared scanner cannot read is one the runner could not merge
+    // back either, so failing here is the earlier and louder of the two.
+    store.fail(`masonry.yml cannot be split per album — ${err.message}`);
+  }
+
+  for (const entry of pages) {
+    routes.set(`${p}/${entry.slug}/y.bin`, vc.seal(entry.key, entry.page === "masonry" ? text : masked));
+  }
+}
+
 /* ─── Generator ────────────────────────────────────────────────────────────── */
 
 hexo.extend.generator.register("redefine_vault", async function (locals) {
@@ -1038,57 +1112,173 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
     data: { type: "vault-listing", title: "", comment: false },
   });
 
-  // ── the admin surface ─────────────────────────────────────────────────────
-  // Blog Management and the composer, sealed like anything else. Two blobs
-  // under one key, because they are one audience and splitting them would mean
-  // two grants to keep in step:
+  // ── the editor's copy of everything it may open ───────────────────────────
   //
-  //   b.bin  the console's markup, with the post inventory folded in. Every
-  //          fact Posts Management shows is settled here — titles, dates,
-  //          taxonomy, draft state, where each file lives — so opening the
-  //          console costs one blob rather than a request per post.
-  //   e.bin  the composer, which is the article layout with nothing in it.
-  //   m.bin  the same for an album: the gallery layout with nothing in it.
-  //   o.bin  which repositories the editor commits to, and who the
-  //          collaborators are. Private coordinates and private addresses, so
-  //          both reach the editor through this key and never through the page.
-  const resolved = backend.resolve(hexo.theme.config);
-  const editor = resolved.online_editor;
-  for (const entry of state.pages()) {
-    const consoleView = hexo.theme.getView("pages/management/blog-management.ejs");
-    const shell = await consoleView.render(cardLocals({ page: { type: "blog-management" } }));
+  // Two blobs per item, under that item's own key, and neither is ever fetched
+  // by a reader:
+  //
+  //   s.bin  the markdown, front matter and all (posts). Already written above
+  //          for an encrypted post; written here for every other one.
+  //   y.bin  the album's slice of masonry.yml, plus where in the file it sits.
+  //          The editor sends a PATCH naming this album, never the whole file,
+  //          which is what makes a per-album permission enforceable at all.
+  //   r.bin  the Posts Management row. Identical in shape to a row in the
+  //          admin's sealed inventory because it IS one — indexed out of the
+  //          same build, so the two can never describe the same post
+  //          differently.
+  //
+  // This is what replaced the repository token the browser used to hold. A key
+  // released here opens one item; it is not the key to the site, and holding
+  // one says nothing about how many others exist.
+  const keyed = {
+    posts: new Map(state.sources().map((e) => [e.post.source, { id: e.id, slug: e.slug }])),
+    albums: new Map(state.albumSources().map((e) => [e.title, { id: e.id, slug: e.slug }])),
+  };
+  const inv = inventory.build(hexo, entries, state.albums(), p, keyed);
 
+  const rowFor = new Map();
+  for (const row of inv.items) {
+    if (row.vaultId) rowFor.set(row.vaultId, row);
+    // A draft is folded INTO the row of the article it stands in front of, so
+    // it has no row of its own to find. The editor addresses it by its own id,
+    // and gets the row that describes both halves — which is the row Posts
+    // Management draws for it either way.
+    if (row.draft && row.draft.id) rowFor.set(row.draft.id, row);
+  }
+
+  for (const entry of state.sources()) {
+    routes.set(`${p}/${entry.slug}/s.bin`, vc.seal(entry.key, entry.post.raw || ""));
+    // The same `meta` an encrypted post's c.bin carries, so the editor's
+    // document list reads one shape rather than two. A public post has no
+    // sealed images and no card — its body is on the site — so `assets` and
+    // `sizes` are empty here by construction rather than by omission.
     routes.set(
-      `${p}/${entry.slug}/b.bin`,
+      `${p}/${entry.slug}/c.bin`,
+      vc.seal(entry.key, JSON.stringify({ meta: sourceMeta(entry) }))
+    );
+  }
+
+  for (const entry of state.albumSources()) {
+    routes.set(
+      `${p}/${entry.slug}/c.bin`,
       vc.seal(
         entry.key,
         JSON.stringify({
-          shell: avifRewrite ? avifRewrite(shell) : shell,
-          inventory: inventory.build(hexo, entries, state.albums(), p),
+          meta: {
+            kind: "album",
+            id: entry.id,
+            slug: entry.slug,
+            title: entry.title,
+            name: entry.item.name || entry.title,
+            description: entry.item.description || "",
+            category: entry.category.links_category || "",
+            thumbs: entry.category.has_thumbnail === true,
+            href: withRoot(`masonry/${entry.title}/`),
+            contributor: entry.item.contributor || "",
+            draft: false,
+            supersedes: "",
+            supersedesHref: "",
+            assets: {},
+            sizes: {},
+            index: entry.index,
+            pos: entry.pos,
+            catIndex: entry.catIndex,
+            catPos: entry.catPos,
+          },
         })
       )
     );
+  }
 
-    if (!editor.enable) continue;
+  for (const entry of state.all()) {
+    const row = rowFor.get(entry.id);
+    if (!row) continue;
+    routes.set(`${p}/${entry.slug}/r.bin`, vc.seal(entry.key, JSON.stringify(row)));
+  }
+
+  // masonry.yml itself, twice: as it is, and with every withheld album cut out
+  // of it. The album editor works on a whole file because its parser keeps the
+  // comments and the ordering, and the runner merges whichever version comes
+  // back one album at a time — so the masked copy is a complete, valid file
+  // that simply does not mention what its reader may not see.
+  await sealMasonrySource(routes, p);
+
+  // ── the admin surface ─────────────────────────────────────────────────────
+  //
+  //   b.bin  the console's markup. Under the ADMIN key it also carries the post
+  //          inventory, which names every article on the site and is the one
+  //          thing a scoped collaborator must never be handed.
+  //   e.bin  the composer, which is the article layout with nothing in it.
+  //   m.bin  the same for an album: the gallery layout with nothing in it.
+  //   o.bin  who the collaborators are — a login and an address each, the
+  //          identity a commit is signed with.
+  //
+  // ── Why the markup is sealed TWICE ────────────────────────────────────────
+  //
+  // Once under a key every collaborator holds, and once under the admin's. It
+  // is a few kilobytes, and what it buys is that the admin's console depends on
+  // exactly one key: the one they have held since before collaborators existed.
+  // Sealing it only under the collaborator key made the owner of the blog
+  // reliant on a row a build had to have registered and a request that had to
+  // have answered — so a half-applied deploy, or a reconcile that had not run
+  // yet, locked the admin out of the page they would use to find out why.
+  const resolved = backend.resolve(hexo.theme.config);
+  const editor = resolved.online_editor;
+  const adminEntry = state.pages().find((entry) => !entry.page);
+  const consoleEntry = state.pages().find((entry) => entry.page === "console");
+
+  const consoleView = hexo.theme.getView("pages/management/blog-management.ejs");
+  const shell = await consoleView.render(cardLocals({ page: { type: "blog-management" } }));
+  const shellHTML = avifRewrite ? avifRewrite(shell) : shell;
+
+  let composerHTML = "";
+  let albumHTML = "";
+  if (editor.enable) {
     const composerView = hexo.theme.getView("pages/management/editor.ejs");
     const composer = await composerView.render(cardLocals({ page: { type: "blog-editor" } }));
-    routes.set(
-      `${p}/${entry.slug}/e.bin`,
-      vc.seal(entry.key, avifRewrite ? avifRewrite(composer) : composer)
-    );
+    composerHTML = avifRewrite ? avifRewrite(composer) : composer;
 
     const albumComposerView = hexo.theme.getView("pages/management/album.ejs");
     const albumComposer = await albumComposerView.render(cardLocals({ page: { type: "album-editor" } }));
+    albumHTML = avifRewrite ? avifRewrite(albumComposer) : albumComposer;
+  }
+
+  // The MARKUP, under the key every collaborator holds. It is the theme's own
+  // layout with nothing in it — what a person is shown inside it is decided by
+  // the Worker's grades and painted by blog-management.js — so there is nothing
+  // here to withhold from somebody who has been given a section of it.
+  if (consoleEntry) {
     routes.set(
-      `${p}/${entry.slug}/m.bin`,
-      vc.seal(entry.key, avifRewrite ? avifRewrite(albumComposer) : albumComposer)
+      `${p}/${consoleEntry.slug}/b.bin`,
+      vc.seal(consoleEntry.key, JSON.stringify({ shell: shellHTML }))
     );
+    if (editor.enable) {
+      routes.set(`${p}/${consoleEntry.slug}/e.bin`, vc.seal(consoleEntry.key, composerHTML));
+      routes.set(`${p}/${consoleEntry.slug}/m.bin`, vc.seal(consoleEntry.key, albumHTML));
+    }
+  }
+
+  // The same markup AND the inventory, under the admin's. The inventory names
+  // every post on the site, which is precisely what a collaborator scoped to
+  // three articles must not be handed — they build their own list from the
+  // items they were actually given (`r.bin`), a request each for three rows.
+  if (adminEntry) {
     routes.set(
-      `${p}/${entry.slug}/o.bin`,
-      vc.seal(
-        entry.key,
-        JSON.stringify({ providers: editor.providers, collaborators: resolved.collaborators })
-      )
+      `${p}/${adminEntry.slug}/b.bin`,
+      vc.seal(adminEntry.key, JSON.stringify({ shell: shellHTML, inventory: inv }))
+    );
+    if (editor.enable) {
+      routes.set(`${p}/${adminEntry.slug}/e.bin`, vc.seal(adminEntry.key, composerHTML));
+      routes.set(`${p}/${adminEntry.slug}/m.bin`, vc.seal(adminEntry.key, albumHTML));
+    }
+    // The roster, and nothing else. It used to carry the private repository's
+    // coordinates too — the editor needed them to commit there. Nothing commits
+    // there from a browser now, so the only private thing left is who the
+    // collaborators are: a login and an address each, which is the identity a
+    // commit is signed with and not something to put in a public page.
+    routes.set(
+      `${p}/${adminEntry.slug}/o.bin`,
+      vc.seal(adminEntry.key, JSON.stringify({ collaborators: resolved.collaborators }))
     );
   }
 

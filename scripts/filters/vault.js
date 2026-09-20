@@ -44,6 +44,57 @@ function adminPageId() {
   return vc.pageId("admin");
 }
 
+/**
+ * The console's MARKUP, under a key of its own.
+ *
+ * It used to share the admin key with the inventory sealed beside it, which was
+ * right while the console was for one reader. It is not: a collaborator opens
+ * the same page and is shown the sections an admin granted them. So the markup
+ * — which says nothing about the site beyond what the theme ships — travels
+ * under a key any collaborator holds, and the INVENTORY, which names every post
+ * on the site, stays behind the admin's.
+ */
+function consolePageId() {
+  if (!backend.resolve(hexo.theme.config).management) return null;
+  return vc.pageId("console");
+}
+
+/**
+ * The build log's own key.
+ *
+ * The runner seals its output under this and writes the blob straight into the
+ * published tree — including on a build that failed, which is the build whose
+ * log is worth reading. It is a key of its own rather than the admin page's so
+ * that a collaborator can be given the log section without being given the
+ * console's whole markup, and so that the runner never has to hold the admin
+ * key to write a file.
+ */
+function buildLogId() {
+  if (!backend.resolve(hexo.theme.config).management) return null;
+  return vc.pageId("buildlog");
+}
+
+/**
+ * masonry.yml itself, in two versions under two keys.
+ *
+ * The album editor works on the whole file — its parser keeps the comments, the
+ * ordering and the blank lines, and a second writer that only understood the
+ * parts it cared about would disagree with it within a release. But a
+ * collaborator may not see every album, so there are two:
+ *
+ *   masonry       the file as it is                     admin only
+ *   masonry-open  the same file with every encrypted     anyone who may edit
+ *                 and draft album removed                an album
+ *
+ * The runner merges whichever comes back into the real file one album at a
+ * time, so an album missing from the masked copy means nothing and is left
+ * exactly where it was. See workflows/ci/lib/masonry.mjs.
+ */
+function masonryIds() {
+  if (!backend.resolve(hexo.theme.config).management) return null;
+  return { full: vc.pageId("masonry"), open: vc.pageId("masonry-open") };
+}
+
 // Whether this build owes the backend a reconcile. Set while the keyring is
 // being decided, acted on once public/ is written: a build that sealed nothing
 // but retired something still has to say so.
@@ -128,7 +179,16 @@ function withholdTaxonomy(entries) {
  */
 const withheldAlbum = (item) => !!item && (item.vault === true || item.draft === true);
 
-function markedAlbums() {
+/**
+ * Every album in masonry.yml with the four numbers that say where it sits.
+ *
+ * One walk, two consumers: the withheld ones are taken out of the public build
+ * and sealed whole, and the rest get a sealed copy of their own slice so the
+ * album editor can open one without reading the file it came from. Splitting
+ * this into two walks would mean two places that have to agree about what `pos`
+ * counts, and they would not for long.
+ */
+function walkAlbums() {
   const masonry = (hexo.locals.get("data") || {}).masonry;
   if (!Array.isArray(masonry)) return [];
 
@@ -142,8 +202,9 @@ function markedAlbums() {
     let pos = 0;
     for (let index = 0; index < category.list.length; index++) {
       const item = category.list[index];
-      if (withheldAlbum(item)) out.push({ category, item, index, pos, catIndex, catPos });
-      else pos++;
+      const withheld = withheldAlbum(item);
+      out.push({ category, item, index, pos, catIndex, catPos, withheld });
+      if (!withheld) pos++;
     }
 
     // `pos` has finished counting this category's public albums, which is also
@@ -223,23 +284,25 @@ hexo.extend.filter.register(
     state.clear();
     syncOwed = false;
 
-    const albums = markedAlbums();
+    const everyAlbum = walkAlbums();
+    const albums = everyAlbum.filter((row) => row.withheld);
     const adminId = adminPageId();
+    const logId = buildLogId();
 
-    if (!marked.length && !albums.length && !adminId) {
-      // The last `vault:` flag on the site has just been removed. The keyring
-      // still names every post that ever carried one, so it is reconciled here
-      // too — this is the one build that would otherwise never look at it.
-      if (vaultEnabled() && store.prune(new Set()).length) syncOwed = true;
-      return;
-    }
-
+    // Encryption off is now the whole switch. It used to be possible to build a
+    // site with it off as long as nothing carried `vault:`; that is still true
+    // of the PUBLIC output, but the editor's sealed source copies go with it —
+    // and a site with no sealed sources has an online editor that can open
+    // nothing, which is a coherent state and says so rather than half-working.
     if (!vaultEnabled()) {
-      store.fail(
-        `${marked.length + albums.length} item(s) carry \`vault:\` or \`draft:\` but backend encryption is off. ` +
-          `Refusing to build them in the clear — set backend.encryption.enable: true (with backend.api_url ` +
-          `and giscus comments), or remove the flag.`
-      );
+      if (marked.length || albums.length) {
+        store.fail(
+          `${marked.length + albums.length} item(s) carry \`vault:\` or \`draft:\` but backend encryption is off. ` +
+            `Refusing to build them in the clear — set backend.encryption.enable: true (with backend.api_url ` +
+            `and giscus comments), or remove the flag.`
+        );
+      }
+      return;
     }
 
     const hidden = new Set();
@@ -305,6 +368,73 @@ hexo.extend.filter.register(
       live.add(adminId);
     }
 
+    const consoleId = consolePageId();
+    if (consoleId) {
+      const { key, slug } = store.ensurePost(consoleId);
+      state.put(consoleId, { kind: "page", id: consoleId, key, slug, page: "console" });
+      live.add(consoleId);
+    }
+
+    if (logId) {
+      const { key, slug } = store.ensurePost(logId);
+      state.put(logId, { kind: "page", id: logId, key, slug, page: "buildlog" });
+      live.add(logId);
+    }
+
+    const masonryIdPair = masonryIds();
+    for (const [which, id] of Object.entries(masonryIdPair || {})) {
+      const { key, slug } = store.ensurePost(id);
+      state.put(id, {
+        kind: "page",
+        id,
+        key,
+        slug,
+        page: which === "full" ? "masonry" : "masonry-open",
+      });
+      live.add(id);
+    }
+
+    // ── every OTHER post and album, sealed only for the editor ──────────────
+    //
+    // The online editor used to read the source out of the private repository
+    // with a token the browser held. Nothing holds that token now, so the
+    // source has to be reachable from the published site — sealed, one key per
+    // item, released by the Worker only to somebody that item's permissions
+    // name.
+    //
+    // These entries change NOTHING about the public build. The post is still
+    // published at its permalink with its taxonomy intact; the album is still
+    // on the collection page. What is added is a blob beside them that opens
+    // for an editor and for nobody else.
+    for (const post of posts.toArray()) {
+      if (hidden.has(post.source)) continue;
+      const id = vc.postId(post.source);
+      const { key, slug } = store.ensurePost(id);
+      state.put(id, { kind: "source", id, key, slug, post });
+      live.add(id);
+    }
+
+    for (const { category, item, index, pos, catIndex, catPos, withheld } of everyAlbum) {
+      if (withheld) continue;
+      const title = item["page-title"] || item.name;
+      const id = vc.albumId(title);
+      const { key, slug } = store.ensurePost(id);
+      state.put(id, {
+        kind: "album-source",
+        id,
+        key,
+        slug,
+        item,
+        category,
+        title,
+        index,
+        pos,
+        catIndex,
+        catPos,
+      });
+      live.add(id);
+    }
+
     // A key whose post has since dropped the flag is a key for content that is
     // no longer sealed. It goes now, before the keyring is written; `sync` is
     // what takes the wrapped copy out of D1 at the end of the same build.
@@ -348,7 +478,8 @@ hexo.extend.filter.register(
 
     hexo.log.info(
       `[vault] ${hidden.size} encrypted post(s) and ${albums.length} encrypted album(s) ` +
-        `withheld from the public build`
+        `withheld from the public build; ${state.sources().length} post(s) and ` +
+        `${state.albumSources().length} album(s) carry a sealed source copy for the editor`
     );
   },
   100
@@ -501,19 +632,41 @@ hexo.extend.filter.register(
     const opened = store.load().opened;
     if (opened) hexo.log.info(`[vault] opened ${opened} key(s) from .vault/keys.enc`);
 
-    // Which ids are drafts, so the Worker can refuse to grant one an audience.
-    // A draft is the author's unfinished copy and has exactly one reader.
+    // What each key IS, so the Worker can answer three different questions
+    // about it without holding any metadata of its own:
+    //
+    //   draft  refuse to grant it an audience — a draft has exactly one reader
+    //   enc    keep it out of /api/vault/keys, which every reader calls. A
+    //          public post has a key here too now, and handing that one out
+    //          would have the page try to render the article as a vault item
+    //   kind   which blob the editor opens for it
+    //
     // ALBUMS as well as posts: an album draft is the same thing with a different
     // document model, and leaving it out of this set was the one place the rule
     // could be reached round — the Worker would have granted it to whoever the
     // published album was granted to.
-    const drafts = new Set();
-    for (const entry of state.sorted()) if (entry.post.draft === true) drafts.add(entry.id);
-    for (const entry of state.albums()) if (entry.item && entry.item.draft === true) drafts.add(entry.id);
+    const meta = new Map();
+    for (const entry of state.sorted()) {
+      meta.set(entry.id, { kind: "post", enc: 1, draft: entry.post.draft === true });
+    }
+    for (const entry of state.albums()) {
+      meta.set(entry.id, { kind: "album", enc: 1, draft: !!(entry.item && entry.item.draft === true) });
+    }
+    for (const entry of state.sources()) meta.set(entry.id, { kind: "post", enc: 0, draft: false });
+    for (const entry of state.albumSources()) meta.set(entry.id, { kind: "album", enc: 0, draft: false });
+    const PAGE_KINDS = {
+      buildlog: "log",
+      masonry: "masonry",
+      "masonry-open": "masonry-open",
+      console: "console",
+    };
+    for (const entry of state.pages()) {
+      meta.set(entry.id, { kind: PAGE_KINDS[entry.page] || "page", enc: 1, draft: false });
+    }
 
     const api = backend.resolve(hexo.theme.config).api_url;
     try {
-      const done = await store.sync(api, drafts);
+      const done = await store.sync(api, meta);
       if (done) {
         hexo.log.info(
           `[vault] backend reconciled: ${done.registered} key(s) registered` +

@@ -125,15 +125,30 @@ SITE_URL = "https://blog.example.com"
 # mismatch makes every push fail with 401/403 at the push service.
 VAPID_PUBLIC_KEY = ""
 
-# ─── The nightly build ──────────────────────────────────────
-# Which workflow the daily cron starts on each backend, and which side wins when
-# both are reachable at the same commit. The cron and the sync find the
-# repositories through GITEA_API_URL, GITEA_REPO, GITEA_BRANCH and the GITHUB_*
-# pair; the editor reads `backend.online_editor` from the theme config instead
-# and asks this Worker only for GITEA_TOKEN / GITHUB_EDITOR_TOKEN.
-GITEA_DEPLOY_WORKFLOW = "deploy.yml"
-GITHUB_DEPLOY_WORKFLOW = "deploy.yml"
-REPO_PREFER = "gitea"
+# ─── The online editor, and the one build ───────────────────
+# The browser holds no credential for the repository the site is WRITTEN in. It
+# holds one for the repository the site is PUBLISHED from, and the only thing
+# that credential can achieve is a sealed payload on the queue branch — which
+# the runner refuses unless it carries a receipt signed with EDITOR_SIGNING_KEY.
+GITHUB_API_URL = "https://api.github.com"
+PUBLIC_REPO = ""                              # owner/name of the public repo
+PUBLIC_BRANCH = "main"
+PUBLIC_QUEUE_BRANCH = "editor-queue"
+PUBLIC_DEPLOY_WORKFLOW = "deploy.yml"
+
+# The private repository the runner clones. Named here only so the source-push
+# webhook knows which branch it cares about; no token for it lives in this Worker.
+SOURCE_BRANCH = "main"
+
+# The fallback identity for the commits the runner itself makes.
+COMMIT_AUTHOR_NAME = ""
+COMMIT_AUTHOR_EMAIL = ""
+
+# The public half of the editor's signing pair, from `npm run editor:keygen`.
+# NOT a secret: it is published so anybody can check that a commit really was
+# authorised for the identity it names. Must match RDFX_EDITOR_PUBKEY in the
+# public repository and `backend.online_editor.verify_key` in the theme config.
+EDITOR_PUBLIC_KEY = ""
 
 # ─── Secrets (do NOT put values here; set via Wrangler) ─────
 # HMAC signing key for session tokens. Any long random value:
@@ -147,6 +162,28 @@ REPO_PREFER = "gitea"
 # tells the Worker which repository to trust: only the repo holding this secret
 # can produce a valid signature, so no DEPLOY_REPO variable is needed.
 #   wrangler secret put GITHUB_WEBHOOK_SECRET
+#
+# The same idea on the PRIVATE repository, whose push webhook starts a build
+# after a commit made from a laptop. A separate secret, because they
+# authenticate two different repositories:
+#   wrangler secret put SOURCE_WEBHOOK_SECRET
+#
+# Unwraps the per-item keys in `vault_posts`, and wraps a save's one-time key.
+# MUST be byte-identical to VAULT_MASTER in the site's .env:
+#   wrangler secret put VAULT_MASTER
+#
+# The token an authorised browser pushes a sealed save with. A fine-grained PAT
+# on PUBLIC_REPO alone: `Contents: read and write`, `Metadata: read`,
+# `Actions: read` — and NOT `Workflows`, which is what makes GitHub itself
+# refuse any write under `.github/workflows/`:
+#   wrangler secret put PUBLIC_REPO_TOKEN
+#
+# Starts the one workflow. A SECOND fine-grained PAT on PUBLIC_REPO with
+# `Actions: read and write` and nothing else; a browser never receives it:
+#   wrangler secret put PUBLIC_DISPATCH_TOKEN
+#
+# The Ed25519 seed that signs a save's receipt, from `npm run editor:keygen`:
+#   wrangler secret put EDITOR_SIGNING_KEY
 
 [observability]
 enabled = false

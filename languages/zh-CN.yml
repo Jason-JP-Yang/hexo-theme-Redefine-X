@@ -427,6 +427,25 @@ management:
   p_s_pushed: 产物已推送
   p_s_deployed: 已部署
   v_badge: 加密
+  v_editors: 可以编辑的人
+  ed_placeholder: 协作者用户名或数字 ID，回车确认
+  c_title: 协作者
+  c_lede: 每位协作者在这个控制台里能看到什么。文章管理始终属于他们，且只限于获授权的条目；其余部分默认全部拒绝。
+  c_empty: 尚未配置协作者。请先写入 backend.collaborators 与 Worker 的 COLLABORATORS，然后重新构建。
+  g_none: 拒绝
+  g_r: 只读
+  g_rw: 读写
+  part_posts: 文章管理
+  part_analytics: 访问统计
+  part_announce: 发布公告
+  part_notifications: 通知记录
+  part_followers: 订阅者
+  part_buildlog: 构建日志
+  l_title: 构建日志
+  l_lede: 上一次部署实际做了什么。构建过程不向外输出任何内容，日志加密后存放在这里；即使构建失败也会写入。
+  l_empty: 还没有任何一次构建写入过日志。
+  l_failed: 失败
+  l_ok: 成功
   v_audience: 可以阅读的人
   v_reader: 人
   v_readers: 人

@@ -70,6 +70,30 @@ export function pageId(name) {
   return sha256Hex("page|" + String(name)).then((hex) => hex.slice(0, 16));
 }
 
+/**
+ * A post's identity, from either spelling of its path.
+ *
+ * The build hashes Hexo's `post.source`, which is relative to `source/`; the
+ * editor only ever holds repository paths, which are not. Both normalise to the
+ * Hexo one here, because that is what every id already registered was built
+ * from. Mirrors `postId` in scripts/lib/vault-crypto.js.
+ */
+export function postId(sourcePath) {
+  const rel = String(sourcePath || "")
+    .replace(/^\/+/, "")
+    .replace(/^source\//, "");
+  return sha256Hex(rel).then((hex) => hex.slice(0, 16));
+}
+
+/** An album has no source file, so its identity is the page it is published at. */
+export function albumId(pageTitle) {
+  return sha256Hex("masonry|" + String(pageTitle)).then((hex) => hex.slice(0, 16));
+}
+
+export function albumDraftId(pageTitle) {
+  return sha256Hex("masonry|draft|" + String(pageTitle)).then((hex) => hex.slice(0, 16));
+}
+
 export function vaultPrefix() {
   const backend = (window.theme && window.theme.backend) || {};
   return String((backend.encryption && backend.encryption.prefix) || "/v").replace(/\/+$/, "");

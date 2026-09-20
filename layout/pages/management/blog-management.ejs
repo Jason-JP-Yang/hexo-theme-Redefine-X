@@ -42,6 +42,17 @@
                 <section class="bm-section" data-part="notifications" id="bm-notifications"></section>
                 <section class="bm-section" data-part="followers" id="bm-followers"></section>
                 <% } %>
+                <%# Who may see which of the sections above. Written out for
+                    everybody and REMOVED by blog-management.js for anybody who
+                    is not the admin — the markup is the same for both because
+                    this page is sealed under a key a collaborator holds, and
+                    what they are shown is decided at the Worker rather than by
+                    which template rendered. %>
+                <section class="bm-section" data-part="collab" id="bm-collab"></section>
+                <%# The last build's output, sealed by the runner under a key of
+                    its own so this section can be granted without granting the
+                    console whole. %>
+                <section class="bm-section" data-part="buildlog" id="bm-buildlog"></section>
             </div>
         </div>
     </div>
@@ -57,6 +68,8 @@
             notify ? ['bm-announce', __('management.announce')] : null,
             notify ? ['bm-notifications', __('management.notifications')] : null,
             notify ? ['bm-followers', __('management.followers')] : null,
+            ['bm-collab', __('management.c_title')],
+            ['bm-buildlog', __('management.l_title')],
         ].filter(Boolean);
     %>
     <div class="toc-content-container">

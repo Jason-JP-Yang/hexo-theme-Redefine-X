@@ -25,23 +25,28 @@ function group(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function providers(editor) {
-  const out = [];
-  const gitea = group(editor.gitea);
-  const github = group(editor.github);
-
-  if (text(gitea.api_url) && REPO.test(text(gitea.repo)) && text(gitea.branch)) {
-    out.push({
-      id: "gitea",
-      api_url: text(gitea.api_url).replace(/\/+$/, ""),
-      repo: text(gitea.repo),
-      branch: text(gitea.branch),
-    });
-  }
-  if (REPO.test(text(github.repo)) && text(github.branch)) {
-    out.push({ id: "github", repo: text(github.repo), branch: text(github.branch) });
-  }
-  return out;
+/**
+ * Where the runner publishes from, and the key that checks a save was allowed.
+ *
+ * Both are public facts about a public repository, which is the change: the
+ * editor used to need the coordinates of the PRIVATE repository, and those had
+ * to be sealed. Nothing in a browser knows where the source lives any more.
+ *
+ * The editor is on only with both — a repository to push to and a key to check
+ * the receipt with. A deployment missing either can still open everything it is
+ * entitled to read; it simply cannot save, which is a coherent state and one
+ * worth being able to reach.
+ */
+function onlineEditor(editor) {
+  const repo = text(editor.repo);
+  const verify = text(editor.verify_key);
+  if (!REPO.test(repo) || !verify) return { enable: false, repo: "", branch: "", verify_key: "" };
+  return {
+    enable: true,
+    repo,
+    branch: text(editor.branch) || "main",
+    verify_key: verify,
+  };
 }
 
 /**
@@ -95,7 +100,9 @@ function resolve(theme) {
   const websiteId = text(analytics.website_id);
 
   const sealed = on && encryption.enable === true;
-  const editors = sealed ? providers(group(raw.online_editor)) : [];
+  const editor = sealed
+    ? onlineEditor(group(raw.online_editor))
+    : { enable: false, repo: "", branch: "", verify_key: "" };
 
   return {
     enable: on,
@@ -124,25 +131,24 @@ function resolve(theme) {
       pulse: analytics.pulse !== false,
       events: analytics.events !== false,
     },
-    online_editor: {
-      enable: editors.length > 0,
-      providers: editors,
-    },
+    online_editor: editor,
   };
 }
 
 /**
- * What the page may carry. Repository coordinates are sealed under the admin key
- * instead — and so is the half of a collaborator's entry that is not already on
- * screen. The name and avatar are printed in the markup of every post they
+ * What the page may carry. The editor's repository is PUBLIC now, so naming it
+ * discloses nothing — and the verification key is published on purpose, because
+ * a signature nobody can check is not evidence of anything.
+ *
+ * What is still sealed is the half of a collaborator's entry that is not already
+ * on screen. Their name and avatar are printed in the markup of every post they
  * contributed to; their login and email are the identity a commit is signed
- * with, and they travel with the editor's own sealed blob (`o.bin`) rather than
+ * with, and those travel with the editor's own sealed blob (`o.bin`) rather than
  * with every page the site serves.
  */
 function forPage(theme) {
   const resolved = resolve(theme);
   return Object.assign({}, resolved, {
-    online_editor: { enable: resolved.online_editor.enable },
     collaborators: resolved.collaborators.map((row) => ({
       id: row.id,
       name: row.name,

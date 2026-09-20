@@ -1,20 +1,23 @@
 /**
  * Documents: where they are read from, and what a save turns into.
  *
- * ── Two places a post can live ──────────────────────────────────────────────
+ * ── Where a post is read from ───────────────────────────────────────────────
  *
- * A PUBLIC post is read straight out of Gitea. An ENCRYPTED one is not in the
- * public build at all, so it is read the way a reader reads it: `s.bin` off the
- * CDN, opened with the key the Worker released. That blob is the only copy of
- * an encrypted post's source outside the repository, and it is what makes
- * editing one possible without handing the browser the whole repo.
+ * One place, for every post: `s.bin` off the CDN, opened with the key the
+ * Worker released for that item. It used to be two — an encrypted post read
+ * this way and a public one read straight out of the repository with a token
+ * the browser held — and the second half is gone with the token. Every post
+ * has a sealed source copy now, and a key opens exactly one of them.
  *
  * ── What a save is ──────────────────────────────────────────────────────────
  *
- * One commit. There is no draft store and no autosave to a server: saving is
- * committing, and every commit runs the pipeline. Local recovery is the
- * browser's own, sealed under the document's key so a stolen disk yields
- * nothing.
+ * One sealed payload, pushed to a queue branch of the PUBLIC repository with a
+ * signed receipt naming who asked and what they were cleared for. The runner
+ * opens it, checks every path against that receipt, and applies it to the
+ * private repository or refuses the whole of it. There is no draft store and no
+ * autosave to a server: saving is committing, and every commit runs the
+ * pipeline. Local recovery is the browser's own, sealed under the document's
+ * key so a stolen disk yields nothing.
  *
  * ── Drafts ──────────────────────────────────────────────────────────────────
  *
@@ -46,8 +49,8 @@ const POSTS_DIR = "source/_posts";
  * A repository path, from either spelling of the same file.
  *
  * Hexo's `post.source` is relative to `source/` — that is what the rendered
- * page carries and what the sealed metadata records — while Gitea lists and
- * writes full repository paths. Mixing the two is not a cosmetic mismatch: an
+ * page carries and what the sealed metadata records — while a save names full
+ * repository paths. Mixing the two is not a cosmetic mismatch: an
  * encrypted post whose `_posts/x.md` never matched a listed `source/_posts/x.md`
  * fell out of the document list entirely, so opening it reported that the post
  * was not in the repository, and a save that did find it would have created a
@@ -67,6 +70,20 @@ let owners = null;
 
 /* ─── grants ───────────────────────────────────────────────────────────────── */
 
+/**
+ * Every item this session may open.
+ *
+ * `/api/editor/keys` rather than `/api/vault/keys`: the second is the READER's
+ * route and returns only the encrypted posts a reader was granted. The editor
+ * needs the other axis — everything this identity may open OR change, which
+ * now includes every public post, because a public post's markdown is sealed
+ * beside the site so that editing it needs no credential for the repository it
+ * lives in.
+ *
+ * `masonry` and `log` come back on the same list and are not documents; they
+ * are filtered out here rather than at the Worker, which has no business
+ * knowing what a document is.
+ */
 async function loadGrants(force) {
   if (grants && !force) return grants;
   // A re-fetch replaces the grant objects, and the sealed index is built out of
@@ -78,7 +95,7 @@ async function loadGrants(force) {
   const base = window.blogAuth.resolveApiBase();
   if (!session || !session.token || !base) return (grants = []);
 
-  const res = await fetch(base + "/api/vault/keys", {
+  const res = await fetch(base + "/api/editor/keys", {
     method: "POST",
     headers: { Authorization: "Bearer " + session.token, "Content-Type": "application/json" },
     body: "{}",
@@ -89,7 +106,9 @@ async function loadGrants(force) {
   // `raw` is BYTES, the same shape plugins/vault.js keeps. The sealed-asset
   // helpers take raw key material, and one of the two spellings silently
   // derives the wrong path rather than failing.
-  grants = (body.posts || []).map((row) => ({ ...row, key: null, raw: b64urlToBytes(row.key) }));
+  grants = (body.items || [])
+    .filter((row) => row.kind === "post" || row.kind === "album")
+    .map((row) => ({ ...row, key: null, raw: b64urlToBytes(row.key) }));
   return grants;
 }
 
@@ -217,15 +236,37 @@ export function forgetGrants() {
  * two entries for one article is a way to edit the wrong one.
  */
 export async function listDocuments() {
-  const [files, granted] = await Promise.all([repo.list(POSTS_DIR), loadGrants(true)]);
+  const granted = await loadGrants(true);
 
   const metas = await Promise.all(granted.map(metaOf));
   const vaultBySource = new Map();
   const drafts = [];
+  // Every post has a sealed source copy now, so this list is no longer two
+  // lists stitched together — a repository listing for the public ones and the
+  // grants for the rest. It is the grants, and what separates the two kinds is
+  // `enc`: whether the item is encrypted ON THE SITE, not whether the editor
+  // can open it.
+  const files = [];
 
   granted.forEach((grant, i) => {
     const meta = metas[i];
     if (!meta || meta.kind === "album") return;
+    if (grant.enc !== 1) {
+      files.push({
+        type: "file",
+        name: String(meta.source || "").split("/").pop() || "",
+        path: repoPath(meta.source),
+        sha: "",
+        // A public post's title and date used to be guessed from its file name,
+        // because a repository listing is all a name and a sha. The sealed
+        // record carries the real ones, so the list finally agrees with the site.
+        title: meta.title || "",
+        date: meta.date || "",
+        grant,
+        slug: grant.slug,
+      });
+      return;
+    }
     const entry = {
       kind: "vault",
       id: grant.id,
@@ -265,12 +306,12 @@ export async function listDocuments() {
     out.push({
       kind: vault ? "vault" : "public",
       id: vault ? vault.id : file.path,
-      slug: vault ? vault.slug : "",
-      grant: vault ? vault.grant : null,
+      slug: vault ? vault.slug : file.slug || "",
+      grant: vault ? vault.grant : file.grant || null,
       path: file.path,
       sha: file.sha,
-      title: vault ? vault.title : titleFromName(file.name),
-      date: vault ? vault.date : "",
+      title: vault ? vault.title : file.title || titleFromName(file.name),
+      date: vault ? vault.date : file.date || "",
       encrypted: !!vault,
       assets: vault ? vault.assets : null,
       sizes: vault ? vault.sizes : null,
@@ -548,45 +589,36 @@ function publishEncrypted(doc, choice) {
  * A picture the repository has never seen needs no note: it was added in this
  * same session and rides in on the pending upload under its final name.
  */
+/**
+ * The notes that tell the build a picture moved.
+ *
+ * Every move is noted now, rather than only the ones a repository listing
+ * confirmed. There is no repository to list — the editor reads from the
+ * published site — and the two errors are not symmetrical: a note for a file
+ * that was never there is a line the build finds nothing to do with, while a
+ * MISSING note is a picture left behind by the commit meant to move it, with
+ * every check downstream agreeing the move went fine because a file did arrive.
+ *
+ * The journal is APPENDED by the runner rather than rewritten here, for the
+ * same reason: this session cannot read what is already in it, and a save that
+ * replaced the file with its own idea of the contents would drop whatever
+ * another save had put there.
+ */
 async function movedFiles(stage) {
   if (!stage || !stage.dirty) return [];
-
-  // One listing per folder, not one per file: a folder move is hundreds of
-  // pairs that all share a parent.
-  const listings = new Map();
-  const known = async (repoPath) => {
-    const dir = repoPath.replace(/\/[^/]+$/, "");
-    if (!listings.has(dir)) listings.set(dir, repo.list(dir).catch(() => []));
-    return (await listings.get(dir)).some((row) => row.path === repoPath);
-  };
 
   const notes = [];
   for (const move of stage.moves) {
     if (move.noted) continue;
-    if (await known(move.from)) notes.push({ from: move.from, to: move.to });
+    notes.push({ from: move.from, to: move.to });
   }
   if (!notes.length) return [];
 
-  const JOURNAL = "source/_data/image-moves.json";
-  let held = [];
-  let sha = "";
-  try {
-    const current = await repo.read(JOURNAL);
-    if (current) {
-      sha = current.sha;
-      held = JSON.parse(current.text) || [];
-    }
-  } catch (err) {
-    held = [];
-  }
-
-  const body = JSON.stringify(held.concat(notes), null, 2) + "\n";
   return [
     {
-      operation: sha ? "update" : "create",
-      path: JOURNAL,
-      content: repo.toBase64(body),
-      ...(sha ? { sha } : {}),
+      operation: "append",
+      path: "source/_data/image-moves.json",
+      content: repo.toBase64(JSON.stringify(notes)),
     },
   ];
 }
@@ -912,13 +944,19 @@ export async function remove(entry) {
   return repo.commit(files, `Remove: ${entry.title || entry.path}`);
 }
 
+/**
+ * The resealed keyring, straight from the mint that produced it.
+ *
+ * No read first. There is nothing to read — the keyring is not published — and
+ * nothing to compare against: the Worker rebuilds the whole file from its own
+ * rows every time it mints, so what comes back IS the file, and the runner
+ * accepts it only because it opens under VAULT_MASTER.
+ */
 async function keyringFile(keysEnc) {
-  const current = await repo.read(".vault/keys.enc");
   return {
-    operation: current ? "update" : "create",
+    operation: "update",
     path: ".vault/keys.enc",
     content: repo.toBase64(keysEnc),
-    ...(current ? { sha: current.sha } : {}),
   };
 }
 

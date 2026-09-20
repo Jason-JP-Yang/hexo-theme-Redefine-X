@@ -746,3 +746,165 @@ a.bm-post-edit
   > a
     position relative
     display block
+
+// ── The collaborator matrix ──────────────────────────────────────────────────
+//
+// One card per person, and inside it one row per section of the console. The
+// grades are the segmented control the filter bar already uses, so a grade that
+// is set reads exactly like a filter that is on — there is one vocabulary here
+// for "this is the state it is in" and this is it.
+//
+// Every colour is a theme token that inverts with the scheme, so nothing below
+// needs a dark-mode branch and nothing can come out dark on dark.
+.bm-collab
+  display flex
+  flex-direction column
+  gap 12px
+  padding 14px 16px
+  border-radius 0.75rem
+  background var(--second-background-color)
+  border 1px solid var(--shadow-color-1)
+
+  + .bm-collab
+    margin-top 10px
+
+.bm-collab-head
+  display flex
+  align-items center
+  gap 10px
+  min-width 0
+
+.bm-collab-avatar
+  width 30px
+  height 30px
+  border-radius 999px
+  object-fit cover
+  flex none
+  background var(--third-background-color-transparent)
+
+.bm-collab-name
+  font-weight 600
+  font-size 0.9rem
+  color var(--first-text-color)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.bm-collab-login
+  font-size 0.76rem
+  color var(--third-text-color)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+  // The save flag sits at the end of the line rather than under it, so the row
+  // does not change height when a grade is being written.
+  + .bm-save-state
+    margin-left auto
+    flex none
+
+// Two columns on a desktop, one on a phone. The rule is the content's own: a
+// section name and its three grades need about 300px to sit on one line, and
+// below that they stack rather than wrap mid-control.
+.bm-collab-grid
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(300px, 1fr))
+  gap 8px 20px
+
+.bm-collab-cell
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+  min-width 0
+
+.bm-collab-panel
+  display inline-flex
+  align-items center
+  gap 7px
+  font-size 0.8rem
+  color var(--second-text-color)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+  i
+    font-size 0.72rem
+    color var(--third-text-color)
+    flex none
+
+.bm-collab-grades
+  flex none
+
+  button
+    padding 5px 10px
+
+    // A grade this section does not have is shown and disabled rather than left
+    // out: a control that is simply missing reads as one somebody forgot, while
+    // one that is there and greyed says what the rule is.
+    &:disabled
+      opacity 0.38
+      cursor not-allowed
+
+      &:hover
+        color var(--third-text-color)
+
+    &:disabled.is-on
+      opacity 0.75
+      cursor default
+
+// ── The build log ────────────────────────────────────────────────────────────
+.bm-log-head
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 6px
+  margin-bottom 10px
+
+.bm-bubble
+  &.is-ok
+    background var(--box-green-bg)
+    color var(--box-green-text)
+
+  &.is-danger
+    background var(--box-red-bg)
+    color var(--box-red-text)
+
+// A terminal transcript, so it keeps its own line breaks and scrolls sideways
+// rather than wrapping a path in the middle. Capped in height because the point
+// of reading it is almost always the end.
+.bm-log-text
+  margin 0
+  max-height 26rem
+  overflow auto
+  padding 12px 14px
+  border-radius 0.6rem
+  background var(--third-background-color-transparent)
+  border 1px solid var(--shadow-color-1)
+  color var(--second-text-color)
+  font-family 'Geist Mono', 'Noto Color Emoji', Courier, monospace
+  font-size 0.74rem
+  line-height 1.6
+  white-space pre
+  -webkit-overflow-scrolling touch
+
+  code
+    background none
+    padding 0
+    font-size inherit
+    color inherit
+
+@media screen and (max-width: 640px)
+  .bm-collab-cell
+    flex-direction column
+    align-items flex-start
+    gap 6px
+
+  .bm-collab-grades
+    align-self stretch
+
+    button
+      flex 1 1 0
+      display inline-flex
+      align-items center
+      justify-content center
