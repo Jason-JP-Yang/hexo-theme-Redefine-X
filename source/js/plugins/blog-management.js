@@ -898,14 +898,25 @@ function postRowHTML(row) {
   // Edit opens the gallery editor on it and Unpublish writes `draft: true` onto
   // that entry — but both are still "edit this" and "take this down", and saying
   // so in two vocabularies would be two things to learn about one.
+  // Edit appears only where this identity may actually write. The row is still
+  // listed either way — a collaborator scoped to three articles is working
+  // inside a blog, not inside three articles — but a button that leads to a
+  // save the runner will refuse is worse than no button.
+  //
+  // `canWrite` is undefined on the admin's rows, which arrive sealed with the
+  // page and describe a site the admin may change all of.
   const queued = state.posts.queue.includes(row.key);
-  const actions = !canCommit()
+  const mine = row.canWrite !== false;
+  const actions = !canCommit() || !mine
     ? ""
     : `<a class="bm-quiet bm-post-edit" href="${escapeHTML(editHref(row))}">
          <i class="fa-solid fa-pen" aria-hidden="true"></i>
          <span class="np-btn-label">${e("edit", "Edit")}</span></a>
        ${
-         row.published
+         // Unpublishing changes what the SITE shows, which is never a
+         // collaborator's decision — refused at the Worker and at the runner
+         // too, so this only saves them from finding that out the hard way.
+         row.published && state.me.admin
            ? `<button type="button" class="bm-quiet bm-danger bm-post-unpublish${queued ? " is-on" : ""}">
                 <i class="fa-solid ${queued ? "fa-check" : "fa-eye-slash"}" aria-hidden="true"></i>
                 <span class="np-btn-label">${
@@ -2157,7 +2168,15 @@ async function scopedInventory() {
         const sealed = await fetchSealed(`${vaultPrefix()}/${row.slug}/r.bin`);
         if (!sealed) return null;
         const meta = await openJSON(await importAesKey(b64urlToBytes(row.key)), sealed);
-        return { ...meta, vaultId: meta.vaultId || row.id, slug: meta.slug || row.slug };
+        // `write` is the Worker's answer, not the row's: the sealed record says
+        // what the item IS, and who may change it is a decision made after the
+        // build that sealed it.
+        return {
+          ...meta,
+          vaultId: meta.vaultId || row.id,
+          slug: meta.slug || row.slug,
+          canWrite: row.write === true,
+        };
       } catch (err) {
         return null;
       }

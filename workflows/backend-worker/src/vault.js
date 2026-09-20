@@ -110,9 +110,16 @@ export async function unwrapper(env) {
 export async function grantedPosts(db, env, session) {
   const master = await importMaster(env.VAULT_MASTER);
 
+  // `kind` matters as much as `enc`. The console's markup, the build log and the
+  // two copies of masonry.yml are all encrypted items with keys in this table,
+  // and none of them is a thing a READER opens — handing them over made the page
+  // fetch a card for each and get five 404s, because a console has no card.
   if (session.isAdmin) {
     const { results } = await db
-      .prepare("SELECT id, slug, wrapped FROM vault_posts WHERE enc = 1 ORDER BY created_at DESC")
+      .prepare(
+        `SELECT id, slug, wrapped FROM vault_posts
+          WHERE enc = 1 AND kind IN ('post', 'album') ORDER BY created_at DESC`
+      )
       .all();
     return unwrapAll(master, results);
   }
@@ -131,7 +138,10 @@ export async function grantedPosts(db, env, session) {
   const slice = ids.slice(0, 90);
   const holes = slice.map((_, i) => `?${i + 1}`).join(",");
   const { results } = await db
-    .prepare(`SELECT id, slug, wrapped FROM vault_posts WHERE enc = 1 AND id IN (${holes})`)
+    .prepare(
+      `SELECT id, slug, wrapped FROM vault_posts
+        WHERE enc = 1 AND kind IN ('post', 'album') AND id IN (${holes})`
+    )
     .bind(...slice)
     .all();
 

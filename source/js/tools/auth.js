@@ -206,10 +206,21 @@
   }
 
   // ─── session cache (avoid re-verifying on every page load) ─
-  function syncAdminClass(isAdmin) {
+  /**
+   * `html.blog-admin` reveals the console's entry points — the navbar link, the
+   * pencil on an article, the one on an album.
+   *
+   * A COLLABORATOR gets it too. The class is presentation and nothing else:
+   * every route behind those entry points checks the real rule, and what a
+   * collaborator is then shown inside the console is decided per section by the
+   * Worker. Keying it on `isAdmin` alone was what left somebody with edit
+   * permission on three articles no way to reach any of them.
+   */
+  function syncAdminClass(session) {
+    var staff = !!(session && (session.isAdmin || session.isCollaborator));
     try {
-      document.documentElement.classList.toggle("blog-admin", !!isAdmin);
-      if (isAdmin) localStorage.setItem(ADMIN_KEY, "1");
+      document.documentElement.classList.toggle("blog-admin", staff);
+      if (staff) localStorage.setItem(ADMIN_KEY, "1");
       else localStorage.removeItem(ADMIN_KEY);
     } catch (e) {}
   }
@@ -219,7 +230,7 @@
       if (data) sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(data));
       else sessionStorage.removeItem(SESSION_CACHE_KEY);
     } catch (e) {}
-    syncAdminClass(data && data.isAdmin);
+    syncAdminClass(data);
   }
   function hydrate() {
     if (!readGiscusSession()) {
@@ -232,7 +243,7 @@
       var data = JSON.parse(raw);
       if (data && (!data.exp || Date.now() < data.exp)) {
         cachedSession = data;
-        syncAdminClass(data.isAdmin);
+        syncAdminClass(data);
       } else persist(null);
     } catch (e) {}
   }

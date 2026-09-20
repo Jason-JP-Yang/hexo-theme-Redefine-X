@@ -266,7 +266,17 @@ export async function itemsFor(db, env, session, unwrap, panels) {
     }
 
     const write = session.isAdmin || splitList(row.editors).includes(me);
-    if (!write && !(readable && readable.has(row.id))) continue;
+
+    // A PUBLIC item is readable by everyone, because it is published. Posts
+    // Management shows a collaborator the whole catalogue for that reason, with
+    // Edit only on the rows they may write — a console that listed only the
+    // encrypted articles somebody had been granted described the blog as three
+    // articles long and gave them no way to see what they were working beside.
+    //
+    // Nothing is disclosed: `enc = 0` means the article is on the site, and the
+    // key opens a copy of markdown anybody can already read rendered.
+    const open = !row.enc && (row.kind === "post" || row.kind === "album");
+    if (!write && !open && !(readable && readable.has(row.id))) continue;
     // The admin page's key opens the INVENTORY — every post on the site, named.
     // It is never handed out here: a collaborator scoped to three articles
     // builds their list from those three, not from a list of everything.

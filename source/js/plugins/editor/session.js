@@ -251,28 +251,37 @@ export async function listDocuments() {
   granted.forEach((grant, i) => {
     const meta = metas[i];
     if (!meta || meta.kind === "album") return;
-    if (grant.enc !== 1) {
-      files.push({
-        type: "file",
-        name: String(meta.source || "").split("/").pop() || "",
-        path: repoPath(meta.source),
-        sha: "",
-        // A public post's title and date used to be guessed from its file name,
-        // because a repository listing is all a name and a sha. The sealed
-        // record carries the real ones, so the list finally agrees with the site.
-        title: meta.title || "",
-        date: meta.date || "",
-        grant,
-        slug: grant.slug,
-      });
-      return;
-    }
+    const path = repoPath(meta.source);
+
+    // EVERY article gets a row here, encrypted or not. `files` used to be a
+    // repository listing of `_posts`, which is what made the loop below work:
+    // it walked every file on disk and `vaultBySource` upgraded the encrypted
+    // ones in place. Filling it only with the public ones left every published
+    // encrypted post out of the list entirely — the editor then reported that
+    // the post it was standing on was not one it could write to.
+    //
+    // A public post's title and date used to be guessed from its file name,
+    // because a repository listing is a name and a sha and nothing else. The
+    // sealed record carries the real ones, so the list agrees with the site.
+    files.push({
+      type: "file",
+      name: String(meta.source || "").split("/").pop() || "",
+      path,
+      sha: "",
+      title: meta.title || "",
+      date: meta.date || "",
+      grant,
+      slug: grant.slug,
+    });
+
+    if (grant.enc !== 1) return;
+
     const entry = {
       kind: "vault",
       id: grant.id,
       slug: grant.slug,
       grant,
-      path: repoPath(meta.source),
+      path,
       title: meta.title || "",
       date: meta.date || "",
       draft: meta.draft === true,
