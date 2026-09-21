@@ -50,6 +50,26 @@ const FORBIDDEN = [
 
 const POST = /^source\/_posts\/[^/]+\.md$/;
 const DRAFT = /\.draft\.md$/;
+
+/**
+ * Does the incoming body say it is a draft? The FRONT MATTER, not the name.
+ *
+ * A brand-new article is saved as a draft at its future published path; only a
+ * draft standing in front of an already-published article has the `.draft.md`
+ * suffix. Reading the suffix alone called every new draft a publish, which is
+ * what refused a collaborator the one thing the Worker had just issued them a
+ * claim row for — creating something of their own.
+ */
+function draftBody(data) {
+  let text = "";
+  try {
+    text = Buffer.from(String(data || ""), "base64").toString("utf8");
+  } catch {
+    return false;
+  }
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  return !!front && /^draft:\s*(true|yes|on|1)\s*$/im.test(front[1]);
+}
 const MASONRY = "source/_data/masonry.yml";
 const KEYRING = ".vault/keys.enc";
 const JOURNAL = "source/_data/image-moves.json";
@@ -212,9 +232,12 @@ for (const file of files) {
       // Editing a published article you are an editor of is ordinary work.
       // Creating one, or removing one, is publishing, and publishing is the
       // admin's decision — refused here as well as at the Worker, so the rule
-      // does not depend on which client asked.
+      // does not depend on which client asked. A new article whose OWN front
+      // matter says `draft: true` is not published by being created, though,
+      // and refusing it was the hole that made a collaborator unable to start
+      // anything at all.
       if (op === "delete") refuse(`only an admin may unpublish ${rel}`);
-      if (!exists) refuse(`only an admin may publish a new article (${rel})`);
+      if (!exists && !draftBody(file.data)) refuse(`only an admin may publish a new article (${rel})`);
     }
 
     if (op === "delete") deletes.push({ rel });

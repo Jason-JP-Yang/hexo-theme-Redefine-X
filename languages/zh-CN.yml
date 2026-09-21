@@ -428,7 +428,7 @@ management:
   p_s_deployed: 已部署
   v_badge: 加密
   v_editors: 可以编辑的人
-  ed_placeholder: 协作者用户名或数字 ID，回车确认
+  ed_placeholder: 协作者名字或数字 ID，回车确认
   c_title: 协作者
   c_lede: 每位协作者在这个控制台里能看到什么。文章管理始终属于他们，且只限于获授权的条目；其余部分默认全部拒绝。
   c_empty: 尚未配置协作者。请先写入 backend.collaborators 与 Worker 的 COLLABORATORS，然后重新构建。

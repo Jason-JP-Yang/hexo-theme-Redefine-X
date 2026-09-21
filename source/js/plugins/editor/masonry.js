@@ -2286,6 +2286,12 @@ async function doSave(mode) {
 
     syncHeader();
     notice("info", `${t("saved", "Saved")} ${result.short || ""}`.trim());
+    if (result.started === false) {
+      notice(
+        "warn",
+        t("save_unstarted", "Saved and queued, but the build was not started — save again to retry.")
+      );
+    }
 
     startProgress(result);
     if (plan.published) window.scrollTo({ top: 0, behavior: "smooth" });

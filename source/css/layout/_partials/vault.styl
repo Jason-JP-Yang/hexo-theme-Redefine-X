@@ -870,29 +870,212 @@ a.bm-post-edit
     background var(--box-red-bg)
     color var(--box-red-text)
 
-// A terminal transcript, so it keeps its own line breaks and scrolls sideways
-// rather than wrapping a path in the middle. Capped in height because the point
-// of reading it is almost always the end.
+// The surface the transcript scrolls on. The background, radius and border live
+// here rather than on the <pre> so that the mask below fades only the TEXT — a
+// mask on the scroller would otherwise fade its own background too, and the log
+// would end in a hole rather than in an edge.
+.bm-log-frame
+  position relative
+  min-width 0
+  border-radius 0.6rem
+  background var(--third-background-color-transparent)
+  border 1px solid var(--shadow-color-1)
+  overflow hidden
+
+// A terminal transcript: smaller than body copy, and it WRAPS. A long Hexo or
+// npm line used to run off the side of the page, so the one thing worth reading
+// — the end of it — was the one thing off screen. Long unbroken paths wrap too,
+// which is what `anywhere` buys; the horizontal scrollbar below is for the case
+// where nothing can break.
+//
+// The mask is the theme's usual edge hint, in both axes at once: each hidden
+// edge contributes a custom property to the two gradients, and the gradients
+// are intersected so a corner fades once, not twice. A property that is 0px
+// makes its gradient stop at the very edge, which is exactly "no fade here".
 .bm-log-text
   margin 0
   max-height 26rem
   overflow auto
-  padding 12px 14px
-  border-radius 0.6rem
-  background var(--third-background-color-transparent)
-  border 1px solid var(--shadow-color-1)
+  padding 10px 12px
   color var(--second-text-color)
   font-family 'Geist Mono', 'Noto Color Emoji', Courier, monospace
-  font-size 0.74rem
-  line-height 1.6
-  white-space pre
+  font-size 0.68rem
+  line-height 1.55
+  tab-size 2
+  white-space pre-wrap
+  overflow-wrap anywhere
+  word-break break-word
   -webkit-overflow-scrolling touch
+  scrollbar-width thin
+  scrollbar-color var(--scrollbar-color) transparent
+
+  --log-fade-top 0px
+  --log-fade-bottom 0px
+  --log-fade-left 0px
+  --log-fade-right 0px
+
+  -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 var(--log-fade-top), #000 calc(100% - var(--log-fade-bottom)), transparent 100%), linear-gradient(to right, transparent 0, #000 var(--log-fade-left), #000 calc(100% - var(--log-fade-right)), transparent 100%)
+  mask-image linear-gradient(to bottom, transparent 0, #000 var(--log-fade-top), #000 calc(100% - var(--log-fade-bottom)), transparent 100%), linear-gradient(to right, transparent 0, #000 var(--log-fade-left), #000 calc(100% - var(--log-fade-right)), transparent 100%)
+  -webkit-mask-composite source-in
+  mask-composite intersect
+
+  &.has-top
+    --log-fade-top 18px
+
+  &.has-bottom
+    --log-fade-bottom 18px
+
+  &.has-left
+    --log-fade-left 14px
+
+  &.has-right
+    --log-fade-right 14px
+
+  // The site's own thin scrollbar, the same one the analytics tables use, on
+  // both axes: a rounded thumb inset from a transparent track, never the
+  // platform's grey block.
+  &::-webkit-scrollbar
+    width 9px
+    height 9px
+
+  &::-webkit-scrollbar-track
+    background transparent
+
+  &::-webkit-scrollbar-thumb
+    border 2px solid transparent
+    border-radius 999px
+    background var(--scrollbar-color)
+    background-clip content-box
+
+  &:hover::-webkit-scrollbar-thumb
+    background var(--scrollbar-color-hover)
+    background-clip content-box
 
   code
     background none
     padding 0
     font-size inherit
     color inherit
+
+// ── the transcript's colours ─────────────────────────────────────────────────
+// What the runner printed with FORCE_COLOR=1, restored. The basic sixteen are
+// classes so they invert with the scheme — a terminal's black is not readable
+// on a dark page, and its bright white is not readable on a light one.
+.a-b
+  font-weight 620
+
+.a-dim
+  opacity 0.62
+
+.a-i
+  font-style italic
+
+.a-u
+  text-decoration underline
+
+.a-s
+  text-decoration line-through
+
+.a-inv
+  background var(--first-text-color)
+  color var(--background-color)
+
+.a-0, .a-8
+  color #57606a
+
+.a-1, .a-9
+  color #c0392b
+
+.a-2, .a-10
+  color #1a7f37
+
+.a-3, .a-11
+  color #9a6700
+
+.a-4, .a-12
+  color #1f6feb
+
+.a-5, .a-13
+  color #8250df
+
+.a-6, .a-14
+  color #0f766e
+
+.a-7, .a-15
+  color #3b3f46
+
+.a-bg-0, .a-bg-8
+  background #d0d7de
+
+.a-bg-1, .a-bg-9
+  background #ffd7d5
+
+.a-bg-2, .a-bg-10
+  background #d7f5dd
+
+.a-bg-3, .a-bg-11
+  background #f8e3a1
+
+.a-bg-4, .a-bg-12
+  background #d3e2fd
+
+.a-bg-5, .a-bg-13
+  background #ecd8ff
+
+.a-bg-6, .a-bg-14
+  background #ccf1f1
+
+.a-bg-7, .a-bg-15
+  background #e6e8eb
+
+.dark
+  .a-0, .a-8
+    color #8b949e
+
+  .a-1, .a-9
+    color #ff7b72
+
+  .a-2, .a-10
+    color #7ee787
+
+  .a-3, .a-11
+    color #e3b341
+
+  .a-4, .a-12
+    color #79c0ff
+
+  .a-5, .a-13
+    color #d2a8ff
+
+  .a-6, .a-14
+    color #56d4dd
+
+  .a-7, .a-15
+    color #c9d1d9
+
+  .a-bg-0, .a-bg-8
+    background #30363d
+
+  .a-bg-1, .a-bg-9
+    background #4a1d1d
+
+  .a-bg-2, .a-bg-10
+    background #1b3a24
+
+  .a-bg-3, .a-bg-11
+    background #3d3111
+
+  .a-bg-4, .a-bg-12
+    background #14294a
+
+  .a-bg-5, .a-bg-13
+    background #3a2152
+
+  .a-bg-6, .a-bg-14
+    background #11383a
+
+  .a-bg-7, .a-bg-15
+    background #2d333b
 
 @media screen and (max-width: 640px)
   .bm-collab-cell

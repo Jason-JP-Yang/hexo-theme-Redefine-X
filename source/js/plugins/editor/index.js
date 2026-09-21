@@ -3418,6 +3418,16 @@ async function doSave(mode) {
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);
 
+    // The save is on the queue branch either way, but a dispatch that did not
+    // get through means no run is coming for it — so the rail would sit at
+    // "Building" until it gave up. Said here, where the author is looking.
+    if (result.started === false) {
+      notice(
+        "warn",
+        t("save_unstarted", "Saved and queued, but the build was not started — save again to retry.")
+      );
+    }
+
     // A post written HERE now lives somewhere else, but the rail is still worth
     // watching: it is the only thing saying whether the commit built. Where it
     // lands is what differs — see `land`.

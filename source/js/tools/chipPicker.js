@@ -23,6 +23,70 @@ export function avatarOf(id) {
   return `https://avatars.githubusercontent.com/u/${encodeURIComponent(id)}?s=64&v=4`;
 }
 
+/** The collaborators the site is configured with: id, display name, avatar. */
+function roster() {
+  const backend = (window.theme && window.theme.backend) || {};
+  return Array.isArray(backend.collaborators) ? backend.collaborators : [];
+}
+
+/**
+ * Resolve a typed value against the configured collaborators ONLY.
+ *
+ * The editor list is for collaborators and nobody else — a GitHub account that
+ * is not on the roster cannot be given write access however the request is
+ * made — so this lookup answers from the page's own configuration and needs no
+ * request at all. Matches the numeric id, or the display name.
+ */
+export async function rosterLookup(raw) {
+  const value = String(raw || "").replace(/^[@#]/, "").trim().toLowerCase();
+  const hit = roster().find(
+    (row) => String(row.id) === value || String(row.name || "").toLowerCase() === value
+  );
+  return { ok: true, matched: hit ? [{ id: Number(hit.id), login: "", name: hit.name || "" }] : [] };
+}
+
+// id -> Promise<{login, name}>, for the life of the page. GitHub's public user
+// endpoint is rate-limited per address, so each identity is asked for once.
+const named = new Map();
+
+/**
+ * The GitHub login and display name behind a numeric id.
+ *
+ * A stored identity is an id and, at best, the login it was typed in as. For
+ * anybody first entered by number that login WAS the number, so a reloaded
+ * chip had nothing to call them. The roster answers for collaborators; GitHub's
+ * public API answers for everybody else, straight from the browser, with no
+ * credential and no Worker round trip.
+ */
+function nameOf(id) {
+  const key = String(id);
+  if (named.has(key)) return named.get(key);
+
+  const job = (async () => {
+    const mate = roster().find((row) => String(row.id) === key);
+    let login = "";
+    let name = mate ? String(mate.name || "") : "";
+    try {
+      const res = await fetch(`https://api.github.com/user/${encodeURIComponent(key)}`, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (res.ok) {
+        const user = await res.json();
+        login = String(user.login || "");
+        name = name || String(user.name || "");
+      }
+    } catch (e) {
+      /* offline or rate-limited: the roster name, or the id, is what shows */
+    }
+    return { login, name };
+  })();
+
+  named.set(key, job);
+  return job;
+}
+
+const digitsOnly = (value) => /^\d+$/.test(String(value || ""));
+
 export class Picker {
   /**
    * @param {object} options
@@ -85,15 +149,40 @@ export class Picker {
     return this.busy === 0 && this.chips.every((c) => c.status === "ok");
   }
 
+  /**
+   * Put stored identities back. Accepts `{id, login, name}` rows or bare ids —
+   * an editor list is stored as ids alone — and fills in whatever is missing
+   * afterwards, so the chips appear at once and gain their names as they arrive.
+   */
   set(entries) {
-    this.chips = (entries || []).map((row) => ({
-      raw: String(row.login || row.id),
-      id: row.id,
-      login: row.login || "",
-      name: row.name || "",
-      status: "ok",
-    }));
+    this.chips = (entries || [])
+      .map((row) => (row && typeof row === "object" ? row : { id: row }))
+      .filter((row) => row.id != null && row.id !== "")
+      .map((row) => {
+        const login = digitsOnly(row.login) ? "" : String(row.login || "");
+        return {
+          raw: String(row.id),
+          id: Number(row.id),
+          login,
+          name: String(row.name || ""),
+          status: "ok",
+        };
+      });
     this.paint();
+    this.fillNames(this.chips);
+  }
+
+  /** Ask for the names a chip does not carry, then repaint once they are in. */
+  fillNames(chips) {
+    const missing = chips.filter((chip) => chip.status === "ok" && (!chip.login || !chip.name));
+    if (!missing.length) return;
+    Promise.all(
+      missing.map(async (chip) => {
+        const found = await nameOf(chip.id);
+        if (!chip.login && found.login) chip.login = found.login;
+        if (!chip.name && found.name) chip.name = found.name;
+      })
+    ).then(() => this.paint());
   }
 
   clear() {
@@ -135,15 +224,16 @@ export class Picker {
 
     const match = result && result.ok && (result.matched || [])[0];
     if (match) {
-      chip.id = match.id;
-      chip.login = match.login;
-      chip.name = match.name || "";
+      chip.id = Number(match.id);
+      chip.login = digitsOnly(match.login) ? "" : String(match.login || "");
+      chip.name = String(match.name || "");
       chip.status = "ok";
     } else {
       chip.status = result && result.ok ? "unknown" : "error";
     }
     this.paint();
     this.onCommit(this);
+    if (match) this.fillNames([chip]);
   }
 
   paint() {
@@ -172,9 +262,14 @@ export class Picker {
                 aria-label="${escapeHTML(remove)}">
           <i class="fa-solid fa-xmark" aria-hidden="true"></i></button></span>`;
     }
-    return `<span class="bm-chip is-ok">
+    // Name first, then the login when it says something the name does not, then
+    // the id — the one field every chip is guaranteed to have.
+    const label = chip.name || chip.login;
+    const handle = chip.login && chip.login !== chip.name ? `@${chip.login}` : "";
+    return `<span class="bm-chip is-ok" title="${escapeHTML([label, handle, "#" + chip.id].filter(Boolean).join(" "))}">
       <img class="bm-chip-avatar" src="${avatarOf(chip.id)}" alt="" loading="lazy">
-      <span class="bm-chip-name">${escapeHTML(chip.name || chip.login)}</span>
+      ${label ? `<span class="bm-chip-name">${escapeHTML(label)}</span>` : ""}
+      ${handle && chip.name ? `<span class="bm-chip-id">${escapeHTML(handle)}</span>` : ""}
       <span class="bm-chip-id">#${escapeHTML(chip.id)}</span>
       <button type="button" class="bm-chip-x" data-raw="${escapeHTML(chip.raw)}"
               aria-label="${escapeHTML(remove)}">

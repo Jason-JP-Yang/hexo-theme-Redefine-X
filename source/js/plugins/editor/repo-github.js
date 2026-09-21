@@ -138,6 +138,38 @@ export async function running(repo) {
   return false;
 }
 
+/** One page of a run query, or null — the shape every lookup below returns. */
+async function runsPage(repo, path) {
+  const res = await call(repo, path, null, true).catch(() => null);
+  if (!res || !res.ok) return null;
+  const body = await res.json().catch(() => ({}));
+  return body.workflow_runs || [];
+}
+
+/**
+ * The run a SAVE was dispatched as.
+ *
+ * `workflow_dispatch` from `main` gives every run `head_sha: main`, so the
+ * commit the save pushed is not on the run at all — the ONE place it appears is
+ * the `run-name` the workflow formats out of its inputs, and `display_title` is
+ * that string. Matched on the full commit id first, then its short form, since
+ * the run-name is written with whichever the dispatcher named.
+ */
+async function dispatchedRun(repo, file, ref) {
+  const short = String(ref).slice(0, 7);
+  const runs = await runsPage(
+    repo,
+    `/actions/workflows/${encodeURIComponent(file)}/runs?event=workflow_dispatch&per_page=20`
+  );
+  if (!runs) return null;
+  return (
+    runs.find((run) => {
+      const title = String(run.display_title || run.name || "");
+      return title.includes(ref) || title.includes(short);
+    }) || null
+  );
+}
+
 /**
  * The run for one commit — verify, build and deploy as three stages.
  *
@@ -151,16 +183,17 @@ export async function runStatus(repo, sha) {
   if (!ref) return null;
 
   const file = repo.workflow || "deploy.yml";
-  const res = await call(
-    repo,
-    `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`,
-    null,
-    true
-  ).catch(() => null);
-  if (!res || !res.ok) return null;
 
-  const body = await res.json().catch(() => ({}));
-  const run = (body.workflow_runs || [])[0];
+  // Two ways to find the run, because there are two kinds of run. A push starts
+  // one whose `head_sha` IS the commit. A save cannot push its way into a run —
+  // the queue commit is rootless and carries no workflow file — so the Worker
+  // dispatches it from `main` and names the queue commit only in `run-name`.
+  // `head_sha` finds the first kind and never the second.
+  const pushed = await runsPage(
+    repo,
+    `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`
+  );
+  const run = (pushed && pushed[0]) || (await dispatchedRun(repo, file, ref));
   if (!run) return { state: "", url: "", count: 0, stages: [] };
 
   const status = String(run.status || "").toLowerCase();

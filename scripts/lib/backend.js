@@ -107,6 +107,10 @@ function resolve(theme) {
   return {
     enable: on,
     api_url: apiUrl,
+    // The address a MACHINE reaches the Worker at. The custom domain is behind
+    // the zone's bot protection, which challenges a CI runner with a 403; the
+    // workers.dev address is outside the zone. Falls back to api_url.
+    ci_api_url: text(raw.ci_api_url).replace(/\/+$/, "") || apiUrl,
     mode: text(raw.mode) || "production",
     local_api_url: text(raw.local_api_url),
     collaborators: collaborators(raw.collaborators),
@@ -149,6 +153,7 @@ function resolve(theme) {
 function forPage(theme) {
   const resolved = resolve(theme);
   return Object.assign({}, resolved, {
+    ci_api_url: undefined,
     collaborators: resolved.collaborators.map((row) => ({
       id: row.id,
       name: row.name,

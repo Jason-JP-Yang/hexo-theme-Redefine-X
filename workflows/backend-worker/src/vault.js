@@ -438,7 +438,13 @@ export async function setAudience(db, postId, ids) {
   // page view.
   if (!row.enc) return { error: "a public post has no audience" };
 
-  const logins = new Map(ids.map((v) => [String(v.id || v), String(v.login || "")]));
+  // A login that is only digits is the id typed into the field, not a login —
+  // storing it is what made a reloaded chip show a number where a name belongs.
+  const loginOf = (v) => {
+    const login = String((v && v.login) || "");
+    return /^\d+$/.test(login) ? "" : login;
+  };
+  const logins = new Map(ids.map((v) => [String(v.id || v), loginOf(v)]));
   const wanted = new Set(logins.keys());
 
   const { results } = await db
@@ -492,7 +498,7 @@ export async function setAudience(db, postId, ids) {
                           ELSE trim(moderation.vault || ',' || ?3, ',') END,
              updated_at = unixepoch()`
         )
-        .bind(Number(key), String(entry.login || ""), postId, "," + postId + ",")
+        .bind(Number(key), loginOf(entry), postId, "," + postId + ",")
     );
   }
 

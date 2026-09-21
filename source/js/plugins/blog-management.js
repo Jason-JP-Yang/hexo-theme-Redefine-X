@@ -31,7 +31,8 @@ import {
   describeDevice,
 } from "./notifications-inbox.js";
 import { initManagementAnalytics } from "./management-analytics.js";
-import { Picker, avatarOf } from "../tools/chipPicker.js";
+import { Picker, avatarOf, rosterLookup } from "../tools/chipPicker.js";
+import { renderANSI } from "../tools/ansi.js";
 import {
   b64urlToBytes,
   fetchSealed,
@@ -240,13 +241,18 @@ function morph(host, inner, mutate) {
 // The class itself lives in tools/chipPicker.js so the encrypted-post page can
 // put the same control above an article. Only the two dependencies it refuses
 // to assume — the identity lookup and the translator — are supplied here.
+// The roster first, because a collaborator is often not a follower and the
+// Worker only knows the people who have followed or been moderated.
 async function lookupIdentity(raw) {
+  const mate = await rosterLookup(raw);
+  if (mate.matched.length) return mate;
   const result = await api("/api/admin/lookup", { method: "POST", body: { ids: [raw] } });
   return { ok: result.ok, matched: (result.data && result.data.matched) || [] };
 }
 
+// `lookup` can be overridden: the editor list resolves against the roster alone.
 function makePicker(key, host, options) {
-  return new Picker(key, host, { ...options, lookup: lookupIdentity, t });
+  return new Picker(key, host, { lookup: lookupIdentity, t, ...options });
 }
 
 // ─── A · compose ─────────────────────────────────────────────
@@ -1010,7 +1016,10 @@ function paintPosts() {
       const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
       if (host) {
         const picker = makePicker(key, host, {
-          placeholder: t("ed_placeholder", "Collaborator login or numeric id, then Enter"),
+          placeholder: t("ed_placeholder", "Collaborator name or numeric id, then Enter"),
+          // Only a configured collaborator can be an editor, so the roster is
+          // the whole answer and anybody else comes back as unknown.
+          lookup: rosterLookup,
           onCommit: (p) => saveEditors(row.vaultId, p),
         });
         picker.set(box.editors[row.vaultId] || []);
@@ -1381,6 +1390,12 @@ async function runUnpublish() {
 
     markStage("committed", "done");
     barNotice("info", `${t("p_unpub_done", "Committed")} ${result.short || ""}`.trim());
+    if (result.started === false) {
+      barNotice(
+        "warn",
+        t("p_unpub_unstarted", "Committed and queued, but the build was not started — try the operation again to retry.")
+      );
+    }
 
     // Repainted from local state: each item is a draft now, and what changed
     // about it is known here without asking anything again. An ALBUM keeps
@@ -2022,8 +2037,38 @@ function paintLog() {
       ${record.reason ? `<span class="bm-bubble"><i class="fa-regular fa-play"></i>${escapeHTML(record.reason)}</span>` : ""}
       ${record.sha ? `<span class="bm-bubble"><i class="fa-regular fa-code-commit"></i>${escapeHTML(record.sha)}</span>` : ""}
     </div>
-    <pre class="bm-log-text"><code>${escapeHTML(record.text || "")}</code></pre>`;
+    <div class="bm-log-frame">
+      <pre class="bm-log-text" data-log-scroller><code>${renderANSI(record.text || "")}</code></pre>
+    </div>`;
+  wireLogScroller(body.querySelector("[data-log-scroller]"));
   contentChanged();
+}
+
+/**
+ * Where the log's mask fades belong.
+ *
+ * One read of the scroller's box says which of its four edges have something
+ * past them; the four flags become CSS custom properties that set the stop
+ * points of the two mask gradients. Written only when one of them changes, and
+ * both events that can change them — a scroll and a resize — are watched.
+ */
+function wireLogScroller(scroller) {
+  if (!scroller) return;
+
+  const edges = () => {
+    const maxX = scroller.scrollWidth - scroller.clientWidth;
+    const maxY = scroller.scrollHeight - scroller.clientHeight;
+    const x = scroller.scrollLeft;
+    const y = scroller.scrollTop;
+    scroller.classList.toggle("has-left", maxX > 2 && x > 2);
+    scroller.classList.toggle("has-right", maxX > 2 && maxX - x > 2);
+    scroller.classList.toggle("has-top", maxY > 2 && y > 2);
+    scroller.classList.toggle("has-bottom", maxY > 2 && maxY - y > 2);
+  };
+
+  edges();
+  scroller.addEventListener("scroll", edges, { passive: true });
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(edges).observe(scroller);
 }
 
 /**

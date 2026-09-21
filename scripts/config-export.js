@@ -75,6 +75,8 @@ hexo.extend.helper.register("export_config", function () {
     theme_config.vault_i18n = Object.assign({}, languageContent["vault"], {
       audience: management.v_audience,
       placeholder: management.aud_placeholder,
+      editors: management.v_editors,
+      editor_placeholder: management.ed_placeholder,
       remove: management.remove,
       chip_unknown: management.chip_unknown,
       chip_error: management.chip_error,

@@ -358,6 +358,26 @@ async function ownerOf(file) {
 }
 
 /**
+ * Does this post body say it is a draft? The FRONT MATTER, not the file name.
+ *
+ * A brand-new article is saved as a draft at its future published path — the
+ * `.draft.md` suffix exists only for a draft standing in front of an article
+ * that is already published. So the suffix alone calls a new draft a publish,
+ * which is what stopped a collaborator from ever creating one, however clearly
+ * the body said `draft: true`.
+ */
+function draftBody(content) {
+  let text = "";
+  try {
+    text = atob(String(content || ""));
+  } catch (err) {
+    return false;
+  }
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  return !!front && /^draft:\s*(true|yes|on|1)\s*$/im.test(front[1]);
+}
+
+/**
  * Does this save publish or unpublish something?
  *
  * Creating an article at a published path, or removing one, is the decision
@@ -371,6 +391,8 @@ function publishes(files) {
     if (!rel.startsWith(POSTS_DIR + "/") || !/\.md$/i.test(rel) || /\.draft\.md$/i.test(rel)) {
       return false;
     }
+    // A new article that is still a draft changes nothing the site shows.
+    if (file.operation === "create" && draftBody(file.content)) return false;
     return file.operation === "create" || file.operation === "delete";
   });
 }
@@ -462,7 +484,36 @@ export async function commit(files, message) {
 
   const result = await githubDriver.pushQueue(repo, bytesToB64(sealed), `${message}\n\n${trailers}`);
   textCache = new Map();
-  return { ...result, backend: "github" };
+
+  // ── start the run the save cannot start by itself ─────────────────────────
+  //
+  // The commit just pushed is ROOTLESS and holds one file, so nothing happens
+  // when GitHub sees it: a push-triggered workflow is taken from the pushed
+  // commit's own tree, and that tree has no workflow in it. The Worker starts
+  // the run instead, from `main`, naming this exact commit — the page cannot,
+  // because its token deliberately carries no `Actions: write`.
+  //
+  // A failure here does NOT undo the save: the payload is on the queue branch
+  // and the next run that names it applies it. What is lost is only the run for
+  // THIS save, so that is all the caller is told.
+  let started = false;
+  let why = "";
+  try {
+    const res = await fetch(base + "/api/editor/dispatch", {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ sha: result.sha }),
+    });
+    started = res.ok;
+    if (!started) {
+      const body = await res.json().catch(() => ({}));
+      why = body.error || `the Worker did not start the run (${res.status})`;
+    }
+  } catch (err) {
+    why = String((err && err.message) || err);
+  }
+
+  return { ...result, backend: "github", started, why };
 }
 
 /**

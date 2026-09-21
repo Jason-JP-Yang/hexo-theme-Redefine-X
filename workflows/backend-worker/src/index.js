@@ -1168,6 +1168,43 @@ async function resolveIdentities(db, raw) {
   return { matched, unknown: wanted.filter((v) => !found.has(v.toLowerCase())) };
 }
 
+/**
+ * id → { id, login, name } for identities stored only by number.
+ *
+ * A stored identity used to be rendered from whatever login string sat beside
+ * it, and for anybody first typed in as a numeric id that string WAS the id —
+ * so a reloaded chip showed "254300720" where a name belonged, and an editor
+ * list, which stores ids alone, showed nothing at all. The name is looked up
+ * here from the follower row, which is written from GitHub at sign-in and is
+ * the one authoritative copy this Worker holds. A login that is only digits is
+ * treated as no login.
+ *
+ * One query for every id in the answer, bounded by the lookup ceiling.
+ */
+async function describeIds(db, ids) {
+  const out = new Map();
+  const wanted = [...new Set(ids.map((v) => String(v)).filter((v) => /^\d+$/.test(v)))].slice(
+    0,
+    ADMIN_LOOKUP_MAX
+  );
+  if (!wanted.length) return out;
+  const { matched } = await resolveIdentities(db, wanted);
+  for (const row of matched || []) {
+    const login = /^\d+$/.test(String(row.login || "")) ? "" : String(row.login || "");
+    const held = out.get(String(row.id));
+    // Followers first: `resolveIdentities` puts them ahead of moderation rows.
+    if (held && held.login) continue;
+    out.set(String(row.id), { id: Number(row.id), login, name: String(row.name || "") });
+  }
+  return out;
+}
+
+function described(map, id, fallbackLogin) {
+  const hit = map.get(String(id));
+  const login = hit && hit.login ? hit.login : /^\d+$/.test(String(fallbackLogin || "")) ? "" : fallbackLogin || "";
+  return { id: Number(id), login, name: (hit && hit.name) || "" };
+}
+
 // ─── ADMIN: name the ids typed into an audience field ───────
 app.post("/api/admin/lookup", staffMiddleware, async (c) => {
   let body = {};
@@ -1688,7 +1725,14 @@ app.post("/api/vault/keys", userMiddleware, async (c) => {
 // inventory the build seals into the console page, so this answers the one
 // question a build cannot: who has been granted what.
 app.get("/api/admin/vault", authMiddleware, async (c) => {
-  return c.json({ audiences: await listAudiences(c.env.DB) });
+  const byPost = await listAudiences(c.env.DB);
+  const ids = Object.values(byPost).flat().map((row) => row.id);
+  const names = await describeIds(c.env.DB, ids);
+  const audiences = {};
+  for (const [post, rows] of Object.entries(byPost)) {
+    audiences[post] = rows.map((row) => described(names, row.id, row.login));
+  }
+  return c.json({ audiences });
 });
 
 /**
@@ -1927,6 +1971,27 @@ app.post("/api/editor/submit", staffMiddleware, async (c) => {
   return c.json(issued);
 });
 
+// ─── EDITOR: start the run for a save that has just landed ──
+//
+// A save is a rootless commit on the queue branch, and a rootless commit carries
+// no workflow file — so pushing it starts nothing: GitHub runs a push-triggered
+// workflow from the pushed commit's own tree. The run is started here instead,
+// from `main`, naming the queue commit it is for.
+//
+// The browser cannot do this itself: its token deliberately has no Actions
+// write, so a stolen session cannot start runs. Nothing about the save is
+// trusted on the way through — the run checks the receipt the commit carries.
+// One subrequest, no D1.
+app.post("/api/editor/dispatch", staffMiddleware, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const sha = String(body?.sha || "").trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) return c.json({ error: "Bad commit id" }, 400);
+
+  const started = await startBuild(c.env, { reason: "editor", queue: sha });
+  c.header("Cache-Control", "no-store");
+  return started.ok ? c.json({ ok: true }) : c.json({ error: started.why }, 502);
+});
+
 // ─── ADMIN: the collaborator matrix ─────────────────────────
 //
 // Who may see which section of the console, and who may write which item. Both
@@ -1934,8 +1999,22 @@ app.post("/api/editor/submit", staffMiddleware, async (c) => {
 // are small: a row per moderated identity, and a row per item that has any
 // editor at all.
 app.get("/api/admin/collab", authMiddleware, async (c) => {
-  const [people, editors] = await Promise.all([listPanels(c.env.DB), listEditors(c.env.DB)]);
-  return c.json({ people, editors, grades: Object.fromEntries(Object.entries(PANELS).map(([k, v]) => [k, v.grades])) });
+  const [people, byItem] = await Promise.all([listPanels(c.env.DB), listEditors(c.env.DB)]);
+  const names = await describeIds(
+    c.env.DB,
+    Object.values(byItem).flat().concat(people.map((p) => p.id))
+  );
+  // Full chips rather than bare ids: the console renders them straight back
+  // into a picker, which needs a login or a name beside every avatar.
+  const editors = {};
+  for (const [item, ids] of Object.entries(byItem)) {
+    editors[item] = ids.map((id) => described(names, id, ""));
+  }
+  return c.json({
+    people: people.map((p) => ({ ...p, ...described(names, p.id, p.login), panels: p.panels, state: p.state })),
+    editors,
+    grades: Object.fromEntries(Object.entries(PANELS).map(([k, v]) => [k, v.grades])),
+  });
 });
 
 // The complete new grade set for ONE identity, not a delta.
@@ -1973,6 +2052,13 @@ app.put("/api/admin/vault/:id/editors", authMiddleware, async (c) => {
   }
   const ids = Array.isArray(body?.editors) ? body.editors : [];
   if (ids.length > ADMIN_LOOKUP_MAX) return c.json({ error: "Too many" }, 400);
+
+  // An editor is a collaborator or nobody. Checked here rather than trusted from
+  // the console, which offers only the roster but is not the only thing that
+  // can make this request.
+  const allowed = new Set(allowList(c.env.COLLABORATORS));
+  const stray = ids.map((v) => String((v && v.id) || v)).filter((id) => !allowed.has(id));
+  if (stray.length) return c.json({ error: `Not a collaborator: ${stray.join(", ")}` }, 400);
 
   const result = await setEditors(c.env.DB, c.req.param("id"), ids);
   if (result.error) return c.json({ error: result.error }, 400);
@@ -2112,7 +2198,7 @@ const GH = {
   "User-Agent": "backend-blog",
 };
 
-async function startBuild(env, { reason, sha }) {
+async function startBuild(env, { reason, sha, queue }) {
   const [owner, repo] = String(env.PUBLIC_REPO || "").split("/");
   if (!owner || !repo || !env.PUBLIC_DISPATCH_TOKEN) {
     return { ok: false, why: "the public repository is not configured" };
@@ -2129,7 +2215,11 @@ async function startBuild(env, { reason, sha }) {
     },
     body: JSON.stringify({
       ref: env.PUBLIC_BRANCH || "main",
-      inputs: { reason: String(reason || "manual"), source_sha: String(sha || "").slice(0, 40) },
+      inputs: {
+        reason: String(reason || "manual"),
+        source_sha: String(sha || "").slice(0, 40),
+        queue_sha: String(queue || "").slice(0, 40),
+      },
     }),
   });
 

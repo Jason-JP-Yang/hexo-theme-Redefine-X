@@ -12,7 +12,7 @@ import initCopyCode from "../tools/codeBlock.js";
 import initMathJaxScroll from "../plugins/mathjax-scroll.js";
 import { initNotoAnim } from "../plugins/noto-anim.js";
 import { invalidateMetrics, requestScrollPass } from "../tools/scrollScheduler.js";
-import { Picker } from "../tools/chipPicker.js";
+import { Picker, rosterLookup } from "../tools/chipPicker.js";
 import { refreshHomeRelativeTime } from "../utils.js";
 import {
   b64urlToBytes,
@@ -502,43 +502,60 @@ async function mountAudienceEditor(host, entry) {
   const wrap = document.createElement("div");
   wrap.className = "vault-admin-wrap px-2 sm:px-6 md:px-8";
 
+  // Two fields, the same two Posts Management puts on this article's row: who
+  // may READ it, and who may CHANGE it. One control, two places — so what is set
+  // here is what the console shows, and the other way round.
   const box = document.createElement("div");
   box.className = "vault-admin";
   box.innerHTML = `
     <label class="vault-admin-label">
       <i class="fa-regular fa-user-lock" aria-hidden="true"></i>
       <span>${i18n("audience", "Who can read this")}</span>
-      <span class="vault-admin-state" role="status"></span>
+      <span class="vault-admin-state" data-for="read" role="status"></span>
     </label>
-    <div class="vault-admin-picker"></div>`;
+    <div class="vault-admin-picker" data-picker="read"></div>
+    <label class="vault-admin-label">
+      <i class="fa-regular fa-user-pen" aria-hidden="true"></i>
+      <span>${i18n("editors", "Who can edit this")}</span>
+      <span class="vault-admin-state" data-for="edit" role="status"></span>
+    </label>
+    <div class="vault-admin-picker" data-picker="edit"></div>`;
   wrap.appendChild(box);
   container.insertBefore(wrap, anchor || container.firstChild);
 
-  const flag = box.querySelector(".vault-admin-state");
-  const picker = new Picker(entry.id, box.querySelector(".vault-admin-picker"), {
+  const saver = (which, path, field) => async (p) => {
+    const flag = box.querySelector(`.vault-admin-state[data-for="${which}"]`);
+    if (!p.settled) return void (flag.innerHTML = "");
+    flag.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`;
+    const data = await callWorker(path, { method: "PUT", body: { [field]: p.entries } });
+    flag.innerHTML = data
+      ? `<i class="fa-solid fa-check" aria-hidden="true"></i>`
+      : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
+    if (data) setTimeout(() => (flag.innerHTML = ""), 1800);
+  };
+
+  const readers = new Picker(`read:${entry.id}`, box.querySelector('[data-picker="read"]'), {
     placeholder: i18n("placeholder", "GitHub login or numeric id, then Enter"),
     t: i18n,
     lookup: async (raw) => {
+      const mate = await rosterLookup(raw);
+      if (mate.matched.length) return mate;
       const data = await callWorker("/api/admin/lookup", { method: "POST", body: { ids: [raw] } });
       return { ok: !!data, matched: (data && data.matched) || [] };
     },
-    onCommit: async (p) => {
-      if (!p.settled) return void (flag.innerHTML = "");
-      flag.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>`;
-      const data = await callWorker(`/api/admin/vault/${encodeURIComponent(entry.id)}/audience`, {
-        method: "PUT",
-        body: { audience: p.entries },
-      });
-      flag.innerHTML = data
-        ? `<i class="fa-solid fa-check" aria-hidden="true"></i>`
-        : `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>`;
-      if (data) setTimeout(() => (flag.innerHTML = ""), 1800);
-    },
+    onCommit: saver("read", `/api/admin/vault/${encodeURIComponent(entry.id)}/audience`, "audience"),
   });
 
-  const listing = await callWorker("/api/admin/vault");
-  const audience = listing && (listing.audiences || {})[entry.id];
-  if (audience) picker.set(audience);
+  const editors = new Picker(`edit:${entry.id}`, box.querySelector('[data-picker="edit"]'), {
+    placeholder: i18n("editor_placeholder", "Collaborator name or numeric id, then Enter"),
+    t: i18n,
+    lookup: rosterLookup,
+    onCommit: saver("edit", `/api/admin/vault/${encodeURIComponent(entry.id)}/editors`, "editors"),
+  });
+
+  const [listing, collab] = await Promise.all([callWorker("/api/admin/vault"), callWorker("/api/admin/collab")]);
+  readers.set((listing && (listing.audiences || {})[entry.id]) || []);
+  editors.set((collab && (collab.editors || {})[entry.id]) || []);
 }
 
 /**

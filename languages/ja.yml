@@ -410,7 +410,7 @@ management:
   p_unpublish: 公開を取り消す
   v_badge: 暗号化
   v_editors: 編集できる人
-  ed_placeholder: 協力者のログイン名または数値 ID を入力して Enter
+  ed_placeholder: 協力者の名前または数値 ID を入力して Enter
   c_title: 協力者
   c_lede: 各協力者がこのコンソールで見られるもの。記事管理は常に利用でき、権限のある項目だけに限られます。それ以外は既定で拒否されます。
   c_empty: 協力者が設定されていません。backend.collaborators と Worker の COLLABORATORS に追加して再ビルドしてください。

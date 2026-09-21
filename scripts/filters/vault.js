@@ -664,7 +664,13 @@ hexo.extend.filter.register(
       meta.set(entry.id, { kind: PAGE_KINDS[entry.page] || "page", enc: 1, draft: false });
     }
 
-    const api = backend.resolve(hexo.theme.config).api_url;
+    // A runner cannot reach the custom domain: the zone's bot protection answers
+    // it with a "Just a moment..." challenge, which is a 403 to anything that is
+    // not a browser, and the reconcile silently never happened. On CI the build
+    // takes the workers.dev address, which is outside the zone.
+    const resolved = backend.resolve(hexo.theme.config);
+    const onRunner = !!(process.env.CI || process.env.GITHUB_ACTIONS);
+    const api = onRunner ? resolved.ci_api_url : resolved.api_url;
     try {
       const done = await store.sync(api, meta);
       if (done) {

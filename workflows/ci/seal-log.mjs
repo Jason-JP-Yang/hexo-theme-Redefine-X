@@ -74,7 +74,13 @@ try {
   const buf = Buffer.alloc(length);
   fs.readSync(fd, buf, 0, length, stat.size - length);
   fs.closeSync(fd);
-  text = buf.toString("utf8");
+  // The slice can land in the middle of a multi-byte character, and decoding
+  // from a continuation byte paints a replacement character at the head of the
+  // transcript — which reads as corruption. Walk forward to the first byte that
+  // starts a code point before decoding.
+  let start = 0;
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
+  text = buf.subarray(start).toString("utf8");
   if (stat.size > length) text = `… ${stat.size - length} earlier bytes omitted …\n` + text;
 } catch {
   text = "(no output was captured)";
