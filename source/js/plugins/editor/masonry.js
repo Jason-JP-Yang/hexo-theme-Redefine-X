@@ -1866,6 +1866,92 @@ async function activate(container) {
 }
 
 /**
+ * Put an album the opened file does not mention back into it.
+ *
+ * A collaborator opens masonry.yml with every encrypted and draft album taken
+ * out of it — including the one they were granted, which is the whole of the
+ * "… is not in source/_data/masonry.yml" failure. The build seals each such
+ * album's own block under that album's key (the editor's `y.bin`), so what
+ * arrives here is a complete one-album file: parse it, find its category in the
+ * document being edited — creating it when the collaborator can see no other
+ * album in it — and insert the block. The save needs no special case: the
+ * runner's merge replaces this album in the real file and leaves everything the
+ * reader was not shown exactly where it was.
+ */
+async function restoreFromSlice(doc, grant) {
+  let raw;
+  try {
+    raw = await repo.readAlbumSlice(grant);
+  } catch (err) {
+    return null;
+  }
+  if (!raw) return null;
+
+  // Sealed as `{ v, category, title, yaml }` so the blob can say what it is;
+  // the YAML is inside `yaml`. A slice written without the wrapper is the YAML
+  // itself, and both are accepted — parsing the wrapper as YAML was why the
+  // restore silently found nothing and the error it was meant to remove stayed.
+  let text = raw;
+  try {
+    const held = JSON.parse(raw);
+    if (held && typeof held.yaml === "string") text = held.yaml;
+  } catch (err) {
+    /* not the wrapper: the bytes are the slice */
+  }
+
+  let mini;
+  try {
+    mini = parseMasonry(text);
+  } catch (err) {
+    return null;
+  }
+
+  const head = categories(mini)[0];
+  const item = head && head.items[0];
+  if (!item) return null;
+
+  const name = String(categoryFields(head).links_category || "");
+  let cat = findCategory(doc, name);
+  if (!cat) {
+    cat = appendCategory(
+      doc,
+      makeCategory(doc.eol, name, isTrue(categoryFields(head).has_thumbnail))
+    );
+    // The slice was cut from the committed file, so this category exists there
+    // even though the copy the reader opened had it masked out — which is what
+    // keeps it reading as Existing rather than as one this session created.
+    cat.openedName = name;
+  }
+  insertItem(cat, item, null);
+
+  // Returned directly rather than looked up again: the block just spliced in is
+  // the one the editor is about to open, renamed draft or not.
+  return { cat, item, index: cat.items.length - 1, fields: itemFields(item) };
+}
+
+/**
+ * Splice the slice for `grant` into `doc` when the album is not already there.
+ *
+ * The two documents it is called for are the one the editor opened and the one
+ * the SAVE just re-read — both are the masked copy for a collaborator, and both
+ * are missing every withheld album. `findAlbum` is the test, so the admin's
+ * full file and a public album are left alone.
+ *
+ * @returns {Promise<object|null>} the album as `findAlbum` would describe it
+ */
+async function restoreAlbum(doc, grant, title, draft) {
+  // `listAlbums` rows carry the key row as `grant`; a caller that already has
+  // the key row passes it directly. Both shapes reach here — `state.grant` is
+  // stored for the SAVE, and getting that one shape wrong is why the album
+  // restored at open time and then answered "no longer in masonry.yml" when it
+  // was saved.
+  const raw = grant && grant.grant ? grant.grant : grant;
+  if (!raw) return null;
+  if (findAlbum(doc, title, draft ? "draft" : "published") || findAlbumDraftFor(doc, title)) return null;
+  return restoreFromSlice(doc, raw);
+}
+
+/**
  * Find this album in the file, or start a new one.
  *
  * A published album that already HAS a draft is edited ON THE DRAFT — the same
@@ -1921,9 +2007,17 @@ async function openAlbum(container) {
 
   // By `supersedes` when the title no longer matches: a draft whose name has
   // been changed is still the draft OF this album.
-  const found =
+  let found =
     findAlbum(state.doc, title, onDraft ? "draft" : "published") ||
     (onDraft ? findAlbumDraftFor(state.doc, title) : null);
+
+  // Not there because the file it opened is the MASKED one a collaborator gets,
+  // which has every withheld album — this one included — cut out of it. The
+  // album carries its own sealed slice; put it back where it belongs.
+  if (!found) {
+    const row = owner || mine;
+    if (row && row.grant) found = await restoreAlbum(state.doc, row.grant, title, onDraft);
+  }
   if (!found) throw new Error(`${title} is not in ${DATA}`);
 
   state.cat = found.cat;
@@ -1933,7 +2027,9 @@ async function openAlbum(container) {
     draft: onDraft,
     category: found.cat.openedName,
   };
-  state.grant = owner || null;
+  // The KEY row, not the list row that carries it: the save hands this straight
+  // back to `restoreAlbum`, which needs `.raw` to open the sealed slice.
+  state.grant = owner ? owner.grant : null;
 
   if (owner) setVaultAssets(owner.grant, owner.assets, owner.sizes);
   else setVaultAssets(null, null, null);
@@ -2108,9 +2204,16 @@ async function buildCommit(mode) {
   if (!cat) cat = appendCategory(fresh, makeCategory(fresh.eol, catName, true));
   cat.pre = state.cat.pre;
 
-  const origin = state.opened.title
+  let origin = state.opened.title
     ? findAlbum(fresh, state.opened.title, state.opened.draft ? "draft" : "published")
     : null;
+  // The file just re-read is the masked one for a collaborator, so their album
+  // is missing from it in exactly the way the editor put it back at open time.
+  // Put it back here too, or every save of a granted album answers "no longer
+  // in masonry.yml" to the only person it was granted to.
+  if (state.opened.title && !origin) {
+    origin = await restoreAlbum(fresh, state.grant, state.opened.title, state.opened.draft);
+  }
   if (state.opened.title && !origin) {
     throw Object.assign(
       new Error(t("album_gone", "This album is no longer in masonry.yml — it may have been renamed or withdrawn.")),

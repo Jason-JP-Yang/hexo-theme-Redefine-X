@@ -189,7 +189,10 @@ function build(hexo, sealed, albums, prefix, keyed) {
       published: false,
       encrypted: false,
       sticky: false,
-      vaultId: "",
+      // The draft IS this row's item, so its own id is what "who can edit this"
+      // must address. Left empty, the console drew no permission field at all
+      // and nothing could be granted on an unpublished article.
+      vaultId: entry.id,
       slug: entry.slug,
       draft,
     });
@@ -283,7 +286,9 @@ function build(hexo, sealed, albums, prefix, keyed) {
       published: false,
       encrypted: false,
       sticky: false,
-      vaultId: "",
+      // Same as a draft-only article: the withheld album is the item, so the
+      // row has to name it or its editors can never be set.
+      vaultId: entry.id,
       slug: entry.slug,
       draft,
       album: { title: entry.title, category: entry.category.links_category || "" },

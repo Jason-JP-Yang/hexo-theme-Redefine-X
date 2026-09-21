@@ -99,7 +99,17 @@ export async function unwrapper(env) {
 
 /**
  * Every ENCRYPTED post this session may open, with its key already unwrapped.
- * An admin gets all of them; anyone else gets exactly what their grant names.
+ * An admin gets all of them; anyone else gets their read grants — plus every
+ * item they are an EDITOR of.
+ *
+ * ── An editor is a reader ───────────────────────────────────────────────────
+ *
+ * The two answer different questions and only one of them used to be here. A
+ * reader's grant decides what a page may decrypt; an editor's list decides what
+ * the editor may change. An editor of a draft who held no read grant could open
+ * the document in the console but not the PAGE it lives on — the vault gate had
+ * no key to unlock, so the browser answered "not found" to the one person the
+ * draft was handed to. Anyone cleared to change an item is cleared to read it.
  *
  * `enc = 1` is the whole filter, and it is not a refinement. Every post on the
  * site now has a row in this table — that is what lets the editor read an
@@ -128,21 +138,25 @@ export async function grantedPosts(db, env, session) {
     .prepare("SELECT vault, state FROM moderation WHERE github_id = ?1")
     .bind(session.id)
     .first();
-
-  if (!row || row.state === "banned") return [];
-  const ids = splitList(row.vault);
-  if (!ids.length) return [];
+  if (row && row.state === "banned") return [];
 
   // D1 binds at most 100 parameters; a reader with more grants than that reads
   // the rest on a second call rather than silently losing them.
-  const slice = ids.slice(0, 90);
-  const holes = slice.map((_, i) => `?${i + 1}`).join(",");
+  const ids = splitList(row && row.vault).slice(0, 90);
+  const holes = ids.map((_, i) => `?${i + 1}`).join(",");
+  const me = String(session.id);
+  // `editors` is the same comma-joined shape, matched with the delimiters so an
+  // id that is a prefix of another cannot claim the row.
+  const clause =
+    `instr(',' || editors || ',', ',' || ?${ids.length + 1} || ',') > 0` +
+    (ids.length ? ` OR id IN (${holes})` : "");
+
   const { results } = await db
     .prepare(
       `SELECT id, slug, wrapped FROM vault_posts
-        WHERE enc = 1 AND kind IN ('post', 'album') AND id IN (${holes})`
+        WHERE enc = 1 AND kind IN ('post', 'album') AND (${clause})`
     )
-    .bind(...slice)
+    .bind(...ids, me)
     .all();
 
   return unwrapAll(master, results);

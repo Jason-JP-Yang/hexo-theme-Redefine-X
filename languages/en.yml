@@ -426,7 +426,7 @@ management:
   p_s_deployed: Deployed
   v_badge: Encrypted
   v_editors: Who can edit this
-  ed_placeholder: Collaborator name or numeric id, then Enter
+  ed_placeholder: Collaborator username, name or numeric id, then Enter
   c_title: Collaborators
   c_lede: What each collaborator sees in this console. Posts management is always theirs and always scoped to the items they were given; everything else starts denied.
   c_empty: No collaborators are configured. Add them to backend.collaborators and to the Worker's COLLABORATORS, then rebuild.

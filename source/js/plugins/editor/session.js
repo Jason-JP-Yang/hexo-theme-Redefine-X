@@ -886,6 +886,11 @@ async function unpublishAlbumsFile(rows) {
 
 export async function unpublishAll(rows) {
   const files = [];
+  // The freshly minted draft key of every article withdrawn here. The console
+  // repaints the row as unpublished the moment this returns, and without the
+  // new id it would have nothing to hang "who can edit this" on until the next
+  // build's inventory arrived.
+  const minted = [];
   let keysEnc = null;
 
   const albumFile = await unpublishAlbumsFile(rows);
@@ -912,7 +917,9 @@ export async function unpublishAll(rows) {
       if (!published) throw new Error(`${source || row.title} is not in the repository`);
       const path = draftPathFor(source);
       if (await repo.read(path)) throw new Error(`${path} already exists`);
-      keysEnc = (await mintVaultKey(path)).keysEnc;
+      const mint = await mintVaultKey(path);
+      keysEnc = mint.keysEnc;
+      minted.push({ source: row.source, id: mint.id, slug: mint.slug, path });
       files.push({
         operation: "create",
         path,
@@ -934,10 +941,11 @@ export async function unpublishAll(rows) {
   if (keysEnc) files.push(await keyringFile(keysEnc));
 
   const titles = rows.map((row) => row.title || repoPath(row.source)).filter(Boolean);
-  return repo.commit(
+  const result = await repo.commit(
     files,
     titles.length === 1 ? `Unpublish: ${titles[0]}` : `Unpublish ${titles.length} posts`
   );
+  return { ...result, minted };
 }
 
 export async function remove(entry) {

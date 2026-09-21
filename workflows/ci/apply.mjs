@@ -215,7 +215,9 @@ for (const file of files) {
     } catch (err) {
       refuse(err.message);
     }
-    if (!merged.touched.length) refuse("masonry.yml is unchanged");
+    // A save that changed only categories names no album; it is still a change,
+    // and the merge refuses one from a save it was not cleared for.
+    if (!merged.touched.length && !merged.categories) refuse("masonry.yml is unchanged");
     for (const id of merged.touched) owners.add(id);
     writes.push({ rel, bytes: Buffer.from(merged.text, "utf8") });
     continue;

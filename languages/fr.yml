@@ -410,7 +410,7 @@ management:
   p_unpublish: Depublier
   v_badge: Chiffre
   v_editors: Qui peut la modifier
-  ed_placeholder: Nom ou id numerique du collaborateur, puis Entree
+  ed_placeholder: Identifiant, nom ou id numerique du collaborateur, puis Entree
   c_title: Collaborateurs
   c_lede: Ce que chaque collaborateur voit dans cette console. La gestion des articles leur revient toujours, limitee aux elements qui leur ont ete confies ; tout le reste est refuse par defaut.
   c_empty: Aucun collaborateur n'est configure. Ajoutez-les a backend.collaborators et a COLLABORATORS du Worker, puis reconstruisez.

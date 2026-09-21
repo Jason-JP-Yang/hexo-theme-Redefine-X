@@ -413,7 +413,7 @@ management:
   p_unpublish: 取消發布
   v_badge: 加密
   v_editors: 可以編輯的人
-  ed_placeholder: 協作者名稱或數字 ID，按 Enter 確認
+  ed_placeholder: 協作者使用者名稱、名稱或數字 ID，按 Enter 確認
   c_title: 協作者
   c_lede: 每位協作者在這個控制台裡能看到什麼。文章管理永遠屬於他們，且僅限於獲授權的項目；其餘部分預設全部拒絕。
   c_empty: 尚未設定協作者。請先寫入 backend.collaborators 與 Worker 的 COLLABORATORS，然後重新建置。

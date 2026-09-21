@@ -29,20 +29,36 @@ function roster() {
   return Array.isArray(backend.collaborators) ? backend.collaborators : [];
 }
 
+/** `@handle`, `#handle` and surrounding space are how people paste an identity. */
+const normalise = (value) =>
+  String(value == null ? "" : value)
+    .replace(/^[@#]/, "")
+    .trim()
+    .toLowerCase();
+
 /**
  * Resolve a typed value against the configured collaborators ONLY.
  *
  * The editor list is for collaborators and nobody else — a GitHub account that
  * is not on the roster cannot be given write access however the request is
  * made — so this lookup answers from the page's own configuration and needs no
- * request at all. Matches the numeric id, or the display name.
+ * request at all. Matches the numeric id, the GitHub username, or the display
+ * name; all three are things a person reaches for.
  */
 export async function rosterLookup(raw) {
-  const value = String(raw || "").replace(/^[@#]/, "").trim().toLowerCase();
+  const value = normalise(raw);
   const hit = roster().find(
-    (row) => String(row.id) === value || String(row.name || "").toLowerCase() === value
+    (row) =>
+      String(row.id) === value ||
+      normalise(row.username) === value ||
+      normalise(row.name) === value
   );
-  return { ok: true, matched: hit ? [{ id: Number(hit.id), login: "", name: hit.name || "" }] : [] };
+  return {
+    ok: true,
+    matched: hit
+      ? [{ id: Number(hit.id), login: String(hit.username || ""), name: hit.name || "" }]
+      : [],
+  };
 }
 
 // id -> Promise<{login, name}>, for the life of the page. GitHub's public user
@@ -64,19 +80,24 @@ function nameOf(id) {
 
   const job = (async () => {
     const mate = roster().find((row) => String(row.id) === key);
-    let login = "";
+    let login = mate ? String(mate.username || "") : "";
     let name = mate ? String(mate.name || "") : "";
-    try {
-      const res = await fetch(`https://api.github.com/user/${encodeURIComponent(key)}`, {
-        headers: { Accept: "application/vnd.github+json" },
-      });
-      if (res.ok) {
-        const user = await res.json();
-        login = String(user.login || "");
-        name = name || String(user.name || "");
+    // Only ask GitHub for what the roster could not answer. A collaborator is
+    // known here completely; anybody else is named from their GitHub profile,
+    // rate limit permitting.
+    if (!login || !name) {
+      try {
+        const res = await fetch(`https://api.github.com/user/${encodeURIComponent(key)}`, {
+          headers: { Accept: "application/vnd.github+json" },
+        });
+        if (res.ok) {
+          const user = await res.json();
+          login = login || String(user.login || "");
+          name = name || String(user.name || "");
+        }
+      } catch (e) {
+        /* offline or rate-limited: the roster name, or the id, is what shows */
       }
-    } catch (e) {
-      /* offline or rate-limited: the roster name, or the id, is what shows */
     }
     return { login, name };
   })();

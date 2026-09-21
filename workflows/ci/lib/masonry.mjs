@@ -193,19 +193,90 @@ function unquote(value) {
 /**
  * Apply the albums a receipt cleared, and nothing else.
  *
- * @returns {{text: string, touched: string[]}}
+ * ── Categories are part of that, and belong to nobody ───────────────────────
+ *
+ * A category has no owner — the receipt names albums — so anyone a save was
+ * cleared for at all may create, rename, retune and remove them. That is not a
+ * hole: a category is a header and a list of albums, every album underneath it
+ * is still checked one at a time, and a category that holds albums the sender
+ * could not see is never emptied by what they sent (see the prune at the end).
+ *
+ * A rename is recognised by what it carries, not by intent: an after-category
+ * whose album set is exactly the set of a category that has gone is a rename,
+ * so only the header moves and the albums are not re-permissioned one by one.
+ *
+ * @returns {{text: string, touched: string[], categories: number}}
  * @throws when the incoming file changes an album the receipt did not name.
  */
 export function merge(yaml, oldText, newText, allowed, admin) {
   const before = index(oldText, yaml);
   const after = index(newText, yaml);
+  const eol = eolOf(oldText);
 
+  const albumsIn = (doc, name) => {
+    const out = new Set();
+    for (const [id, row] of doc.albums) if (row.category === name) out.add(id);
+    return out;
+  };
+
+  /**
+   * Could the after-category be the before-category under a new name?
+   *
+   * Everything the after-category holds has to be something the before one
+   * held, and everything the before one held that is NOT in the after one has
+   * to have vanished from the file altogether. A masked save hides albums the
+   * sender could not see, so those are exactly the ones that may be "missing" —
+   * and an album that merely moved to another visible category is still in the
+   * after file, which is what rules a rename out.
+   */
+  const looksLikeRename = (beforeSet, afterSet) => {
+    if (!afterSet.size) return false;
+    for (const id of afterSet) if (!beforeSet.has(id)) return false;
+    for (const id of beforeSet) if (!afterSet.has(id) && after.albums.has(id)) return false;
+    return true;
+  };
+
+  const renamedFrom = new Map(); // after name -> { block, oldName }
+  const consumed = new Set();
+  for (const name of after.byCategory.keys()) {
+    if (before.byCategory.has(name)) continue;
+    const set = albumsIn(after, name);
+    if (!set.size) continue;
+    for (const [oldName, block] of before.byCategory) {
+      if (after.byCategory.has(oldName) || consumed.has(oldName)) continue;
+      if (!looksLikeRename(albumsIn(before, oldName), set)) continue;
+      renamedFrom.set(name, { block, oldName });
+      consumed.add(oldName);
+      break;
+    }
+  }
+  const afterNameOf = (oldName) => {
+    for (const [to, row] of renamedFrom) if (row.oldName === oldName) return to;
+    return oldName;
+  };
+
+  // Any save at all carries an album id, so this is true for every editor's
+  // receipt; the guard is here so an empty clearance cannot reorganise the file.
+  const mayCategory = admin || allowed.size > 0;
   const edits = [];
   const touched = [];
+  let categories = 0;
+
+  // Categories the real file does not have yet, their headers collected in the
+  // sender's own order. The album loop below drops allowed albums into them,
+  // and the whole set is appended after the in-place edits have been applied.
+  const pending = new Map();
+  for (const [name, block] of after.byCategory) {
+    if (before.byCategory.has(name) || renamedFrom.has(name)) continue;
+    pending.set(name, after.lines.slice(block.start, block.listLine + 1));
+  }
+
+  /* ─── albums ───────────────────────────────────────────────────────────── */
 
   for (const [id, row] of after.albums) {
     const old = before.albums.get(id);
-    const same = old && JSON.stringify(old.item) === JSON.stringify(row.item) && old.category === row.category;
+    const same =
+      old && JSON.stringify(old.item) === JSON.stringify(row.item) && afterNameOf(old.category) === row.category;
     if (same) continue;
 
     if (!allowed.has(id)) {
@@ -219,18 +290,25 @@ export function merge(yaml, oldText, newText, allowed, admin) {
     touched.push(id);
 
     const block = after.lines.slice(row.start, row.end);
-    if (old && old.category === row.category) {
+    if (old && afterNameOf(old.category) === row.category) {
       edits.push({ start: old.start, end: old.end, lines: reindent(block, row.indent, old.indent) });
       continue;
     }
-    // Moved, or brand new. The old block goes; the new one is appended to the
-    // category it now names, which is created if the file does not have it.
+    // Moved, or brand new. The old block goes; the new one goes into the
+    // category it now names — one the file already has, or one this save is
+    // about to create.
     if (old) edits.push({ start: old.start, end: old.end, lines: [] });
     const target = before.byCategory.get(row.category);
-    if (!target) throw new Error(`masonry.yml has no category "${row.category}" to put this album in`);
-    const at = target.items.length ? target.items[target.items.length - 1].end : target.listLine + 1;
-    const indent = target.indent >= 0 ? target.indent : 2;
-    edits.push({ start: at, end: at, lines: reindent(block, row.indent, indent) });
+    if (target) {
+      const at = target.items.length ? target.items[target.items.length - 1].end : target.listLine + 1;
+      const indent = target.indent >= 0 ? target.indent : 2;
+      edits.push({ start: at, end: at, lines: reindent(block, row.indent, indent) });
+      continue;
+    }
+    const bucket = pending.get(row.category);
+    if (!bucket) throw new Error(`masonry.yml has no category "${row.category}" to put this album in`);
+    const block2 = after.byCategory.get(row.category);
+    bucket.push(...reindent(block, row.indent, block2.indent >= 0 ? block2.indent : 2));
   }
 
   // A removal is only a removal when the receipt named it. An album the sender
@@ -246,13 +324,124 @@ export function merge(yaml, oldText, newText, allowed, admin) {
     edits.push({ start: old.start, end: old.end, lines: [] });
   }
 
-  if (!edits.length) return { text: oldText, touched };
+  /* ─── categories ───────────────────────────────────────────────────────── */
+
+  const beforeDoc = yaml.load(oldText);
+  const afterDoc = yaml.load(newText);
+  const settingsOf = (doc, name) => {
+    for (const category of Array.isArray(doc) ? doc : []) {
+      if (category && String(category.links_category || "") === name) {
+        const { list, ...rest } = category;
+        return JSON.stringify(rest);
+      }
+    }
+    return "";
+  };
+
+  const changedCategory = () => {
+    if (!mayCategory) throw new Error("this save was not cleared to change categories");
+    categories += 1;
+  };
+
+  for (const [name, block] of after.byCategory) {
+    const rename = renamedFrom.get(name);
+    if (rename) {
+      // The header alone: the albums never move, so a category holding albums
+      // this save may not edit can still be reorganised.
+      const header = after.lines.slice(block.start, block.listLine + 1);
+      edits.push({ start: rename.block.start, end: rename.block.listLine + 1, lines: header });
+      changedCategory();
+      continue;
+    }
+
+    const old = before.byCategory.get(name);
+    if (!old) {
+      changedCategory();
+      continue;
+    }
+    if (settingsOf(beforeDoc, name) !== settingsOf(afterDoc, name)) {
+      const header = after.lines.slice(block.start, block.listLine + 1);
+      edits.push({ start: old.start, end: old.listLine + 1, lines: header });
+      changedCategory();
+    }
+  }
+
+  if (!edits.length && !pending.size) return { text: oldText, touched, categories };
 
   // Applied from the bottom up, so an earlier edit's offsets stay valid.
   edits.sort((a, b) => b.start - a.start || b.end - a.end);
-  const out = before.lines.slice();
+  let out = before.lines.slice();
   for (const edit of edits) out.splice(edit.start, edit.end - edit.start, ...edit.lines);
-  return { text: out.join(eolOf(oldText)), touched };
+
+  if (pending.size) {
+    for (const lines of pending.values()) {
+      if (out.length && out[out.length - 1] !== "") out.push("");
+      out.push(...lines);
+    }
+    // The blank tail the original file closed on is no longer last once a
+    // category has been appended; put one back so the file keeps its shape.
+    if (out.length && out[out.length - 1] !== "") out.push("");
+  }
+
+  return { text: pruneEmptyCategories(yaml, out.join(eol)), touched, categories };
+}
+
+/**
+ * Drop every category left with no albums in the merged file.
+ *
+ * `list:` with nothing under it is YAML null, and every consumer of
+ * masonry.yml reads it as an array. A category the sender emptied keeps any
+ * album they could not see — the prune only fires when the block really has
+ * nothing left in it — which is what stops a rename or a move from deleting a
+ * neighbour's work as a side effect.
+ */
+function pruneEmptyCategories(yaml, text) {
+  let doc;
+  try {
+    doc = index(text, yaml);
+  } catch {
+    return text;
+  }
+
+  const cuts = [];
+  for (const block of doc.byCategory.values()) if (!block.items.length) cuts.push(block);
+  if (!cuts.length) return text;
+
+  cuts.sort((a, b) => b.start - a.start);
+  const out = doc.lines.slice();
+  for (const cut of cuts) out.splice(cut.start, cut.end - cut.start);
+
+  const eol = eolOf(text);
+  let merged = out.join(eol);
+  // A cut can take the file's closing newline with it when the last category is
+  // the one removed; the file kept one before, so it keeps one now.
+  if (/\r?\n$/.test(text) && merged && !/\r?\n$/.test(merged)) merged += eol;
+  return merged;
+}
+
+/**
+ * One album's block, with the header of the category it lives in — a complete
+ * one-album masonry.yml, or null when the file has no such album.
+ *
+ * The masked file a collaborator opens has every withheld album cut out of it,
+ * INCLUDING the one they were granted, so the editor cannot find their album in
+ * what it read. This is the other half of that: the build seals this slice
+ * under the album's own key, and the editor splices it back into the document
+ * before it starts. It goes through the same scanner as `strip` and `merge`, so
+ * the block spliced in has exactly the boundaries the runner's merge will look
+ * for when the save comes back.
+ *
+ * @returns {{category: string, text: string}|null}
+ */
+export function sliceFor(yaml, text, id) {
+  const { lines, albums, byCategory } = index(text, yaml);
+  const row = albums.get(id);
+  if (!row) return null;
+
+  const cat = byCategory.get(row.category);
+  const header = cat && cat.listLine >= 0 ? lines.slice(cat.start, cat.listLine + 1) : [];
+  const item = lines.slice(row.start, row.end);
+  return { category: row.category, text: header.concat(item).join(eolOf(text)) + eolOf(text) };
 }
 
 /**

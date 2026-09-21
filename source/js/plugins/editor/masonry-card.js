@@ -205,13 +205,26 @@ export function createAlbumCard(model, ctx) {
     return rows.slice(0, MENU_MAX);
   }
 
-  /** Whether what is typed names a category that exists — the row says which. */
+  /**
+   * Whether what is typed names a category that EXISTED when the file was
+   * opened — not one this session created.
+   *
+   * The test used to be `known`, the names in the document as it stands, so a
+   * category made by the editor turned "New" into "Existing" the moment it was
+   * appended. `openedName` is the signal the parser and `makeCategory` already
+   * maintain: a node read from the file carries the name it was read under, a
+   * node created here carries none — so every category this session added goes
+   * on reading as New, however many repaints happen before the save.
+   */
   function paintTag() {
     const input = comboInput();
     const tag = el.querySelector("[data-combo-tag]");
     if (!input || !tag) return;
     const value = input.value.trim();
-    const held = known.some((name) => name === value);
+    const node = categories(model.doc).find(
+      (cat) => String(categoryFields(cat).links_category || "") === value
+    );
+    const held = !!(node && node.openedName);
     tag.textContent = !value ? "" : held ? t("cat_here", "Existing") : t("cat_make", "New");
     tag.dataset.kind = !value ? "" : held ? "held" : "new";
   }

@@ -169,6 +169,43 @@ async function hydrateMeta(map) {
   );
 }
 
+/**
+ * The key for a page this session may EDIT but was never granted to READ.
+ *
+ * `/api/vault/keys` answers the reader's question, and an unpublished article
+ * handed to a collaborator for editing arrives through the editor's route
+ * instead — `/api/editor/keys` — so the gate held no key and answered "not
+ * found" to the one person the page was handed to. Being cleared to change an
+ * item is being cleared to read it, so the other route is asked here when the
+ * read list has nothing for this slug.
+ *
+ * Staff only, and only ever for the slug being opened: the reply is the same
+ * authorization the editor already uses, not a second one.
+ */
+async function editorGrant(slug) {
+  if (!slug || !window.blogAuth) return null;
+  const session = await window.blogAuth.getSession().catch(() => null);
+  if (!session || !session.token || !(session.isAdmin || session.isCollaborator)) return null;
+
+  const base = window.blogAuth.resolveApiBase();
+  if (!base) return null;
+  const res = await fetch(base + "/api/editor/keys", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + session.token, "Content-Type": "application/json" },
+    body: "{}",
+  }).catch(() => null);
+  if (!res || !res.ok) return null;
+
+  const data = await res.json().catch(() => ({}));
+  const row = ((data && data.items) || []).find(
+    (item) => item.slug === slug && (item.kind === "post" || item.kind === "album")
+  );
+  if (!row || !row.key) return null;
+
+  const raw = b64urlToBytes(row.key);
+  return { id: row.id, slug: row.slug, raw, key: await importAesKey(raw), meta: undefined, card: null };
+}
+
 /** Granted POSTS that carry metadata, newest first. Albums share the keyring and
  *  the same blob layout, but belong to no post listing. */
 function readable(map) {
@@ -363,7 +400,10 @@ async function unlockPost(gate) {
   setGate(gate, "probing");
 
   const map = await loadGrants(true);
-  const entry = map && Array.from(map.values()).find((g) => g.slug === slug);
+  let entry = map && Array.from(map.values()).find((g) => g.slug === slug);
+  // An editor of an item it was never granted a READ key for — an unpublished
+  // article handed to a collaborator — reaches it through the editor route.
+  if (!entry) entry = await editorGrant(slug);
   if (!entry) {
     setGate(gate, "denied");
     settle();
@@ -547,7 +587,7 @@ async function mountAudienceEditor(host, entry) {
   });
 
   const editors = new Picker(`edit:${entry.id}`, box.querySelector('[data-picker="edit"]'), {
-    placeholder: i18n("editor_placeholder", "Collaborator name or numeric id, then Enter"),
+    placeholder: i18n("editor_placeholder", "Collaborator username, name or numeric id, then Enter"),
     t: i18n,
     lookup: rosterLookup,
     onCommit: saver("edit", `/api/admin/vault/${encodeURIComponent(entry.id)}/editors`, "editors"),

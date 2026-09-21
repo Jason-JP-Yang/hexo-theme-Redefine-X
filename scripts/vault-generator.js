@@ -841,11 +841,26 @@ async function sealMasonrySource(routes, p) {
   // Hexo loads scripts in a VM without a dynamic-import callback.  Use the
   // CommonJS loader instead; recent Node versions can synchronously load this
   // ESM module and this also keeps the generator compatible with Hexo's VM.
-  const { strip } = require("../workflows/ci/lib/masonry.mjs");
+  const { strip, sliceFor } = require("../workflows/ci/lib/masonry.mjs");
 
   let masked = text;
+  let slices = new Map();
   try {
     masked = hidden.size ? strip(yaml, text, hidden) : text;
+    // ── the withheld albums, one slice each ─────────────────────────────────
+    //
+    // The masked copy is a single artifact and every collaborator opens the same
+    // one, so it cannot carry an album only SOME of them may see. What it can
+    // do — and what makes a per-album grant enforceable at all — is announce
+    // nothing and let the build seal each withheld album's own block under that
+    // album's own key (the editor's `y.bin`). The editor splices the slice back
+    // into the document before it paints, and the runner's merge then replaces
+    // the album in the real file and leaves every album the reader was not
+    // shown exactly where it was.
+    for (const entry of state.albums()) {
+      const part = sliceFor(yaml, text, entry.id);
+      if (part) slices.set(entry.id, part);
+    }
   } catch (err) {
     // A file the shared scanner cannot read is one the runner could not merge
     // back either, so failing here is the earlier and louder of the two.
@@ -854,6 +869,19 @@ async function sealMasonrySource(routes, p) {
 
   for (const entry of pages) {
     routes.set(`${p}/${entry.slug}/y.bin`, vc.seal(entry.key, entry.page === "masonry" ? text : masked));
+  }
+
+  // The per-album slices go to the albums themselves, under their own keys.
+  for (const entry of state.albums()) {
+    const part = slices.get(entry.id);
+    if (!part) continue;
+    routes.set(
+      `${p}/${entry.slug}/y.bin`,
+      vc.seal(
+        entry.key,
+        JSON.stringify({ v: 1, category: part.category, title: entry.title, yaml: part.text })
+      )
+    );
   }
 }
 

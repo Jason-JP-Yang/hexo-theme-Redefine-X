@@ -305,6 +305,27 @@ export async function read(path) {
 }
 
 /**
+ * One album's own slice of masonry.yml, sealed under that album's key.
+ *
+ * The file a collaborator opens has every encrypted and draft album cut out of
+ * it — including the one they were granted, which is why the album editor used
+ * to answer "… is not in source/_data/masonry.yml" to the one person it was
+ * supposed to work for. The slice is a complete one-album file (its category's
+ * header plus its own block), so the editor can splice it back into the
+ * document it is working on and then behave exactly as it does for an admin.
+ *
+ * Null for an album the build did not slice — a public one, which is in the
+ * file already.
+ */
+export async function readAlbumSlice(grant) {
+  if (!grant || !grant.slug) return null;
+  if (!grant.key) grant.key = await importAesKey(grant.raw);
+  const sealed = await fetchSealed(`${vaultPrefix()}/${grant.slug}/y.bin`);
+  if (!sealed) return null;
+  return openText(grant.key, sealed);
+}
+
+/**
  * A directory listing, for the one directory anything still lists.
  *
  * Every post has a sealed source copy now, so the list of articles is the list

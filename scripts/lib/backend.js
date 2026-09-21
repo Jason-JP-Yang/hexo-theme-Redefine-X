@@ -154,8 +154,14 @@ function forPage(theme) {
   const resolved = resolve(theme);
   return Object.assign({}, resolved, {
     ci_api_url: undefined,
+    // `username` rides along because it is the handle a person actually TYPES
+    // into the editor's "who can edit this" field — matching only the display
+    // name and the numeric id meant a collaborator whose name nobody remembers
+    // could not be added at all. It is the half that is already public on
+    // GitHub, unlike the email, which stays in the sealed blob.
     collaborators: resolved.collaborators.map((row) => ({
       id: row.id,
+      username: row.username,
       name: row.name,
       avatar: row.avatar,
     })),

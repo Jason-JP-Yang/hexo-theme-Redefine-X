@@ -34,6 +34,7 @@ import { initManagementAnalytics } from "./management-analytics.js";
 import { Picker, avatarOf, rosterLookup } from "../tools/chipPicker.js";
 import { renderANSI } from "../tools/ansi.js";
 import {
+  albumDraftId,
   b64urlToBytes,
   fetchSealed,
   importAesKey,
@@ -1016,7 +1017,7 @@ function paintPosts() {
       const host = section.querySelector(`[data-picker="${CSS.escape(key)}"]`);
       if (host) {
         const picker = makePicker(key, host, {
-          placeholder: t("ed_placeholder", "Collaborator name or numeric id, then Enter"),
+          placeholder: t("ed_placeholder", "Collaborator username, name or numeric id, then Enter"),
           // Only a configured collaborator can be an editor, so the roster is
           // the whole answer and anybody else comes back as unknown.
           lookup: rosterLookup,
@@ -1401,11 +1402,25 @@ async function runUnpublish() {
     // about it is known here without asking anything again. An ALBUM keeps
     // saying it is encrypted, because it is — `draft:` on a `list:` entry is
     // what withholds it, and its key is minted by the build that follows.
+    // The withdrawn article is now a DRAFT, and the item "who can edit this"
+    // addresses is the draft's own id — the one the commit just minted for a
+    // post, the one derived from the page title for an album. Clearing it to
+    // nothing (which is what used to happen) left the row with no permission
+    // field until a build happened to bring the inventory back.
+    const mintedFor = new Map((result.minted || []).map((m) => [String(m.source || ""), m]));
     for (const row of rows) {
       row.published = false;
       if (row.kind !== "album") row.encrypted = false;
-      row.draft = row.draft || { id: "", slug: row.slug || "", href: row.href, source: row.source };
-      if (row.kind !== "album") row.vaultId = "";
+      const mint = mintedFor.get(String(row.source || ""));
+      const freshAlbumId =
+        row.kind === "album" && row.album && row.album.title ? await albumDraftId(row.album.title) : "";
+      row.draft = row.draft || {
+        id: mint ? mint.id : freshAlbumId,
+        slug: mint ? mint.slug : row.slug || "",
+        href: row.href,
+        source: mint ? mint.path : row.source,
+      };
+      row.vaultId = (row.draft && row.draft.id) || (mint && mint.id) || freshAlbumId || "";
     }
     box.queue = [];
     paintPosts();
