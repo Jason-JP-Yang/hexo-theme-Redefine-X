@@ -74,6 +74,11 @@ const INDEX_FILE = ".images.json";
 const SCAN = [".md", ".yml", ".yaml", ".json"];
 const CONFIG = /^_config([.-][^/\\]+)?\.ya?ml$/i;
 const BITMAP = /\.(png|jpe?g|gif|webp)$/i;
+// What a note may name. The runner refuses anything else at the payload, and
+// this is the same limit on the build side: a note for a post or a config file
+// is not a picture move, and applying one would let a journal rename containers
+// of content rather than the pictures it exists for.
+const MOVABLE = /^source\/(?:images|masonry)\//;
 
 /** A directory path with no trailing separator, whoever handed it over. */
 function trim(dir) {
@@ -363,6 +368,12 @@ function applyMoves(opts) {
     const from = inside(move.from);
     const to = inside(move.to);
     if (!from || !to) continue;
+    if (!MOVABLE.test(move.from) || !MOVABLE.test(move.to)) {
+      // Dropped rather than held: no build can ever carry it out, and holding
+      // it would keep the journal alive on every run and warn about it forever.
+      log.warn(`[image-moves] ${move.from} -> ${move.to} is outside the picture tree; ignored.`);
+      continue;
+    }
 
     const pair = { from: move.from, to: move.to };
     const left = fs.existsSync(from);

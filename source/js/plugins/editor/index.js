@@ -3343,26 +3343,32 @@ async function doSave(mode) {
 
     const result = await session.save(state.doc, mode, state.pending, state.vaultChoice, state.stage);
 
-    // The picture browser's tree is the BUILD's, and the build that will name
-    // these has not run yet. Handing them over rebuilds the tree AND keeps them
-    // in it until it has. Before `pending` is emptied, which is where they are.
-    noteCommitted(state.pending, state.stage);
-    for (const asset of state.pending) URL.revokeObjectURL(asset.url);
-    state.pending = [];
-    // Settled, not cleared. The commit carried the note; the picture itself is
-    // moved by the build, so the mapping is still the only thing that knows
-    // where the bytes are until that build lands.
-    state.stage.settle();
-    // Every step still on the stack now describes a document whose pictures are
-    // already in the repository, so stepping back through one must not queue
-    // those bytes again or re-ask for a rename the build has been told about.
-    history.settle();
-    state.dirty = false;
+    // A dispatch that did not get through means no run is coming for this save:
+    // the queue branch holds ONE payload and the next save replaces it, so
+    // consuming the staged work here loses the move notes and the uploaded
+    // bytes rather than committing them. Everything stays staged, and "save
+    // again to retry" below is a real retry. See repo.js.
+    if (result.started !== false) {
+      // The picture browser's tree is the BUILD's, and the build that will name
+      // these has not run yet. Handing them over rebuilds the tree AND keeps them
+      // in it until it has. Before `pending` is emptied, which is where they are.
+      noteCommitted(state.pending, state.stage);
+      for (const asset of state.pending) URL.revokeObjectURL(asset.url);
+      state.pending = [];
+      // Settled, not cleared. The commit carried the note; the picture itself is
+      // moved by the build, so the mapping is still the only thing that knows
+      // where the bytes are until that build lands.
+      state.stage.settle();
+      // Every step still on the stack now describes a document whose pictures are
+      // already in the repository, so stepping back through one must not queue
+      // those bytes again or re-ask for a rename the build has been told about.
+      history.settle();
 
-    // Edited blocks STAY dirty. Their `src` is the text they were parsed from
-    // and is now stale, so re-emitting from their fields is the only thing that
-    // still reproduces what was just committed.
-    await session.dropStash(state.doc.path);
+      // Edited blocks STAY dirty. Their `src` is the text they were parsed from
+      // and is now stale, so re-emitting from their fields is the only thing that
+      // still reproduces what was just committed.
+      await session.dropStash(state.doc.path);
+    }
 
     // What the document IS changes when it is saved: a new post becomes a file,
     // a public post becomes a draft, a draft becomes the published post. The
@@ -3409,11 +3415,14 @@ async function doSave(mode) {
       state.painting = false;
     }
 
-    // The commit has landed, so nothing is at stake in leaving any more — said
+    // The run has started, so nothing is at stake in leaving any more — said
     // once, here, rather than relying on every path above having left `dirty`
-    // alone. The build that follows needs no editor to finish.
-    state.dirty = false;
-    clearTimeout(state.stashTimer);
+    // alone. A save whose run never started stays dirty, so leaving asks for the
+    // retry that would actually commit the staged pictures.
+    if (result.started !== false) {
+      state.dirty = false;
+      clearTimeout(state.stashTimer);
+    }
     syncHeader();
 
     notice("info", `${t("saved", "Saved")} ${result.short}`);

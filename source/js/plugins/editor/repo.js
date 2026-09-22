@@ -514,9 +514,13 @@ export async function commit(files, message) {
   // the run instead, from `main`, naming this exact commit — the page cannot,
   // because its token deliberately carries no `Actions: write`.
   //
-  // A failure here does NOT undo the save: the payload is on the queue branch
-  // and the next run that names it applies it. What is lost is only the run for
-  // THIS save, so that is all the caller is told.
+  // A failure here does NOT undo the push: the payload is on the queue branch.
+  // But that branch is a single slot and no run names this payload, so the next
+  // save replaces it — a caller that consumed its staged work on a
+  // `started: false` answer would therefore lose it. The editors keep their
+  // pending uploads, move notes and history steps until a save actually starts
+  // a run, which is what makes the retry they are told to make a real one. The
+  // flag is returned for exactly that decision.
   let started = false;
   let why = "";
   try {

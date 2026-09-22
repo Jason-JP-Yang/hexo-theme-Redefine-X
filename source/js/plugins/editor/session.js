@@ -612,8 +612,13 @@ function publishEncrypted(doc, choice) {
  * same reason: this session cannot read what is already in it, and a save that
  * replaced the file with its own idea of the contents would drop whatever
  * another save had put there.
+ *
+ * Exported because there are TWO editors and both stage picture moves: the post
+ * editor's `save` below, and the album editor's commit — which built its own
+ * file list and, for want of calling this, was the save whose every rename was
+ * silently dropped on the floor. See editor/masonry.js.
  */
-async function movedFiles(stage) {
+export async function movedFiles(stage) {
   if (!stage || !stage.dirty) return [];
 
   const notes = [];

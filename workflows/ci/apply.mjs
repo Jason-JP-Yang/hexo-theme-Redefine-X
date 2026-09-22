@@ -74,6 +74,13 @@ const MASONRY = "source/_data/masonry.yml";
 const KEYRING = ".vault/keys.enc";
 const JOURNAL = "source/_data/image-moves.json";
 const ASSET = /^source\/(images|masonry)\/.+\.[a-z0-9]+$/i;
+// What the picture-move journal may name. The note carries no owner — it is
+// build bookkeeping, not content — so without this the one path in the payload
+// that is not checked against the receipt could rename ANY file under source/:
+// a save cleared for a single article could move somebody else's article by
+// appending a note. The picker only ever moves pictures, so nothing legitimate
+// is outside this.
+const MOVABLE = /^source\/(?:images|masonry)\//;
 
 /* ─── arguments ────────────────────────────────────────────────────────────── */
 
@@ -167,6 +174,9 @@ for (const file of files) {
     const clean = notes
       .filter((n) => n && typeof n.from === "string" && typeof n.to === "string")
       .filter((n) => !FORBIDDEN.some((re) => re.test(n.from) || re.test(n.to)));
+    if (clean.some((n) => !MOVABLE.test(n.from) || !MOVABLE.test(n.to))) {
+      refuse("the picture-move journal may only move pictures");
+    }
     writes.push({
       rel,
       bytes: Buffer.from(JSON.stringify(held.concat(clean), null, 2) + "\n", "utf8"),

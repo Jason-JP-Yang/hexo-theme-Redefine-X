@@ -347,10 +347,15 @@ jobs:
           git push -q origin "HEAD:${{ github.event.repository.default_branch }}"
 
       # What the source keeps from the build: the resealed keyring, the save
-      # itself, the picture moves, and the artifact pointer. Pushed even when
-      # the build failed, so an author's work is never lost to a broken build —
-      # the log in Blog Management says what to fix. `Built-by: ci` stops the
-      # private repository's webhook relaying this back into another build.
+      # itself, the picture moves, the references the moves rewrote — including
+      # the root `_config*.yml`, which name covers, avatars and banners — and the
+      # artifact pointer. The configs are staged EXPLICITLY: the journal is
+      # consumed by the build that rewrites them, so a rewrite left uncommitted
+      # is a path that goes stale the moment the next build reads the file.
+      # Pushed even when the build failed, so an author's work is never lost to
+      # a broken build — the log in Blog Management says what to fix.
+      # `Built-by: ci` stops the private repository's webhook relaying this back
+      # into another build.
       - name: Return the source's half of the build
         if: always()
         env:
@@ -361,7 +366,7 @@ jobs:
         run: |
           [ -d src/.git ] || { echo "no source checkout"; exit 0; }
           cd src
-          git add -A -- .vault source public
+          git add -A -- .vault source public '_config*.yml'
           if git diff --cached --quiet; then
             echo "the source has nothing to take back"
             exit 0

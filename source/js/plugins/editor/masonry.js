@@ -2332,6 +2332,13 @@ async function buildCommit(mode) {
     owners,
     content: repo.toBase64(emitMasonry(fresh)),
   });
+  // The renames staged in this album's picture browser. The photographs
+  // themselves do not travel: the note is a few hundred bytes that the build
+  // turns into R100 renames and reference rewrites, exactly as it does for a
+  // post. This editor builds its own file list, so it has to ask for the note
+  // itself — leaving it out meant a rename here changed the album's own
+  // addresses while the build was never told to move a single file.
+  files.push(...(await session.movedFiles(state.stage)));
 
   return { files, message, title, published: publishing, forked };
 }
@@ -2367,25 +2374,32 @@ async function doSave(mode) {
     const plan = await buildCommit(mode);
     const result = await repo.commit(plan.files, plan.message);
 
-    noteCommitted(state.pending, state.stage);
-    for (const asset of state.pending) URL.revokeObjectURL(asset.url);
-    state.pending = [];
-    state.stage.settle();
+    // A dispatch that did not get through means no run is coming for this save:
+    // the queue branch holds ONE payload and the next save replaces it, so
+    // consuming the staged work here loses the move notes and the uploaded
+    // bytes rather than committing them. Everything stays staged, and "save
+    // again to retry" below is a real retry. See repo.js.
+    if (result.started !== false) {
+      noteCommitted(state.pending, state.stage);
+      for (const asset of state.pending) URL.revokeObjectURL(asset.url);
+      state.pending = [];
+      state.stage.settle();
 
-    // What the album IS changes when it is saved: a new one becomes an entry, a
-    // published one gains a draft in front of it, a draft becomes the published
-    // album. Written BEFORE the history settles, so the step this commit is
-    // clean against is the document as it now stands — otherwise stepping back
-    // once would quietly take the shadow link off a draft that needs it.
-    if (plan.forked) setItemField(state.item, "supersedes", state.opened.title);
-    else if (plan.published) setItemField(state.item, "supersedes", null);
+      // What the album IS changes when it is saved: a new one becomes an entry, a
+      // published one gains a draft in front of it, a draft becomes the published
+      // album. Written BEFORE the history settles, so the step this commit is
+      // clean against is the document as it now stands — otherwise stepping back
+      // once would quietly take the shadow link off a draft that needs it.
+      if (plan.forked) setItemField(state.item, "supersedes", state.opened.title);
+      else if (plan.published) setItemField(state.item, "supersedes", null);
 
-    history.settle();
-    state.dirty = false;
-    await dropStash();
+      history.settle();
+      state.dirty = false;
+      await dropStash();
 
-    state.cat.openedName = categoryFields(state.cat).links_category || state.cat.openedName;
-    state.opened = { title: plan.title, draft: !plan.published, category: state.cat.openedName };
+      state.cat.openedName = categoryFields(state.cat).links_category || state.cat.openedName;
+      state.opened = { title: plan.title, draft: !plan.published, category: state.cat.openedName };
+    }
 
     syncHeader();
     notice("info", `${t("saved", "Saved")} ${result.short || ""}`.trim());

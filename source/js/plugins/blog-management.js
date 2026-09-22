@@ -2152,7 +2152,10 @@ async function boot() {
       sections[name] = null;
       // The contents rail is written out with the page, so the entry for a
       // section that is not there has to go with it or it scrolls to nothing.
-      const link = root.parentElement && root.parentElement.querySelector(`a[href="#bm-${name}"]`);
+      // The rail is a SIBLING of the console, not a descendant — both hang off
+      // `.post-page-container` — so the lookup starts at their common parent.
+      const scope = root.closest(".post-page-container") || document;
+      const link = scope.querySelector(`a[href="#bm-${name}"]`);
       if (link && link.closest(".nav-item")) link.closest(".nav-item").remove();
     }
   }

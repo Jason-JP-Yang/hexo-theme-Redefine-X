@@ -113,7 +113,17 @@ function write(file, data) {
 
 /* ─── Umami ───────────────────────────────────────────────────────────────── */
 
-async function ask(url, token) {
+/**
+ * One Umami read, with a couple of retries for the walls that are not Umami's.
+ *
+ * A 403 here is almost never the API refusing the token: the instance's custom
+ * domain sits behind the zone's bot protection, which occasionally answers a
+ * machine fetch with a challenge page. That challenge is not sticky across
+ * requests — the next one may be handled by another edge instance and pass —
+ * so the busy answers are tried again, and the LAST body is kept in the error
+ * because "HTTP 403" alone cannot say which wall was hit.
+ */
+async function ask(url, token, attempt = 0) {
   let res;
   try {
     res = await fetch(url, {
@@ -123,7 +133,24 @@ async function ask(url, token) {
   } catch (e) {
     throw new Error("unreachable (" + (e && e.name === "TimeoutError" ? "timed out" : e.message) + ")");
   }
-  if (!res.ok) throw new Error("HTTP " + res.status);
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    if (attempt < 2 && (res.status === 403 || res.status === 429 || res.status >= 500)) {
+      await new Promise((r) => setTimeout(r, 1000 + attempt * 2000));
+      return ask(url, token, attempt + 1);
+    }
+    let host = "";
+    try {
+      host = new URL(url).host;
+    } catch {
+      /* a malformed URL is not worth a second throw */
+    }
+    const snippet = String(detail).replace(/\s+/g, " ").trim().slice(0, 160);
+    throw new Error(
+      "HTTP " + res.status + (host ? " from " + host : "") + (snippet ? " — " + snippet : "")
+    );
+  }
   return res.json();
 }
 
