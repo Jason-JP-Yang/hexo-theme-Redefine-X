@@ -38,7 +38,7 @@
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { applyMoves, rewriteDeep } = require("../lib/image-moves");
-const { setRunMode } = require("../lib/build-index");
+const { setRunMode, ciHost } = require("../lib/build-index");
 const clock = require("../lib/build-clock");
 
 /** The command as its full name, so `hexo g` and `hexo generate` are one thing. */
@@ -125,17 +125,27 @@ hexo.extend.filter.register(
     const site = (this.config && this.config.theme_config) || {};
     // At after_init the theme's own file may not be loaded yet, while the site's
     // `_config.<theme>.yml` is — so the site's keys win wherever both exist.
-    const a = require("../lib/backend").resolve(Object.assign({}, theme, site)).analytics;
+    const resolved = require("../lib/backend").resolve(Object.assign({}, theme, site));
+    const a = resolved.analytics;
     if (!a.enable || !a.pulse) return;
 
     const { refresh } = require("../lib/analytics-archive");
     const file = path.join(this.source_dir, "_data", "analytics.json");
+
+    // A runner cannot reach the analytics custom domain: the zone's bot
+    // protection challenges it exactly as it does the Worker's own domain, and
+    // the archive fetch has nowhere else to go — its address IS
+    // `backend.analytics.host`. On CI it travels through the Worker's relay on
+    // the workers.dev address instead, the same one `filters/vault.js` uses for
+    // the keyring reconcile.
+    const onRunner = !!ciHost();
 
     let result;
     try {
       result = await refresh({
         file,
         host: a.host,
+        relay: onRunner ? resolved.ci_api_url : "",
         websiteId: a.website_id,
         log: (line) => this.log.info(`[analytics] ${line}`),
       });

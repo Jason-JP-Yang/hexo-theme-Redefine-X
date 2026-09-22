@@ -589,6 +589,22 @@ write` (`GITHUB_SYNC_TOKEN`). Neither gains a capability it did not have.
 A dispatch that does not land costs one day of latency, not a day of data: the
 next build fetches **every** day the archive is missing, not just the last one.
 
+### Analytics relay
+
+The analytics instance lives on a custom domain behind the zone's bot
+protection, which challenges a CI runner with a 403. The build's activity
+archive — the one thing that reads Umami at build time — therefore goes through
+this Worker on the workers.dev address instead.
+
+| | |
+| --- | --- |
+| `GET /api/analytics/websites/:id` | the website probe (its creation date) |
+| `GET /api/analytics/websites/:id/pageviews` | the daily pageviews series, query string passed through |
+
+Not a general proxy: the path must be one of those two shapes and the request
+must carry `Authorization: Bearer <UMAMI_TOKEN>` — the same token this Worker
+holds and forwards. Everything else is refused before any fetch leaves.
+
 ### Webhook
 
 #### `POST /api/hooks/github`

@@ -5,6 +5,16 @@
 const { version } = require("../../package.json");
 const https = require("https");
 
+// The version service answers on a custom domain, which sits behind the zone's
+// bot protection: a CI runner is handed a "Just a moment..." challenge instead
+// of JSON, so the banner and the CDN probe silently went missing on every
+// runner build. workers.dev is outside the zone. Hardcoded, because the API is
+// its own Worker and no config in the theme points at it.
+const VERSION_API =
+  process.env.CI || process.env.GITHUB_ACTIONS
+    ? `https://redefine-x-version-api.jiepengyang.workers.dev/api/v2/info`
+    : `https://redefine-x-version.jason-yang.top/api/v2/info`;
+
 hexo.on("ready", async () => {
   const timeout = 3000;
 
@@ -12,7 +22,7 @@ hexo.on("ready", async () => {
     return new Promise((resolve, reject) => {
       https
         .get(
-          `https://redefine-x-version.jason-yang.top/api/v2/info`,
+          VERSION_API,
           { timeout: timeout },
           (response) => {
             if (response.statusCode < 200 || response.statusCode > 299) {

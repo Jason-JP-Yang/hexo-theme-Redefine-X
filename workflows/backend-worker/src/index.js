@@ -2,14 +2,18 @@
  * Redefine-X Backend Worker
  *
  * A headless Cloudflare Worker (Hono + D1) backing the Redefine-X theme. It has
- * NO front-end of its own — it serves four JSON/proxy concerns:
+ * NO front-end of its own — it serves five JSON/proxy concerns:
  *   1. Instant Notes API   — D1-backed notes (public read; admin CRUD).
  *   2. Auth                — verifies a giscus-derived GitHub token and mints a
  *                            short-lived HMAC session. Every verified user gets
  *                            one; only allowlisted ids get isAdmin.
  *   3. Giscus CORS proxy   — forwards giscus.app API calls (comments + masonry
  *                            likes) with the blog's CORS headers.
- *   4. Notifications       — follow/push subscriptions, the in-site inbox, the
+ *   4. Analytics relay     — the two read paths a CI build's archive fetch
+ *                            needs, forwarded to the Umami instance because
+ *                            its custom domain challenges a runner. See the
+ *                            route below.
+ *   5. Notifications       — follow/push subscriptions, the in-site inbox, the
  *                            GitHub webhook that ingests changelog.json, and the
  *                            producer half of the Queues-based push pipeline.
  *                            The consumer half is the `queue` export at the
@@ -2089,6 +2093,54 @@ app.get("/api/admin/analytics/ticket", panel("analytics", "r"), (c) => {
 
   c.header("Cache-Control", "no-store");
   return c.json({ token, host, websiteId });
+});
+
+// ─── ANALYTICS: the relay a CI build reaches Umami through ──
+//
+// The instance is served on a custom domain, behind the zone's bot protection:
+// a GitHub Actions runner is answered with a "Just a moment..." challenge, a
+// 403 to anything that is not a browser. The build's archive fetch cannot
+// sidestep that on its own — the address it is handed is `analytics.host` from
+// the theme config — so the two read paths that fetch actually uses are
+// forwarded from here, over the workers.dev address that is outside the zone.
+//
+// ONLY those two. This is not a second door into a dashboard: the path must be
+// the website probe or its pageviews series, the caller must present the same
+// UMAMI_TOKEN this Worker holds, and everything else is refused before any
+// fetch leaves. A relay that forwarded whatever it was asked to would be a way
+// around the instance's own controls from anywhere on the internet.
+const ANALYTICS_PATHS = /^\/websites\/[^/]+(\/pageviews)?$/;
+
+app.get("/api/analytics/*", async (c) => {
+  const host = String(c.env.UMAMI_API_URL || "").replace(/\/+$/, "");
+  if (!host || !c.env.UMAMI_TOKEN) {
+    return c.json({ error: "Analytics is not configured" }, 503);
+  }
+
+  const auth = c.req.header("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (token !== c.env.UMAMI_TOKEN) return c.json({ error: "Unauthorized" }, 401);
+
+  const url = new URL(c.req.url);
+  const rest = url.pathname.slice("/api/analytics".length);
+  if (!ANALYTICS_PATHS.test(rest)) return c.json({ error: "Not found" }, 404);
+
+  let res;
+  try {
+    res = await fetch(host + "/api" + rest + url.search, {
+      headers: { Accept: "application/json", Authorization: "Bearer " + c.env.UMAMI_TOKEN },
+    });
+  } catch {
+    return c.json({ error: "Analytics unreachable" }, 502);
+  }
+
+  // The body travels as it came. No CORS headers, deliberately and by omission:
+  // the only client is a runner, and a browser has no business reading a
+  // dashboard through this Worker.
+  return new Response(await res.text(), {
+    status: res.status,
+    headers: { "Content-Type": res.headers.get("content-type") || "application/json" },
+  });
 });
 
 //

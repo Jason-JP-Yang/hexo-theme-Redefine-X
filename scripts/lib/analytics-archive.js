@@ -128,8 +128,8 @@ async function ask(url, token) {
 }
 
 /** The website's own creation date — where "all of it" starts. */
-async function firstDay(host, id, token) {
-  const site = await ask(host + "/api/websites/" + encodeURIComponent(id), token);
+async function firstDay(remote, id, token) {
+  const site = await ask(remote("/api/websites/" + encodeURIComponent(id)), token);
   const at = site && (site.createdAt || site.created_at);
   const ms = at ? Date.parse(at) : NaN;
   return isNaN(ms) ? null : msOf(keyOf(ms));
@@ -146,18 +146,18 @@ async function firstDay(host, id, token) {
  * `x` is a wall-clock string in the requested timezone, not an instant: the first
  * ten characters are the day, and parsing it as a date would shift the edges.
  */
-async function chunk(host, id, token, from, to) {
-  const url =
-    host +
+async function chunk(remote, id, token, from, to) {
+  const url = remote(
     "/api/websites/" +
-    encodeURIComponent(id) +
-    "/pageviews?" +
-    new URLSearchParams({
-      startAt: String(from),
-      endAt: String(to + DAY - 1),
-      unit: "day",
-      timezone: "UTC",
-    });
+      encodeURIComponent(id) +
+      "/pageviews?" +
+      new URLSearchParams({
+        startAt: String(from),
+        endAt: String(to + DAY - 1),
+        unit: "day",
+        timezone: "UTC",
+      })
+  );
 
   const data = await ask(url, token);
   const views = new Map();
@@ -188,11 +188,20 @@ async function chunk(host, id, token, from, to) {
  * @param {string} options.file       source/_data/analytics.json
  * @param {string} options.host       Umami base URL
  * @param {string} options.websiteId  which site's numbers
+ * @param {string} [options.relay]    a Worker base URL to send every Umami path
+ *                                    through instead of `host` — the relay a CI
+ *                                    build needs because the instance's custom
+ *                                    domain challenges a runner. Its
+ *                                    `/api/analytics` route serves the Umami
+ *                                    path with the `/api` prefix dropped.
  * @param {Function} [options.log]
  * @returns {Promise<{ok: boolean, added: number, through: string|null, why: string}>}
  */
-async function refresh({ file, host, websiteId, log = () => {} }) {
+async function refresh({ file, host, websiteId, relay = "", log = () => {} }) {
   const base = String(host || "").replace(/\/+$/, "");
+  const door = String(relay || "").replace(/\/+$/, "");
+  const remote = (path) =>
+    door ? door + "/api/analytics" + path.replace(/^\/api/, "") : base + path;
   const id = String(websiteId || "");
   const stored = read(file);
   const have = stored ? stored.days : {};
@@ -221,7 +230,7 @@ async function refresh({ file, host, websiteId, log = () => {} }) {
   } else {
     let from = null;
     try {
-      from = await firstDay(base, id, token);
+      from = await firstDay(remote, id, token);
     } catch (e) {
       log("could not read the website's start date (" + e.message + "), taking two years");
     }
@@ -241,7 +250,7 @@ async function refresh({ file, host, websiteId, log = () => {} }) {
     const to = Math.min(shift(at, CHUNK - 1), end);
     let got;
     try {
-      got = await chunk(base, id, token, at, to);
+      got = await chunk(remote, id, token, at, to);
     } catch (e) {
       if (added) break;
       return {

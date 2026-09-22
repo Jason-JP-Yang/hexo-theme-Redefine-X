@@ -86,7 +86,7 @@ When `global.single_page` is on (default), `components/swup.ejs` loads [swup](ht
 
 ## 7. CDN & version awareness
 
-- `events/welcome.js` pings `https://redefine-x-version.jason-yang.top/api/v2/info` on `ready`, prints the ASCII banner with current/latest version, warns if outdated, and probes which CDNs (jsDelivr, unpkg, cdnjs, zstatic, npmmirror) currently host this version. Results are stored in `hexo.locals` as `cdnTestStatus_*`.
+- `events/welcome.js` pings `https://redefine-x-version.jason-yang.top/api/v2/info` on `ready` — or `https://redefine-x-version-api.jiepengyang.workers.dev/api/v2/info` on CI, whose runner the custom domain's bot protection challenges — prints the ASCII banner with current/latest version, warns if outdated, and probes which CDNs (jsDelivr, unpkg, cdnjs, zstatic, npmmirror) currently host this version. Results are stored in `hexo.locals` as `cdnTestStatus_*`.
 - The `cdn` config block (see [02](02-configuration.md#cdn)) switches asset URLs between local and a CDN provider, using the `${version}`/`${path}` URL template.
 
 ## 8. Build pipeline summary

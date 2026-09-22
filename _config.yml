@@ -502,13 +502,13 @@ comment:
 backend:
   # Worker base URL. Empty turns every backend feature off
   api_url:
-  # The Worker address CI and webhooks use: the workers.dev one, which bot protection
-  # on the custom domain cannot challenge. Empty falls back to api_url
+  # The Worker address CI and webhooks use: the workers.dev
+  # Prevent challenge from Cloudflare WAF and Bot Fight Mode.
   ci_api_url:
-  # Which Worker the front-end talks to: production, local (honoured on localhost pages only)
-  mode: production
   # The Worker used when mode is local. Must be a localhost or private address
   local_api_url: http://localhost:8787
+  # Which Worker the front-end talks to: production, local (honoured on localhost pages only)
+  mode: production
   # People with the same rights as the admin. Every field is required, and the same
   # ids must be in the Worker's COLLABORATORS — a rebuild and a deploy, never live
   collaborators:

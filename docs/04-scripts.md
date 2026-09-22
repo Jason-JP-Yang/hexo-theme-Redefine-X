@@ -102,7 +102,7 @@ hexo clean --include-minify # also wipes source/build/ optimized-image cache
 ```
 
 ### `welcome.js`
-On `ready`: fetches `redefine-x-version.jason-yang.top/api/v2/info` (3 s timeout), prints the ASCII banner with current vs latest version, warns if outdated, and records CDN availability into `hexo.locals` (`cdnTestStatus_jsdelivr` etc.) for the `cdn` feature.
+On `ready`: fetches the version API (3 s timeout), prints the ASCII banner with current vs latest version, warns if outdated, and records CDN availability into `hexo.locals` (`cdnTestStatus_jsdelivr` etc.) for the `cdn` feature. The address is `redefine-x-version.jason-yang.top/api/v2/info`, except on CI, where it is `redefine-x-version-api.jiepengyang.workers.dev/api/v2/info` — the custom domain's bot protection challenges a runner with a 403.
 
 ### `404.js`
 Registers/handles the 404 page generation.

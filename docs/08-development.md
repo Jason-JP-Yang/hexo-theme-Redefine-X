@@ -58,7 +58,7 @@ npm run npm:publish      # npm run build && npm publish
 > **Commit-message convention** (from `CONTRIBUTING.md`): `[section]: [brief info]`, e.g. `footer: optimize style`. PRs go to the **`dev`** branch upstream.
 
 ## Version & CDN awareness
-On `hexo` startup, [`events/welcome.js`](04-scripts.md#welcomejs) queries `redefine-x-version.jason-yang.top/api/v2/info` to print current-vs-latest version and probe CDN availability (jsDelivr/unpkg/cdnjs/zstatic/npmmirror), stored in `hexo.locals.cdnTestStatus_*`. The `cdn` config block then rewrites asset URLs to the chosen provider using `${version}`/`${path}`. The version API itself is a separate service (the `themes/redefine-x-version-api` submodule).
+On `hexo` startup, [`events/welcome.js`](04-scripts.md#welcomejs) queries `redefine-x-version.jason-yang.top/api/v2/info` — on CI, the custom domain's bot protection would challenge the runner, so it uses `redefine-x-version-api.jiepengyang.workers.dev/api/v2/info` instead — to print current-vs-latest version and probe CDN availability (jsDelivr/unpkg/cdnjs/zstatic/npmmirror), stored in `hexo.locals.cdnTestStatus_*`. The `cdn` config block then rewrites asset URLs to the chosen provider using `${version}`/`${path}`. The version API itself is a separate service (the `themes/redefine-x-version-api` submodule).
 
 ## Where things get compiled (summary)
 
