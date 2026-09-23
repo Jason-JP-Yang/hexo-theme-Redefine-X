@@ -2,35 +2,38 @@
 # published site, and it is the only thing anywhere that holds a credential for
 # the private repository the site is written in.
 #
-# ── The ways a run starts ───────────────────────────────────────────────────
+# Three jobs, always in this order:
 #
-#   workflow_dispatch  editor  somebody saved in the online editor. The Worker
-#                              starts this run right after the save is pushed to
-#                              the queue branch, naming the queue commit. The
-#                              payload is sealed and carries an Ed25519 receipt;
-#                              verified, applied, built, published.
-#                      source  a push to the private repository, relayed by the
-#                              Worker's webhook. Built and published.
-#                      nightly the Worker's cron. Built and published.
-#   push to main       the admin built at home and pushed the artifact.
-#                      Published as-is if it carries `Deploy-Signature:`;
-#                      force-reset if it does not. Without DEPLOY_KEY only.
-#   push to publish    the same, with DEPLOY_KEY: a GPG-verified commit by the
-#                      owner is promoted to main through the key, then published.
+#   verify  what this run is, and whether it may happen at all
+#   build   render the site from the private repository and commit it to main
+#   deploy  GitHub Pages: publish main.  Vercel / Cloudflare Pages: they deploy
+#           every push to main themselves, so wait until the site's
+#           version.json names the build on main; fail after two minutes.
 #
-# ── DEPLOY_KEY ──────────────────────────────────────────────────────────────
+# ── Two ways to verify ──────────────────────────────────────────────────────
 #
-# Vercel and Cloudflare Pages publish a push to main before any run can refuse
-# it. With a write deploy key as DEPLOY_KEY, and a ruleset on main that restricts
-# updates with Deploy keys as its only bypass, only this workflow can move main.
-# GitHub Pages then also needs `publish` allowed in the github-pages
-# environment's deployment branches.
+# Locked: DEPLOY_KEY is set AND a ruleset on main restricts updates, with
+# Deploy keys as its only bypass. Nothing but this workflow can move main.
 #
-# ── The deploy job ──────────────────────────────────────────────────────────
+#   push to publish    the admin's local build (`npm run deploy`). Must be a
+#                      GPG-verified commit by the repository owner. Its tree is
+#                      committed on top of main through the key and deployed;
+#                      publish is then emptied again.
+#   push to main       only this workflow can make one; nothing to do.
+#   editor save        the receipt below.
 #
-# GitHub Pages is published by the job. Vercel and Cloudflare Pages publish the
-# push themselves; the job waits until the site's version.json names the build
-# on main, and fails after two minutes.
+# Open: anything else. Every run warns, because Vercel and Cloudflare Pages
+# have already deployed a push to main before any run can look at it.
+#
+#   push to main       must be a GPG-verified commit by the repository owner;
+#                      put back otherwise. The workflow's own pushes use
+#                      GITHUB_TOKEN, which starts no run.
+#   push to publish    refused.
+#   editor save        the receipt below.
+#
+# Neither publish nor editor-queue is a site: turn off Vercel / Cloudflare
+# preview deploys for both. With GitHub Pages and a locked main, allow
+# `publish` in the github-pages environment's deployment branches.
 #
 # ── Why a save is DISPATCHED rather than pushed into a run ──────────────────
 #
@@ -39,15 +42,6 @@
 # has none, so pushing a save started nothing at all. Dispatching runs the
 # workflow from `main`, which is also the only copy of it the editor's token can
 # never have touched.
-#
-# ── Why the deploy always publishes `main` ──────────────────────────────────
-#
-# The deploy job checks out `main` fresh and publishes that, never a working
-# tree handed over from the build. A build that failed half way used to hand
-# over whatever was left — which could be an empty directory, and GitHub Pages
-# then answered every URL on the site with its own 404. `main` is the last
-# artifact that was committed whole; the worst a failed build can now do is add
-# its sealed log to it.
 #
 # ── What this file cannot become ────────────────────────────────────────────
 #
@@ -58,6 +52,10 @@
 #
 # ── Configuration ───────────────────────────────────────────────────────────
 #
+# The site's own `deploy:` block arrives as ci/deploy.json: the platform, the
+# address polled for version.json, the admin every site commit is authored as,
+# and the bot that empties publish and editor-queue.
+#
 # Variables:
 #   SOURCE_REPO          owner/name of the private repository (required)
 #   SOURCE_BRANCH        default main
@@ -67,12 +65,11 @@
 #   NODE_VERSION         default 24
 #
 # Secrets:
-#   VAULT_MASTER         opens .vault/keys.enc, unwraps a save's one-time key,
-#                        and checks a local build's signature
+#   VAULT_MASTER         opens .vault/keys.enc and unwraps a save's one-time key
 #   SOURCE_REPO_TOKEN    fine-grained PAT on SOURCE_REPO: Contents read/write,
 #                        Metadata read. NOT Workflows
-#   DEPLOY_KEY           optional, recommended; private half of a write deploy key
-#   UMAMI_TOKEN         optional; brings source/_data/analytics.json up to date
+#   DEPLOY_KEY           private half of a deploy key with write access
+#   UMAMI_TOKEN          optional; brings source/_data/analytics.json up to date
 
 name: Build and deploy
 run-name: >-
@@ -120,100 +117,123 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.decide.outputs.mode }}
-      platform: ${{ steps.decide.outputs.platform }}
-      login: ${{ steps.receipt.outputs.login }}
+      locked: ${{ steps.settings.outputs.locked }}
+      platform: ${{ steps.settings.outputs.platform }}
+      ci_url: ${{ steps.settings.outputs.ci_url }}
+      author: ${{ steps.settings.outputs.author }}
+      email: ${{ steps.settings.outputs.email }}
+      bot_email: ${{ steps.settings.outputs.bot_email }}
       admin: ${{ steps.receipt.outputs.admin }}
       ids: ${{ steps.receipt.outputs.ids }}
     steps:
+      # The artifact this run starts from says how the site is deployed; the
+      # repository's own settings say which way to verify.
+      - name: Read the deploy settings
+        id: settings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.DEPLOY_KEY != '' }}
+        run: |
+          SETTINGS=$(gh api "repos/${GITHUB_REPOSITORY}/contents/ci/deploy.json?ref=${GITHUB_SHA}" -H "Accept: application/vnd.github.raw" 2>/dev/null) || SETTINGS='{}'
+          jq -r '"platform=\(.platform // "github-pages")", "ci_url=\(.ci_url // "")", "author=\(.author // "")", "email=\(.email // "")", "bot_email=\(.bot_email // .email // "")"' <<<"$SETTINGS" >> "$GITHUB_OUTPUT"
+
+          UPDATES=$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" --jq 'any(.[]; .type == "update")' 2>/dev/null || echo false)
+          if [ "$HAS_KEY" = "true" ] && [ "$UPDATES" = "true" ]; then
+            echo "locked=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "locked=false" >> "$GITHUB_OUTPUT"
+          if [ "$UPDATES" = "true" ]; then
+            echo "::error title=No DEPLOY_KEY::main is locked by a ruleset but DEPLOY_KEY is not set, so nothing this workflow builds can reach main."
+          elif [ "$HAS_KEY" = "true" ]; then
+            echo "::warning title=main is not locked::DEPLOY_KEY is set, but no ruleset restricts updates to main. Verifying admin pushes to main by GPG until one does."
+          else
+            echo "::warning title=No DEPLOY_KEY::Admin pushes to main are checked for a GPG-verified commit only after Vercel or Cloudflare Pages has deployed them. Add a write deploy key as DEPLOY_KEY and a ruleset on main that restricts updates to it, then push local builds to publish."
+          fi
+
       # Inline rather than a script in `ci/`, because `ci/` lives on this branch
       # and a gate that ran from there would be guarding itself.
-      - name: Account for a push to the published branch
+      - name: Account for a push
         id: published
         if: github.event_name == 'push'
         env:
-          MESSAGE: ${{ github.event.head_commit.message }}
-          VAULT_MASTER: ${{ secrets.VAULT_MASTER }}
           GH_TOKEN: ${{ github.token }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          BEFORE: ${{ github.event.before }}
+          LOCKED: ${{ steps.settings.outputs.locked }}
+          AUTHOR: ${{ steps.settings.outputs.author }}
+          EMAIL: ${{ steps.settings.outputs.email }}
+          BOT_EMAIL: ${{ steps.settings.outputs.bot_email }}
+          DEPLOY_KEY: ${{ steps.settings.outputs.locked == 'true' && secrets.DEPLOY_KEY || '' }}
         run: |
-          # `origin` writes through the deploy key when there is one; the key is
-          # on disk only until this step ends.
-          git init -q .
-          if [ -n "$DEPLOY_KEY" ]; then
-            printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key" && chmod 600 "$RUNNER_TEMP/deploy_key"
-            trap 'rm -f "$RUNNER_TEMP/deploy_key"' EXIT
-            gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$RUNNER_TEMP/known_hosts"
-            export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
-            git remote add origin "git@github.com:${GITHUB_REPOSITORY}.git"
-          else
-            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          fi
-
-          if printf '%s' "$MESSAGE" | grep -qiE '^Built-by:[[:space:]]*ci[[:space:]]*$'; then
-            echo "verdict=none" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          COMMIT=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}")
-          TREE=$(jq -r '.commit.tree.sha' <<<"$COMMIT")
-          # The owner's own GPG signature, as GitHub verified it. A commit made
+          ORIGIN="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # The owner's own signature, as GitHub verified it. A commit made
           # through the API is signed by `web-flow`, not the owner, so fails.
-          SIGNED=$(jq -r --arg owner "$GITHUB_REPOSITORY_OWNER" '.commit.verification.verified == true and .committer.login == $owner' <<<"$COMMIT")
+          SIGNED=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" \
+            --jq '.commit.verification.verified == true and .committer.login == env.GITHUB_REPOSITORY_OWNER')
 
-          if [ -n "$DEPLOY_KEY" ]; then
-            if [ "$GITHUB_REF_NAME" = "publish" ] && [ "$SIGNED" = "true" ]; then
-              # Fast-forwarded when it is ahead of main; otherwise its tree is
-              # committed on top of main, so nothing on main is rewritten.
-              git fetch -q --depth 1 --filter=blob:none origin "$GITHUB_SHA" "+refs/heads/main:refs/remotes/origin/main"
-              NEXT="$GITHUB_SHA"
-              case "$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${GITHUB_SHA}" --jq .status)" in
-                ahead|identical) ;;
-                *) NEXT=$(printf '%s\n' "$MESSAGE" | git interpret-trailers --trailer "Promoted-from: ${GITHUB_SHA}" --trailer "Built-by: ci" \
-                     | git -c user.name="$(git log -1 --format=%an "$GITHUB_SHA")" -c user.email="$(git log -1 --format=%ae "$GITHUB_SHA")" \
-                         commit-tree "$TREE" -p origin/main) ;;
-              esac
-              git push -q origin "${NEXT}:refs/heads/main"
-              echo "promoted ${GITHUB_SHA::7} to main as ${NEXT::7}"
-              echo "verdict=deploy" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            # The ruleset lets nothing but the key move main, so a verified
-            # commit there is one a publish run promoted and is deploying.
-            if [ "$GITHUB_REF_NAME" = "main" ] && [ "$SIGNED" = "true" ]; then
+          case "$GITHUB_REF_NAME:$LOCKED" in
+            main:true)
+              echo "main moves only through this workflow; the run that moved it deploys it"
               echo "verdict=none" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "::error::${GITHUB_SHA::7} is not a GPG-verified commit by ${GITHUB_REPOSITORY_OWNER}."
-          else
-            [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::publish is promoted through DEPLOY_KEY, and none is set — push to main."; exit 1; }
-            CLAIM=$(printf '%s' "$MESSAGE" | grep -iE '^Deploy-Signature:[[:space:]]*sha256=[0-9a-f]{64}[[:space:]]*$' | tail -1 | sed 's/.*sha256=/sha256=/' | tr -d '[:space:]' || true)
-            EXPECT=$(TREE="$TREE" node -e '
-              const c = require("node:crypto");
-              const k = c.hkdfSync("sha256", Buffer.from(process.env.VAULT_MASTER, "base64url"),
-                                   Buffer.alloc(0), Buffer.from("rdfx-deploy"), 32);
-              process.stdout.write("sha256=" + c.createHmac("sha256", Buffer.from(k))
-                .update(process.env.TREE, "utf8").digest("hex"));
-            ')
+              ;;
 
-            if [ -n "$CLAIM" ] && [ "$CLAIM" = "$EXPECT" ]; then
-              echo "signed by a build that holds VAULT_MASTER"
-              echo "verdict=deploy" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "::error::this commit carries no valid Deploy-Signature."
-          fi
+            main:false)
+              if [ "$SIGNED" = "true" ]; then
+                echo "a GPG-verified commit by ${GITHUB_REPOSITORY_OWNER}"
+                echo "verdict=deploy" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::error::${GITHUB_SHA::7} is not a GPG-verified commit by ${GITHUB_REPOSITORY_OWNER}. Putting main back."
+              case "$BEFORE" in
+                ""|0000000000000000000000000000000000000000)
+                  echo "::error::and there is nothing to put it back TO — reset it by hand."
+                  exit 1 ;;
+              esac
+              git init -q "$RUNNER_TEMP/reset" && cd "$RUNNER_TEMP/reset"
+              git fetch -q --depth 1 --filter=blob:none "$ORIGIN" "$BEFORE"
+              git push -q --force "$ORIGIN" "${BEFORE}:refs/heads/main"
+              exit 1
+              ;;
 
-          [ "$GITHUB_REF_NAME" = "main" ] || exit 1
-          echo "::error::Putting the branch back."
-          BEFORE='${{ github.event.before }}'
-          case "$BEFORE" in
-            ""|0000000000000000000000000000000000000000)
-              echo "::error::and there is nothing to put it back TO — reset it by hand."
-              exit 1 ;;
+            publish:true)
+              [ "$SIGNED" = "true" ] || { echo "::error::${GITHUB_SHA::7} is not a GPG-verified commit by ${GITHUB_REPOSITORY_OWNER}. Nothing promoted."; exit 1; }
+              [ -n "$AUTHOR" ] && [ -n "$EMAIL" ] || { echo "::error::ci/deploy.json names no author or email — set deploy.author and deploy.email"; exit 1; }
+
+              # The deploy key is on disk only until this step ends.
+              printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key" && chmod 600 "$RUNNER_TEMP/deploy_key"
+              trap 'rm -f "$RUNNER_TEMP/deploy_key"' EXIT
+              gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$RUNNER_TEMP/known_hosts"
+              export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+
+              # The build's tree goes on top of main's latest commit, whatever
+              # publish was based on: nothing on main is rewritten.
+              git init -q "$RUNNER_TEMP/promote" && cd "$RUNNER_TEMP/promote"
+              git fetch -q --depth 1 --filter=blob:none "git@github.com:${GITHUB_REPOSITORY}.git" "$GITHUB_SHA" "+refs/heads/main:refs/remotes/origin/main"
+              TREE=$(git rev-parse "${GITHUB_SHA}^{tree}")
+              if [ "$TREE" = "$(git rev-parse 'origin/main^{tree}')" ]; then
+                echo "main already publishes this tree"
+                echo "verdict=none" >> "$GITHUB_OUTPUT"
+              else
+                NEXT=$(printf '%s\n' "$MESSAGE" | git interpret-trailers --trailer "Promoted-from: ${GITHUB_SHA}" \
+                  | git -c user.name="$AUTHOR" -c user.email="$EMAIL" commit-tree "$TREE" -p origin/main)
+                git push -q "git@github.com:${GITHUB_REPOSITORY}.git" "${NEXT}:refs/heads/main"
+                echo "promoted ${GITHUB_SHA::7} to main as ${NEXT::7}"
+                echo "verdict=deploy" >> "$GITHUB_OUTPUT"
+              fi
+
+              # Emptied the way editor-queue is, through GITHUB_TOKEN, which
+              # starts no run.
+              git init -q -b publish "$RUNNER_TEMP/empty" && cd "$RUNNER_TEMP/empty"
+              git -c user.name=ci -c user.email="$BOT_EMAIL" commit -q --allow-empty -m "publish: empty"
+              git push -q --force "$ORIGIN" "HEAD:refs/heads/publish"
+              ;;
+
+            publish:false)
+              echo "::error::publish is promoted only with DEPLOY_KEY and a ruleset locking main — push local builds to main."
+              exit 1
+              ;;
           esac
-          git fetch -q --depth 1 --filter=blob:none origin "$BEFORE"
-          git push -q --force origin "${BEFORE}:refs/heads/main"
-          exit 1
 
       # ── an editor save ────────────────────────────────────────────────────
       - name: Take the verifier from the published branch
@@ -249,25 +269,18 @@ jobs:
         if: failure() && inputs.reason == 'editor'
         env:
           GH_TOKEN: ${{ github.token }}
+          BOT_EMAIL: ${{ steps.settings.outputs.bot_email }}
         run: |
           echo "::error::refusing this save and clearing the queue"
           rm -rf "${RUNNER_TEMP}/empty" && mkdir -p "${RUNNER_TEMP}/empty" && cd "${RUNNER_TEMP}/empty"
           git init -q -b "$QUEUE_BRANCH" .
-          git -c user.name=ci -c user.email=ci@localhost commit -q --allow-empty -m "queue: empty"
+          git -c user.name=ci -c user.email="$BOT_EMAIL" commit -q --allow-empty -m "queue: empty"
           git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "HEAD:refs/heads/${QUEUE_BRANCH}"
 
       - name: Say what this run is
         id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KEYED: ${{ secrets.DEPLOY_KEY != '' }}
         run: |
-          [ "$KEYED" = "true" ] || echo "::warning title=No DEPLOY_KEY::Verifying with Deploy-Signature. Vercel and Cloudflare Pages publish a push to main before this can refuse it — add a write deploy key as DEPLOY_KEY, lock main to it with a ruleset, and push local builds to publish."
-          # The platform the site is deployed on, as the artifact on main says.
-          # A build replaces it with the one it just wrote.
-          PLATFORM=$(gh api "repos/${GITHUB_REPOSITORY}/contents/version.json?ref=${GITHUB_SHA}" -H "Accept: application/vnd.github.raw" 2>/dev/null | jq -r '.platform // empty' 2>/dev/null || true)
-          echo "platform=${PLATFORM:-github-pages}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "mode=build" >> "$GITHUB_OUTPUT"
           else
@@ -283,12 +296,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       platform: ${{ steps.commit.outputs.platform }}
+      ci_url: ${{ steps.commit.outputs.ci_url }}
     env:
       VAULT_MASTER: ${{ secrets.VAULT_MASTER }}
       # AVIF bytes depend on the machine's encoder, so none is started here:
       # img-optimizer serves what source/build/ already holds and gives anything
       # new a quick `sharp` AVIF that the next build at home re-encodes.
       RDFX_SKIP_AVIF: "1"
+      # Every commit of the site is the admin's, whoever saved.
+      AUTHOR: ${{ needs.verify.outputs.author }}
+      EMAIL: ${{ needs.verify.outputs.email }}
     steps:
       # FIRST, and on its own: the published artifact is what a failed build
       # falls back to and what its log is written into, so it has to exist
@@ -306,6 +323,7 @@ jobs:
         run: |
           [ -n "$REPO" ] || { echo "::error::SOURCE_REPO is not set"; exit 1; }
           [ -n "$TOKEN" ] || { echo "::error::SOURCE_REPO_TOKEN is not set"; exit 1; }
+          [ -n "$AUTHOR" ] && [ -n "$EMAIL" ] || { echo "::error::ci/deploy.json on main names no author or email — set deploy.author and deploy.email and deploy once from home"; exit 1; }
           git clone -q --depth 1 --branch "${{ vars.SOURCE_BRANCH || 'main' }}" \
             "https://x-access-token:${TOKEN}@github.com/${REPO}.git" src \
             || { echo "::error::could not clone ${REPO} — check SOURCE_REPO_TOKEN"; exit 1; }
@@ -389,26 +407,27 @@ jobs:
             --reason '${{ inputs.reason || github.event_name }}'
 
       # ── publish ───────────────────────────────────────────────────────────
+      #
+      # Locked, main takes nothing but the deploy key; the push it makes starts
+      # a run that verify recognises and leaves alone. Open, GITHUB_TOKEN
+      # pushes, which starts no run at all.
       - name: Commit the artifact
         id: commit
         if: always()
         env:
-          WHO: ${{ needs.verify.outputs.login }}
+          DEPLOY_KEY: ${{ needs.verify.outputs.locked == 'true' && secrets.DEPLOY_KEY || '' }}
           GH_TOKEN: ${{ github.token }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
         run: |
           [ -d src/public/.git ] || { echo "no artifact checkout"; exit 0; }
           cd src/public
           # Refused rather than published: an artifact with no home page is a
           # site that answers every URL with 404.
           [ -f index.html ] || { echo "::error::the artifact has no index.html — not publishing it"; exit 1; }
-          echo "platform=$(jq -r '.platform // empty' version.json 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          NAME="${WHO:-${{ vars.COMMIT_AUTHOR_NAME || 'Jason-JP-Yang' }}}"
-          MAIL="${{ vars.COMMIT_AUTHOR_EMAIL || 'jiepengyang@outlook.com' }}"
+          jq -r '"platform=\(.platform // "")", "ci_url=\(.ci_url // "")"' ci/deploy.json >> "$GITHUB_OUTPUT" 2>/dev/null || true
           git add -A
-          # The runner's token may not write under .github/workflows/; without a
-          # deploy key a theme release that changes a workflow reaches this
-          # repository from a build at home instead.
+          # GITHUB_TOKEN may not write under .github/workflows/; a deploy key
+          # may. Without one, a theme release that changes a workflow reaches
+          # this repository from a build at home instead.
           if [ -z "$DEPLOY_KEY" ] && ! git diff --cached --quiet -- .github; then
             echo "::warning::.github/ changed — push it from a local build; unstaged here"
             git reset -q -- .github
@@ -417,7 +436,7 @@ jobs:
             echo "artifact unchanged"
             exit 0
           fi
-          git -c user.name="$NAME" -c user.email="$MAIL" commit -q -F - <<EOF
+          git -c user.name="$AUTHOR" -c user.email="$EMAIL" commit -q -F - <<EOF
           Site updated: $(date -u +'%Y-%m-%d %H:%M:%SZ')
 
           Built-by: ci
@@ -427,9 +446,9 @@ jobs:
             trap 'rm -f "$RUNNER_TEMP/deploy_key"' EXIT
             gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$RUNNER_TEMP/known_hosts"
             GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts" \
-              git push -q "git@github.com:${GITHUB_REPOSITORY}.git" "HEAD:${{ github.event.repository.default_branch }}"
+              git push -q "git@github.com:${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/main"
           else
-            git push -q origin "HEAD:${{ github.event.repository.default_branch }}"
+            git push -q origin "HEAD:refs/heads/main"
           fi
 
       # What the source keeps from the build: the resealed keyring, the save
@@ -447,7 +466,6 @@ jobs:
         env:
           TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
           REPO: ${{ vars.SOURCE_REPO }}
-          WHO: ${{ needs.verify.outputs.login }}
           SUBJECT: ${{ steps.apply.outputs.message }}
         run: |
           [ -d src/.git ] || { echo "no source checkout"; exit 0; }
@@ -457,9 +475,7 @@ jobs:
             echo "the source has nothing to take back"
             exit 0
           fi
-          NAME="${WHO:-${{ vars.COMMIT_AUTHOR_NAME || 'Jason-JP-Yang' }}}"
-          MAIL="${{ vars.COMMIT_AUTHOR_EMAIL || 'jiepengyang@outlook.com' }}"
-          git -c user.name="$NAME" -c user.email="$MAIL" commit -q -F - <<EOF
+          git -c user.name="$AUTHOR" -c user.email="$EMAIL" commit -q -F - <<EOF
           ${SUBJECT:-build: reseal the keyring and settle the artifact pointer}
 
           Built-by: ci
@@ -471,10 +487,11 @@ jobs:
         if: always() && inputs.reason == 'editor'
         env:
           GH_TOKEN: ${{ github.token }}
+          BOT_EMAIL: ${{ needs.verify.outputs.bot_email }}
         run: |
           rm -rf "${RUNNER_TEMP}/empty" && mkdir -p "${RUNNER_TEMP}/empty" && cd "${RUNNER_TEMP}/empty"
           git init -q -b "$QUEUE_BRANCH" .
-          git -c user.name=ci -c user.email=ci@localhost commit -q --allow-empty -m "queue: empty"
+          git -c user.name=ci -c user.email="$BOT_EMAIL" commit -q --allow-empty -m "queue: empty"
           git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "HEAD:refs/heads/${QUEUE_BRANCH}"
 
@@ -500,12 +517,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PLATFORM: ${{ needs.build.outputs.platform || needs.verify.outputs.platform || 'github-pages' }}
+      CI_URL: ${{ needs.build.outputs.ci_url || needs.verify.outputs.ci_url }}
     # Only GitHub Pages is an environment of this repository; an empty name runs
     # the job with none.
     environment:
       name: ${{ (needs.build.outputs.platform || needs.verify.outputs.platform || 'github-pages') == 'github-pages' && 'github-pages' || '' }}
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # `main` fresh, never a working tree handed over from the build: a build
+      # that failed half way could hand over an empty directory, and Pages
+      # would then answer every URL with its own 404.
       - uses: actions/checkout@v4
         if: env.PLATFORM == 'github-pages'
         with:
@@ -528,22 +549,23 @@ jobs:
         uses: actions/deploy-pages@v4
 
       # The platform deploys the push itself; this waits until the site serves
-      # the build main now carries.
+      # the build main carries. CI_URL is deploy.ci_url — an address outside
+      # the site's WAF, which answers a runner with 403.
       - name: Wait for ${{ env.PLATFORM }} to serve main
         if: env.PLATFORM != 'github-pages'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          MAIN=$(gh api "repos/${GITHUB_REPOSITORY}/contents/version.json?ref=${{ github.event.repository.default_branch }}" -H "Accept: application/vnd.github.raw")
-          BUILD=$(jq -r '.build // empty' <<<"$MAIN")
-          URL=$(jq -r '.url // empty' <<<"$MAIN")
-          [ -n "$BUILD" ] && [ -n "$URL" ] || { echo "::error::main's version.json names no build or site"; exit 1; }
+          [ -n "$CI_URL" ] || { echo "::error::ci/deploy.json names no address to poll"; exit 1; }
+          BUILD=$(gh api "repos/${GITHUB_REPOSITORY}/contents/version.json?ref=${{ github.event.repository.default_branch }}" \
+            -H "Accept: application/vnd.github.raw" | jq -r '.build // empty')
+          [ -n "$BUILD" ] || { echo "::error::main's version.json names no build"; exit 1; }
           LIVE=""
           END=$((SECONDS + 120))
           while [ "$SECONDS" -lt "$END" ]; do
-            LIVE=$(curl -fsS "${URL}version.json?t=$(date +%s%N)" | jq -r '.build // empty' 2>/dev/null || true)
+            LIVE=$(curl -fsS "${CI_URL}version.json?t=$(date +%s%N)" | jq -r '.build // empty' 2>/dev/null || true)
             [ "$LIVE" = "$BUILD" ] && { echo "${PLATFORM} serves build ${BUILD::7}"; exit 0; }
             sleep 5
           done
-          echo "::error::${PLATFORM} still serves ${LIVE:-nothing} after two minutes, not build ${BUILD::7}"
+          echo "::error::${CI_URL} still serves ${LIVE:-nothing} after two minutes, not build ${BUILD::7}"
           exit 1

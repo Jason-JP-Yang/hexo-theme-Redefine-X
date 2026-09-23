@@ -503,7 +503,14 @@ deploy:
   # github-pages, vercel, cloudflare-pages. Vercel / Cloudflare: turn off preview
   # deploys for the editor-queue and publish branches
   platform: github-pages
-# DEPLOY <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
+  # Where the deploy job reads version.json, outside the site's WAF. Empty: the site url
+  ci_url:
+  # The admin every commit the workflow makes to the site is authored as. Empty author: info.author
+  author:
+  email:
+  # The address that empties the publish and editor-queue branches. Empty: email
+  bot_email:
+# DEPLOY <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
 # BACKEND >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/backend

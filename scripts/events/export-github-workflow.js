@@ -15,8 +15,9 @@
  * to the workflow file has to arrive from a build at home — while `ci/` is
  * ordinary content the runner can carry forward like anything else.
  *
- * `version.json` names the build every footer names. The deploy job polls it
- * until Vercel or Cloudflare Pages serves the build on main.
+ * `ci/deploy.json` is the `deploy:` block as the workflow needs it (see
+ * scripts/lib/deploy.js). `version.json` names the build every footer names;
+ * the deploy job polls it until Vercel or Cloudflare Pages serves main.
  */
 
 const fs = require("fs");
@@ -37,26 +38,29 @@ function copyTree(from, to) {
 
 hexo.extend.filter.register("after_generate", function () {
   const from = path.join(hexo.theme_dir, "workflows");
-  const enabled = deploy.resolve(hexo.theme.config).enable;
+  const settings = deploy.resolve(hexo.theme.config, hexo.config.url);
 
   const workflows = path.join(hexo.public_dir, ".github", "workflows");
   fs.mkdirSync(workflows, { recursive: true });
-  for (const name of enabled ? ["deploy.yml", "masonry-reactions-cleanup.yml"] : ["masonry-reactions-cleanup.yml"]) {
+  for (const name of settings.enable ? ["deploy.yml", "masonry-reactions-cleanup.yml"] : ["masonry-reactions-cleanup.yml"]) {
     const file = path.join(from, name);
     if (fs.existsSync(file)) fs.copyFileSync(file, path.join(workflows, name));
   }
 
-  const ci = path.join(from, "ci");
-  if (enabled && fs.existsSync(ci)) copyTree(ci, path.join(hexo.public_dir, "ci"));
+  if (!settings.enable) return;
+  const ci = path.join(hexo.public_dir, "ci");
+  copyTree(path.join(from, "ci"), ci);
+  const { enable, ...shipped } = settings;
+  fs.writeFileSync(path.join(ci, "deploy.json"), JSON.stringify(shipped, null, 2) + "\n");
+  if (!settings.email) hexo.log.warn("[deploy] deploy.email is empty — the workflow has nobody to commit as.");
 });
 
 let warned = false;
 
 hexo.extend.generator.register("redefine_version", function () {
   const theme = hexo.theme.config || {};
-  const settings = deploy.resolve(theme);
 
-  if (!settings.enable) {
+  if (!deploy.resolve(theme).enable) {
     const editor = (theme.backend || {}).online_editor || {};
     if (!warned && editor.repo && editor.verify_key) {
       warned = true;
@@ -68,12 +72,6 @@ hexo.extend.generator.register("redefine_version", function () {
   const build = deploy.build();
   return {
     path: "version.json",
-    data: JSON.stringify({
-      build: build.id,
-      time: build.time,
-      theme: version,
-      platform: settings.platform,
-      url: String(hexo.config.url || "").replace(/\/+$/, "") + "/",
-    }),
+    data: JSON.stringify({ build: build.id, time: build.time, theme: version }),
   };
 });

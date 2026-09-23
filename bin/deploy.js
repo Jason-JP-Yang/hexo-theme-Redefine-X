@@ -9,9 +9,8 @@
  *      site, so a stale source would publish over saves the editor made since.
  *      `npm run deploy -- --force` builds anyway.
  *   2. `hexo clean` + `hexo generate`.
- *   3. Commits public/ onto `publish`, GPG-signed, when a ruleset locks main to
- *      the deploy key; else onto `main` with the `Deploy-Signature:` trailer
- *      from ci/sign-deploy.mjs. Each is what that mode's verify checks.
+ *   3. Commits public/ GPG-signed — what verify checks — onto `publish` when a
+ *      ruleset locks main to the deploy key, else onto `main`.
  *   4. Points that branch's upstream at the same name on origin, so a plain
  *      `git push` sends it.
  *
@@ -119,20 +118,9 @@ function mainLocked(repo) {
       build = JSON.parse(fs.readFileSync(path.join(PUBLIC, "version.json"), "utf8")).build || "";
     } catch {}
     const stamp = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
-    const trailers = build ? [`Build: ${build}`] : [];
-    if (branch === "main") {
-      const sign = spawnSync(process.execPath, [path.join(PUBLIC, "ci", "sign-deploy.mjs")], {
-        cwd: ROOT,
-        encoding: "utf8",
-        windowsHide: true,
-      });
-      const signature = /^Deploy-Signature: sha256=[0-9a-f]{64}$/m.exec(sign.stdout || "");
-      if (sign.status !== 0 || !signature) fail(`ci/sign-deploy.mjs could not sign the build${sign.stderr ? `\n${sign.stderr.trim()}` : ""}`);
-      trailers.push(signature[0]);
-    }
     const message = ["-m", `Site updated: ${stamp}`];
-    if (trailers.length) message.push("-m", trailers.join("\n"));
-    git(["commit", ...(branch === "publish" ? ["-S"] : []), "-q", ...message], { inherit: true });
+    if (build) message.push("-m", `Build: ${build}`);
+    git(["commit", "-S", "-q", ...message], { inherit: true });
   }
 
   git(["config", `branch.${branch}.remote`, "origin"]);

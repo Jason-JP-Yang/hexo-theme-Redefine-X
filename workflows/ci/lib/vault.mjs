@@ -109,18 +109,6 @@ export function verifyEd25519(publicKeyB64url, message, signatureB64url) {
   }
 }
 
-/** HMAC over an arbitrary string under an HKDF subkey of the master. */
-export function mac(info, message) {
-  return "sha256=" + crypto.createHmac("sha256", hkdf(master(), info)).update(String(message), "utf8").digest("hex");
-}
-
-/** Constant time, because a fast exit leaks the correct prefix. */
-export function sameMac(a, b) {
-  const x = Buffer.from(String(a));
-  const y = Buffer.from(String(b));
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-
 /** One commit-message trailer, the last well-formed one wins. */
 export function trailer(message, name) {
   const re = new RegExp(`^${name}:[ \\t]*(.+)$`, "gim");
