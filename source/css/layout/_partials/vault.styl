@@ -967,14 +967,20 @@ a.bm-bubble
 // edge contributes a custom property to the two gradients, and the gradients
 // are intersected so a corner fades once, not twice. A property that is 0px
 // makes its gradient stop at the very edge, which is exactly "no fade here".
+//
+// The size is `!important` because codeblock/highlight.styl gives every `pre`
+// `0.9rem !important`, which otherwise wins and makes the size buttons inert.
+// The floor keeps the box — and the buttons floating in it — standing when a
+// short log or the level filter leaves only a few lines.
 .bm-log-text
   margin 0
+  min-height 12rem
   max-height 26rem
   overflow auto
   padding 10px 12px
   color var(--second-text-color)
   font-family 'Geist Mono', 'Noto Color Emoji', Courier, monospace
-  font-size unquote('calc(0.68rem * var(--log-scale, 1))')
+  font-size unquote('calc(0.68rem * var(--log-scale, 1))') !important
   line-height 1.55
   tab-size 2
   white-space pre-wrap
