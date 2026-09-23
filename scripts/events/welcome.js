@@ -76,40 +76,42 @@ hexo.on("ready", async () => {
   }
 });
 
+// The box is drawn to one width whatever the version strings are, so the
+// console's build log can fit it to a line and stack its rows without a seam.
+const BANNER_ART = [
+  "██████╗ ███████╗██████╗ ███████╗███████╗██╗███╗   ██╗███████╗   ██╗  ██╗",
+  "██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██║████╗  ██║██╔════╝   ╚██╗██╔╝",
+  "██████╔╝█████╗  ██║  ██║█████╗  █████╗  ██║██╔██╗ ██║█████╗█████╗╚███╔╝",
+  "██╔══██╗██╔══╝  ██║  ██║██╔══╝  ██╔══╝  ██║██║╚██╗██║██╔══╝╚════╝██╔██╗",
+  "██║  ██║███████╗██████╔╝███████╗██║     ██║██║ ╚████║███████╗   ██╔╝ ██╗",
+  "╚═╝  ╚═╝╚══════╝╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝  ╚═╝",
+];
+const BANNER_INNER = 85;
+
+function banner(status) {
+  const width = (text) => [...text].length;
+  const row = (text = "") => "|" + text + " ".repeat(Math.max(0, BANNER_INNER - width(text))) + "|";
+  const center = (text) => row(" ".repeat(Math.max(0, Math.floor((BANNER_INNER - width(text)) / 2))) + text);
+  const left = " ".repeat(Math.floor((BANNER_INNER - Math.max(...BANNER_ART.map(width))) / 2));
+  const rule = "+" + "=".repeat(BANNER_INNER) + "+";
+  return [
+    "",
+    rule,
+    row(),
+    ...BANNER_ART.map((line) => row(left + line)),
+    row(),
+    center(status),
+    center("https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X"),
+    rule,
+  ].join("\n");
+}
+
 function logInfo(data) {
-  hexo.log.info(`
-+=====================================================================================+
-|                                                                                     |
-|      ██████╗ ███████╗██████╗ ███████╗███████╗██╗███╗   ██╗███████╗   ██╗  ██╗       |
-|      ██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██║████╗  ██║██╔════╝   ╚██╗██╔╝       |
-|      ██████╔╝█████╗  ██║  ██║█████╗  █████╗  ██║██╔██╗ ██║█████╗█████╗╚███╔╝        |
-|      ██╔══██╗██╔══╝  ██║  ██║██╔══╝  ██╔══╝  ██║██║╚██╗██║██╔══╝╚════╝██╔██╗        |
-|      ██║  ██║███████╗██████╔╝███████╗██║     ██║██║ ╚████║███████╗   ██╔╝ ██╗       |
-|      ╚═╝  ╚═╝╚══════╝╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝  ╚═╝       |
-|                                                                                     |
-|                             current v${version}  latest v${data.npmVersion}                           |
-|                 https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X              |
-+=====================================================================================+`,
-  );
+  hexo.log.info(banner(`current v${version}  latest v${data.npmVersion}`));
 }
 
 function logFailedInfo() {
-  hexo.log.info(
-    `
-      +=====================================================================================+
-      |                                                                                     |
-      |      ██████╗ ███████╗██████╗ ███████╗███████╗██╗███╗   ██╗███████╗   ██╗  ██╗       |
-      |      ██╔══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██║████╗  ██║██╔════╝   ╚██╗██╔╝       |
-      |      ██████╔╝█████╗  ██║  ██║█████╗  █████╗  ██║██╔██╗ ██║█████╗█████╗╚███╔╝        |
-      |      ██╔══██╗██╔══╝  ██║  ██║██╔══╝  ██╔══╝  ██║██║╚██╗██║██╔══╝╚════╝██╔██╗        |
-      |      ██║  ██║███████╗██████╔╝███████╗██║     ██║██║ ╚████║███████╗   ██╔╝ ██╗       |
-      |      ╚═╝  ╚═╝╚══════╝╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝  ╚═╝       |
-      |                                                                                     |
-      |                          current v${version}  fetch latest failed                        |
-      |                   https://github.com/Jason-JP-Yang/hexo-theme-Redefine-X            |
-      +=====================================================================================+
-       `,
-  );
+  hexo.log.info(banner(`current v${version}  fetch latest failed`));
 }
 
 function checkVersionAndCDNAvailability(data) {

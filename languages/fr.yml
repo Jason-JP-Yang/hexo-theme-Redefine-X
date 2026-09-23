@@ -15,6 +15,7 @@ recent_posts: Articles récents
 share: Partager
 powered_by: "POWERED BY %s"
 theme: THEME
+build: BUILD
 rss_feed: Flux RSS
 category: Catégorie
 categories: Catégories
@@ -428,6 +429,11 @@ management:
   l_empty: Aucun build n'a encore ecrit de journal.
   l_failed: Echec
   l_ok: Reussi
+  l_levels: Niveaux de journal
+  l_output: Sortie
+  l_zoom_in: Texte plus grand
+  l_zoom_out: Texte plus petit
+  l_run: Ouvrir l execution Actions
   v_audience: Qui peut le lire
   v_reader: lecteur
   v_readers: lecteurs

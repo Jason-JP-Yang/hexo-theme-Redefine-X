@@ -15,6 +15,7 @@ recent_posts: 最新記事
 share: 分かち合う
 powered_by: "%s で駆動する"
 theme: テーマ
+build: ビルド
 rss_feed: RSS Feed
 category: 分類
 categories: 分類
@@ -428,6 +429,11 @@ management:
   l_empty: まだログを書き込んだビルドがありません。
   l_failed: 失敗
   l_ok: 成功
+  l_levels: ログレベル
+  l_output: 出力
+  l_zoom_in: 文字を大きく
+  l_zoom_out: 文字を小さく
+  l_run: Actions の実行を開く
   v_audience: 読める人
   v_reader: 人
   v_readers: 人

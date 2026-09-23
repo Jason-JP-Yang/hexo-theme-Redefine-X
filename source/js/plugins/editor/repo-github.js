@@ -170,8 +170,21 @@ async function dispatchedRun(repo, file, ref) {
   );
 }
 
+// A run, once found, is read by its id: one request a poll instead of two
+// searches, against an anonymous budget of sixty requests an hour.
+const runs = new Map();
+
+/** A job as the rail draws it. */
+function stageOf(job) {
+  const status = String(job.status || "").toLowerCase();
+  if (status === "in_progress") return "live";
+  if (PENDING.test(status)) return "wait";
+  return job.conclusion === "success" || job.conclusion === "skipped" ? "done" : "fail";
+}
+
 /**
- * The run for one commit — verify, build and deploy as three stages.
+ * The run for one commit, as its three jobs — verify, build, deploy — each a
+ * rail state. The run is over when deploy is, or when any job fails.
  *
  * Read WITHOUT a credential. The repository is public, so its runs are public,
  * which means the build rail keeps working after the session's token has been
@@ -183,53 +196,30 @@ export async function runStatus(repo, sha) {
   if (!ref) return null;
 
   const file = repo.workflow || "deploy.yml";
+  let run = runs.get(ref);
 
   // Two ways to find the run, because there are two kinds of run. A push starts
   // one whose `head_sha` IS the commit. A save cannot push its way into a run —
   // the queue commit is rootless and carries no workflow file — so the Worker
   // dispatches it from `main` and names the queue commit only in `run-name`.
   // `head_sha` finds the first kind and never the second.
-  const pushed = await runsPage(
-    repo,
-    `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`
-  );
-  const run = (pushed && pushed[0]) || (await dispatchedRun(repo, file, ref));
-  if (!run) return { state: "", url: "", count: 0, stages: [] };
+  if (!run) {
+    const pushed = await runsPage(
+      repo,
+      `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`
+    );
+    const found = (pushed && pushed[0]) || (await dispatchedRun(repo, file, ref));
+    if (!found) return { state: "", url: "", count: 0, stages: {} };
+    run = { id: found.id, url: found.html_url || "" };
+    runs.set(ref, run);
+  }
 
-  const status = String(run.status || "").toLowerCase();
-  const conclusion = String(run.conclusion || "").toLowerCase();
-  const state = PENDING.test(status)
-    ? "pending"
-    : conclusion === "success"
-      ? "success"
-      : conclusion
-        ? "failure"
-        : "pending";
-
-  return { state, url: run.html_url || "", count: 1, stages: await stagesOf(repo, run.id) };
-}
-
-/**
- * The three jobs, in the order the workflow runs them.
- *
- * One extra request, and it is the one that makes the rail worth having: "the
- * deploy failed" and "the save was refused before anything was built" are the
- * same colour otherwise, and they mean opposite things.
- */
-async function stagesOf(repo, runId) {
-  const res = await call(repo, `/actions/runs/${runId}/jobs?per_page=10`, null, true).catch(() => null);
-  if (!res || !res.ok) return [];
+  const res = await call(repo, `/actions/runs/${run.id}/jobs?per_page=10`, null, true).catch(() => null);
+  if (!res || !res.ok) return null;
   const body = await res.json().catch(() => ({}));
-  return (body.jobs || []).map((job) => ({
-    name: job.name || "",
-    state: PENDING.test(String(job.status || "").toLowerCase())
-      ? "pending"
-      : String(job.conclusion || "") === "success"
-        ? "success"
-        : job.conclusion === "skipped"
-          ? "skipped"
-          : job.conclusion
-            ? "failure"
-            : "pending",
-  }));
+  const stages = {};
+  for (const job of body.jobs || []) stages[job.name] = stageOf(job);
+
+  const state = Object.values(stages).includes("fail") ? "failure" : stages.deploy === "done" ? "success" : "pending";
+  return { state, url: run.url, count: 1, stages };
 }

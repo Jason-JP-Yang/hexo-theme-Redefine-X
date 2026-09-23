@@ -10,7 +10,8 @@
  *   - Nothing exists without a Worker URL, and nothing exists unless comments
  *     run on giscus: every sign-in in the theme is the giscus session.
  *   - Blog Management and the editor need encryption. The console is sealed
- *     under the admin key, and a draft IS an encrypted post.
+ *     under the admin key, and a draft IS an encrypted post. The editor also
+ *     needs `deploy.enable`: the deploy workflow is what applies a save.
  *   - An editor provider is on when every one of its fields is filled.
  *   - A collaborator is on when every one of THEIR fields is filled.
  */
@@ -100,7 +101,8 @@ function resolve(theme) {
   const websiteId = text(analytics.website_id);
 
   const sealed = on && encryption.enable === true;
-  const editor = sealed
+  // A save is only ever published by the deploy workflow, so no workflow, no editor.
+  const editor = sealed && require("./deploy").resolve(config).enable
     ? onlineEditor(group(raw.online_editor))
     : { enable: false, repo: "", branch: "", verify_key: "" };
 

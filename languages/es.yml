@@ -15,6 +15,7 @@ recent_posts: Publicaciones recientes
 share: Compartir
 powered_by: "DESARROLLADO POR %s"
 theme: TEMA
+build: BUILD
 rss_feed: RSS Feed
 category: Categoría
 categories: Categorías
@@ -428,6 +429,11 @@ management:
   l_empty: Ninguna construccion ha escrito todavia un registro.
   l_failed: Fallo
   l_ok: Correcto
+  l_levels: Niveles de registro
+  l_output: Salida
+  l_zoom_in: Texto mas grande
+  l_zoom_out: Texto mas pequeno
+  l_run: Abrir la ejecucion de Actions
   v_audience: Quien puede leerla
   v_reader: lector
   v_readers: lectores

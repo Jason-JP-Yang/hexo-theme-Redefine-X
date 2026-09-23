@@ -120,47 +120,28 @@ function openTag(state) {
 }
 
 /**
- * A sealed log, as HTML: escape sequences applied, everything else escaped.
- *
- * `\r` is line-overwrite on a terminal, and a spinner frame is not worth
- * replaying — the last write of a line wins, which is what a reader of the log
- * would have seen had they not looked away.
+ * One line of the transcript as HTML, with the colour state carried in from the
+ * line before and closed at the end of this one — so a line can be hidden, or
+ * lifted out into a block of its own, without taking a dangling span with it.
  */
-export function renderANSI(text) {
-  const src = String(text == null ? "" : text)
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => {
-      const at = line.lastIndexOf("\r");
-      return at < 0 ? line : line.slice(at + 1);
-    })
-    .join("\n");
-
-  const state = {
-    fg: null,
-    bg: null,
-    bold: false,
-    dim: false,
-    italic: false,
-    underline: false,
-    strike: false,
-    inverse: false,
-  };
+function renderLine(src, state) {
   const out = [];
   let plain = "";
+  let text = "";
 
   const flush = () => {
-    if (!plain) return;
+    if (!text) return;
     const tag = openTag(state);
-    const body = escapeHTML(plain).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+    const body = escapeHTML(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
     out.push(tag ? `${tag}${body}</span>` : body);
-    plain = "";
+    plain += text;
+    text = "";
   };
 
   let i = 0;
   while (i < src.length) {
     if (src[i] !== ESC) {
-      plain += src[i];
+      text += src[i];
       i++;
       continue;
     }
@@ -190,11 +171,7 @@ export function renderANSI(text) {
 
     if (rest[1] === "]") {
       const match = /^\u001b\][^\u0007]*(?:\u0007|\u001b\\)/.exec(rest);
-      if (match) {
-        i += match[0].length;
-        continue;
-      }
-      i += 2;
+      i += match ? match[0].length : 2;
       continue;
     }
 
@@ -202,5 +179,123 @@ export function renderANSI(text) {
   }
 
   flush();
-  return out.join("");
+  return { html: out.join(""), plain };
+}
+
+/**
+ * The transcript as lines. `\r` is line-overwrite on a terminal, and a spinner
+ * frame is not worth replaying — the last write of a line wins, which is what a
+ * reader of the log would have seen had they not looked away.
+ */
+function ansiLines(text) {
+  const state = {
+    fg: null,
+    bg: null,
+    bold: false,
+    dim: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    inverse: false,
+  };
+  return String(text == null ? "" : text)
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => renderLine(line.slice(line.lastIndexOf("\r") + 1), state));
+}
+
+/* ─── levels ─────────────────────────────────────────────────────────────────
+ *
+ * Hexo prints `INFO `, `WARN `, `ERROR`, `FATAL`, `DEBUG` or `TRACE` at the head
+ * of every entry (after a timestamp under --debug), and a message that spans
+ * lines — a stack, the theme's banner — carries no label on its continuation
+ * lines. So a line either OPENS an entry or belongs to the one before it. npm's
+ * own warnings and errors, Node's process warnings and a bare thrown error open
+ * entries too; anything before the first label is plain output.
+ */
+const OPENERS = [
+  [/^(?:\d\d:\d\d:\d\d\.\d{3} )?(?:TRACE|DEBUG)\b/, "debug"],
+  [/^(?:\d\d:\d\d:\d\d\.\d{3} )?INFO\b/, "info"],
+  [/^(?:\d\d:\d\d:\d\d\.\d{3} )?WARN\b/, "warn"],
+  [/^(?:\d\d:\d\d:\d\d\.\d{3} )?ERROR\b/, "error"],
+  [/^(?:\d\d:\d\d:\d\d\.\d{3} )?FATAL\b/, "fatal"],
+  [/^npm (?:warn|WARN)\b/, "warn"],
+  [/^npm (?:error|ERR!)/, "error"],
+  [/^\(node:\d+\) \w*Warning\b/, "warn"],
+  [/^(?:[A-Z]\w*)?Error\b.*:/, "error"],
+  [/^> /, "other"],
+];
+
+function opens(plain) {
+  for (const [pattern, level] of OPENERS) if (pattern.test(plain)) return level;
+  return "";
+}
+
+// The theme's banner (scripts/events/welcome.js): a ruled box around block art.
+const RULE = /^\s*\+={20,}\+\s*$/;
+const ART = /[█╗╝║═╔╚]/;
+
+function bannerEnd(lines, from) {
+  if (!RULE.test(lines[from].plain)) return -1;
+  for (let j = from + 1; j < Math.min(lines.length, from + 16); j++) {
+    if (!RULE.test(lines[j].plain)) continue;
+    return lines.slice(from + 1, j).some((line) => ART.test(line.plain)) ? j : -1;
+  }
+  return -1;
+}
+
+/**
+ * A sealed log as entries: `{ level, html }` each, and a count per level.
+ *
+ * Every entry's lines end in a newline INSIDE the entry, so an entry hidden by
+ * the level filter takes its line breaks with it. The banner is lifted out into
+ * `.bm-log-logo`, a block the console sizes to fit — which is why no newline is
+ * written next to it: a block already breaks the line.
+ */
+export function parseLog(text) {
+  const lines = ansiLines(text);
+  const entries = [];
+  const counts = {};
+  let entry = null;
+
+  const start = (level) => {
+    entry = { level, parts: [] };
+    entries.push(entry);
+    counts[level] = (counts[level] || 0) + 1;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const end = bannerEnd(lines, i);
+    if (end > 0) {
+      if (!entry) start("info");
+      const rows = lines.slice(i, end + 1).map((line) => line.plain.replace(/\s+$/, ""));
+      const indent = Math.min(...rows.map((row) => row.match(/^ */)[0].length));
+      entry.parts.push(
+        `<span class="bm-log-logo"><span class="bm-log-logo-art">${escapeHTML(
+          rows.map((row) => row.slice(indent)).join("\n")
+        )}</span></span>`
+      );
+      i = end;
+      continue;
+    }
+
+    const level = opens(lines[i].plain);
+    if (level || !entry) start(level || "other");
+    entry.parts.push(lines[i].html + "\n");
+  }
+
+  // The file's own trailing newline is not a line anybody wrote.
+  const last = entries[entries.length - 1];
+  if (last && last.parts[last.parts.length - 1] === "\n") {
+    last.parts.pop();
+    if (!last.parts.length) {
+      entries.pop();
+      counts[last.level] -= 1;
+    }
+  }
+
+  return {
+    entries: entries.map((row) => ({ level: row.level, html: row.parts.join("") })),
+    counts,
+  };
 }

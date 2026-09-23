@@ -57,3 +57,33 @@
 
   .odometer.odometer-auto-theme .odometer-value, .odometer.odometer-theme-default .odometer-value
     text-align center
+
+  // The build this page belongs to, as the console's build log names it: the
+  // same pill vocabulary as a `.bm-bubble`, in the theme's own ink pair so it
+  // reads on either scheme.
+  .footer-build
+    white-space nowrap
+
+  .footer-build-id
+    display inline-flex
+    align-items center
+    gap 5px
+    padding 1px 8px
+    border 1px solid var(--border-color)
+    border-radius 999px
+    background var(--third-background-color-transparent)
+    color var(--second-text-color)
+    vertical-align middle
+    cursor default
+
+    i
+      font-size 0.68rem
+      color var(--primary-color)
+
+    code
+      font-family 'Geist Mono', Courier, monospace
+      font-size 0.76rem
+      letter-spacing 0.02em
+      background none
+      padding 0
+      color inherit

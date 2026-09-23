@@ -32,7 +32,7 @@ import {
 } from "./notifications-inbox.js";
 import { initManagementAnalytics } from "./management-analytics.js";
 import { Picker, avatarOf, rosterLookup } from "../tools/chipPicker.js";
-import { renderANSI } from "../tools/ansi.js";
+import { parseLog } from "../tools/ansi.js";
 import {
   albumDraftId,
   b64urlToBytes,
@@ -122,7 +122,7 @@ const state = {
   // presentation and refusing one is the control.
   me: { admin: false, panels: {}, grades: {}, id: 0, login: "" },
   collab: { people: [], roster: [], loading: false, error: false },
-  log: { record: null, loading: false, error: false },
+  log: { record: null, loading: false, error: false, view: null },
 };
 
 // Every chip picker on the page, by key: "audience" for the composer, then one
@@ -1137,17 +1137,13 @@ async function saveAudience(postId, picker) {
 
 const UNPUB_STAGES = [
   ["committed", "fa-code-commit", "Committed"],
-  ["building", "fa-hammer", "Building"],
-  ["pushed", "fa-upload", "Artifact pushed"],
-  ["deployed", "fa-globe", "Deployed"],
+  ["verify", "fa-shield-check", "Verify"],
+  ["build", "fa-hammer", "Build"],
+  ["deploy", "fa-globe", "Deploy"],
 ];
 
 const BACKEND_ICON = { gitea: "fa-solid fa-server", github: "fa-brands fa-github" };
 
-// How long the deploy that follows the artifact push is given before the page is
-// reloaded. Vercel is downstream of a push nothing here can see, so the last
-// stage is optimistic by design — the same 20s the editor allows.
-const DEPLOY_MS = 20000;
 const POLL_MS = 6000;
 
 let repoMod = null;
@@ -1437,14 +1433,13 @@ async function runUnpublish() {
 }
 
 /**
- * Where the build for the commit just made has got to — the commit status the
- * Actions run writes for that sha, polled exactly as the editor polls it. When
+ * Where the build for the commit just made has got to — the verify, build and
+ * deploy jobs of its Actions run, polled exactly as the editor polls them. When
  * it lands the console is showing a list that no longer describes the site, so
  * the answer is the front page rather than a repaint of a stale page.
  */
 function watchBuild(sha) {
   clearInterval(buildTimer);
-  markStage("building", "live");
 
   let ticks = 0;
   buildTimer = setInterval(async () => {
@@ -1453,24 +1448,17 @@ function watchBuild(sha) {
     const repo = await loadRepo();
     const status = await repo.commitStatus(sha);
     if (!status || !status.count) return;
-    if (status.state === "pending") return void markStage("building", "live");
+    for (const [key, value] of Object.entries(status.stages)) markStage(key, value);
 
     if (status.state === "success") {
       clearInterval(buildTimer);
-      markStage("building", "done");
-      markStage("pushed", "done");
-      markStage("deployed", "live");
-      setTimeout(() => {
-        markStage("deployed", "done");
-        barNotice("info", t("p_unpub_land", "Done. Loading the site as readers see it…"));
-        // The console itself, loaded properly rather than swapped in: every list
-        // on this page was sealed into it by the build that has just been
-        // replaced, so a swup transition would show the same stale rows.
-        setTimeout(() => window.location.assign(siteRoot() + "/blog-management/"), 1200);
-      }, DEPLOY_MS);
-    } else if (status.state === "failure" || status.state === "error") {
+      barNotice("info", t("p_unpub_land", "Done. Loading the site as readers see it…"));
+      // The console itself, loaded properly rather than swapped in: every list
+      // on this page was sealed into it by the build that has just been
+      // replaced, so a swup transition would show the same stale rows.
+      setTimeout(() => window.location.assign(siteRoot() + "/blog-management/"), 1200);
+    } else if (status.state === "failure") {
       clearInterval(buildTimer);
-      markStage("building", "fail");
       barNotice("error", t("p_unpub_failed", "The build failed. The commit landed; nothing published has changed."));
       state.posts.busy = false;
       root.classList.remove("is-unpublishing");
@@ -2024,6 +2012,48 @@ function renderLogShell(section) {
     <div class="bm-log-body">${SPINNER_ROW}</div>`;
 }
 
+// The levels a transcript's entries are filtered by, in reading order, each
+// inked with the ANSI class the runner printed it in so the key and the line
+// agree. `other` is output no logger labelled; it and DEBUG appear only when a
+// log has some.
+const LOG_LEVELS = [
+  ["info", "INFO", "a-2"],
+  ["warn", "WARN", "a-3"],
+  ["error", "ERROR", "a-1"],
+  ["fatal", "FATAL", "a-5"],
+  ["debug", "DEBUG", "a-6"],
+  ["other", "", "a-0"],
+];
+const LOG_OPTIONAL = new Set(["debug", "other"]);
+const LOG_SCALES = [0.6, 0.7, 0.8, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2];
+const LOG_VIEW_KEY = "redefine:build-log-view";
+// The size the banner is measured at before it is scaled to fit.
+const LOGO_PROBE_PX = 20;
+
+// What a reader last chose to see, kept per browser: a convenience, so a
+// storage that refuses simply means the defaults.
+function logView() {
+  if (!state.log.view) {
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(LOG_VIEW_KEY) || "{}") || {};
+    } catch {}
+    const scale = Number(saved.scale);
+    state.log.view = {
+      off: new Set(Array.isArray(saved.off) ? saved.off : []),
+      scale: Number.isInteger(scale) && LOG_SCALES[scale] ? scale : LOG_SCALES.indexOf(1),
+    };
+  }
+  return state.log.view;
+}
+
+function saveLogView() {
+  const view = logView();
+  try {
+    localStorage.setItem(LOG_VIEW_KEY, JSON.stringify({ off: [...view.off], scale: view.scale }));
+  } catch {}
+}
+
 function paintLog() {
   const section = root.querySelector('[data-part="buildlog"]');
   if (!section) return;
@@ -2041,7 +2071,25 @@ function paintLog() {
     return contentChanged();
   }
 
+  const view = logView();
+  const { entries, counts } = parseLog(record.text || "");
   const failed = record.status && record.status !== "success";
+  // `build` names the artifact the log was published with; a log sealed before
+  // builds had ids only knows the commit the run started from.
+  const id = String(record.build || record.sha || "");
+  const run = record.url
+    ? `<a class="bm-bubble" href="${escapeHTML(record.url)}" target="_blank" rel="noopener" title="${e("l_run", "Open the Actions run")}">`
+    : `<span class="bm-bubble">`;
+
+  const keys = LOG_LEVELS.filter(([level]) => !LOG_OPTIONAL.has(level) || counts[level])
+    .map(([level, label, ink]) => {
+      const off = view.off.has(level);
+      return `<button type="button" class="${off ? "is-off" : ""}" data-level="${level}" aria-pressed="${off ? "false" : "true"}">
+          <i class="${ink}" aria-hidden="true"></i>${escapeHTML(label || t("l_output", "Output"))}<span class="bm-log-n">${counts[level] || 0}</span>
+        </button>`;
+    })
+    .join("");
+
   when.textContent = String(record.at || "").replace("T", " ").slice(0, 16);
   body.innerHTML = `
     <div class="bm-log-head">
@@ -2049,26 +2097,37 @@ function paintLog() {
         <i class="fa-regular ${failed ? "fa-circle-xmark" : "fa-circle-check"}" aria-hidden="true"></i>
         ${escapeHTML(failed ? t("l_failed", "Failed") : t("l_ok", "Succeeded"))}
       </span>
-      ${record.reason ? `<span class="bm-bubble"><i class="fa-regular fa-play"></i>${escapeHTML(record.reason)}</span>` : ""}
-      ${record.sha ? `<span class="bm-bubble"><i class="fa-regular fa-code-commit"></i>${escapeHTML(record.sha)}</span>` : ""}
+      ${record.reason ? `${run}<i class="fa-regular fa-play" aria-hidden="true"></i>${escapeHTML(record.reason)}${record.url ? "</a>" : "</span>"}` : ""}
+      ${id ? `<span class="bm-bubble" title="${escapeHTML(id)}"><i class="fa-regular fa-code-commit" aria-hidden="true"></i>${escapeHTML(id.slice(0, 7))}</span>` : ""}
     </div>
+    <div class="bma-legend bm-log-keys" role="group" aria-label="${e("l_levels", "Log levels")}">${keys}</div>
     <div class="bm-log-frame">
-      <pre class="bm-log-text" data-log-scroller><code>${renderANSI(record.text || "")}</code></pre>
+      <pre class="bm-log-text" data-log-scroller data-off="${[...view.off].join(" ")}" style="--log-scale:${LOG_SCALES[view.scale]}"><code>${entries
+        .map((entry) => `<span class="bm-log-e" data-level="${entry.level}">${entry.html}</span>`)
+        .join("")}</code></pre>
+      <div class="bm-log-zoom">
+        <button type="button" class="bm-icon" data-zoom="-1" title="${e("l_zoom_out", "Smaller text")}" aria-label="${e("l_zoom_out", "Smaller text")}">
+          <i class="fa-solid fa-magnifying-glass-minus" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="bm-icon" data-zoom="1" title="${e("l_zoom_in", "Larger text")}" aria-label="${e("l_zoom_in", "Larger text")}">
+          <i class="fa-solid fa-magnifying-glass-plus" aria-hidden="true"></i>
+        </button>
+      </div>
     </div>`;
-  wireLogScroller(body.querySelector("[data-log-scroller]"));
+
+  wireLogView(body);
   contentChanged();
 }
 
 /**
- * Where the log's mask fades belong.
- *
- * One read of the scroller's box says which of its four edges have something
- * past them; the four flags become CSS custom properties that set the stop
- * points of the two mask gradients. Written only when one of them changes, and
- * both events that can change them — a scroll and a resize — are watched.
+ * The level keys, the two size buttons, the banner fit and the edge fades — all
+ * of it state on the one `<pre>`, so a filter or a size change is one attribute
+ * write rather than a repaint of thousands of lines.
  */
-function wireLogScroller(scroller) {
-  if (!scroller) return;
+function wireLogView(body) {
+  const scroller = body.querySelector("[data-log-scroller]");
+  const view = logView();
+  const zoom = body.querySelectorAll("[data-zoom]");
 
   const edges = () => {
     const maxX = scroller.scrollWidth - scroller.clientWidth;
@@ -2081,9 +2140,96 @@ function wireLogScroller(scroller) {
     scroller.classList.toggle("has-bottom", maxY > 2 && maxY - y > 2);
   };
 
-  edges();
+  const settle = () => {
+    fitLogos(scroller);
+    edges();
+    zoom.forEach((button) => {
+      const next = view.scale + Number(button.dataset.zoom);
+      button.disabled = next < 0 || next >= LOG_SCALES.length;
+    });
+  };
+
+  body.querySelector(".bm-log-keys").addEventListener("click", (event) => {
+    const key = event.target.closest("[data-level]");
+    if (!key) return;
+    const level = key.dataset.level;
+    if (view.off.has(level)) view.off.delete(level);
+    else view.off.add(level);
+    const off = view.off.has(level);
+    key.classList.toggle("is-off", off);
+    key.setAttribute("aria-pressed", off ? "false" : "true");
+    scroller.dataset.off = [...view.off].join(" ");
+    saveLogView();
+    settle();
+    contentChanged();
+  });
+
+  zoom.forEach((button) =>
+    button.addEventListener("click", () => {
+      const next = view.scale + Number(button.dataset.zoom);
+      if (!LOG_SCALES[next]) return;
+      view.scale = next;
+      scroller.style.setProperty("--log-scale", String(LOG_SCALES[next]));
+      saveLogView();
+      settle();
+      contentChanged();
+    })
+  );
+
+  settle();
   scroller.addEventListener("scroll", edges, { passive: true });
-  if (typeof ResizeObserver !== "undefined") new ResizeObserver(edges).observe(scroller);
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(settle).observe(scroller);
+  // The banner is measured in the log's own face, which may still be loading.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => scroller.isConnected && settle());
+}
+
+/**
+ * The theme's banner, scaled to exactly the width the log has and stacked with
+ * no seam between its rows.
+ *
+ * The width is measured, never assumed: box-drawing and block glyphs are often
+ * drawn from a fallback face whose advance is not the log font's. It is capped
+ * at the log's own size, so the banner never outgrows the text around it, and
+ * has no floor — a phone gets a small banner rather than a broken one.
+ *
+ * The line pitch is the ink height of `█` in the face that actually draws it, a
+ * third of a pixel short so antialiasing cannot leave a hairline between rows.
+ */
+function fitLogos(scroller) {
+  const arts = scroller.querySelectorAll(".bm-log-logo-art");
+  if (!arts.length) return;
+
+  const style = getComputedStyle(scroller);
+  const room = scroller.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const cap = parseFloat(style.fontSize);
+  const ink = blockInk(style.fontFamily);
+
+  arts.forEach((art) => {
+    art.style.fontSize = `${LOGO_PROBE_PX}px`;
+    const natural = art.getBoundingClientRect().width;
+    // Hidden by the level filter: nothing to measure until it is shown again.
+    if (!natural || room <= 0) return;
+    const size = Math.min(cap, Math.floor(((LOGO_PROBE_PX * room) / natural) * 0.995 * 100) / 100);
+    art.style.fontSize = `${size}px`;
+    art.style.lineHeight = `${Math.max(ink * size - 0.33, ink * size * 0.9)}px`;
+  });
+}
+
+let inkCache = null;
+
+/** The ink height of a full block per pixel of font size, in the face that draws it. */
+function blockInk(family) {
+  if (inkCache && inkCache.family === family) return inkCache.ratio;
+  let ratio = 1.2;
+  try {
+    const context = document.createElement("canvas").getContext("2d");
+    context.font = `100px ${family}`;
+    const metrics = context.measureText("█");
+    const height = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    if (height > 0) ratio = height / 100;
+  } catch {}
+  inkCache = { family, ratio };
+  return ratio;
 }
 
 /**

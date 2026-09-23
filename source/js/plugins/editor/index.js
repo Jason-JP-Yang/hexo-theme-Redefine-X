@@ -3553,9 +3553,9 @@ async function switchBackend() {
 
 const STAGES = [
   { key: "committed", icon: "fa-code-commit", label: "Committed" },
-  { key: "building", icon: "fa-hammer", label: "Building" },
-  { key: "pushed", icon: "fa-upload", label: "Artifact pushed" },
-  { key: "deployed", icon: "fa-globe", label: "Deployed" },
+  { key: "verify", icon: "fa-shield-check", label: "Verify" },
+  { key: "build", icon: "fa-hammer", label: "Build" },
+  { key: "deploy", icon: "fa-globe", label: "Deploy" },
 ];
 
 let progressTimer = null;
@@ -3563,15 +3563,12 @@ let progressTimer = null;
 /**
  * Where the build for the commit just made has got to.
  *
- * Driven by the COMMIT STATUS Gitea Actions writes for the sha we pushed, not
- * by the Actions run list: that list is an administrative endpoint, this token
- * is a content-repository token, and every poll came back 403 — which is why
- * the rail used to stop at "Committed" and sit there. `repo.commitStatus`
- * carries the reasoning.
+ * Driven by the GitHub Actions run for the commit: each of its jobs — verify,
+ * build, deploy — is a stage, and the page reloads once deploy is done.
  *
  * A null answer is "ask again"; a run that has not started yet reports no
- * statuses at all, and that is also just waiting. Only a state the workflow
- * itself put there ends the poll.
+ * jobs at all, and that is also just waiting. Only a state the workflow itself
+ * put there ends the poll.
  */
 function startProgress(result) {
   clearInterval(progressTimer);
@@ -3606,21 +3603,12 @@ function startProgress(result) {
       link.hidden = false;
     }
 
-    if (status.state === "pending") return void mark("building", "live");
+    for (const [key, value] of Object.entries(status.stages)) mark(key, value);
 
     if (status.state === "success") {
-      mark("building", "done");
-      mark("pushed", "done");
-      mark("deployed", "live");
       clearInterval(progressTimer);
-      // Vercel is downstream of a push nothing here sees, so the last stage is
-      // optimistic by design: the artifact is out of our hands.
-      setTimeout(() => {
-        mark("deployed", "done");
-        land();
-      }, 20000);
-    } else if (status.state === "failure" || status.state === "error") {
-      mark("building", "fail");
+      land();
+    } else if (status.state === "failure") {
       clearInterval(progressTimer);
       notice("error", t("build_failed", "The build failed. The post is committed; nothing published has changed."));
     }

@@ -869,6 +869,82 @@ a.bm-post-edit
     background var(--box-red-bg)
     color var(--box-red-text)
 
+a.bm-bubble
+  text-decoration none
+  transition filter 0.2s ease
+
+  &:hover
+    filter brightness(0.96)
+
+// The level filter is the analytics chart's legend (`.bma-legend`), a key per
+// level: pressing one takes that level's entries out of the transcript. Its
+// swatch is inked by the same ANSI class as the level's label in the log.
+.bma-legend.bm-log-keys
+  justify-content flex-start
+  margin 0 0 8px
+
+  i
+    background currentColor
+
+.bm-log-n
+  margin-left 1px
+  font-variant-numeric tabular-nums
+  font-weight 600
+  color var(--second-text-color)
+
+.bm-log-text[data-off~="info"] .bm-log-e[data-level="info"],
+.bm-log-text[data-off~="warn"] .bm-log-e[data-level="warn"],
+.bm-log-text[data-off~="error"] .bm-log-e[data-level="error"],
+.bm-log-text[data-off~="fatal"] .bm-log-e[data-level="fatal"],
+.bm-log-text[data-off~="debug"] .bm-log-e[data-level="debug"],
+.bm-log-text[data-off~="other"] .bm-log-e[data-level="other"]
+  display none
+
+// The theme's banner: scaled by the console to fill exactly one line per row
+// (fitLogos), with a line pitch equal to a block glyph's ink so the art stacks
+// without a seam. `max-content` keeps the measured width the art's own, never
+// the frame's.
+.bm-log-logo
+  display block
+  overflow hidden
+  margin 2px 0
+
+.bm-log-logo-art
+  display inline-block
+  width max-content
+  white-space pre
+  overflow-wrap normal
+  word-break normal
+
+// The two size buttons float over the transcript's top-right corner, outside
+// the scroller so its edge fades never touch them, and clear of its scrollbar.
+// Base material: an opaque pill, because what scrolls under it is text.
+.bm-log-zoom
+  position absolute
+  top 8px
+  right 16px
+  z-index 1
+  display flex
+  gap 2px
+  padding 2px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  box-shadow 0 2px 8px var(--shadow-color-1)
+
+  .bm-icon
+    width 26px
+    height 26px
+    border-radius 7px
+    font-size 11px
+
+    &:hover:not(:disabled)
+      background var(--second-background-color)
+
+    &:disabled
+      opacity 0.35
+      cursor default
+
 // The surface the transcript scrolls on. The background, radius and border live
 // here rather than on the <pre> so that the mask below fades only the TEXT — a
 // mask on the scroller would otherwise fade its own background too, and the log
@@ -898,7 +974,7 @@ a.bm-post-edit
   padding 10px 12px
   color var(--second-text-color)
   font-family 'Geist Mono', 'Noto Color Emoji', Courier, monospace
-  font-size 0.68rem
+  font-size unquote('calc(0.68rem * var(--log-scale, 1))')
   line-height 1.55
   tab-size 2
   white-space pre-wrap

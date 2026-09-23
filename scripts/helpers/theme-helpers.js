@@ -237,6 +237,12 @@ hexo.extend.helper.register("buildDate", function () {
   return require("../lib/build-clock").date();
 });
 
+/** The build every page of this run names, or null with deploy off — see scripts/lib/deploy.js. */
+hexo.extend.helper.register("deploy_build", function () {
+  const deploy = require("../lib/deploy");
+  return deploy.resolve(this.theme || hexo.theme.config).enable ? deploy.build() : null;
+});
+
 /** `backend:` as it is actually switched on — see scripts/lib/backend.js. */
 hexo.extend.helper.register("backend_config", function () {
   return require("../lib/backend").resolve(this.theme || hexo.theme.config);

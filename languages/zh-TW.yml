@@ -15,6 +15,7 @@ recent_posts: 之前的文章
 share: 分享
 powered_by: "%s 框架"
 theme: 主題
+build: 建置
 rss_feed: RSS 訂閱
 category: 分類
 categories: 分類
@@ -431,6 +432,11 @@ management:
   l_empty: 還沒有任何一次建置寫入過日誌。
   l_failed: 失敗
   l_ok: 成功
+  l_levels: 日誌級別
+  l_output: 輸出
+  l_zoom_in: 放大字體
+  l_zoom_out: 縮小字體
+  l_run: 開啟 Actions 執行紀錄
   v_audience: 可以閱讀的人
   v_reader: 人
   v_readers: 人

@@ -15,6 +15,7 @@ recent_posts: Recent Posts
 share: Share
 powered_by: "POWERED BY %s"
 theme: THEME
+build: BUILD
 rss_feed: RSS Feed
 category: Category
 categories: Categories
@@ -421,9 +422,9 @@ management:
   p_unpub_failed: The build failed. The commit landed; nothing published has changed.
   p_backend: Build on
   p_s_committed: Committed
-  p_s_building: Building
-  p_s_pushed: Artifact pushed
-  p_s_deployed: Deployed
+  p_s_verify: Verify
+  p_s_build: Build
+  p_s_deploy: Deploy
   v_badge: Encrypted
   v_editors: Who can edit this
   ed_placeholder: Collaborator username, name or numeric id, then Enter
@@ -444,6 +445,11 @@ management:
   l_empty: No build has written a log yet.
   l_failed: Failed
   l_ok: Succeeded
+  l_levels: Log levels
+  l_output: Output
+  l_zoom_in: Larger text
+  l_zoom_out: Smaller text
+  l_run: Open the Actions run
   v_audience: Who can read this
   v_reader: reader
   v_readers: readers
@@ -511,9 +517,9 @@ editor:
   deployed_reload: Published. Loading the page as readers see it...
   view_run: View run
   s_committed: Committed
-  s_building: Building
-  s_pushed: Artifact pushed
-  s_deployed: Deployed
+  s_verify: Verify
+  s_build: Build
+  s_deploy: Deploy
   cover_pick: Change cover
   cover_drop: Remove cover
   placeholder: Write, or press / for a block

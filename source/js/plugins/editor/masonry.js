@@ -128,7 +128,6 @@ import { checkMasonryOverflow } from "../masonry.js";
 
 const DATA = "source/_data/masonry.yml";
 const AUTOSTASH_MS = 4000;
-const DEPLOY_MS = 20000;
 const POLL_MS = 6000;
 // The article's own step duration, so a photograph sliding into its new column
 // travels at the same speed a paragraph does.
@@ -181,9 +180,9 @@ const PROP_KEYS = ["title", "description", "auto-exif", ...Object.values(EXIF_YM
 
 const STAGES = [
   { key: "committed", icon: "fa-code-commit", label: "Committed" },
-  { key: "building", icon: "fa-hammer", label: "Building" },
-  { key: "pushed", icon: "fa-upload", label: "Artifact pushed" },
-  { key: "deployed", icon: "fa-globe", label: "Deployed" },
+  { key: "verify", icon: "fa-shield-check", label: "Verify" },
+  { key: "build", icon: "fa-hammer", label: "Build" },
+  { key: "deploy", icon: "fa-globe", label: "Deploy" },
 ];
 
 const BACKEND_ICON = { gitea: "fa-solid fa-server", github: "fa-brands fa-github" };
@@ -2518,20 +2517,13 @@ function startProgress(result) {
       link.href = status.url;
       link.hidden = false;
     }
-    if (status.state === "pending") return void mark("building", "live");
+    for (const [key, value] of Object.entries(status.stages)) mark(key, value);
 
     if (status.state === "success") {
       clearInterval(state.progressTimer);
-      mark("building", "done");
-      mark("pushed", "done");
-      mark("deployed", "live");
-      setTimeout(() => {
-        mark("deployed", "done");
-        land();
-      }, DEPLOY_MS);
-    } else if (status.state === "failure" || status.state === "error") {
+      land();
+    } else if (status.state === "failure") {
       clearInterval(state.progressTimer);
-      mark("building", "fail");
       notice("error", t("build_failed_album", "The build failed. The album is committed; nothing published has changed."));
     }
   }, POLL_MS);

@@ -495,6 +495,16 @@ comment:
       loading: lazy # Load the comments lazily
 # COMMENT <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
 
+# DEPLOY >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
+# The workflow in workflows/deploy.yml, a build hash in every footer and version.json.
+# Required by backend.online_editor
+deploy:
+  enable: false
+  # github-pages, vercel, cloudflare-pages. Vercel / Cloudflare: turn off preview
+  # deploys for the editor-queue and publish branches
+  platform: github-pages
+# DEPLOY <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< end
+
 # BACKEND >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> start
 # Docs: https://redefine-x-docs.jason-yang.top/zh/backend
 # The Cloudflare Worker in workflows/backend-worker. Everything here needs
@@ -553,7 +563,7 @@ backend:
   online_editor:
     # owner/name of the public repository the site is published from
     repo:
-    # The branch GitHub Pages serves
+    # The branch the site is published from
     branch: main
     # Ed25519 public key from `npm run editor:keygen`, matching EDITOR_PUBLIC_KEY
     # in the Worker. Published so a save's receipt can be checked by anyone

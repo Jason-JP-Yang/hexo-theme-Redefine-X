@@ -86,12 +86,23 @@ try {
   text = "(no output was captured)";
 }
 
+// The build the published tree now carries: this run's when it succeeded, the
+// restored previous one when it did not — either way, what this log ships with.
+let build = "";
+try {
+  build = String(JSON.parse(fs.readFileSync(path.join(out, "version.json"), "utf8")).build || "");
+} catch {
+  /* deploy is off, or there was never a build */
+}
+
+const { GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID } = process.env;
 const record = {
   at: new Date().toISOString(),
   status: String(args.status || "ok"),
   reason: String(args.reason || ""),
-  run: process.env.GITHUB_RUN_ID || "",
-  sha: (process.env.GITHUB_SHA || "").slice(0, 7),
+  run: GITHUB_RUN_ID || "",
+  url: GITHUB_RUN_ID ? `${GITHUB_SERVER_URL || "https://github.com"}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}` : "",
+  build,
   text,
 };
 
