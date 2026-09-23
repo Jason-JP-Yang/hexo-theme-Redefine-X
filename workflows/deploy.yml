@@ -19,17 +19,21 @@
 #                      GPG-verified commit by the repository owner. Its tree is
 #                      committed on top of main through the key and deployed;
 #                      publish is then emptied again.
-#   push to main       only this workflow can make one; nothing to do.
+#   push to main       only this workflow can make one, and it starts no run.
 #   editor save        the receipt below.
 #
 # Open: anything else. Every run warns, because Vercel and Cloudflare Pages
-# have already deployed a push to main before any run can look at it.
+# have already deployed a push to main before any run can look at it — and a
+# push whose message says `[skip ci]` starts no run to look at it at all.
 #
 #   push to main       must be a GPG-verified commit by the repository owner;
-#                      put back otherwise. The workflow's own pushes use
-#                      GITHUB_TOKEN, which starts no run.
+#                      put back otherwise.
 #   push to publish    refused.
 #   editor save        the receipt below.
+#
+# Every commit this workflow puts on main says `[skip actions]`: GitHub starts
+# no run for it (the run that pushed it deploys it), while Vercel and Cloudflare
+# Pages, which skip only on `[skip ci]`, still deploy it.
 #
 # Neither publish nor editor-queue is a site: turn off Vercel / Cloudflare
 # preview deploys for both. With GitHub Pages and a locked main, allow
@@ -215,7 +219,7 @@ jobs:
                 echo "main already publishes this tree"
                 echo "verdict=none" >> "$GITHUB_OUTPUT"
               else
-                NEXT=$(printf '%s\n' "$MESSAGE" | git interpret-trailers --trailer "Promoted-from: ${GITHUB_SHA}" \
+                NEXT=$(printf '%s\n' "$MESSAGE" | sed '1s/$/ [skip actions]/' | git interpret-trailers --trailer "Promoted-from: ${GITHUB_SHA}" \
                   | git -c user.name="$AUTHOR" -c user.email="$EMAIL" commit-tree "$TREE" -p origin/main)
                 git push -q "git@github.com:${GITHUB_REPOSITORY}.git" "${NEXT}:refs/heads/main"
                 echo "promoted ${GITHUB_SHA::7} to main as ${NEXT::7}"
@@ -408,9 +412,9 @@ jobs:
 
       # ── publish ───────────────────────────────────────────────────────────
       #
-      # Locked, main takes nothing but the deploy key; the push it makes starts
-      # a run that verify recognises and leaves alone. Open, GITHUB_TOKEN
-      # pushes, which starts no run at all.
+      # Locked, main takes nothing but the deploy key; open, GITHUB_TOKEN pushes.
+      # Either way `[skip actions]` keeps the push from starting a second run —
+      # this one deploys it.
       - name: Commit the artifact
         id: commit
         if: always()
@@ -437,7 +441,7 @@ jobs:
             exit 0
           fi
           git -c user.name="$AUTHOR" -c user.email="$EMAIL" commit -q -F - <<EOF
-          Site updated: $(date -u +'%Y-%m-%d %H:%M:%SZ')
+          Site updated: $(date -u +'%Y-%m-%d %H:%M:%SZ') [skip actions]
 
           Built-by: ci
           EOF
