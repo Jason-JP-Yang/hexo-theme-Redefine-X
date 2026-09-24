@@ -715,15 +715,27 @@ textarea.ed-f-input
   background var(--background-color)
   font-size 0.72rem
 
+// A live stage fills from the left with a deeper tone of its own colour, as far
+// as plugins/editor/rail.js says the stage has got (`--p`, 0–1, set per frame).
+// When the fill is full the bubble turns to its done colour and the fill fades
+// out over it. `isolation` keeps the fill under the words without lifting it
+// out of the pill; the label clips while the width follows a new label.
 .ed-stage
   position relative
+  isolation isolate
   display inline-flex
   align-items center
   gap 6px
   padding 4px 10px
   border-radius 999px
   color var(--third-text-color)
+  white-space nowrap
   transition color $ed-morph, background $ed-morph
+
+  --ed-stage-fill unquote('color-mix(in oklab, var(--box-blue-text) 20%, var(--box-blue-bg))')
+
+  .dark &
+    --ed-stage-fill unquote('color-mix(in oklab, black 24%, var(--box-blue-bg))')
 
   & + .ed-stage::before
     content ""
@@ -737,8 +749,8 @@ textarea.ed-f-input
     background var(--box-blue-bg)
     color var(--box-blue-text)
 
-    i
-      animation ed-breathe 1.4s ease-in-out infinite
+    .ed-stage-fill
+      opacity 1
 
   &[data-state="done"]
     background var(--box-green-bg)
@@ -747,6 +759,21 @@ textarea.ed-f-input
   &[data-state="fail"]
     background var(--box-red-bg)
     color var(--box-red-text)
+
+.ed-stage-fill
+  position absolute
+  inset 0
+  z-index -1
+  border-radius inherit
+  background var(--ed-stage-fill)
+  clip-path unquote('inset(0 calc(100% - var(--p, 0) * 100%) 0 0)')
+  opacity 0
+  transition opacity $ed-morph
+  pointer-events none
+
+.ed-stage-label
+  min-width 0
+  overflow hidden
 
 .ed-stage-link
   margin-left auto

@@ -421,10 +421,23 @@ management:
   p_unpub_land: Done. Loading the site as readers see it...
   p_unpub_failed: The build failed. The commit landed; nothing published has changed.
   p_backend: Build on
-  p_s_committed: Committed
-  p_s_verify: Verify
-  p_s_build: Build
-  p_s_deploy: Deploy
+  r_commit_wait: Commit
+  r_commit_live: Committing
+  r_commit_done: Committed
+  r_commit_fail: Commit failed
+  r_verify_wait: Verify
+  r_verify_live: Verifying
+  r_verify_done: Verified
+  r_verify_fail: Verify failed
+  r_build_wait: Build
+  r_build_live: Building
+  r_build_done: Built
+  r_build_fail: Build failed
+  r_deploy_wait: Deploy
+  r_deploy_live: Deploying
+  r_deploy_done: Deployed
+  r_deploy_fail: Deploy failed
+  view_run: View run
   v_badge: Encrypted
   v_editors: Who can edit this
   ed_placeholder: Collaborator username, name or numeric id, then Enter
@@ -516,10 +529,23 @@ editor:
   backend_diverged: The two repositories have diverged - each has commits the other does not. This session commits to the one shown.
   deployed_reload: Published. Loading the page as readers see it...
   view_run: View run
-  s_committed: Committed
-  s_verify: Verify
-  s_build: Build
-  s_deploy: Deploy
+  r_commit_wait: Commit
+  r_commit_live: Committing
+  r_commit_done: Committed
+  r_commit_fail: Commit failed
+  r_verify_wait: Verify
+  r_verify_live: Verifying
+  r_verify_done: Verified
+  r_verify_fail: Verify failed
+  r_build_wait: Build
+  r_build_live: Building
+  r_build_done: Built
+  r_build_fail: Build failed
+  r_deploy_wait: Deploy
+  r_deploy_live: Deploying
+  r_deploy_done: Deployed
+  r_deploy_fail: Deploy failed
+  save_refused: The workflow refused this save. Nothing was published.
   cover_pick: Change cover
   cover_drop: Remove cover
   placeholder: Write, or press / for a block

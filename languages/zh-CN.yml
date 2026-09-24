@@ -423,10 +423,23 @@ management:
   p_unpub_land: 已完成，正在载入读者看到的站点……
   p_unpub_failed: 构建失败。提交已落地，已发布的内容没有变化。
   p_backend: 构建于
-  p_s_committed: 已提交
-  p_s_verify: 校验
-  p_s_build: 构建
-  p_s_deploy: 部署
+  r_commit_wait: 提交
+  r_commit_live: 提交中
+  r_commit_done: 已提交
+  r_commit_fail: 提交失败
+  r_verify_wait: 校验
+  r_verify_live: 校验中
+  r_verify_done: 已校验
+  r_verify_fail: 校验失败
+  r_build_wait: 构建
+  r_build_live: 构建中
+  r_build_done: 已构建
+  r_build_fail: 构建失败
+  r_deploy_wait: 部署
+  r_deploy_live: 部署中
+  r_deploy_done: 已部署
+  r_deploy_fail: 部署失败
+  view_run: 查看构建
   v_badge: 加密
   v_editors: 可以编辑的人
   ed_placeholder: 协作者用户名、名字或数字 ID，回车确认
@@ -518,10 +531,23 @@ editor:
   backend_diverged: 两个仓库已分叉 —— 各自都有对方没有的提交。本次会话提交到所显示的一侧。
   deployed_reload: 已发布。正在载入读者看到的页面...
   view_run: 查看构建
-  s_committed: 已提交
-  s_verify: 校验
-  s_build: 构建
-  s_deploy: 部署
+  r_commit_wait: 提交
+  r_commit_live: 提交中
+  r_commit_done: 已提交
+  r_commit_fail: 提交失败
+  r_verify_wait: 校验
+  r_verify_live: 校验中
+  r_verify_done: 已校验
+  r_verify_fail: 校验失败
+  r_build_wait: 构建
+  r_build_live: 构建中
+  r_build_done: 已构建
+  r_build_fail: 构建失败
+  r_deploy_wait: 部署
+  r_deploy_live: 部署中
+  r_deploy_done: 已部署
+  r_deploy_fail: 部署失败
+  save_refused: 工作流拒绝了这次保存，没有发布任何内容。
   cover_pick: 更换头图
   cover_drop: 移除头图
   placeholder: 开始书写，或按 / 插入区块

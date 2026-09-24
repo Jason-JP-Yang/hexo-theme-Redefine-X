@@ -66,6 +66,19 @@ let idleTimer = 0;
 let itemsById = null; // id -> { id, slug, kind, enc, draft, write, raw }
 let roster = [];
 let textCache = new Map(); // repo path -> { text, sha }
+let commitWatcher = null;
+
+/**
+ * Who hears the save being uploaded, as the fraction of its bytes sent — the
+ * publish rail's Commit stage. One at a time, because there is one save at a
+ * time; the return value lets go.
+ */
+export function watchCommit(fn) {
+  commitWatcher = fn;
+  return () => {
+    if (commitWatcher === fn) commitWatcher = null;
+  };
+}
 
 function touch() {
   if (idleTimer) clearTimeout(idleTimer);
@@ -503,7 +516,9 @@ export async function commit(files, message) {
     `Editor-Key: ${receipt.wrapped}\n` +
     (me ? `Co-authored-by: ${me.name} <${me.email}>\n` : "");
 
-  const result = await githubDriver.pushQueue(repo, bytesToB64(sealed), `${message}\n\n${trailers}`);
+  const result = await githubDriver.pushQueue(repo, bytesToB64(sealed), `${message}\n\n${trailers}`, (loaded, total) => {
+    if (commitWatcher && total) commitWatcher(loaded / total);
+  });
   textCache = new Map();
 
   // ── start the run the save cannot start by itself ─────────────────────────
@@ -594,16 +609,19 @@ function bytesToB64(bytes) {
 /* ─── where the build has got to ───────────────────────────────────────────── */
 
 /**
- * The public repository's own runs, read WITHOUT a credential.
- *
- * It is a public repository, so its workflow runs are public — which means the
- * build rail needs no token at all, and goes on working after the session's
- * credentials have been erased.
+ * The public repository's own runs, read with the reader's token and never the
+ * save token (see repo-github.js). The coordinates are remembered apart from
+ * the ticket, so the rail goes on after the session's credentials are erased.
  */
+let watched = null;
+
 export function commitStatus(sha) {
-  const repo = ticket && ticket.repo;
-  if (!repo) return Promise.resolve(null);
-  return githubDriver.runStatus(repo, sha);
+  if (ticket && ticket.repo) {
+    const { api, owner, repo, workflow } = ticket.repo;
+    watched = { api, owner, repo, workflow };
+  }
+  if (!watched) return Promise.resolve(null);
+  return githubDriver.runStatus(watched, sha);
 }
 
 /* ─── pictures the site does not serve yet ─────────────────────────────────── */

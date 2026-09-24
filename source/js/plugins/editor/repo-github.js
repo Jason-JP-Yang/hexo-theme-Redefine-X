@@ -22,6 +22,11 @@
  * which is what makes GitHub itself refuse any write under
  * `.github/workflows/`. The workflow is the thing that decides whether a save
  * is legitimate, so a token that could edit it would decide for itself.
+ *
+ * Reading where a build has got to never uses it. Those reads carry the signed-
+ * in author's own GitHub token (window.blogAuth, the giscus sign-in): five
+ * thousand requests an hour, where anonymous reads get sixty, and nothing that
+ * can write.
  */
 
 const PAYLOAD = "payload.bin";
@@ -30,19 +35,64 @@ function url(repo, path) {
   return `${String(repo.api).replace(/\/+$/, "")}/repos/${repo.owner}/${repo.repo}${path}`;
 }
 
-async function call(repo, path, init, anonymous) {
-  const res = await fetch(url(repo, path), {
-    ...init,
-    headers: {
-      ...(anonymous ? {} : { Authorization: "Bearer " + repo.token }),
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(init && init.body ? { "Content-Type": "application/json" } : {}),
-      ...((init && init.headers) || {}),
-    },
-  });
+const HEADERS = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+
+/** The signed-in author's own GitHub token, or "" — never the save token. */
+async function readerToken() {
+  try {
+    return (window.blogAuth && (await window.blogAuth.getToken())) || "";
+  } catch {
+    return "";
+  }
+}
+
+async function call(repo, path, init, reader) {
+  const send = (token) =>
+    fetch(url(repo, path), {
+      ...init,
+      headers: {
+        ...(token ? { Authorization: "Bearer " + token } : {}),
+        ...HEADERS,
+        ...(init && init.body ? { "Content-Type": "application/json" } : {}),
+        ...((init && init.headers) || {}),
+      },
+    });
+
+  const token = reader ? await readerToken() : repo.token;
+  let res = await send(token);
+  // A reader token GitHub stopped honouring is no reason to stop watching: the
+  // runs are public, so the read is simply made again without it.
+  if (res.status === 401 && reader && token) res = await send("");
   if (res.status === 401) throw Object.assign(new Error("github rejected the token"), { status: 401 });
   return res;
+}
+
+/**
+ * The blob upload, as the one request whose size is the save's: an XHR, because
+ * fetch reports no upload progress and the publish rail fills with these bytes.
+ */
+function upload(repo, path, body, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url(repo, path));
+    xhr.setRequestHeader("Authorization", "Bearer " + repo.token);
+    for (const [name, value] of Object.entries(HEADERS)) xhr.setRequestHeader(name, value);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) onProgress(event.loaded, event.total);
+    };
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      if (xhr.status === 401) return reject(Object.assign(new Error("github rejected the token"), { status: 401 }));
+      reject(new Error(data.message || `upload the save failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("upload the save failed: the network dropped it"));
+    xhr.send(body);
+  });
 }
 
 async function json(repo, path, init, what) {
@@ -61,15 +111,10 @@ async function json(repo, path, init, what) {
  * nothing before it, so a refused save leaves no history to unpick and the
  * runner's checkout of it is one file deep.
  */
-export async function pushQueue(repo, base64, message) {
+export async function pushQueue(repo, base64, message, onProgress) {
   const branch = repo.queue || "editor-queue";
 
-  const blob = await json(
-    repo,
-    "/git/blobs",
-    { method: "POST", body: JSON.stringify({ content: base64, encoding: "base64" }) },
-    "upload the save"
-  );
+  const blob = await upload(repo, "/git/blobs", JSON.stringify({ content: base64, encoding: "base64" }), onProgress);
 
   const tree = await json(
     repo,
@@ -113,10 +158,8 @@ export async function pushQueue(repo, base64, message) {
 
 /* ─── where the build has got to ───────────────────────────────────────────── */
 
-const PENDING = /^(queued|in_progress|requested|waiting|pending)$/;
-
 /**
- * Is a BUILD still running? Asked before a save, and answered anonymously.
+ * Is a BUILD still running? Asked before a save, with the reader's token.
  *
  * Scoped to the deploy workflow rather than to the repository. The repository
  * also runs a nightly reactions sweep, and a save refused because an unrelated
@@ -171,31 +214,21 @@ async function dispatchedRun(repo, file, ref) {
 }
 
 // A run, once found, is read by its id: one request a poll instead of two
-// searches, against an anonymous budget of sixty requests an hour.
+// searches.
 const runs = new Map();
 
-/** A job as the rail draws it. */
-function stageOf(job) {
-  const status = String(job.status || "").toLowerCase();
-  if (status === "in_progress") return "live";
-  if (PENDING.test(status)) return "wait";
-  return job.conclusion === "success" || job.conclusion === "skipped" ? "done" : "fail";
-}
-
 /**
- * The run for one commit, as its three jobs — verify, build, deploy — each a
- * rail state. The run is over when deploy is, or when any job fails.
- *
- * Read WITHOUT a credential. The repository is public, so its runs are public,
- * which means the build rail keeps working after the session's token has been
- * erased — and an author watching a deploy is not holding a write credential
- * for the whole of it.
+ * The run for one commit and its jobs, as GitHub reports them — each with its
+ * steps and their timestamps, which is what the publish rail draws progress
+ * from. `authed` says whether the read carried the reader's token, and so how
+ * often it may be asked again.
  */
 export async function runStatus(repo, sha) {
   const ref = String(sha || "").trim();
   if (!ref) return null;
 
   const file = repo.workflow || "deploy.yml";
+  const authed = !!(await readerToken());
   let run = runs.get(ref);
 
   // Two ways to find the run, because there are two kinds of run. A push starts
@@ -209,17 +242,13 @@ export async function runStatus(repo, sha) {
       `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`
     );
     const found = (pushed && pushed[0]) || (await dispatchedRun(repo, file, ref));
-    if (!found) return { state: "", url: "", count: 0, stages: {} };
+    if (!found) return { url: "", count: 0, jobs: [], authed };
     run = { id: found.id, url: found.html_url || "" };
     runs.set(ref, run);
   }
 
-  const res = await call(repo, `/actions/runs/${run.id}/jobs?per_page=10`, null, true).catch(() => null);
+  const res = await call(repo, `/actions/runs/${run.id}/jobs?per_page=20`, null, true).catch(() => null);
   if (!res || !res.ok) return null;
   const body = await res.json().catch(() => ({}));
-  const stages = {};
-  for (const job of body.jobs || []) stages[job.name] = stageOf(job);
-
-  const state = Object.values(stages).includes("fail") ? "failure" : stages.deploy === "done" ? "success" : "pending";
-  return { state, url: run.url, count: 1, stages };
+  return { url: run.url, count: 1, jobs: body.jobs || [], authed };
 }

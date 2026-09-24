@@ -98,6 +98,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
   pages: write
   id-token: write
 
@@ -428,6 +429,10 @@ jobs:
           # site that answers every URL with 404.
           [ -f index.html ] || { echo "::error::the artifact has no index.html — not publishing it"; exit 1; }
           jq -r '"platform=\(.platform // "")", "ci_url=\(.ci_url // "")"' ci/deploy.json >> "$GITHUB_OUTPUT" 2>/dev/null || true
+          # The deploy record: the runs before this one, for the publish rail.
+          if [ "${{ steps.render.outcome }}" = "success" ]; then
+            node ../themes/redefine-x/workflows/ci/record-run.mjs . || echo "::warning::version.json could not record the last runs"
+          fi
           git add -A
           # GITHUB_TOKEN may not write under .github/workflows/; a deploy key
           # may. Without one, a theme release that changes a workflow reaches

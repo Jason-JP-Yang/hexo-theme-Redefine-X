@@ -16,12 +16,14 @@
  * ordinary content the runner can carry forward like anything else.
  *
  * `ci/deploy.json` is the `deploy:` block as the workflow needs it (see
- * scripts/lib/deploy.js). `version.json` names the build every footer names;
- * the deploy job polls it until Vercel or Cloudflare Pages serves main.
+ * scripts/lib/deploy.js). `version.json` is the deploy record: the build every
+ * footer names, which the deploy job polls until Vercel or Cloudflare Pages
+ * serves main, and the recent runs' timings the publish rail estimates from.
  */
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const deploy = require("../lib/deploy");
 const { version } = require("../../package.json");
 
@@ -72,6 +74,26 @@ hexo.extend.generator.register("redefine_version", function () {
   const build = deploy.build();
   return {
     path: "version.json",
-    data: JSON.stringify({ build: build.id, time: build.time, theme: version }),
+    data: JSON.stringify({ build: build.id, time: build.time, theme: version, runs: recordedRuns() }),
   };
 });
+
+/**
+ * The runs the last artifact recorded (workflows/ci/record-run.mjs), carried
+ * into this one. Read from git rather than the file: `hexo clean` has emptied
+ * public/ by now, but its `.git` is kept, and HEAD is the artifact last built.
+ */
+function recordedRuns() {
+  try {
+    const text = execFileSync("git", ["show", "HEAD:version.json"], {
+      cwd: hexo.public_dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const runs = JSON.parse(text).runs;
+    return Array.isArray(runs) ? runs : [];
+  } catch {
+    return [];
+  }
+}

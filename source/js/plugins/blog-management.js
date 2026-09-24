@@ -44,6 +44,7 @@ import {
   vaultPrefix,
 } from "../tools/vaultCrypto.js";
 import { enter, exit, pop } from "./editor/motion.js";
+import { createRail } from "./editor/rail.js";
 
 // The morph used for inline editing: content fades out, the box resizes, content
 // fades back. Same shape and the same feel as editing an instant-note bubble.
@@ -1135,20 +1136,11 @@ async function saveAudience(postId, picker) {
  * written until Save & publish.
  */
 
-const UNPUB_STAGES = [
-  ["committed", "fa-code-commit", "Committed"],
-  ["verify", "fa-shield-check", "Verify"],
-  ["build", "fa-hammer", "Build"],
-  ["deploy", "fa-globe", "Deploy"],
-];
-
 const BACKEND_ICON = { gitea: "fa-solid fa-server", github: "fa-brands fa-github" };
-
-const POLL_MS = 6000;
 
 let repoMod = null;
 let credMod = null;
-let buildTimer = null;
+let rail = null;
 
 function loadRepo() {
   if (!repoMod) repoMod = import("./editor/repo.js");
@@ -1189,23 +1181,6 @@ function toggleUnpublish(item) {
   paintPosts();
   if (box.queue.length) openBar();
   else closeBar();
-}
-
-function stageRail() {
-  return UNPUB_STAGES.map(
-    ([key, icon, label]) =>
-      `<span class="ed-stage" data-key="${key}" data-state="wait">
-         <i class="fa-solid ${icon}" aria-hidden="true"></i>${escapeHTML(t("p_s_" + key, label))}
-       </span>`
-  ).join("");
-}
-
-function markStage(key, value) {
-  const bar = state.posts.bar;
-  const node = bar && bar.querySelector(`.ed-stage[data-key="${key}"]`);
-  if (!node || node.dataset.state === value) return;
-  node.dataset.state = value;
-  pop(node);
 }
 
 function barNotice(kind, text) {
@@ -1256,7 +1231,7 @@ function openBar() {
           <i class="fa-solid fa-xmark" aria-hidden="true"></i>
         </button>
       </div>
-      <div class="ed-progress">${stageRail()}</div>
+      <div class="ed-progress" hidden></div>
       <div class="ed-notice" hidden></div>`;
 
     root.insertBefore(bar, root.querySelector(".bm-console"));
@@ -1283,7 +1258,7 @@ function openBar() {
 
 async function closeBar() {
   const box = state.posts;
-  clearInterval(buildTimer);
+  if (rail) rail.stop();
   box.queue = [];
   box.busy = false;
   root.classList.remove("is-unpublishing");
@@ -1379,13 +1354,34 @@ async function runUnpublish() {
   barNotice(null, "");
   for (const row of rows) rowEl(row.key)?.classList.add("is-working");
 
+  const repo = await loadRepo();
+  rail = createRail(bar.querySelector(".ed-progress"), {
+    repo,
+    t,
+    // The console itself, loaded properly rather than swapped in: every list on
+    // this page was sealed into it by the build that has just been replaced, so
+    // a swup transition would show the same stale rows.
+    onDone: () => {
+      barNotice("info", t("p_unpub_land", "Done. Loading the site as readers see it…"));
+      setTimeout(() => window.location.assign(siteRoot() + "/blog-management/"), 1200);
+    },
+    onFail: (key) => {
+      if (key === "commit") return;
+      barNotice("error", t("p_unpub_failed", "The build failed. The commit landed; nothing published has changed."));
+      state.posts.busy = false;
+      root.classList.remove("is-unpublishing");
+    },
+  });
+  let committed = false;
+
   try {
-    const [repo, session] = await Promise.all([loadRepo(), import("./editor/session.js")]);
+    const session = await import("./editor/session.js");
     await repo.open(true);
     const result = await session.unpublishAll(rows);
     if (!result) throw new Error(t("p_unpub_empty", "There was nothing to commit."));
+    committed = true;
+    rail.committed(result);
 
-    markStage("committed", "done");
     barNotice("info", `${t("p_unpub_done", "Committed")} ${result.short || ""}`.trim());
     if (result.started === false) {
       barNotice(
@@ -1420,9 +1416,8 @@ async function runUnpublish() {
     }
     box.queue = [];
     paintPosts();
-    watchBuild(result.sha);
   } catch (err) {
-    markStage("committed", "fail");
+    if (!committed) rail.fail("commit");
     barNotice("error", (err && err.message) || t("offline", "The Worker did not answer."));
     box.busy = false;
     root.classList.remove("is-unpublishing");
@@ -1430,40 +1425,6 @@ async function runUnpublish() {
     bar.querySelector(".ed-dot").dataset.state = "dirty";
     for (const row of rows) rowEl(row.key)?.classList.remove("is-working");
   }
-}
-
-/**
- * Where the build for the commit just made has got to — the verify, build and
- * deploy jobs of its Actions run, polled exactly as the editor polls them. When
- * it lands the console is showing a list that no longer describes the site, so
- * the answer is the front page rather than a repaint of a stale page.
- */
-function watchBuild(sha) {
-  clearInterval(buildTimer);
-
-  let ticks = 0;
-  buildTimer = setInterval(async () => {
-    if ((ticks += 1) > 100) return clearInterval(buildTimer);
-
-    const repo = await loadRepo();
-    const status = await repo.commitStatus(sha);
-    if (!status || !status.count) return;
-    for (const [key, value] of Object.entries(status.stages)) markStage(key, value);
-
-    if (status.state === "success") {
-      clearInterval(buildTimer);
-      barNotice("info", t("p_unpub_land", "Done. Loading the site as readers see it…"));
-      // The console itself, loaded properly rather than swapped in: every list
-      // on this page was sealed into it by the build that has just been
-      // replaced, so a swup transition would show the same stale rows.
-      setTimeout(() => window.location.assign(siteRoot() + "/blog-management/"), 1200);
-    } else if (status.state === "failure") {
-      clearInterval(buildTimer);
-      barNotice("error", t("p_unpub_failed", "The build failed. The commit landed; nothing published has changed."));
-      state.posts.busy = false;
-      root.classList.remove("is-unpublishing");
-    }
-  }, POLL_MS);
 }
 
 function notePostError(message) {
@@ -2423,7 +2384,8 @@ export async function initBlogManagement(inventory, who) {
   state.posts.queue = [];
   state.posts.bar = null;
   state.posts.busy = false;
-  clearInterval(buildTimer);
+  if (rail) rail.stop();
+  rail = null;
   reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const backend = (window.theme && window.theme.backend) || {};

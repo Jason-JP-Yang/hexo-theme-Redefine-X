@@ -124,11 +124,11 @@ import {
   setDragImage,
   toolbarIn,
 } from "./motion.js";
+import { createRail } from "./rail.js";
 import { checkMasonryOverflow } from "../masonry.js";
 
 const DATA = "source/_data/masonry.yml";
 const AUTOSTASH_MS = 4000;
-const POLL_MS = 6000;
 // The article's own step duration, so a photograph sliding into its new column
 // travels at the same speed a paragraph does.
 const STEP_MS = 380;
@@ -178,13 +178,6 @@ const YML_EXIF = Object.fromEntries(Object.entries(EXIF_YML).map(([exif, key]) =
 /** Every field the property sheet owns, in the order it prints them. */
 const PROP_KEYS = ["title", "description", "auto-exif", ...Object.values(EXIF_YML)];
 
-const STAGES = [
-  { key: "committed", icon: "fa-code-commit", label: "Committed" },
-  { key: "verify", icon: "fa-shield-check", label: "Verify" },
-  { key: "build", icon: "fa-hammer", label: "Build" },
-  { key: "deploy", icon: "fa-globe", label: "Deploy" },
-];
-
 const BACKEND_ICON = { gitea: "fa-solid fa-server", github: "fa-brands fa-github" };
 
 /* ─── state ────────────────────────────────────────────────────────────────── */
@@ -218,7 +211,6 @@ function blank() {
     perchOff: null,
     versionOff: null,
     barSize: null,
-    progressTimer: null,
     dragId: "",
     dropAt: "",
   };
@@ -2367,11 +2359,15 @@ async function doSave(mode) {
   state.saving = true;
   syncHeader();
   notice(null, "");
+  const rail = startRail();
+  let committed = false;
 
   try {
     applyStagedMoves();
     const plan = await buildCommit(mode);
     const result = await repo.commit(plan.files, plan.message);
+    committed = true;
+    rail.committed(result);
 
     // A dispatch that did not get through means no run is coming for this save:
     // the queue branch holds ONE payload and the next save replaces it, so
@@ -2409,9 +2405,9 @@ async function doSave(mode) {
       );
     }
 
-    startProgress(result);
     if (plan.published) window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
+    if (!committed) rail.fail("commit");
     if (err && err.kind === "conflict") {
       notice("error", t("conflict_album", "masonry.yml changed in the repository. Your work is safe here — reload to see what landed, then re-apply."));
     } else {
@@ -2486,47 +2482,22 @@ async function switchBackend() {
 
 /* ─── the publish rail ─────────────────────────────────────────────────────── */
 
-function startProgress(result) {
-  clearInterval(state.progressTimer);
-  ui.progress.hidden = false;
-  ui.progress.innerHTML =
-    STAGES.map(
-      (stage, i) =>
-        `<span class="ed-stage" data-key="${stage.key}" data-state="${i === 0 ? "done" : "wait"}">
-           <i class="fa-solid ${stage.icon}" aria-hidden="true"></i>${escapeHTML(t("s_" + stage.key, stage.label))}
-         </span>`
-    ).join("") + `<a class="ed-stage-link" target="_blank" rel="noopener" hidden>${escapeHTML(t("view_run", "View run"))}</a>`;
-  pop(ui.progress);
-
-  const link = ui.progress.querySelector(".ed-stage-link");
-  const mark = (key, value) => {
-    const node = ui.progress.querySelector(`[data-key="${key}"]`);
-    if (node && node.dataset.state !== value) {
-      node.dataset.state = value;
-      pop(node);
-    }
-  };
-
-  let ticks = 0;
-  state.progressTimer = setInterval(async () => {
-    if ((ticks += 1) > 100) return clearInterval(state.progressTimer);
-
-    const status = await repo.commitStatus(result.sha);
-    if (!status || !status.count) return;
-    if (status.url) {
-      link.href = status.url;
-      link.hidden = false;
-    }
-    for (const [key, value] of Object.entries(status.stages)) mark(key, value);
-
-    if (status.state === "success") {
-      clearInterval(state.progressTimer);
-      land();
-    } else if (status.state === "failure") {
-      clearInterval(state.progressTimer);
-      notice("error", t("build_failed_album", "The build failed. The album is committed; nothing published has changed."));
-    }
-  }, POLL_MS);
+/** The rail for one save — see rail.js. The album reloads once Deploy is done. */
+function startRail() {
+  return createRail(ui.progress, {
+    repo,
+    t,
+    onDone: land,
+    onFail: (key) => {
+      if (key === "commit") return;
+      notice(
+        "error",
+        key === "verify"
+          ? t("save_refused", "The workflow refused this save. Nothing was published.")
+          : t("build_failed_album", "The build failed. The album is committed; nothing published has changed.")
+      );
+    },
+  });
 }
 
 /**
@@ -2593,7 +2564,7 @@ async function teardown(restore) {
   state.on = false;
 
   clearTimeout(state.stashTimer);
-  clearInterval(state.progressTimer);
+  if (ui && ui.progress && ui.progress._rail) ui.progress._rail.stop();
   unwire();
   closeDialogs();
   spotClear();

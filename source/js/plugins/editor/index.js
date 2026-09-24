@@ -89,6 +89,7 @@ import * as session from "./session.js";
 import * as repo from "./repo.js";
 import * as credentials from "./credentials.js";
 import { EASE, contentChanged, crossFade, enter, exit, flip, flowCost, pop, reduced, toolbarIn, toolbarOut } from "./motion.js";
+import { createRail } from "./rail.js";
 
 const AUTOSTASH_MS = 4000;
 const EDGE = 90;        // px from a viewport edge where a drag starts scrolling
@@ -901,7 +902,7 @@ async function deactivate() {
   // opened from. Read before the teardown resets it.
   const composer = state.fresh;
 
-  clearInterval(progressTimer);
+  if (ui && ui.progress && ui.progress._rail) ui.progress._rail.stop();
   clearTimeout(state.stashTimer);
   // The steps belong to the session, not to the post: reopening the editor on
   // the same article starts from what is committed, not from where somebody
@@ -1006,7 +1007,7 @@ function forgetSession() {
  * jump in the one animation the author is watching.
  */
 function abandon(leaving) {
-  clearInterval(progressTimer);
+  if (ui && ui.progress && ui.progress._rail) ui.progress._rail.stop();
   clearTimeout(state.stashTimer);
   history.reset();
   spotClear();
@@ -3333,6 +3334,9 @@ async function doSave(mode) {
   state.saving = true;
   syncHeader();
   notice(null, "");
+  // On screen from the press, so the upload is seen as it happens.
+  const rail = startRail();
+  let committed = false;
 
   try {
     // A rename is only real once it is committed, and it is committed with the
@@ -3342,6 +3346,8 @@ async function doSave(mode) {
     applyStagedMoves();
 
     const result = await session.save(state.doc, mode, state.pending, state.vaultChoice, state.stage);
+    committed = true;
+    rail.committed(result);
 
     // A dispatch that did not get through means no run is coming for this save:
     // the queue branch holds ONE payload and the next save replaces it, so
@@ -3437,17 +3443,13 @@ async function doSave(mode) {
       );
     }
 
-    // A post written HERE now lives somewhere else, but the rail is still worth
-    // watching: it is the only thing saying whether the commit built. Where it
-    // lands is what differs — see `land`.
-    startProgress(result);
-
     // Publishing is the end of a piece of work, and what it produces — the
     // commit line, the build rail, the document bar — is all at the top of the
     // page, while the author is almost always at the bottom of it. The same
     // journey the corner's own button makes (tools/scrollTopBottom.js).
     if (result.published) window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
+    if (!committed) rail.fail("commit");
     if (err.kind === "conflict") {
       notice("error", t("conflict_hint", "This file changed in the repository. Your text is safe here — open the post in a new tab to see what landed, then re-apply."));
     } else {
@@ -3551,68 +3553,25 @@ async function switchBackend() {
 
 /* ─── the publish rail ─────────────────────────────────────────────────────── */
 
-const STAGES = [
-  { key: "committed", icon: "fa-code-commit", label: "Committed" },
-  { key: "verify", icon: "fa-shield-check", label: "Verify" },
-  { key: "build", icon: "fa-hammer", label: "Build" },
-  { key: "deploy", icon: "fa-globe", label: "Deploy" },
-];
-
-let progressTimer = null;
-
 /**
- * Where the build for the commit just made has got to.
- *
- * Driven by the GitHub Actions run for the commit: each of its jobs — verify,
- * build, deploy — is a stage, and the page reloads once deploy is done.
- *
- * A null answer is "ask again"; a run that has not started yet reports no
- * jobs at all, and that is also just waiting. Only a state the workflow itself
- * put there ends the poll.
+ * The rail for one save — see rail.js. The page reloads once Deploy is done;
+ * a job that fails says so here, where the author is looking.
  */
-function startProgress(result) {
-  clearInterval(progressTimer);
-  ui.progress.hidden = false;
-  ui.progress.innerHTML =
-    STAGES.map(
-      (stage, i) =>
-        `<span class="ed-stage" data-key="${stage.key}" data-state="${i === 0 ? "done" : "wait"}">
-           <i class="fa-solid ${stage.icon}" aria-hidden="true"></i>${escapeHTML(t("s_" + stage.key, stage.label))}
-         </span>`
-    ).join("") + `<a class="ed-stage-link" target="_blank" rel="noopener" hidden>${escapeHTML(t("view_run", "View run"))}</a>`;
-  pop(ui.progress);
-
-  const link = ui.progress.querySelector(".ed-stage-link");
-  const mark = (key, value) => {
-    const node = ui.progress.querySelector(`[data-key="${key}"]`);
-    if (node && node.dataset.state !== value) {
-      node.dataset.state = value;
-      pop(node);
-    }
-  };
-
-  let ticks = 0;
-  progressTimer = setInterval(async () => {
-    if ((ticks += 1) > 100) return clearInterval(progressTimer);
-
-    const status = await repo.commitStatus(result.sha);
-    if (!status || !status.count) return;
-
-    if (status.url) {
-      link.href = status.url;
-      link.hidden = false;
-    }
-
-    for (const [key, value] of Object.entries(status.stages)) mark(key, value);
-
-    if (status.state === "success") {
-      clearInterval(progressTimer);
-      land();
-    } else if (status.state === "failure") {
-      clearInterval(progressTimer);
-      notice("error", t("build_failed", "The build failed. The post is committed; nothing published has changed."));
-    }
-  }, 6000);
+function startRail() {
+  return createRail(ui.progress, {
+    repo,
+    t,
+    onDone: land,
+    onFail: (key) => {
+      if (key === "commit") return;
+      notice(
+        "error",
+        key === "verify"
+          ? t("save_refused", "The workflow refused this save. Nothing was published.")
+          : t("build_failed", "The build failed. The post is committed; nothing published has changed.")
+      );
+    },
+  });
 }
 
 /**
