@@ -47,8 +47,13 @@ async function readerToken() {
 }
 
 async function call(repo, path, init, reader) {
+  // GitHub marks every read `max-age=60`, so a cached run list stays "not
+  // started yet" for a minute. `no-cache` revalidates each time instead: an
+  // unchanged answer comes back as a 304, which GitHub does not count against
+  // the rate limit, and a changed one arrives at once.
   const send = (token) =>
     fetch(url(repo, path), {
+      ...(reader ? { cache: "no-cache" } : {}),
       ...init,
       headers: {
         ...(token ? { Authorization: "Bearer " + token } : {}),
@@ -236,12 +241,14 @@ export async function runStatus(repo, sha) {
   // the queue commit is rootless and carries no workflow file — so the Worker
   // dispatches it from `main` and names the queue commit only in `run-name`.
   // `head_sha` finds the first kind and never the second.
+  // Every save is the second kind, so it is asked for first.
   if (!run) {
-    const pushed = await runsPage(
-      repo,
-      `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`
-    );
-    const found = (pushed && pushed[0]) || (await dispatchedRun(repo, file, ref));
+    const found =
+      (await dispatchedRun(repo, file, ref)) ||
+      ((await runsPage(
+        repo,
+        `/actions/workflows/${encodeURIComponent(file)}/runs?head_sha=${encodeURIComponent(ref)}&per_page=1`
+      )) || [])[0];
     if (!found) return { url: "", count: 0, jobs: [], authed };
     run = { id: found.id, url: found.html_url || "" };
     runs.set(ref, run);
