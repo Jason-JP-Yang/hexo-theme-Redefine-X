@@ -231,6 +231,10 @@ notifications:
   account_banned: アカウントがブロックされています
   account_banned_note: サインインしたまま記事へのコメントは続けられます。取り消されたのはこのブログを購読する権限だけです。管理者が GitHub 上でもブロックしている場合は、コメントもできなくなります。
 
+guide:
+  label: ガイド
+  menu_title: ガイド
+
 management:
   a_title: アクセス解析
   a_lede: Worker がセッションごとに発行する管理者資格情報で、Umami から直接読み取ります。

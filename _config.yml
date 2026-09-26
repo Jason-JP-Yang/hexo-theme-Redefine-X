@@ -94,6 +94,8 @@ global:
     gear_rotation: true
     # Whether to auto expand tools list on page load
     auto_expand: false
+  # Virtual-cursor guide: first-visit tips, walkthroughs, and {% guide %} notes in posts
+  guide: true
   # Whether to enable open graph
   open_graph:
     enable: true

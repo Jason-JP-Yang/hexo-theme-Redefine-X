@@ -1,0 +1,3181 @@
+// ========================================================================================
+//                                          GUIDE
+// ========================================================================================
+// The virtual cursor, its tip card and the walkthrough card
+// (source/js/plugins/guide).
+//
+// Material: tier 1 only. Every surface is a solid card with a shadow and the
+// tour's mask is a flat colour. The cursor and its card move every frame, and a
+// backdrop pass under something that moves is the most expensive thing the
+// compositor can be asked for.
+//
+// Scenes are authored on a fixed 360×225 canvas that JS scales as one piece
+// (plugins/guide/scene.js), so every size under SCENES is a canvas pixel.
+//
+// Auto-included: style.styl requires layout/_partials/* as a glob.
+
+.gd-layer, .gd-tour
+  --gd-accent var(--primary-color)
+  --gd-accent-10 unquote('color-mix(in srgb, var(--primary-color) 10%, transparent)')
+  --gd-accent-18 unquote('color-mix(in srgb, var(--primary-color) 18%, transparent)')
+  --gd-accent-35 unquote('color-mix(in srgb, var(--primary-color) 35%, transparent)')
+  --gd-accent-55 unquote('color-mix(in srgb, var(--primary-color) 55%, transparent)')
+  --gd-skel rgba(0, 0, 0, 0.08)
+  --gd-skel-strong rgba(0, 0, 0, 0.16)
+  --gd-line-strong rgba(0, 0, 0, 0.18)
+  font-family $default-font-family
+
+.dark .gd-layer, .dark .gd-tour
+  --gd-skel rgba(255, 255, 255, 0.09)
+  --gd-skel-strong rgba(255, 255, 255, 0.2)
+  --gd-line-strong rgba(255, 255, 255, 0.22)
+
+// What a tip may reveal that a pointer otherwise would: the buttons of a code
+// block, the camera card of a photo, a navbar menu (layout/_partials/navbar.styl).
+.code-container.guide-reveal .copy-button, .code-container.guide-reveal .fold-button
+  opacity 1
+
+.image-exif-container.image-exif-float:not(.image-exif-overflow-fallback).guide-reveal .image-exif-info-card
+  opacity 1
+  pointer-events auto
+
+// {% guide %} carries its note in data attributes and prints nothing.
+.guide-note
+  display none !important
+
+
+// ─── the page layer ─────────────────────────────────────────
+.gd-layer
+  position fixed
+  inset 0
+  z-index $z-index-7
+  pointer-events none
+
+.gd-sr
+  position absolute
+  width 1px
+  height 1px
+  overflow hidden
+  clip-path inset(50%)
+  white-space nowrap
+
+.gd-cursor
+  position absolute
+  left 0
+  top 0
+  z-index 3
+  width 0
+  height 0
+  opacity 0
+  pointer-events none
+  will-change transform
+  transition opacity 0.22s ease
+
+  &.is-on
+    opacity 1
+
+  .gd-cursor-body, .gd-cursor-press
+    position absolute
+    left 0
+    top 0
+    transform-origin 0 0
+
+  .gd-arrow
+    position absolute
+    left -3px
+    top -3px
+    width 28px
+    height 28px
+    overflow visible
+    filter drop-shadow(0 2px 4px rgba(0, 0, 0, 0.28))
+
+    path
+      fill var(--gd-accent)
+      stroke #fff
+      stroke-width 2
+      stroke-linejoin round
+
+  &.is-local .gd-arrow
+    left -2px
+    top -2px
+    width 19px
+    height 19px
+    filter drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3))
+
+.gd-pill
+  position absolute
+  left 0
+  top 0
+  z-index 3
+  padding 3px 9px 3px 8px
+  border-radius 8px
+  background var(--gd-accent)
+  color #fff
+  font-size 12.5px
+  font-weight 600
+  line-height 1.3
+  letter-spacing 0.01em
+  white-space nowrap
+  box-shadow 0 3px 10px rgba(0, 0, 0, 0.2)
+  opacity 0
+  pointer-events none
+  will-change transform
+  transition opacity 0.22s ease
+
+  &.is-on
+    opacity 1
+
+  &.is-local
+    padding 2px 6px
+    border-radius 5px
+    font-size 8.5px
+    box-shadow 0 2px 5px rgba(0, 0, 0, 0.2)
+
+.gd-ripple
+  position absolute
+  left 0
+  top 0
+  z-index 2
+  width 0
+  height 0
+  pointer-events none
+
+  i
+    position absolute
+    left 0
+    top 0
+    width 46px
+    height 46px
+    border 2px solid var(--gd-accent)
+    border-radius 50%
+    background var(--gd-accent-10)
+    opacity 0
+    transform translate(-50%, -50%) scale(0.2)
+
+.gd-cam .gd-ripple i
+  width 26px
+  height 26px
+  border-width 1.5px
+
+.gd-halo
+  position absolute
+  left 0
+  top 0
+  z-index 1
+  border 2px solid var(--gd-accent)
+  box-shadow 0 0 0 4px var(--gd-accent-18), 0 6px 22px var(--gd-accent-18)
+  opacity 0
+  pointer-events none
+  will-change transform
+  transition opacity 0.28s ease
+
+  &.is-on
+    opacity 1
+
+  i
+    position absolute
+    inset -2px
+    border-radius inherit
+    animation gd-halo 1.9s cubic-bezier(0.2, 0.7, 0.3, 1) infinite
+
+@keyframes gd-halo
+  0%
+    box-shadow 0 0 0 0 var(--gd-accent-55)
+  100%
+    box-shadow 0 0 0 14px transparent
+
+
+// ─── the tip card ───────────────────────────────────────────
+.gd-callout
+  position absolute
+  left 0
+  top 0
+  z-index 2
+  width 318px
+  max-width unquote('calc(100vw - 24px)')
+  pointer-events auto
+  will-change transform
+
+  &[hidden]
+    display none
+
+  &.is-measuring
+    visibility hidden
+
+.gd-callout-card
+  position relative
+  overflow hidden
+  padding 14px 16px 16px
+  border 1px solid var(--border-color)
+  border-radius 16px
+  background var(--background-color)
+  color var(--default-text-color)
+  box-shadow 0 18px 48px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.07)
+  opacity 0
+  transform translateY(6px) scale(0.94)
+  transition opacity 0.2s ease, transform 0.36s cubic-bezier(0.2, 0.9, 0.3, 1.25)
+
+.gd-callout.is-open .gd-callout-card
+  opacity 1
+  transform none
+
+.gd-callout.is-closing .gd-callout-card
+  opacity 0
+  transform scale(0.96)
+  transition-duration 0.18s
+
+.gd-callout-head
+  display flex
+  align-items center
+  gap 8px
+  margin-bottom 6px
+
+.gd-callout-kicker
+  display inline-flex
+  align-items center
+  gap 6px
+  font-size 11.5px
+  font-weight 700
+  letter-spacing 0.06em
+  text-transform uppercase
+  color var(--gd-accent)
+
+  i
+    font-size 10px
+
+.gd-callout-x
+  display grid
+  place-items center
+  width 28px
+  height 28px
+  margin -4px -6px -4px auto
+  border none
+  border-radius 8px
+  background transparent
+  color var(--third-text-color)
+  font-size 15px
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease
+
+  &:hover
+    background var(--second-background-color)
+    color var(--first-text-color)
+
+.gd-callout-title
+  margin-bottom 5px
+  font-size 16.5px
+  font-weight 650
+  line-height 1.35
+  color var(--first-text-color)
+
+.gd-callout-body
+  font-size 14px
+  line-height 1.62
+  color var(--second-text-color)
+
+  b
+    font-weight 600
+    color var(--first-text-color)
+
+  p
+    margin 0.5em 0 0
+
+  a
+    color var(--gd-accent)
+
+.gd-callout-actions
+  display flex
+  flex-wrap wrap
+  justify-content flex-end
+  align-items center
+  gap 8px
+  margin-top 14px
+
+.gd-callout-timer
+  position absolute
+  left 0
+  right 0
+  bottom 0
+  height 2px
+
+  i
+    display block
+    width 100%
+    height 100%
+    background var(--gd-accent)
+    opacity 0.55
+    transform-origin 0 50%
+    animation gd-countdown var(--gd-wait, 15s) linear forwards
+
+.gd-callout.is-held .gd-callout-timer i
+  animation-play-state paused
+
+@keyframes gd-countdown
+  from
+    transform scaleX(1)
+  to
+    transform scaleX(0)
+
+
+// ─── buttons ────────────────────────────────────────────────
+.gd-btn
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 7px
+  height 36px
+  padding 0 15px
+  border none
+  border-radius 10px
+  font-family inherit
+  font-size 14px
+  font-weight 600
+  line-height 1
+  white-space nowrap
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease, filter 0.2s ease, transform 0.15s ease, box-shadow 0.25s ease
+
+  i
+    font-size 12px
+    transition transform 0.2s ease
+
+  &:active
+    transform scale(0.97)
+
+  &:focus-visible
+    outline 2px solid var(--gd-accent)
+    outline-offset 2px
+
+  &[hidden]
+    display none
+
+.gd-btn-primary
+  background var(--gd-accent)
+  color #fff
+  box-shadow 0 4px 14px var(--gd-accent-35)
+
+  &:hover
+    filter brightness(1.08)
+
+    i
+      transform translateX(2px)
+
+  &.is-ready
+    animation gd-ready 1.6s ease-in-out infinite
+
+.gd-btn-ghost
+  background var(--second-background-color)
+  color var(--first-text-color)
+
+  &:hover
+    background var(--third-background-color)
+
+    i
+      transform translateX(2px)
+
+.gd-btn-quiet
+  background transparent
+  color var(--second-text-color)
+
+  &:hover
+    background var(--second-background-color)
+    color var(--first-text-color)
+
+@keyframes gd-ready
+  0%, 100%
+    box-shadow 0 4px 14px var(--gd-accent-35), 0 0 0 0 var(--gd-accent-55)
+  50%
+    box-shadow 0 4px 14px var(--gd-accent-35), 0 0 0 6px transparent
+
+
+// ─── the walkthrough card ───────────────────────────────────
+.gd-tour
+  position fixed
+  inset 0
+  z-index $z-index-6
+  display flex
+  align-items center
+  justify-content center
+  padding 16px
+  pointer-events none
+
+.gd-tour-mask
+  position absolute
+  inset 0
+  background rgba(8, 8, 12, 0.5)
+  opacity 0
+  pointer-events auto
+  transition opacity 0.3s ease
+
+.gd-tour.is-open .gd-tour-mask
+  opacity 1
+
+.gd-tour.is-closing .gd-tour-mask
+  opacity 0
+
+.gd-tour.is-open.is-live .gd-tour-mask
+  opacity 0.22
+  pointer-events none
+
+.gd-tour.is-live
+  align-items flex-end
+  padding-bottom 24px
+
+.gd-tour-card
+  position relative
+  display flex
+  flex-direction column
+  width unquote('min(560px, 100%)')
+  max-height unquote('calc(100svh - 32px)')
+  overflow hidden
+  border 1px solid var(--border-color)
+  border-radius 22px
+  background var(--background-color)
+  color var(--default-text-color)
+  box-shadow 0 30px 80px rgba(0, 0, 0, 0.28), 0 4px 16px rgba(0, 0, 0, 0.08)
+  pointer-events auto
+  opacity 0
+  transform translateY(18px) scale(0.97)
+  transition opacity 0.28s ease, transform 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.08)
+
+.gd-tour.is-open .gd-tour-card
+  opacity 1
+  transform none
+
+.gd-tour.is-closing .gd-tour-card
+  opacity 0
+  transform translateY(12px) scale(0.98)
+  transition-duration 0.22s
+
+.gd-tour-head
+  flex none
+  display flex
+  align-items center
+  gap 10px
+  min-width 0
+  padding 14px 12px 10px 20px
+
+.gd-tour-kicker
+  flex none
+  display inline-flex
+  align-items center
+  gap 6px
+  font-size 11.5px
+  font-weight 700
+  letter-spacing 0.06em
+  text-transform uppercase
+  color var(--gd-accent)
+
+.gd-tour-name
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  font-size 14px
+  font-weight 600
+  color var(--first-text-color)
+
+.gd-tour-count
+  flex none
+  margin-left auto
+  font-size 12.5px
+  font-variant-numeric tabular-nums
+  color var(--third-text-color)
+
+.gd-tour-close
+  flex none
+  display grid
+  place-items center
+  width 34px
+  height 34px
+  border none
+  border-radius 10px
+  background transparent
+  color var(--third-text-color)
+  font-size 16px
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease
+
+  &:hover
+    background var(--second-background-color)
+    color var(--first-text-color)
+
+.gd-tour.is-menu .gd-tour-count
+  display none
+
+.gd-tour.is-menu .gd-tour-close
+  margin-left auto
+
+// The stage: a letterboxed window onto the scaled canvas. Its height comes from
+// the ratio alone, capped on a short screen, and nothing inside it can size it.
+.gd-tour-stage
+  position relative
+  flex none
+  margin 0 14px
+  aspect-ratio unquote('16 / 10')
+  max-height 44svh
+  overflow hidden
+  border 1px solid var(--border-color)
+  border-radius 16px
+  background var(--second-background-color)
+  contain layout paint
+
+.gd-tour.no-stage .gd-tour-stage, .gd-tour.is-live .gd-tour-stage
+  display none
+
+.gd-view
+  position absolute
+  left 0
+  top 0
+  width 360px
+  height 225px
+  overflow hidden
+  transform-origin 0 0
+
+.gd-cam
+  position absolute
+  left 0
+  top 0
+  transform-origin 0 0
+  transition transform var(--gd-cam-ms, 0ms) cubic-bezier(0.3, 0.7, 0.2, 1)
+  will-change transform
+
+.gd-caption
+  position absolute
+  left 10px
+  bottom 10px
+  z-index 2
+  display -webkit-box
+  // Clear of the Try button beside it, whose English label is the widest.
+  max-width unquote('calc(100% - 184px)')
+  padding 5px 12px
+  overflow hidden
+  border-radius 12px
+  background rgba(18, 18, 22, 0.8)
+  color #fff
+  font-size 12.5px
+  font-weight 500
+  line-height 1.35
+  -webkit-line-clamp 2
+  -webkit-box-orient vertical
+  pointer-events none
+  opacity 0
+  transform translateY(6px)
+  transition opacity 0.25s ease, transform 0.3s ease
+
+  &.is-on
+    opacity 1
+    transform none
+
+.gd-try
+  position absolute
+  right 10px
+  bottom 10px
+  z-index 2
+  display inline-flex
+  align-items center
+  gap 6px
+  height 30px
+  padding 0 12px
+  border 1px solid var(--border-color)
+  border-radius 999px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-family inherit
+  font-size 12.5px
+  font-weight 600
+  white-space nowrap
+  cursor pointer
+  box-shadow 0 2px 10px rgba(0, 0, 0, 0.12)
+  transition background 0.2s ease, color 0.2s ease
+
+  i
+    color var(--gd-accent)
+
+  &[hidden]
+    display none
+
+.gd-tour-stage.is-trying .gd-try
+  border-color transparent
+  background var(--gd-accent)
+  color #fff
+
+  i
+    color #fff
+
+.gd-tour-text
+  flex 1 1 auto
+  display grid
+  min-height 0
+  overflow-x hidden
+  overflow-y auto
+  overscroll-behavior contain
+  transition height 0.38s cubic-bezier(0.3, 0.7, 0.2, 1)
+
+  &.is-sliding
+    overflow hidden
+
+.gd-tour-slide
+  grid-area unquote('1 / 1')
+  align-self start
+  min-width 0
+  padding 16px 22px 4px
+
+  &.is-entering
+    animation gd-slide-in 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) both
+
+  &.is-leaving
+    pointer-events none
+    animation gd-slide-out 0.26s ease both
+
+@keyframes gd-slide-in
+  from
+    opacity 0
+    transform unquote('translateX(calc(var(--gd-dir, 1) * 28px))')
+  to
+    opacity 1
+    transform none
+
+@keyframes gd-slide-out
+  from
+    opacity 1
+    transform none
+  to
+    opacity 0
+    transform unquote('translateX(calc(var(--gd-dir, 1) * -28px))')
+
+.gd-tour-title
+  margin 0 0 6px
+  font-size 19px
+  font-weight 700
+  line-height 1.3
+  color var(--first-text-color)
+
+.gd-tour-body
+  font-size 14.5px
+  line-height 1.7
+  color var(--second-text-color)
+
+  b
+    font-weight 600
+    color var(--first-text-color)
+
+  p
+    margin 0.6em 0 0
+
+  .gd-note
+    margin-top 10px
+    padding 8px 12px
+    border-radius 10px
+    background var(--second-background-color)
+    font-size 13.5px
+
+.gd-tour-foot
+  flex none
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+  padding 14px 18px 18px 22px
+
+.gd-dots
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 6px
+  min-width 0
+
+.gd-dot
+  position relative
+  width 8px
+  height 8px
+  padding 0
+  border none
+  border-radius 4px
+  background var(--gd-skel-strong)
+  cursor pointer
+  transition width 0.35s cubic-bezier(0.3, 0.7, 0.2, 1), background 0.25s ease
+
+  // A target a finger can find, larger than the dot it belongs to.
+  &::after
+    content ''
+    position absolute
+    inset -9px -3px
+
+  &.is-done
+    background var(--gd-accent-35)
+
+  &.is-current
+    width 26px
+    background var(--gd-accent)
+
+.gd-tour-nav
+  flex none
+  display flex
+  gap 8px
+
+// ─── the guide menu ─────────────────────────────────────────
+.gd-menu-lede
+  margin 0 0 12px
+  font-size 14px
+  line-height 1.6
+  color var(--second-text-color)
+
+.gd-menu-list
+  display flex
+  flex-direction column
+  gap 8px
+
+.gd-menu-row
+  display flex
+  align-items center
+  gap 12px
+  width 100%
+  padding 12px 14px
+  border 1px solid var(--border-color)
+  border-radius 14px
+  background var(--background-color)
+  color inherit
+  font-family inherit
+  text-align left
+  cursor pointer
+  transition background 0.2s ease, border-color 0.2s ease, transform 0.15s ease
+
+  &:hover, &:focus-visible
+    border-color var(--gd-accent-35)
+    background var(--second-background-color)
+    outline none
+
+    .gd-menu-go
+      color var(--gd-accent)
+      transform translateX(3px)
+
+  &:active
+    transform scale(0.99)
+
+.gd-menu-icon
+  flex none
+  display grid
+  place-items center
+  width 38px
+  height 38px
+  border-radius 11px
+  background var(--gd-accent-10)
+  color var(--gd-accent)
+  font-size 16px
+
+.gd-menu-text
+  flex 1
+  display flex
+  flex-direction column
+  gap 2px
+  min-width 0
+
+  b
+    font-size 14.5px
+    font-weight 600
+    color var(--first-text-color)
+
+  span
+    font-size 12.5px
+    line-height 1.45
+    color var(--third-text-color)
+
+.gd-menu-meta
+  flex none
+  font-size 12px
+  white-space nowrap
+  color var(--third-text-color)
+
+.gd-menu-go
+  flex none
+  color var(--third-text-color)
+  transition transform 0.2s ease, color 0.2s ease
+
+.gd-menu-reset
+  display inline-flex
+  align-items center
+  gap 8px
+  margin-top 14px
+  padding 8px 10px
+  border none
+  border-radius 10px
+  background transparent
+  color var(--second-text-color)
+  font-family inherit
+  font-size 13.5px
+  font-weight 600
+  cursor pointer
+  transition background 0.2s ease, color 0.2s ease
+
+  &:hover
+    background var(--second-background-color)
+    color var(--first-text-color)
+
+  &.is-armed
+    background var(--gd-accent-10)
+    color var(--gd-accent)
+
+  &.is-done
+    color #2e9d57
+
+.gd-menu-note
+  margin 2px 0 10px
+  font-size 12.5px
+  line-height 1.5
+  color var(--third-text-color)
+
++redefine-mobile()
+  .gd-tour
+    align-items flex-end
+    padding 0
+
+  .gd-tour.is-live
+    padding-bottom 0
+
+  .gd-tour-card
+    width 100%
+    max-height 94svh
+    border-bottom none
+    border-radius 22px 22px 0 0
+    padding-bottom unquote('env(safe-area-inset-bottom)')
+    transform translateY(48px)
+
+  .gd-tour-stage
+    margin 0 12px
+
+  .gd-tour-slide
+    padding 14px 18px 2px
+
+  .gd-tour-title
+    font-size 17.5px
+
+  .gd-tour-body
+    font-size 14px
+
+  .gd-tour-foot
+    padding 12px 14px 14px 18px
+
+  .gd-callout-body
+    font-size 13.5px
+
+@media (prefers-reduced-motion: reduce)
+  .gd-layer *, .gd-tour *
+    transition-duration 0.01ms !important
+    animation-duration 0.01ms !important
+    animation-iteration-count 1 !important
+
+  .gd-callout-timer
+    display none
+
+
+// ========================================================================================
+//                                          SCENES
+// ========================================================================================
+.gd-world
+  position absolute
+  left 0
+  top 0
+  overflow hidden
+  color var(--default-text-color)
+  font-size 9px
+  line-height 1.35
+  user-select none
+  -webkit-user-select none
+
+  b
+    font-weight 600
+
+  em
+    font-style normal
+
+  ul
+    margin 0
+    padding 0
+    list-style none
+
+.gd-world .gd-try-target
+  cursor pointer
+  animation gd-try 1.3s ease-in-out infinite
+
+@keyframes gd-try
+  0%, 100%
+    box-shadow 0 0 0 0 var(--gd-accent-55)
+  60%
+    box-shadow 0 0 0 5px transparent
+
+@keyframes gd-pop
+  from
+    transform scale(0)
+  to
+    transform scale(1)
+
+@keyframes gd-spin
+  to
+    transform rotate(360deg)
+
+@keyframes gd-caret
+  0%
+    opacity 1
+  50%
+    opacity 0
+
+@keyframes gd-wheel
+  from
+    opacity 1
+    transform translateY(0)
+  to
+    opacity 0
+    transform translateY(5px)
+
+.gd-wheel
+  position absolute
+  left 0
+  top 0
+  z-index 4
+  width 13px
+  height 19px
+  border 1.5px solid #fff
+  border-radius 7px
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.35)
+  pointer-events none
+
+  i
+    position absolute
+    left 50%
+    top 3px
+    width 2px
+    height 5px
+    margin-left -1px
+    border-radius 1px
+    background #fff
+    animation gd-wheel 0.55s ease-in-out infinite
+
+.gd-touch
+  position absolute
+  left 0
+  top 0
+  z-index 4
+  width 16px
+  height 16px
+  margin -8px 0 0 -8px
+  border 2px solid #fff
+  border-radius 50%
+  background rgba(255, 255, 255, 0.45)
+  box-shadow 0 0 0 4px rgba(255, 255, 255, 0.18), 0 1px 4px rgba(0, 0, 0, 0.3)
+  pointer-events none
+
+// ─── kit ────────────────────────────────────────────────────
+.gd-m-lines
+  display flex
+  flex-direction column
+  gap 5px
+
+  i
+    display block
+    height 4px
+    border-radius 2px
+    background var(--gd-skel)
+
+.gd-m-browser
+  position absolute
+  left 8px
+  top 8px
+  right 8px
+  bottom 8px
+  display flex
+  flex-direction column
+  overflow hidden
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  box-shadow 0 8px 24px rgba(0, 0, 0, 0.1)
+
+.gd-m-bar
+  flex none
+  display flex
+  align-items center
+  gap 4px
+  height 22px
+  padding 0 8px
+  border-bottom 1px solid var(--border-color)
+  background var(--second-background-color)
+
+  > i
+    width 7px
+    height 7px
+    border-radius 50%
+    background #ff5f57
+
+    &:nth-child(2)
+      background #febc2e
+
+    &:nth-child(3)
+      background #28c840
+
+.gd-m-url
+  flex 1
+  display flex
+  align-items center
+  gap 4px
+  min-width 0
+  height 14px
+  margin-left 8px
+  padding 0 7px
+  overflow hidden
+  border-radius 7px
+  background var(--background-color)
+  color var(--third-text-color)
+  font-size 7.5px
+  white-space nowrap
+
+  i
+    flex none
+    font-size 6px
+    opacity 0.7
+
+.gd-m-url-text
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+
+.gd-m-page
+  position relative
+  flex 1
+  min-height 0
+  overflow hidden
+
+.gd-m-nav
+  display flex
+  align-items center
+  gap 10px
+  height 26px
+  padding 0 10px
+  border-bottom 1px solid var(--border-color)
+
+.gd-m-logo
+  max-width 118px
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  font-size 9px
+  font-weight 600
+  color var(--first-text-color)
+
+.gd-m-links
+  display flex
+  gap 6px
+
+  i
+    width 20px
+    height 4px
+    border-radius 2px
+    background var(--gd-skel)
+
+.gd-m-right
+  display flex
+  align-items center
+  gap 8px
+  margin-left auto
+
+.gd-m-follow
+  display inline-flex
+  align-items center
+  gap 4px
+  height 16px
+  padding 0 8px
+  border-radius 5px
+  background var(--gd-accent)
+  color #fff
+  font-size 8.5px
+  font-weight 600
+  white-space nowrap
+
+  i
+    font-size 7.5px
+
+.gd-m-bell
+  position relative
+  display inline-flex
+  align-items center
+  font-size 10px
+  color var(--default-text-color)
+
+.gd-m-badge
+  position absolute
+  top -5px
+  right -8px
+  min-width 11px
+  height 11px
+  padding 0 3px
+  border-radius 6px
+  background var(--gd-accent)
+  color #fff
+  font-size 7px
+  font-weight 700
+  line-height 11px
+  text-align center
+  transform scale(0)
+  transition transform 0.35s cubic-bezier(0.3, 1.6, 0.5, 1)
+
+.gd-m-bell.has-count .gd-m-badge
+  transform scale(1)
+
+.gd-m-avatar
+  flex none
+  display inline-block
+  width 14px
+  height 14px
+  border-radius 50%
+  background linear-gradient(135deg, #f78736, #367df7)
+
+.gd-m-appicon
+  flex none
+  display inline-block
+  width 20px
+  height 20px
+  border-radius 5px
+  background-color var(--gd-accent)
+  background-position center
+  background-size cover
+  box-shadow 0 1px 3px rgba(0, 0, 0, 0.18)
+
+.gd-m-body
+  display flex
+  flex-direction column
+  gap 7px
+  padding 9px 11px
+
+.gd-m-card
+  display flex
+  flex-direction column
+  gap 5px
+  padding 7px 8px
+  border 1px solid var(--border-color)
+  border-radius 7px
+  background var(--background-color)
+
+  > b
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    font-size 9px
+    color var(--first-text-color)
+
+.gd-m-skel
+  display block
+  width 55%
+  height 6px
+  border-radius 3px
+  background var(--gd-skel-strong)
+
+.gd-m-chip
+  align-self flex-start
+  padding 1px 5px
+  border-radius 4px
+  background var(--gd-accent)
+  color #fff
+  font-size 7px
+  font-weight 700
+  letter-spacing 0.02em
+
+.gd-m-btn
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 5px
+  height 22px
+  padding 0 12px
+  border-radius 6px
+  font-size 9px
+  font-weight 600
+  white-space nowrap
+
+.gd-m-field
+  display flex
+  flex-direction column
+  gap 3px
+
+.gd-m-label
+  font-size 8px
+  font-weight 600
+  color var(--second-text-color)
+
+.gd-m-input
+  display flex
+  align-items center
+  height 20px
+  padding 0 7px
+  overflow hidden
+  border 1px solid var(--gd-line-strong)
+  border-radius 5px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-size 9px
+  white-space nowrap
+  transition border-color 0.2s ease, box-shadow 0.2s ease
+
+  .is-focus &, &.is-focus
+    border-color var(--gd-focus, var(--gd-accent))
+    box-shadow 0 0 0 2px var(--gd-focus-ring, var(--gd-accent-18))
+
+.gd-m-caret
+  display inline-block
+  width 1px
+  height 11px
+  margin-left 1px
+  background currentColor
+  opacity 0
+
+.is-focus .gd-m-caret
+  animation gd-caret 1s steps(1) infinite
+
+.gd-m-toggle
+  position relative
+  flex none
+  display inline-block
+  width 22px
+  height 13px
+  border-radius 7px
+  background var(--gd-skel-strong)
+  transition background 0.25s ease
+
+  i
+    position absolute
+    left 1.5px
+    top 1.5px
+    width 10px
+    height 10px
+    border-radius 50%
+    background #fff
+    box-shadow 0 1px 2px rgba(0, 0, 0, 0.25)
+    transition transform 0.32s cubic-bezier(0.3, 1.4, 0.5, 1)
+
+  &.is-on
+    background var(--gd-accent)
+
+    i
+      transform translateX(9px)
+
+.gd-m-spin
+  display inline-block
+  width 12px
+  height 12px
+  border 2px solid var(--gd-skel-strong)
+  border-top-color var(--gd-accent)
+  border-radius 50%
+  animation gd-spin 0.8s linear infinite
+
+.gd-m-okay
+  position absolute
+  left 50%
+  bottom 12px
+  display inline-flex
+  align-items center
+  gap 5px
+  padding 4px 10px
+  border 1px solid var(--border-color)
+  border-radius 999px
+  background var(--background-color)
+  box-shadow 0 6px 16px rgba(0, 0, 0, 0.14)
+  color var(--first-text-color)
+  font-size 8.5px
+  font-weight 600
+  white-space nowrap
+  opacity 0
+  transform translate(-50%, 8px)
+  transition opacity 0.3s ease, transform 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2)
+
+  i
+    color #2e9d57
+
+.gd-post-title
+  font-size 11px
+  font-weight 700
+  line-height 1.3
+  color var(--first-text-color)
+
+// ─── phone ──────────────────────────────────────────────────
+.gd-m-phone
+  position absolute
+  left 85px
+  top 10px
+  width 190px
+  height 400px
+  padding 5px
+  border-radius 30px
+  background #111
+  box-shadow 0 14px 34px rgba(0, 0, 0, 0.3), inset 0 0 0 1.5px #3a3a3c
+
+  .gd-m-links
+    display none
+
+  .gd-m-logo
+    max-width 76px
+
+  .gd-m-follow
+    padding 0 6px
+    font-size 8px
+
+.gd-m-screen
+  position relative
+  width 100%
+  height 100%
+  overflow hidden
+  border-radius 25px
+  background var(--background-color)
+
+.gd-ios-status
+  position absolute
+  left 0
+  right 0
+  top 0
+  z-index 9
+  display flex
+  align-items center
+  justify-content space-between
+  height 22px
+  padding 0 18px
+  color var(--first-text-color)
+  font-size 8.5px
+  font-weight 600
+
+.gd-ios-icons
+  display flex
+  gap 3px
+  font-size 6.5px
+
+.gd-m-island
+  position absolute
+  left 50%
+  top 6px
+  z-index 10
+  width 54px
+  height 15px
+  margin-left -27px
+  border-radius 10px
+  background #000
+
+.gd-m-homebar
+  position absolute
+  left 50%
+  bottom 5px
+  z-index 10
+  width 62px
+  height 3px
+  margin-left -31px
+  border-radius 2px
+  background var(--first-text-color)
+  opacity 0.4
+
+.gd-ios-safari
+  position absolute
+  inset 0
+
+.gd-ios-page
+  position absolute
+  left 0
+  right 0
+  top 22px
+  bottom 0
+  overflow hidden
+
+  .gd-m-lines
+    padding 10px 12px
+
+.gd-ios-bar
+  position absolute
+  left 8px
+  right 8px
+  bottom 16px
+  z-index 2
+  display flex
+  align-items center
+  gap 6px
+  height 30px
+
+.gd-ios-btn
+  flex none
+  display grid
+  place-items center
+  width 28px
+  height 28px
+  border-radius 50%
+  background var(--background-color)
+  box-shadow 0 2px 10px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px var(--border-color)
+  color var(--first-text-color)
+  font-size 9px
+
+.gd-ios-addr
+  flex 1
+  min-width 0
+  height 28px
+  padding 0 8px
+  overflow hidden
+  border-radius 14px
+  background var(--background-color)
+  box-shadow 0 2px 10px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px var(--border-color)
+  font-size 8px
+  line-height 28px
+  text-align center
+  text-overflow ellipsis
+  white-space nowrap
+
+.gd-ios-menu
+  position absolute
+  right 10px
+  bottom 52px
+  z-index 3
+  width 120px
+  padding 4px
+  border-radius 12px
+  background var(--background-color)
+  box-shadow 0 10px 30px rgba(0, 0, 0, 0.25)
+  opacity 0
+  transform scale(0.85)
+  transform-origin 100% 100%
+  pointer-events none
+  transition opacity 0.2s ease, transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.15)
+
+.gd-m-phone.is-menu .gd-ios-menu
+  opacity 1
+  transform none
+  pointer-events auto
+
+.gd-ios-mi
+  display flex
+  align-items center
+  justify-content space-between
+  height 22px
+  padding 0 8px
+  border-radius 7px
+  font-size 8.5px
+
+  i
+    color var(--third-text-color)
+
+.gd-ios-sheet
+  position absolute
+  left 0
+  right 0
+  bottom 0
+  z-index 4
+  height 200px
+  padding 10px
+  border-radius 16px 16px 0 0
+  background var(--second-background-color)
+  box-shadow 0 -6px 24px rgba(0, 0, 0, 0.18)
+  transform translateY(105%)
+  transition transform 0.45s cubic-bezier(0.2, 0.9, 0.3, 1)
+
+.gd-m-phone.is-sheet .gd-ios-sheet
+  transform none
+
+.gd-ios-sheet-head
+  display flex
+  align-items center
+  gap 8px
+  height 28px
+
+  .gd-m-appicon
+    width 24px
+    height 24px
+    border-radius 6px
+
+  > span:last-child
+    display flex
+    flex-direction column
+    min-width 0
+
+  b
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    font-size 8.5px
+
+  small
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    font-size 7px
+    color var(--third-text-color)
+
+.gd-ios-list
+  position absolute
+  left 10px
+  right 10px
+  top 48px
+  bottom 14px
+  overflow hidden
+  border-radius 10px
+  background var(--background-color)
+
+.gd-ios-scroll
+  transition transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1)
+
+.gd-m-phone.is-scrolled .gd-ios-scroll
+  transform translateY(-62px)
+
+.gd-ios-row
+  display flex
+  align-items center
+  justify-content space-between
+  gap 6px
+  height 25px
+  padding 0 10px
+  border-bottom 0.5px solid var(--border-color)
+  font-size 8.5px
+  white-space nowrap
+
+  i
+    color var(--third-text-color)
+
+.gd-ios-add
+  position absolute
+  inset 0
+  z-index 5
+  padding 30px 10px 10px
+  background var(--second-background-color)
+  transform translateY(102%)
+  transition transform 0.45s cubic-bezier(0.2, 0.9, 0.3, 1)
+
+.gd-m-phone.is-add .gd-ios-add
+  transform none
+
+.gd-ios-add-head
+  display flex
+  align-items center
+  justify-content space-between
+  gap 6px
+  height 22px
+  font-size 8.5px
+  white-space nowrap
+
+  span
+    color #007aff
+
+.gd-ios-add-go
+  font-weight 600
+
+.gd-ios-add-card, .gd-ios-add-row
+  display flex
+  align-items center
+  gap 8px
+  margin-top 10px
+  padding 8px 10px
+  border-radius 10px
+  background var(--background-color)
+  font-size 8.5px
+
+.gd-ios-add-card
+  .gd-m-appicon
+    width 34px
+    height 34px
+    border-radius 8px
+
+  > span:last-child
+    display flex
+    flex-direction column
+    min-width 0
+
+  b, small
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+  small
+    font-size 7px
+    color var(--third-text-color)
+
+.gd-ios-add-row
+  justify-content space-between
+
+  .gd-m-toggle.is-on
+    background #34c759
+
+.gd-ios-home
+  position absolute
+  inset 0
+  z-index 6
+  padding 38px 16px 0
+  background linear-gradient(160deg, #6a82fb 0%, #a26ee8 45%, #fc5c7d 100%)
+  opacity 0
+  pointer-events none
+  transition opacity 0.5s ease
+
+.gd-m-phone.is-home .gd-ios-home
+  opacity 1
+  pointer-events auto
+
+.gd-ios-grid
+  display grid
+  grid-template-columns repeat(4, 30px)
+  justify-content space-between
+  row-gap 16px
+
+  > i
+    width 30px
+    height 30px
+    border-radius 8px
+
+.gd-ios-grid, .gd-ios-dock
+  .a0
+    background linear-gradient(135deg, #ff9f0a, #ff375f)
+
+  .a1
+    background linear-gradient(135deg, #0a84ff, #64d2ff)
+
+  .a2
+    background linear-gradient(135deg, #30d158, #34c759)
+
+  .a3
+    background linear-gradient(135deg, #5e5ce6, #bf5af2)
+
+  .a4
+    background linear-gradient(135deg, #ff453a, #ff9f0a)
+
+  .a5
+    background linear-gradient(135deg, #ffd60a, #ff9f0a)
+
+  .a6
+    background linear-gradient(135deg, #64d2ff, #0a84ff)
+
+  .a7
+    background linear-gradient(135deg, #8e8e93, #c7c7cc)
+
+.gd-ios-new
+  position relative
+  display block
+  width 30px
+  height 30px
+  transform scale(0)
+
+  .gd-m-appicon
+    width 30px
+    height 30px
+    border-radius 8px
+
+  small
+    position absolute
+    left 50%
+    top 33px
+    max-width 44px
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color #fff
+    font-size 6.5px
+    text-shadow 0 1px 2px rgba(0, 0, 0, 0.35)
+    transform translateX(-50%)
+
+.gd-m-phone.is-home .gd-ios-new
+  animation gd-pop 0.6s cubic-bezier(0.3, 1.6, 0.5, 1) 0.35s forwards
+
+.gd-ios-dock
+  position absolute
+  left 10px
+  right 10px
+  bottom 14px
+  display flex
+  align-items center
+  justify-content space-around
+  height 44px
+  border-radius 18px
+  background rgba(255, 255, 255, 0.3)
+
+  i
+    width 30px
+    height 30px
+    border-radius 8px
+
+// The blog opened from its icon: no browser around it.
+.gd-ios-app
+  position absolute
+  inset 0
+  z-index 7
+  padding-top 22px
+  background var(--background-color)
+  opacity 0
+  transform scale(0.18)
+  transform-origin 83% 37%
+  pointer-events none
+  transition transform 0.5s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.3s ease
+
+  .gd-m-lines
+    padding 10px 12px
+
+  .gd-post-title
+    padding 10px 12px 0
+
+.gd-m-phone.is-app .gd-ios-app, .gd-m-phone.is-post .gd-push-post, .gd-ios-app.is-on
+  opacity 1
+  transform none
+  pointer-events auto
+
+// ─── following: a new post reaches the reader ───────────────
+.gd-s-feed
+  .gd-m-new
+    max-height 0
+    margin-top -7px
+    padding-top 0
+    padding-bottom 0
+    border-width 0
+    border-color var(--gd-accent)
+    opacity 0
+    transform translateY(-8px)
+    transition max-height 0.5s ease, margin 0.5s ease, padding 0.5s ease, border-width 0.5s ease, opacity 0.4s ease 0.1s, transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)
+
+  .is-new .gd-m-new
+    max-height 64px
+    margin-top 0
+    padding-top 7px
+    padding-bottom 7px
+    border-width 1px
+    opacity 1
+    transform none
+
+  .gd-m-fly
+    position absolute
+    left 60px
+    top 40px
+    width 8px
+    height 8px
+    border-radius 50%
+    background var(--gd-accent)
+    opacity 0
+    pointer-events none
+
+  .is-sent .gd-m-fly
+    animation gd-fly 0.8s cubic-bezier(0.5, 0, 0.3, 1) forwards
+
+  .is-sent .gd-m-badge
+    transform scale(1)
+    transition-delay 0.72s
+
+  .gd-m-drop
+    position absolute
+    top 29px
+    right 6px
+    z-index 2
+    width 158px
+    padding 5px
+    border 1px solid var(--border-color)
+    border-radius 8px
+    background var(--background-color)
+    box-shadow 0 12px 26px rgba(0, 0, 0, 0.16)
+    opacity 0
+    transform translateY(-4px) scale(0.97)
+    transform-origin 100% 0
+    pointer-events none
+    transition opacity 0.22s ease, transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.1)
+
+  .is-open .gd-m-drop
+    opacity 1
+    transform none
+
+  .gd-m-drop-head
+    padding 2px 4px 5px
+    font-size 8.5px
+    font-weight 700
+    color var(--first-text-color)
+
+  .gd-m-drop-item
+    display grid
+    grid-template-columns 6px 1fr auto
+    align-items center
+    gap 5px
+    padding 4px 5px
+    border-radius 5px
+
+    i
+      width 5px
+      height 5px
+      border-radius 50%
+
+    b
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+      font-size 8px
+
+    small
+      font-size 7px
+      color var(--third-text-color)
+
+    &.is-unread
+      background var(--gd-accent-10)
+
+      i
+        background var(--gd-accent)
+
+  .gd-m-toast
+    position absolute
+    right 16px
+    bottom 16px
+    display flex
+    align-items center
+    gap 7px
+    width 176px
+    padding 7px 9px
+    border 1px solid var(--border-color)
+    border-radius 10px
+    background var(--background-color)
+    box-shadow 0 10px 26px rgba(0, 0, 0, 0.2)
+    opacity 0
+    transform translateX(200px)
+    transition transform 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.1), opacity 0.3s ease
+
+  &.is-toast .gd-m-toast
+    opacity 1
+    transform none
+
+  .gd-m-toast-text
+    display flex
+    flex-direction column
+    min-width 0
+
+    b
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+      font-size 8.5px
+      color var(--first-text-color)
+
+    small
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+      font-size 7.5px
+      color var(--third-text-color)
+
+// From the new post to the bell in the navbar, in page coordinates.
+@keyframes gd-fly
+  0%
+    opacity 0
+    transform translate(0, 0) scale(0.6)
+  15%
+    opacity 1
+    transform translate(20px, -8px) scale(1)
+  60%
+    opacity 1
+    transform translate(150px, -40px) scale(0.9)
+  100%
+    opacity 0
+    transform translate(241px, -31px) scale(0.5)
+
+// ─── GitHub ─────────────────────────────────────────────────
+.gd-gh, .gd-auth-gh
+  --gh-canvas #f6f8fa
+  --gh-bg #ffffff
+  --gh-fg #1f2328
+  --gh-muted #59636e
+  --gh-border #d1d9e0
+  --gd-focus #0969da
+  --gd-focus-ring rgba(9, 105, 218, 0.28)
+  color var(--gh-fg)
+
+.dark .gd-gh, .dark .gd-auth-gh
+  --gh-canvas #010409
+  --gh-bg #0d1117
+  --gh-fg #f0f6fc
+  --gh-muted #9198a1
+  --gh-border #3d444d
+  --gd-focus #4493f8
+  --gd-focus-ring rgba(68, 147, 248, 0.3)
+
+.gd-gh
+  position absolute
+  inset 0
+  background var(--gh-canvas)
+
+  .gd-m-input
+    border-color var(--gh-border)
+    background var(--gh-bg)
+    color var(--gh-fg)
+
+  .gd-m-label
+    color var(--gh-fg)
+
+.gd-gh-panel
+  position absolute
+  left 50%
+  top 50%
+  display flex
+  flex-direction column
+  gap 5px
+  width 204px
+  opacity 0
+  visibility hidden
+  transform translate(-50%, -46%)
+  transition opacity 0.32s ease, transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.32s
+
+  small
+    font-size 7.5px
+    line-height 1.4
+    color var(--gh-muted)
+
+.gd-gh:not(.is-verify) .gd-gh-form, .gd-gh.is-verify:not(.is-code) .gd-gh-verify, .gd-gh.is-code:not(.is-done) .gd-gh-code, .gd-gh.is-done .gd-gh-done
+  opacity 1
+  visibility visible
+  transform translate(-50%, -50%)
+  transition-delay 0s
+
+.gd-gh-title
+  display flex
+  align-items center
+  justify-content center
+  gap 6px
+  font-size 11px
+  font-weight 600
+  text-align center
+
+  i
+    font-size 13px
+
+.gd-gh-form
+  .gd-gh-title
+    margin-bottom 2px
+
+  .gd-m-btn
+    margin-top 4px
+
+.gd-gh-verify, .gd-gh-code, .gd-gh-done
+  align-items center
+  text-align center
+
+.gd-gh-tiles
+  display flex
+  gap 8px
+  margin-top 4px
+
+  i
+    display grid
+    place-items center
+    width 44px
+    height 44px
+    border 1px solid var(--gh-border)
+    border-radius 6px
+    background var(--gh-bg)
+    color var(--gh-muted)
+    font-size 16px
+
+  .t1 b
+    transform rotate(90deg)
+
+  .t3 b
+    transform rotate(200deg)
+
+.gd-gh-digits
+  justify-content center
+  width 150px
+  height 24px
+  font-family ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+  font-size 12px
+  letter-spacing 3px
+
+.gd-gh-done
+  gap 4px
+
+  > i
+    font-size 24px
+    color #1a7f37
+
+  b
+    font-size 11px
+
+.gd-gh-dark
+  background #1f2328
+  color #fff
+
+.dark .gd-gh-dark
+  background #f0f6fc
+  color #0d1117
+
+.gd-gh-green
+  background #1f883d
+  color #fff
+
+.dark .gd-gh-green
+  background #238636
+
+// ─── authorizing giscus ─────────────────────────────────────
+// A hidden layer keeps its visibility until its fade has finished; a shown one
+// takes it at once. The delay therefore sits on the HIDDEN rule of each pair.
+.gd-auth-blog, .gd-auth-gh, .gd-auth-wait
+  position absolute
+  inset 0
+  transition opacity 0.35s ease, visibility 0s linear 0s
+
+.gd-auth-gh, .gd-auth-wait
+  opacity 0
+  visibility hidden
+  transition opacity 0.35s ease, visibility 0s linear 0.35s
+
+.gd-m-page.is-gh:not(.is-back) .gd-auth-blog
+  opacity 0
+  visibility hidden
+  transition opacity 0.35s ease, visibility 0s linear 0.35s
+
+.gd-m-page.is-gh:not(.is-wait) .gd-auth-gh, .gd-m-page.is-wait:not(.is-back) .gd-auth-wait
+  opacity 1
+  visibility visible
+  transition opacity 0.35s ease, visibility 0s linear 0s
+
+.gd-auth-blog
+  background var(--background-color)
+
+  .gd-auth-me
+    transform scale(0)
+    transition transform 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) 0.2s
+
+  &.is-comments
+    display flex
+    flex-direction column
+    gap 12px
+    padding 14px 16px
+
+.gd-m-page.is-back .gd-auth-me
+  transform scale(1)
+
+.gd-m-page.is-back .gd-m-okay
+  opacity 1
+  transform translate(-50%, 0)
+  transition-delay 0.35s
+
+.gd-c-signed
+  display none
+  align-items center
+  gap 6px
+  width 100%
+
+  .gd-m-input
+    flex 1
+    color var(--third-text-color)
+
+.gd-m-page.is-back .gd-auth-blog.is-comments .gd-f-start
+  display none
+
+.gd-m-page.is-back .gd-c-signed
+  display flex
+
+.gd-auth-gh
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  gap 5px
+  background var(--gh-canvas)
+  text-align center
+
+.gd-auth-pair
+  display flex
+  align-items center
+  gap 6px
+  margin-bottom 2px
+
+  .gd-m-avatar
+    width 22px
+    height 22px
+
+.gd-auth-app
+  display grid
+  place-items center
+  width 22px
+  height 22px
+  border 1px solid var(--gh-border)
+  border-radius 6px
+  background var(--gh-bg)
+  color var(--gh-fg)
+  font-size 12px
+  font-weight 800
+
+.gd-auth-dots
+  display flex
+  gap 3px
+
+  i
+    width 3px
+    height 3px
+    border-radius 50%
+    background var(--gh-muted)
+
+.gd-auth-sub
+  font-size 8px
+  color var(--gh-muted)
+
+  b
+    color var(--gh-fg)
+
+.gd-auth-perms
+  display flex
+  flex-direction column
+  gap 3px
+  width 216px
+  margin 2px 0 4px
+  padding 7px 9px
+  border 1px solid var(--gh-border)
+  border-radius 6px
+  background var(--gh-bg)
+  text-align left
+
+  li
+    display flex
+    align-items center
+    gap 6px
+    font-size 8px
+    white-space nowrap
+
+  i
+    width 11px
+    color var(--gh-muted)
+    text-align center
+
+.gd-auth-note
+  font-size 7px
+  color var(--gh-muted)
+
+.gd-auth-wait
+  display flex
+  align-items center
+  justify-content center
+  gap 8px
+  background var(--background-color)
+  color var(--third-text-color)
+  font-size 9px
+
+// ─── allowing notifications ─────────────────────────────────
+.gd-s-allow
+  .gd-m-bell-new
+    display none
+
+  &.is-allowed .gd-f-follow, .gd-m-phone.is-allowed .gd-f-follow
+    display none
+
+  &.is-allowed .gd-m-bell-new, .gd-m-phone.is-allowed .gd-m-bell-new
+    display inline-flex
+    animation gd-pop 0.5s cubic-bezier(0.3, 1.6, 0.5, 1)
+
+  &.is-allowed .gd-m-okay
+    opacity 1
+    transform translate(-50%, 0)
+    transition-delay 0.25s
+
+.gd-perm
+  position absolute
+  left 20px
+  top 34px
+  z-index 3
+  width 172px
+  padding 10px 11px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  box-shadow 0 12px 30px rgba(0, 0, 0, 0.22)
+  opacity 0
+  transform translateY(-6px) scale(0.97)
+  transform-origin 0 0
+  pointer-events none
+  transition opacity 0.22s ease, transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.1)
+
+.gd-s-allow.is-ask:not(.is-allowed) .gd-perm
+  opacity 1
+  transform none
+  pointer-events auto
+
+.gd-perm-head
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  color var(--first-text-color)
+  font-size 8.5px
+  font-weight 600
+
+.gd-perm-row
+  display flex
+  align-items center
+  gap 6px
+  margin 7px 0 9px
+  font-size 8.5px
+
+.gd-perm-btns
+  display flex
+  justify-content flex-end
+  gap 6px
+
+  .gd-m-btn
+    height 20px
+    padding 0 11px
+    border-radius 10px
+    font-size 8px
+
+.gd-perm-no
+  border 1px solid var(--gd-line-strong)
+  color #0b57d0
+
+.gd-perm-yes
+  background #0b57d0
+  color #fff
+
+.dark .gd-perm-no
+  color #a8c7fa
+
+.dark .gd-perm-yes
+  background #a8c7fa
+  color #062e6f
+
+.gd-phone-dim
+  position absolute
+  inset 0
+  z-index 8
+  background rgba(0, 0, 0, 0.36)
+  opacity 0
+  pointer-events none
+  transition opacity 0.3s ease
+
+.gd-m-phone.is-ask:not(.is-allowed) .gd-phone-dim
+  opacity 1
+
+.gd-ios-alert
+  position absolute
+  left 50%
+  top 50%
+  z-index 9
+  width 144px
+  margin-left -72px
+  overflow hidden
+  border-radius 13px
+  background rgba(242, 242, 247, 0.97)
+  color #000
+  text-align center
+  opacity 0
+  transform translateY(-50%) scale(1.12)
+  pointer-events none
+  transition opacity 0.22s ease, transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1)
+
+  b
+    display block
+    padding 11px 11px 3px
+    font-size 8.5px
+    line-height 1.3
+
+  small
+    display block
+    padding 0 11px 10px
+    color rgba(60, 60, 67, 0.75)
+    font-size 7px
+    line-height 1.35
+
+.dark .gd-ios-alert
+  background rgba(44, 44, 46, 0.97)
+  color #fff
+
+  small
+    color rgba(235, 235, 245, 0.65)
+
+.gd-m-phone.is-ask:not(.is-allowed) .gd-ios-alert
+  opacity 1
+  transform translateY(-50%) scale(1)
+  pointer-events auto
+
+.gd-ios-alert-btns
+  display flex
+  border-top 0.5px solid rgba(60, 60, 67, 0.3)
+
+  span
+    flex 1
+    padding 8px 0
+    color #007aff
+    font-size 8.5px
+
+  span + span
+    border-left 0.5px solid rgba(60, 60, 67, 0.3)
+    font-weight 600
+
+.gd-and-perm
+  position absolute
+  left 8px
+  right 8px
+  bottom 18px
+  z-index 9
+  padding 12px 12px 10px
+  border-radius 18px
+  background var(--background-color)
+  box-shadow 0 10px 30px rgba(0, 0, 0, 0.3)
+  text-align center
+  transform translateY(130%)
+  pointer-events none
+  transition transform 0.4s cubic-bezier(0.2, 0.9, 0.3, 1)
+
+  > i
+    color #0b57d0
+    font-size 12px
+
+  b
+    display block
+    margin 6px 0 10px
+    font-size 8.5px
+    line-height 1.35
+
+.gd-m-phone.is-ask:not(.is-allowed) .gd-and-perm
+  transform none
+  pointer-events auto
+
+.gd-and-btns
+  display flex
+  gap 6px
+
+  span
+    flex 1
+    padding 6px 0
+    border-radius 999px
+    background var(--second-background-color)
+    color #0b57d0
+    font-size 8.5px
+    font-weight 600
+
+  span + span
+    background #0b57d0
+    color #fff
+
+// ─── the inbox ──────────────────────────────────────────────
+.gd-np
+  position absolute
+  top 60px
+  right 16px
+  z-index 3
+  width 196px
+  overflow hidden
+  border 1px solid var(--border-color)
+  border-radius 11px
+  background var(--background-color)
+  box-shadow 0 14px 32px rgba(0, 0, 0, 0.18)
+  opacity 0
+  transform translateY(-6px) scale(0.97)
+  transform-origin 100% 0
+  pointer-events none
+  transition opacity 0.22s ease, transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1)
+
+.gd-s-inbox.is-open .gd-np
+  opacity 1
+  transform none
+  pointer-events auto
+
+.gd-np-head
+  display flex
+  align-items center
+  justify-content space-between
+  gap 8px
+  height 24px
+  padding 0 9px
+  border-bottom 1px solid var(--border-color)
+  white-space nowrap
+
+  b
+    color var(--first-text-color)
+    font-size 8.5px
+
+  small
+    color var(--third-text-color)
+    font-size 7px
+
+// The real panel's pages slide vertically past each other; so do these.
+.gd-np-view
+  height 118px
+  overflow hidden
+
+.gd-np-pages
+  transition transform 0.42s cubic-bezier(0.32, 0.72, 0, 1)
+
+.gd-s-inbox.is-manage .gd-np-pages
+  transform translateY(-118px)
+
+.gd-np-page
+  display flex
+  flex-direction column
+  height 118px
+  padding 4px 5px
+
+.gd-np-item
+  display grid
+  grid-template-columns 6px 1fr
+  align-items center
+  gap 6px
+  height 26px
+  padding 0 5px
+  border-radius 6px
+
+  > i
+    width 5px
+    height 5px
+    border-radius 50%
+
+  > span
+    display flex
+    flex-direction column
+    min-width 0
+
+  b
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color var(--first-text-color)
+    font-size 8px
+
+  small
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color var(--third-text-color)
+    font-size 6.5px
+
+  &.is-unread > i
+    background var(--gd-accent)
+
+.gd-np-foot
+  display flex
+  align-items center
+  justify-content space-between
+  height 22px
+  margin-top auto
+  padding 0 6px
+  border-top 1px solid var(--border-color)
+  color var(--gd-accent)
+  font-size 8px
+  font-weight 600
+  white-space nowrap
+
+  i
+    font-size 7px
+
+.gd-np-sec
+  padding 4px 6px 2px
+  color var(--third-text-color)
+  font-size 6.5px
+  font-weight 700
+  letter-spacing 0.05em
+  text-transform uppercase
+
+.gd-np-row
+  display flex
+  align-items center
+  justify-content space-between
+  gap 6px
+  height 19px
+  padding 0 6px
+  font-size 7.5px
+
+  > span:first-child
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+.gd-np-dev
+  display flex
+  align-items center
+  gap 6px
+  height 20px
+  padding 0 6px
+  font-size 7.5px
+  white-space nowrap
+
+  small
+    margin-left auto
+    color var(--third-text-color)
+    font-size 6.5px
+
+// ─── a notification arrives ─────────────────────────────────
+.gd-desk
+  position absolute
+  inset 0
+  overflow hidden
+  background linear-gradient(135deg, #c9d6ff 0%, #e6dada 100%)
+
+.dark .gd-desk
+  background linear-gradient(135deg, #1b2735 0%, #090a0f 100%)
+
+.gd-m-browser.gd-desk-win
+  top 14px
+  right 96px
+  bottom 40px
+  left 14px
+
+.gd-m-browser.gd-desk-post
+  top 26px
+  right 18px
+  bottom 22px
+  left 70px
+  opacity 0
+  transform scale(0.94)
+  transition opacity 0.35s ease, transform 0.45s cubic-bezier(0.2, 0.9, 0.3, 1)
+
+  .gd-post-title
+    margin-bottom 3px
+
+.gd-desk.is-post .gd-desk-post
+  opacity 1
+  transform none
+
+.gd-toast
+  position absolute
+  right 12px
+  bottom 12px
+  z-index 3
+  display flex
+  align-items flex-start
+  gap 7px
+  width 184px
+  padding 8px 9px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+  box-shadow 0 12px 30px rgba(0, 0, 0, 0.25)
+  opacity 0
+  transform translateX(210px)
+  pointer-events none
+  transition transform 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.1), opacity 0.3s ease
+
+  > span:last-child
+    display flex
+    flex-direction column
+    min-width 0
+
+  b
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color var(--first-text-color)
+    font-size 8.5px
+
+  small
+    color var(--third-text-color)
+    font-size 7px
+
+  em
+    display -webkit-box
+    margin-top 2px
+    overflow hidden
+    color var(--second-text-color)
+    font-size 8px
+    line-height 1.3
+    -webkit-line-clamp 2
+    -webkit-box-orient vertical
+
+.gd-desk.is-note:not(.is-post) .gd-toast
+  opacity 1
+  transform none
+  pointer-events auto
+
+.gd-lock
+  position absolute
+  inset 0
+  z-index 5
+  padding-top 44px
+  background linear-gradient(170deg, #243b55 0%, #141e30 100%)
+  color #fff
+  text-align center
+  transition opacity 0.4s ease
+
+.gd-lock-time
+  font-size 34px
+  font-weight 600
+  line-height 1
+  letter-spacing -0.02em
+
+.gd-lock-date
+  margin-top 4px
+  font-size 8.5px
+  opacity 0.85
+
+.gd-lock-note
+  position absolute
+  left 8px
+  right 8px
+  top 108px
+  display flex
+  align-items flex-start
+  gap 7px
+  padding 8px 9px
+  border-radius 13px
+  background rgba(245, 245, 247, 0.88)
+  color #111
+  text-align left
+  opacity 0
+  transform translateY(-24px) scale(0.96)
+  pointer-events none
+  transition opacity 0.3s ease, transform 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.15)
+
+  > span:nth-child(2)
+    display flex
+    flex-direction column
+    min-width 0
+
+  b
+    font-size 8.5px
+
+  small
+    color rgba(0, 0, 0, 0.7)
+    font-size 7.5px
+    line-height 1.3
+
+  em
+    flex none
+    margin-left auto
+    color rgba(0, 0, 0, 0.5)
+    font-size 6.5px
+
+.gd-m-phone.is-note .gd-lock-note
+  opacity 1
+  transform none
+  pointer-events auto
+
+.gd-m-phone.is-post .gd-lock
+  opacity 0
+  pointer-events none
+
+// ─── ready ──────────────────────────────────────────────────
+.gd-check
+  position absolute
+  left 50%
+  top 50%
+  display flex
+  flex-direction column
+  gap 9px
+  width 246px
+  padding 14px 16px
+  border 1px solid var(--border-color)
+  border-radius 14px
+  background var(--background-color)
+  box-shadow 0 10px 26px rgba(0, 0, 0, 0.1)
+  transform translate(-50%, -50%)
+
+.gd-check-row
+  display flex
+  align-items center
+  gap 9px
+  color var(--third-text-color)
+  font-size 10px
+  line-height 1.35
+  transition color 0.3s ease
+
+  i
+    flex none
+    color var(--gd-skel-strong)
+    font-size 13px
+    transform scale(0.8)
+    transition color 0.3s ease, transform 0.45s cubic-bezier(0.3, 1.6, 0.5, 1)
+
+  &.is-on
+    color var(--first-text-color)
+
+    i
+      color #2e9d57
+      transform scale(1)
+
+// ─── the image viewer ───────────────────────────────────────
+.gd-s-viewer
+  background var(--second-background-color)
+
+.gd-v-article
+  position absolute
+  left 60px
+  right 60px
+  top 16px
+  bottom 16px
+  display flex
+  flex-direction column
+  gap 9px
+  padding 14px 16px
+  border 1px solid var(--border-color)
+  border-radius 10px
+  background var(--background-color)
+
+// 206 × 110 at (77, 62): the frame below is scaled down onto exactly this box.
+.gd-v-thumb
+  flex none
+  height 110px
+  overflow hidden
+  border-radius 8px
+
+  .gd-v-photo
+    width 100%
+    height 100%
+
+.gd-v-backdrop
+  position absolute
+  inset 0
+  background rgba(8, 8, 12, 0.88)
+  opacity 0
+  pointer-events none
+  transition opacity 0.35s ease
+
+.gd-v-frame
+  position absolute
+  left 40px
+  top 20px
+  width 280px
+  height 150px
+  overflow hidden
+  border-radius 10px
+  opacity 0
+  transform translate(0, 22px) scale(0.7357)
+  pointer-events none
+  transition transform 0.46s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease
+
+.gd-v-track
+  display flex
+  width 200%
+  height 100%
+  transition transform 0.45s cubic-bezier(0.3, 0.7, 0.2, 1)
+
+  .gd-v-photo
+    width 50%
+    height 100%
+
+.gd-v-photo
+  position relative
+  flex none
+  overflow hidden
+  transition transform 0.5s cubic-bezier(0.3, 0.7, 0.2, 1)
+
+  &.p1
+    background linear-gradient(180deg, #7ab8ff 0%, #bcd9ff 42%, #f6c79f 58%, #58795f 59%, #2c4435 100%)
+
+  &.p2
+    background linear-gradient(180deg, #2b1e4f 0%, #7b3f8c 38%, #f08a5d 56%, #1e3a5f 57%, #0f2238 100%)
+
+  > i
+    position absolute
+    left 64%
+    top 22%
+    width 16%
+    padding-top 16%
+    border-radius 50%
+    background radial-gradient(circle, #fffbe6 0%, #ffd87a 55%, rgba(255, 216, 122, 0) 72%)
+
+  &::before
+    content ''
+    position absolute
+    left 0
+    right 0
+    bottom 41%
+    height 26%
+    background rgba(40, 66, 90, 0.75)
+    clip-path polygon(0 100%, 0 70%, 14% 38%, 26% 62%, 42% 12%, 58% 58%, 72% 30%, 86% 55%, 100% 36%, 100% 100%)
+
+  &.p2::before
+    background rgba(20, 16, 40, 0.8)
+
+.gd-v-side, .gd-v-info
+  position absolute
+  display grid
+  place-items center
+  width 24px
+  height 24px
+  border-radius 50%
+  background rgba(255, 255, 255, 0.14)
+  color #fff
+  font-size 11px
+  opacity 0
+  pointer-events none
+  transition opacity 0.3s ease 0.15s
+
+.gd-v-side
+  top 50%
+  margin-top -12px
+
+  &.prev
+    left 10px
+
+  &.next
+    right 10px
+
+.gd-v-info
+  top 10px
+  right 12px
+  font-size 10px
+
+.gd-v-switch
+  position absolute
+  left 50%
+  bottom 12px
+  display flex
+  align-items center
+  gap 8px
+  padding 4px 10px
+  border-radius 999px
+  background rgba(255, 255, 255, 0.12)
+  color #fff
+  font-size 9px
+  opacity 0
+  transform translateX(-50%)
+  pointer-events none
+  transition opacity 0.3s ease 0.15s
+
+.gd-v-dots
+  display flex
+  gap 4px
+
+  b
+    width 5px
+    height 5px
+    border-radius 3px
+    background rgba(255, 255, 255, 0.4)
+    transition width 0.3s ease, background 0.3s ease
+
+    &:first-child
+      width 12px
+      background #fff
+
+.gd-v-panel
+  position absolute
+  top 40px
+  right 12px
+  z-index 2
+  width 148px
+  padding 9px 10px
+  border-radius 10px
+  background rgba(28, 28, 32, 0.94)
+  color #fff
+  font-size 8px
+  opacity 0
+  transform translateY(-4px) scale(0.97)
+  transform-origin 100% 0
+  pointer-events none
+  transition opacity 0.22s ease, transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.1)
+
+  > b
+    display block
+    margin-bottom 6px
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    font-size 8.5px
+
+  dl
+    display grid
+    grid-template-columns auto 1fr
+    gap 3px 8px
+    margin 0
+
+  dt
+    color rgba(255, 255, 255, 0.6)
+
+  dd
+    margin 0
+    text-align right
+
+.gd-s-viewer.is-open
+  .gd-v-backdrop
+    opacity 1
+    pointer-events auto
+
+  .gd-v-frame
+    opacity 1
+    transform none
+    pointer-events auto
+
+  .gd-v-thumb
+    visibility hidden
+    transition visibility 0s linear 0.08s
+
+  .gd-v-side, .gd-v-info, .gd-v-switch
+    opacity 1
+    pointer-events auto
+
+.gd-s-viewer.is-zoom .gd-f-full
+  transform scale(2.1)
+  transform-origin 58% 46%
+
+// Panned by exactly the distance the cursor drags, so the photo stays under it.
+.gd-s-viewer.is-pan .gd-f-full
+  transform translate(-58px, -22px) scale(2.1)
+
+.gd-s-viewer.is-next
+  .gd-v-track
+    transform translateX(-50%)
+
+  .gd-f-full
+    transform none
+
+  .gd-v-dots b:first-child
+    width 5px
+    background rgba(255, 255, 255, 0.4)
+
+  .gd-v-dots b:nth-child(2)
+    width 12px
+    background #fff
+
+.gd-s-viewer.is-info .gd-v-panel
+  opacity 1
+  transform none
+
+.gd-s-viewer.is-closed
+  .gd-v-backdrop
+    opacity 0
+    pointer-events none
+
+  .gd-v-frame
+    opacity 0
+    transform translate(0, 22px) scale(0.7357)
+    transition transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease 0.3s
+
+  .gd-v-thumb
+    visibility visible
+    transition visibility 0s linear 0.38s
+
+  .gd-v-side, .gd-v-info, .gd-v-switch, .gd-v-panel
+    opacity 0
+    transition-delay 0s
+
+// ─── comments ───────────────────────────────────────────────
+.gd-s-comments
+  padding 12px 16px
+  background var(--background-color)
+
+.gd-c-head
+  display flex
+  align-items center
+  justify-content space-between
+  margin-bottom 8px
+  font-size 9px
+  white-space nowrap
+
+.gd-c-gh
+  display inline-flex
+  align-items center
+  gap 4px
+  color var(--third-text-color)
+  font-size 7.5px
+
+.gd-c-box
+  display flex
+  align-items center
+  justify-content center
+  min-height 34px
+  margin-bottom 10px
+  padding 7px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--second-background-color)
+
+  &.is-signed
+    display block
+    padding 7px 8px
+
+.gd-c-item
+  display grid
+  grid-template-columns 18px 1fr
+  gap 8px
+  margin-bottom 8px
+
+  > .gd-m-avatar
+    width 18px
+    height 18px
+
+  &.is-reply
+    margin-left 26px
+
+.gd-c-main
+  min-width 0
+  overflow hidden
+  border 1px solid var(--border-color)
+  border-radius 8px
+
+.gd-c-meta
+  display flex
+  align-items baseline
+  gap 6px
+  padding 4px 8px
+  border-bottom 1px solid var(--border-color)
+  background var(--second-background-color)
+  font-size 8px
+  white-space nowrap
+
+  small
+    color var(--third-text-color)
+    font-size 7px
+
+.gd-c-text
+  padding 5px 8px
+  color var(--second-text-color)
+  font-size 8.5px
+  line-height 1.4
+
+.gd-c-react
+  display flex
+  flex-wrap wrap
+  gap 4px
+  padding 0 8px 6px
+
+  &:empty
+    display none
+
+  span
+    display inline-flex
+    align-items center
+    gap 2px
+    padding 1px 6px
+    border 1px solid var(--border-color)
+    border-radius 999px
+    background var(--background-color)
+    font-size 7.5px
+
+.gd-c-tabs
+  display flex
+  gap 2px
+  margin-bottom 6px
+
+.gd-c-tab
+  padding 3px 8px
+  border-radius 5px
+  color var(--third-text-color)
+  font-size 8px
+  font-weight 600
+
+  &.is-on
+    background var(--background-color)
+    color var(--first-text-color)
+    box-shadow 0 0 0 1px var(--border-color)
+
+.gd-s-comments.is-preview
+  .gd-c-tab.is-on
+    background transparent
+    color var(--third-text-color)
+    box-shadow none
+
+  .gd-f-preview
+    background var(--background-color)
+    color var(--first-text-color)
+    box-shadow 0 0 0 1px var(--border-color)
+
+  .gd-c-area
+    display none
+
+  .gd-c-rendered
+    display block
+
+.gd-c-area
+  display block
+  height 46px
+  padding 6px 7px
+  line-height 1.4
+  white-space pre-wrap
+
+.gd-c-rendered
+  display none
+  height 46px
+  padding 6px 7px
+  overflow hidden
+  border 1px solid var(--gd-line-strong)
+  border-radius 5px
+  background var(--background-color)
+  color var(--first-text-color)
+  font-size 9px
+  line-height 1.4
+
+.gd-c-actions
+  display flex
+  justify-content flex-end
+  margin-top 6px
+
+.gd-c-mine
+  opacity 0
+  transform translateY(10px)
+  transition opacity 0.35s ease, transform 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.1)
+
+.gd-s-comments.is-sent
+  .gd-c-mine
+    opacity 1
+    transform none
+
+  .gd-c-edit
+    opacity 0.35
+
+.gd-s-comments.is-react .gd-c-list
+  position absolute
+  left 16px
+  top 22px
+  width 214px
+
+.gd-c-add
+  color var(--third-text-color)
+
+.gd-c-party
+  display none !important
+
+.gd-s-comments.is-reacted .gd-c-party
+  display inline-flex !important
+  animation gd-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1)
+
+.gd-c-picker
+  position absolute
+  left 44px
+  top 88px
+  z-index 3
+  display flex
+  gap 2px
+  padding 4px
+  border 1px solid var(--border-color)
+  border-radius 9px
+  background var(--background-color)
+  box-shadow 0 10px 24px rgba(0, 0, 0, 0.16)
+  opacity 0
+  transform translateY(4px) scale(0.96)
+  transform-origin 0 0
+  pointer-events none
+  transition opacity 0.2s ease, transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1)
+
+  span
+    display grid
+    place-items center
+    width 19px
+    height 19px
+    border-radius 5px
+    font-size 11px
+
+.gd-s-comments.is-pick .gd-c-picker
+  opacity 1
+  transform none
+  pointer-events auto
+
+.gd-c-photo
+  position absolute
+  right 16px
+  top 22px
+  width 104px
+  height 138px
+  overflow hidden
+  border-radius 10px
+  box-shadow 0 6px 18px rgba(0, 0, 0, 0.14)
+
+  .gd-v-photo
+    position absolute
+    inset 0
+
+.gd-c-heart
+  position absolute
+  right 6px
+  bottom 6px
+  display inline-flex
+  align-items center
+  gap 3px
+  padding 2px 7px
+  border-radius 999px
+  background rgba(0, 0, 0, 0.45)
+  color #fff
+  font-size 8px
+
+  .fa-solid, .n1
+    display none
+
+.gd-s-comments.is-liked .gd-c-heart
+  .fa-regular, .n0
+    display none
+
+  .fa-solid
+    display inline-block
+    color #ff4d6d
+    animation gd-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1)
+
+  .n1
+    display inline

@@ -12,6 +12,13 @@
 			<i class="fa-regular fa-moon"></i>
 		</li>
 
+		<% if (theme.global.guide !== false) { %>
+		<li class="right-bottom-tools tool-guide flex justify-center items-center" title="<%= __('guide.menu_title') %>"
+		    data-ux="guide" data-ux-action="menu">
+			<i class="fa-regular fa-compass"></i>
+		</li>
+		<% } %>
+
 		<!-- rss -->
 		<% if (theme.plugins.feed.enable && config.feed) { %>
 		<li class="right-bottom-tools rss flex justify-center items-center">

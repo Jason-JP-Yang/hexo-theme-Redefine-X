@@ -232,6 +232,274 @@ notifications:
   account_banned: Your account has been blocked
   account_banned_note: You can stay signed in and keep commenting on posts - only the ability to subscribe to this blog has been withdrawn. If the owner has also blocked you on GitHub, commenting stops too.
 
+# The virtual-cursor guide. Served as guide-i18n.json, not inlined into pages;
+# a key missing from another language falls back to this table.
+guide:
+  label: Guide
+  you: You
+  kicker: Tip
+  note_kicker: Author's note
+  note_title: A note from the author
+  understand: Understand
+  more: View More
+  later: Not now
+  next: Next
+  back: Back
+  done: Done
+  close: Close
+  try: Try it yourself
+  watch: Watch again
+  your_turn: Your turn
+  try_done: Done — that is all it takes.
+  menu_title: Guides
+  menu_lede: Walkthroughs of the parts of this blog that do more than they show. Open one at any time; none of them changes a setting.
+  menu_steps: "{n} steps"
+  reset: Show every tip again
+  reset_confirm: Press again to confirm
+  reset_done: Every tip will show again
+  reset_note: Tips you marked as understood will appear again as you browse. Nothing else is reset.
+  tips:
+    follow:
+      title: Follow the blog
+      body: New posts, instant notes and announcements, delivered to an inbox on this site — and, if you allow it, as push notifications on this device. It takes a GitHub sign-in and one press.
+    bell:
+      title: Your inbox is here
+      body: Everything you follow arrives behind the bell, newest first. Inside it, <b>Manage subscription</b> chooses the topics and the devices that receive push.
+    ios_push:
+      title: One more step for push on iPhone
+      body: iOS delivers notifications only to sites added to the Home Screen. Add the blog there, open it from its icon, and push starts working. The inbox works either way.
+    navbar:
+      title: Everything is one menu away
+      body: <b>Posts</b> holds Archives, Tags, Categories and the photo wall. <b>About</b> and <b>Links</b> hold the rest of the site.
+    navbar_mobile:
+      title: The menu
+      body: Archives, Tags, Categories, the photo wall and the rest of the site are behind this button.
+    notes:
+      title: Instant notes
+      body: Short updates rise here as bubbles — remarks that do not need a whole post.
+    masonry:
+      title: The photo wall
+      body: Albums of photographs, laid out as a wall. Any photo opens full-size, and many carry the camera settings they were taken with.
+    posts:
+      title: Every tile is a post
+      body: A tile's size follows how much the post has to say, pinned posts come first, and posts in a series are gathered into one band. Open any tile to read it.
+    pulse:
+      title: Site activity
+      body: Each square is one day of visits over the past year. The deeper the colour, the busier the day.
+    pager:
+      title: More than one author
+      body: This card turns to each collaborator in turn. Press a dot to go to someone directly, or swipe the card.
+    exif_toggle:
+      title: This photo has camera data
+      body: Press the arrow to unfold how it was taken — camera, lens, exposure and the rest.
+    exif_hover:
+      title: How this photo was taken
+      body: This card lists the camera, lens and exposure. It appears whenever the pointer rests on a photo like this one, and the image viewer shows it too.
+    viewer:
+      title: Open any image
+      body: Press an image to see it full-size. Zoom in, drag to look around, and move through every image in the post without leaving it.
+    errorbook:
+      title: Answer before you look
+      body: Try the question yourself first. A right answer stays quiet; a wrong one opens the explanation of why.
+    code:
+      title: Copy or fold the code
+      body: These buttons appear when the pointer is over a code block. <b>Copy</b> takes the whole block without line numbers; the arrow folds it away.
+    toc:
+      title: Contents
+      body: Shows or hides the table of contents. The section you are reading stays highlighted, and any heading is one press away.
+    tools:
+      title: Reading tools
+      body: Font size, dark mode, and jumps to the top or bottom of the page are all in here.
+    comments:
+      title: Join the discussion
+      body: Comments on this blog are GitHub Discussions. Sign in with GitHub once, and you can comment, reply and react under any post.
+    guide_entry:
+      title: Every guide, whenever you want it
+      body: The compass in these tools opens every walkthrough, and can bring back the tips you have already dismissed.
+    album_photo:
+      title: Browse the album
+      body: Open a photo to see it full-size, then swipe or use the arrows to move through the whole album.
+    album_heart:
+      title: Like a photo
+      body: The heart likes a photo with your GitHub account. The first press asks you to sign in, and finishes the like once you are back.
+    albums:
+      title: Albums
+      body: Each card is an album. Open one to see its photos laid out as a wall.
+    search:
+      title: Search the whole blog
+      body: Search looks through the title and full text of every post as you type.
+  tours:
+    follow:
+      name: Following this blog
+      desc: The inbox, push notifications, and how signing in works.
+      signed_in: You are already signed in as <b>@{login}</b>, so the GitHub steps are done.
+      steps:
+        why:
+          title: What following gives you
+          body: Following places new posts, instant notes and announcements into an inbox on this site, behind the bell in the navigation bar. If you also allow notifications, the same items arrive as push notifications on this device, even while the blog is closed. You choose the topics, and you can leave at any time.
+        github:
+          title: A GitHub account
+          body: Signing in to this blog uses GitHub, the same account that powers the comments. Without one, create it at <b>github.com/signup</b> — enter an email address, a password and a username, solve the short verification puzzle, then type in the code GitHub emails you. It is free and takes about two minutes. With an account already, go on to the next step.
+        authorize:
+          title: Sign in through giscus
+          body: Press <b>Follow</b>. The blog sends you to GitHub to authorize <b>giscus</b>, the app behind the comments. It asks to verify your GitHub identity, to know which resources you can access, and to act on your behalf — which is how it posts the comments you write. Press <b>Authorize giscus</b> and you return to the blog, signed in. The authorization can be revoked at any time under GitHub Settings → Applications.
+        ios:
+          title: On iPhone and iPad, add the blog to the Home Screen
+          body: iOS and iPadOS deliver web push only to a site installed on the Home Screen. In Safari, tap <b>⋯</b> and then <b>Share</b> (with the Bottom or Top tab layout, tap Share directly), scroll to <b>Add to Home Screen</b>, turn on <b>Open as Web App</b>, and tap <b>Add</b>. Then open the blog from its new icon and follow from there. Requires iOS 16.4 or later.
+        allow:
+          title: Follow, then allow notifications
+          body: Back on the blog, press <b>Follow</b>. The browser asks whether this site may show notifications — choose <b>Allow</b> to receive push on this device. Choosing <b>Block</b> still follows the blog; everything keeps arriving in the inbox, only without the alert. The Follow button then becomes a bell.
+        inbox:
+          title: The bell is your inbox
+          body: Everything you follow collects behind the bell, newest first, with a badge counting what is unread. <b>Manage subscription</b> chooses between new posts, instant notes and announcements, lists every browser registered for push and removes any of them, and ends the subscription entirely.
+        push:
+          title: When something new is published
+          body: A new post reaches you as a notification with its title and opening lines, and pressing it opens the post. Notifications are sent only when something is published — never for comments, never for promotion. Logging out of a browser stops push there, and signing back in restores it.
+        iphone:
+          title: Reading on an iPhone as well?
+          body: iOS delivers push only to sites on the Home Screen. On the iPhone, open the blog in Safari, tap <b>⋯</b> → <b>Share</b> → <b>Add to Home Screen</b>, turn on <b>Open as Web App</b>, tap <b>Add</b>, and follow from the new icon. The same GitHub account keeps one inbox across all of your devices.
+        ready:
+          title: Ready when you are
+          body: The Follow button is right here. Press it whenever you like; the steps you have just seen follow in that order.
+        ready_off:
+          title: That is everything
+          body: Press <b>Follow</b> in the navigation bar whenever you are ready; the steps you have just seen follow in that order.
+        ready_following:
+          title: You are following this blog
+          body: Everything that arrives collects behind the bell. Open it at any time, and use <b>Manage subscription</b> inside it to change topics or devices.
+    viewer:
+      name: The image viewer
+      desc: Zooming, panning, moving between images, and camera data.
+      steps:
+        open:
+          title: Open an image
+          body: Press any image in a post, or any photo on the photo wall. It grows out of the page into a full-screen viewer, and everything else steps back until you close it.
+        zoom:
+          title: Zoom in
+          body: Scroll the mouse wheel over the image, or pinch with two fingers, to zoom up to six times. Zooming centres on the point under the pointer or between your fingers.
+        pan:
+          title: Look around, then move on
+          body: Drag a zoomed image to look around it. The arrows at the sides, the arrows below and the page dots move between every image in the post; on a touch screen, a swipe does the same.
+        info:
+          title: Details, and closing
+          body: The info button in the corner shows the image's caption and, for photos that carry it, the camera data. Press <b>Esc</b>, or tap the dark area around the image, to close the viewer.
+    comments:
+      name: Comments and sign-in
+      desc: Joining the discussion under any post with a GitHub account.
+      steps:
+        thread:
+          title: Comments live on GitHub
+          body: Each post has its own thread in GitHub Discussions, shown here through giscus. Your comments appear under your GitHub name and avatar, and can also be found, edited or deleted on GitHub itself.
+        authorize:
+          title: Sign in through giscus
+          body: Press <b>Sign in with GitHub</b> in the comment box. GitHub asks you to authorize <b>giscus</b> — to verify your identity, to know which resources you can access and to act on your behalf, which is how it posts what you write. Press <b>Authorize giscus</b> and you return to the post, signed in.
+        write:
+          title: Write, preview, send
+          body: Type in the box; Markdown works, including code, links and lists. <b>Preview</b> shows the result before you press <b>Comment</b>, and a reply stays attached to the comment it answers.
+        react:
+          title: React, and stay in the loop
+          body: The smiley adds a reaction instead of a comment. The same sign-in likes photos on the photo wall and follows the blog, so it is the only account this site asks for.
+  scenes:
+    new_post: A new post is published
+    to_inbox: It lands in your inbox
+    push: …and as a push notification
+    open_bell: Open the bell at any time
+    email: Enter your email
+    password: Choose a password
+    username: Pick a username
+    create: Continue
+    puzzle: Solve the short puzzle
+    code: Type the code from the email
+    welcome: The account is ready
+    press_follow: Press Follow
+    press_signin: Press Sign in with GitHub
+    to_github: GitHub asks you to authorize giscus
+    authorize: Authorize giscus
+    signed_in: Back on the blog, signed in
+    tap_more: Tap ⋯
+    tap_share: Tap Share
+    scroll: Scroll down the list
+    tap_add_home: Tap Add to Home Screen
+    web_app: Turn on Open as Web App
+    tap_add: Tap Add
+    on_home: The blog is on your Home Screen
+    open_icon: Open it from the new icon
+    allow: Choose Allow
+    now_bell: Followed — the button became a bell
+    open_inbox: Open the inbox
+    manage: Manage subscription
+    toggle_topic: Choose what you receive
+    arrives: A notification arrives
+    open_post: Press it to open the post
+    tap_image: Press the image
+    wheel: Scroll to zoom
+    pinch: Pinch to zoom
+    drag: Drag to look around
+    next_image: Next image
+    swipe_next: Swipe, or tap the arrow
+    info: Show the details
+    close_viewer: Tap outside to close
+    thread: Every post has its own thread
+    reactions: Reactions sit under each comment
+    sign_in_box: Sign in from the comment box
+    type_comment: Write your comment
+    preview: Preview it
+    send: Press Comment
+    react: Add a reaction
+    heart: Like a photo with the same account
+  mock:
+    new: New
+    now: now
+    post_title: Designing a virtual cursor
+    note_title: Re-shot the harbour album this evening
+    announce_title: The blog now sends push notifications
+    push_title: New post
+    sign_in: Sign in with GitHub
+    write_comment: Write a comment
+    signed_in: Signed in
+    followed: Following
+    redirecting: Redirecting…
+    ios_share: Share
+    ios_bookmark: Add Bookmark
+    ios_reader: Show Reader
+    ios_copy: Copy
+    ios_reading_list: Add to Reading List
+    ios_favorites: Add to Favorites
+    ios_quick_note: Add to Quick Note
+    ios_find: Find on Page
+    ios_add_home: Add to Home Screen
+    ios_markup: Markup
+    ios_print: Print
+    ios_cancel: Cancel
+    ios_add: Add
+    ios_web_app: Open as Web App
+    ios_alert: "“{site}” Would Like to Send You Notifications"
+    ios_alert_body: Notifications may include alerts, sounds and icon badges. These can be configured in Settings.
+    ios_dont: Don’t Allow
+    ios_allow: Allow
+    perm_wants: "{host} wants to"
+    perm_show: Show notifications
+    perm_block: Block
+    perm_allow: Allow
+    perm_android: "{host} wants to send notifications"
+    photo_caption: Harbour at dusk
+    exif_camera: Camera
+    exif_lens: Lens
+    exif_exposure: Exposure
+    days_ago: 2 days ago
+    comments_count: 3 comments
+    sample_comment: Really clear write-up, thanks!
+    sample_reply: Glad it helped — more on this soon.
+    write: Write
+    preview: Preview
+    comment: Comment
+    sample_markdown: Great write-up — **thank you!**
+    sample_rendered: Great write-up — <b>thank you!</b>
+    check_github: A GitHub account
+    check_authorize: giscus authorized, signed in
+    check_allow: Followed, notifications allowed
+    check_home: Added to the Home Screen
+
 management:
   a_title: Analytics
   a_lede: Read straight from Umami with an admin credential the Worker releases per session.

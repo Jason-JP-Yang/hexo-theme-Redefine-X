@@ -231,6 +231,10 @@ notifications:
   account_banned: Tu cuenta ha sido bloqueada
   account_banned_note: Puedes seguir con la sesion iniciada y comentar en las entradas; solo se ha retirado la posibilidad de suscribirte a este blog. Si el autor tambien te ha bloqueado en GitHub, los comentarios tambien se detienen.
 
+guide:
+  label: Guía
+  menu_title: Guías
+
 management:
   a_title: Analítica
   a_lede: Se lee directamente de Umami con una credencial de administrador que el Worker entrega por sesión.

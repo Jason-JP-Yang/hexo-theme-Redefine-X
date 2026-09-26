@@ -46,12 +46,15 @@ const NAMES = {
   manage: "Use Blog Management",
   external: "Open External Link",
   search: "Search Site",
+  // The virtual-cursor guide: which tip was understood or opened, and which
+  // walkthrough was finished. Paging through one is not recorded.
+  guide: "Use Guide",
 };
 
 // How many of each may be sent in one pageview. A navigation ends the pageview
 // anyway, so the ones worth capping are the surfaces a reader stays on: the
 // tools rail and the two consoles, where the session is one long page.
-const CAPS = { tool: 2, editor: 2, manage: 2 };
+const CAPS = { tool: 2, editor: 2, manage: 2, guide: 2 };
 
 // Whatever the per-name caps allow, a single pageview never sends more than
 // this. It is the backstop for a taxonomy that grows later without the budget

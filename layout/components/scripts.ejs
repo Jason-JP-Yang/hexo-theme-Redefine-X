@@ -134,6 +134,14 @@
     }) %>
 <% } %>
 
+<%# The virtual-cursor guide: tips, walkthroughs and the author's own notes.
+    Self-initialising on every Swup page view; its layer lives outside #swup. %>
+<% if (theme.global.guide !== false) { %>
+    <%- renderJS('plugins/guide/index.js', {
+        module: true
+    }) %>
+<% } %>
+
 <%# The admin surface — Blog Management and the editor. Nothing is fetched for a
     reader: the console is probed only on its own page, and the editor module is
     imported only once `html.blog-admin` is set. %>

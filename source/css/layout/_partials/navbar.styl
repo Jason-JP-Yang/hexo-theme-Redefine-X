@@ -156,10 +156,10 @@ $logo-image-box-width = 34px
                 .navbar-shrink &
                   bottom -($navbar-shrink-height / 2 - 17)
 
-            &:hover a .fa-chevron-down
+            &:hover a .fa-chevron-down, &.guide-hover a .fa-chevron-down
               transform rotate(180deg)
 
-            &:hover .has-dropdown
+            &:hover .has-dropdown, &.guide-hover .has-dropdown
               &::after
                 display none !important
 
@@ -225,7 +225,8 @@ $logo-image-box-width = 34px
                   color var(--primary-color)
                   background-color var(--third-background-color)
 
-        .navbar-list .navbar-item:hover .sub-menu
+        // guide-hover: the guide opens a menu to point into it (plugins/guide/tips.js).
+        .navbar-list .navbar-item:hover .sub-menu, .navbar-list .navbar-item.guide-hover .sub-menu
           // visibility visible
           max-height 500px
           transition-t('all', '0', '0.2', 'ease')
