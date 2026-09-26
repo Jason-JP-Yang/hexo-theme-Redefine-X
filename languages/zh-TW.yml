@@ -236,8 +236,7 @@ notifications:
 guide:
   label: 導覽
   you: 你
-  kicker: 提示
-  note_kicker: 作者註記
+  colon: "："
   note_title: 來自作者的說明
   understand: 知道了
   more: 查看詳情

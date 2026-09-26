@@ -237,8 +237,7 @@ notifications:
 guide:
   label: Guide
   you: You
-  kicker: Tip
-  note_kicker: Author's note
+  colon: ": "
   note_title: A note from the author
   understand: Understand
   more: View More

@@ -233,6 +233,7 @@ notifications:
 
 guide:
   label: Guide
+  colon: " : "
   menu_title: Guides
 
 management:

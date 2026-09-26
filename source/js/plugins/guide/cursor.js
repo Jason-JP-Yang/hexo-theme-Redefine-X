@@ -1,5 +1,5 @@
 /**
- * Guide — the virtual cursor, and the ring it draws around a target.
+ * Guide — the virtual cursor.
  *
  * One class serves both places a cursor appears: the page itself (a fixed layer,
  * viewport coordinates) and the inside of a tour scene (a scaled stage, the
@@ -11,32 +11,48 @@
  *     side alternating flight to flight — timed by a Fitts-shaped duration and
  *     eased in and out like a hand.
  *   • The path is expressed RELATIVE to the target, which is re-measured every
- *     frame. A page that scrolls under a flight carries the flight with it, and
- *     the cursor still lands exactly on a moving button.
- *   • It lands a few pixels past the target and springs back, tilts into its
- *     horizontal velocity, stretches slightly along its direction of travel, and
- *     its label trails behind on a softer spring.
- *   • At rest it drifts by a couple of pixels, so it reads as held rather than
- *     parked. Reduced motion turns all of that off: it appears in place.
+ *     frame, so the cursor still lands exactly on a button the page scrolls
+ *     under it.
+ *   • At rest it follows its target on a spring and its label follows it on a
+ *     softer one, so a scrolling page carries both with a little weight.
+ *   • The label hangs off one corner of the arrow — below right by default,
+ *     turned left near the right edge and up near the bottom, the arrow
+ *     mirroring to match. That corner stays put while the label grows away
+ *     from it, and the finished label never leaves the view.
+ * Reduced motion turns all of that off: it appears in place.
  */
 
 import { Spring, bezier, ease, flightMs, drift, clamp, reducedMotion } from "./motion.js";
 
+// A rounded arrow on a 24-unit grid, its tip at (3, 3).
 const ARROW =
-  '<svg class="gd-arrow" viewBox="0 0 28 28" aria-hidden="true" focusable="false">' +
-  '<path d="M4.2 2.6 24.2 10.2Q26.2 11 24.3 11.9L14.8 14.8 11.9 24.3Q11 26.2 10.2 24.2L2.6 4.2Q2.1 2.1 4.2 2.6Z"/>' +
+  '<svg class="gd-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+  '<path d="M4.75 3.34 18.5 8.48Q21.5 9.6 18.51 10.75L14.95 12.11Q12.9 12.9 12.11 14.95L10.75 18.51Q9.6 21.5 8.48 18.5L3.34 4.75Q2.5 2.5 4.75 3.34Z"/>' +
   "</svg>";
 
-// Where the label sits relative to the tip, before its spring lags it.
-const PILL_DX = 15;
-const PILL_DY = 19;
+// Label geometry of the page cursor; a scene's smaller cursor scales it by `k`.
+const DX = 10; // the tip to the label's near corner, across
+const DY = 19; // and down: clear of the arrow even when the label slides under it
+const EDGE = 8; // kept clear of the view's edges
+const SLACK = 6; // how far a label must overflow before it turns at rest
+
+// How much of `a` a box at (left, top) of size w × h covers.
+function cover(a, left, top, w, h) {
+  const x = Math.min(left + w, a.right) - Math.max(left, a.left);
+  const y = Math.min(top + h, a.bottom) - Math.max(top, a.top);
+  return x > 0 && y > 0 ? x * y : 0;
+}
+
+// The shift that brings [start, start + size] inside [lo, hi], or pins it to lo.
+const inside = (start, size, lo, hi) =>
+  size > hi - lo || start < lo ? lo - start : start + size > hi ? hi - size - start : 0;
 
 export class Cursor {
   /**
    * @param {object} o
    * @param {HTMLElement} o.layer   what the cursor is drawn into
    * @param {import("./motion.js").Loop} o.loop
-   * @param {string} [o.label]      text of the pill that follows it
+   * @param {string} [o.label]      text of the label that follows it
    * @param {() => {w:number,h:number}} o.bounds   the visible area, in the layer's coordinates
    * @param {string} [o.variant]    extra class, e.g. "is-local" inside a scene
    */
@@ -44,6 +60,7 @@ export class Cursor {
     this.layer = layer;
     this.loop = loop;
     this.bounds = bounds;
+    this.k = variant === "is-local" ? 0.675 : 1;
 
     this.el = document.createElement("div");
     this.el.className = "gd-cursor" + (variant ? " " + variant : "");
@@ -56,9 +73,17 @@ export class Cursor {
     if (label) {
       this.pill = document.createElement("div");
       this.pill.className = "gd-pill" + (variant ? " " + variant : "");
-      this.pill.textContent = label;
+      this.pill.innerHTML =
+        '<div class="gd-pill-box"><div class="gd-say-text"><div class="gd-say-line"><b class="gd-say-name"></b></div></div></div>';
+      this.box = this.pill.firstElementChild;
+      this.line = this.pill.querySelector(".gd-say-line");
+      this.name = this.pill.querySelector(".gd-say-name");
+      this.name.textContent = label;
       layer.appendChild(this.pill);
     }
+    // The page cursor's Callout attaches itself here and sizes the label.
+    this.speech = null;
+    this.label = null;
 
     this.x = 0;
     this.y = 0;
@@ -73,26 +98,44 @@ export class Cursor {
     this.seed = Math.random() * 10000;
     this.alive = !reducedMotion();
 
+    this.rx = new Spring(0, 600, 46);
+    this.ry = new Spring(0, 600, 46);
+    this.lx = new Spring(0, 300, 30);
+    this.ly = new Spring(0, 300, 30);
+    this.turnX = new Spring(0, 320, 34);
+    this.turnY = new Spring(0, 320, 34);
     this.tilt = new Spring(0, 220, 20);
-    this.ox = new Spring(0, 190, 13);
-    this.oy = new Spring(0, 190, 13);
-    this.lx = new Spring(0, 250, 24);
-    this.ly = new Spring(0, 250, 24);
+    this.pop = new Spring(1, 520, 30);
+    this.left = false;
+    this.up = false;
+    this.fresh = true;
+    this.sx = 0;
+    this.sy = 0;
+    this.shape = "";
 
     loop.add(this);
   }
 
   setLabel(text) {
-    if (this.pill) this.pill.textContent = text;
+    if (!this.name || this.name.textContent === text) return;
+    this.name.textContent = text;
+    this.label = null;
   }
 
   // ─── frame ─────────────────────────────────────────────────
-  measure() {
-    if (!this.visible || !this.anchor) {
-      this.point = null;
-      return;
+  measure(now) {
+    this.point = this.visible && this.anchor ? this.anchor() : null;
+    if (!this.pill || !this.visible) return;
+    // Read off the name rather than the box, which has a set size while it speaks.
+    if (!this.label) {
+      const cs = getComputedStyle(this.box);
+      const px = parseFloat(cs.paddingLeft) || 0;
+      const pt = parseFloat(cs.paddingTop) || 0;
+      const pb = parseFloat(cs.paddingBottom) || 0;
+      const lh = parseFloat(getComputedStyle(this.line).lineHeight) || this.name.offsetHeight;
+      this.label = { w: this.name.offsetWidth + 2 * px, h: lh + pt + pb, px, pt, pb, lh };
     }
-    this.point = this.anchor();
+    if (this.speech) this.speech.measure(now);
   }
 
   render(now, dt) {
@@ -112,25 +155,21 @@ export class Cursor {
       if (t >= 1) {
         this.flight = null;
         this.restAt = now;
-        this.ox.snap(f.x3);
-        this.oy.snap(f.y3);
+        this.rx.snap(x);
+        this.ry.snap(y);
         if (f.exit) this.hideNow();
         f.done(true);
       }
     } else if (this.point) {
-      const ox = this.ox.step(0, dt);
-      const oy = this.oy.step(0, dt);
-      let dx = 0;
-      let dy = 0;
+      x = this.point.x;
+      y = this.point.y;
       if (this.alive) {
         // Eased in from the landing, so settling and drifting are one motion.
         const k = Math.min(1, (now - this.restAt) / 700);
         const d = drift(now + this.seed);
-        dx = d.x * k;
-        dy = d.y * k;
+        x = this.rx.step(x + d.x * k, dt);
+        y = this.ry.step(y + d.y * k, dt);
       }
-      x = this.point.x + ox + dx;
-      y = this.point.y + oy + dy;
     }
 
     const inv = dt > 0 ? 1 / dt : 60;
@@ -141,27 +180,110 @@ export class Cursor {
 
     this.el.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`;
 
+    if (this.pill) this.place(x, y, now, dt);
     if (this.alive) {
       const tilt = this.tilt.step(clamp(this.vx / 90, -13, 13), dt);
+      const pop = this.pop.step(1, dt);
       const speed = Math.hypot(this.vx, this.vy);
       const s = clamp(speed / 14000, 0, 0.075);
+      let tf = `rotate(${tilt.toFixed(2)}deg)`;
       if (s > 0.004) {
         const a = (Math.atan2(this.vy, this.vx) * 180) / Math.PI;
-        this.body.style.transform =
-          `rotate(${tilt.toFixed(2)}deg) rotate(${a.toFixed(1)}deg) ` +
-          `scale(${(1 + s).toFixed(3)}, ${(1 - s * 0.55).toFixed(3)}) rotate(${(-a).toFixed(1)}deg)`;
-      } else {
-        this.body.style.transform = `rotate(${tilt.toFixed(2)}deg)`;
+        tf +=
+          ` rotate(${a.toFixed(1)}deg) scale(${(1 + s).toFixed(3)}, ${(1 - s * 0.55).toFixed(3)})` +
+          ` rotate(${(-a).toFixed(1)}deg)`;
       }
-    }
-
-    if (this.pill) {
-      const lx = this.alive ? this.lx.step(x + PILL_DX, dt) : x + PILL_DX;
-      const ly = this.alive ? this.ly.step(y + PILL_DY, dt) : y + PILL_DY;
-      this.pill.style.transform = `translate3d(${lx.toFixed(2)}px, ${ly.toFixed(2)}px, 0)`;
+      // Turning to face the label is a mirror through the tip, on either axis.
+      const fx = (1 - 2 * clamp(this.turnX.x, 0, 1)) * pop;
+      const fy = (1 - 2 * clamp(this.turnY.x, 0, 1)) * pop;
+      this.body.style.transform = `${tf} scale(${fx.toFixed(3)}, ${fy.toFixed(3)})`;
+    } else {
+      this.body.style.transform = `scale(${this.left ? -1 : 1}, ${this.up ? -1 : 1})`;
     }
 
     return this.visible;
+  }
+
+  /** Hang the label off the arrow's corner. */
+  place(x, y, now, dt) {
+    const L = this.label;
+    if (!L) return;
+    const g = this.speech && this.speech.active ? this.speech.frame(now, dt, L) : null;
+    const w = g ? g.w : L.w;
+    const h = g ? g.h : L.h;
+    const fw = g ? g.fw : L.w;
+    const fh = g ? g.fh : L.h;
+    const k = this.k;
+    const dx = DX * k;
+    const dy = DY * k;
+    const m = EDGE * k;
+    const lx = this.alive ? this.lx.step(x, dt) : x;
+    const ly = this.alive ? this.ly.step(y, dt) : y;
+    const { w: vw, h: vh } = this.bounds();
+    const f = this.flight;
+    // Leaving, the label goes with the arrow instead of being held in view.
+    const leaving = !!(f && f.exit);
+
+    // Decided for where the cursor is going, then kept. In flight nothing is
+    // re-decided; at rest a side changes only once the other one fits and this
+    // one clearly does not, so nothing flips back and forth on a boundary.
+    const decide = this.fresh || !!(g && g.decide);
+    if (!leaving && (decide || !f)) {
+      this.orient(decide, f ? f.last : { x, y }, g ? g.sw : L.w, g ? g.sh : L.h, g && g.avoid, vw, vh, dx, dy, m);
+    }
+    const snap = this.fresh || !this.alive;
+    this.fresh = false;
+    if (snap) {
+      this.turnX.snap(this.left ? 1 : 0);
+      this.turnY.snap(this.up ? 1 : 0);
+    } else {
+      this.turnX.step(this.left ? 1 : 0, dt);
+      this.turnY.step(this.up ? 1 : 0, dt);
+    }
+    const tx = clamp(this.turnX.x, 0, 1);
+    const ty = clamp(this.turnY.x, 0, 1);
+
+    // The corner by the arrow stays put and the label grows away from it; the
+    // finished label is kept inside the view.
+    const cx = lx + dx - 2 * dx * tx;
+    const cy = ly + dy - 2 * dy * ty;
+    if (!leaving) {
+      this.sx = inside(cx - fw * tx, fw, m, vw - m);
+      this.sy = inside(cy - fh * ty, fh, m, vh - m);
+    }
+    const bx = cx - w * tx + this.sx;
+    const by = cy - h * ty + this.sy;
+    this.pill.style.transform = `translate3d(${bx.toFixed(2)}px, ${by.toFixed(2)}px, 0)`;
+
+    // The corner by the arrow is the bubble's tail, unless it was pushed away.
+    const free = Math.abs(this.sx) > dx || Math.abs(this.sy) > dy;
+    const shape = free ? "is-free" : (this.up ? "is-u" : "is-d") + (this.left ? "l" : "r");
+    if (shape !== this.shape) {
+      if (this.shape) this.pill.classList.remove(this.shape);
+      this.pill.classList.add(shape);
+      this.shape = shape;
+    }
+  }
+
+  /**
+   * Choose the corner. Below and to the right unless the finished label does not
+   * fit there; a new tip prefers the side covering less of what it is about.
+   */
+  orient(decide, p, sw, sh, avoid, vw, vh, dx, dy, m) {
+    const r = vw - m - p.x - dx;
+    const l = p.x - dx - m;
+    const d = vh - m - p.y - dy;
+    const u = p.y - dy - m;
+    if (decide) {
+      this.up = d < sh && (u >= sh || u > d);
+      if (r >= sw && l >= sw) {
+        const top = this.up ? p.y - dy - sh : p.y + dy;
+        this.left = !!avoid && cover(avoid, p.x - dx - sw, top, sw, sh) < cover(avoid, p.x + dx, top, sw, sh);
+      } else this.left = r >= sw ? false : l >= sw ? true : l > r;
+      return;
+    }
+    if (this.left ? l < sw - SLACK && r >= sw : r < sw - SLACK && l >= sw) this.left = !this.left;
+    if (this.up ? u < sh - SLACK && d >= sh : d < sh - SLACK && u >= sh) this.up = !this.up;
   }
 
   // ─── visibility ────────────────────────────────────────────
@@ -170,9 +292,14 @@ export class Cursor {
     this.x = x;
     this.y = y;
     this.vx = this.vy = 0;
-    this.lx.snap(x + PILL_DX);
-    this.ly.snap(y + PILL_DY);
+    this.rx.snap(x);
+    this.ry.snap(y);
+    this.lx.snap(x);
+    this.ly.snap(y);
     this.tilt.snap(0);
+    this.pop.snap(this.alive ? 0.5 : 1);
+    this.fresh = true;
+    this.label = null;
     this.el.classList.add("is-on");
     if (this.pill) this.pill.classList.add("is-on");
     this.loop.add(this);
@@ -184,6 +311,7 @@ export class Cursor {
     this.point = null;
     this.el.classList.remove("is-on");
     if (this.pill) this.pill.classList.remove("is-on");
+    if (this.speech) this.speech.drop();
   }
 
   /** Fade out where it is — for a page that is being navigated away from. */
@@ -193,14 +321,12 @@ export class Cursor {
     this.hideNow();
   }
 
-  /** Place without a flight, e.g. the resting spot inside a freshly built scene. */
+  /** Rest at a point without a flight, e.g. the starting spot of a freshly built scene. */
   park(x, y) {
     if (this.flight) this.flight.done(false);
     this.flight = null;
     this.anchor = () => ({ x, y });
     this.restAt = performance.now();
-    this.ox.snap(0);
-    this.oy.snap(0);
     if (!this.visible) this.show(x, y);
     this.loop.wake();
   }
@@ -208,10 +334,10 @@ export class Cursor {
   // ─── flights ───────────────────────────────────────────────
   entryPoint(p) {
     const { w, h } = this.bounds();
-    // From below for anything in the upper part of the view — the longest, most
-    // visible arc — and from the far side for anything low on it.
-    if (p.y < h * 0.55) return { x: clamp(p.x + w * 0.16, 24, w - 24), y: h + 44 };
-    return p.x > w / 2 ? { x: -44, y: p.y - h * 0.22 } : { x: w + 44, y: p.y - h * 0.22 };
+    // Close by — a short arc up from below, on the side with more room — so the
+    // cursor is seen arriving rather than found already there.
+    const dir = p.x < w / 2 ? 1 : -1;
+    return { x: clamp(p.x + dir * 120, 12, w - 12), y: clamp(p.y + 150, 12, h - 12) };
   }
 
   exitPoint() {
@@ -243,8 +369,6 @@ export class Cursor {
       if (!this.alive) {
         if (exit) this.hideNow();
         else {
-          this.ox.snap(0);
-          this.oy.snap(0);
           this.x = p.x;
           this.y = p.y;
         }
@@ -268,7 +392,7 @@ export class Cursor {
       const bend = Math.min(dist * 0.2, 120) * this.side;
       const nx = -uy * bend;
       const ny = ux * bend;
-      const over = exit ? 0 : Math.min(9, dist * 0.035);
+      const over = exit ? 0 : Math.min(6, dist * 0.025);
       const x0 = sx - p.x;
       const y0 = sy - p.y;
 
@@ -300,7 +424,7 @@ export class Cursor {
   leave() {
     if (!this.visible) return Promise.resolve(true);
     const out = this.exitPoint();
-    return this.flyTo(() => out, { exit: true, duration: 560 });
+    return this.flyTo(() => out, { exit: true, duration: 420 });
   }
 
   // ─── gestures (pictures only) ──────────────────────────────
@@ -341,10 +465,10 @@ export class Cursor {
   nudge() {
     if (!this.visible || this.flight) return;
     if (this.alive) {
-      this.ox.v += 120;
-      this.oy.v += 150;
+      this.rx.v += 150;
+      this.ry.v += 190;
     }
-    setTimeout(() => this.press(), 170);
+    setTimeout(() => this.press(), 150);
     this.loop.wake();
   }
 
@@ -353,69 +477,5 @@ export class Cursor {
     this.loop.delete(this);
     this.el.remove();
     if (this.pill) this.pill.remove();
-  }
-}
-
-/**
- * The ring around a target. Page layer only. Measured in the same frame as the
- * cursor so the two never drift apart while the page scrolls.
- */
-export class Halo {
-  constructor(layer, loop) {
-    this.loop = loop;
-    this.el = document.createElement("div");
-    this.el.className = "gd-halo";
-    this.el.innerHTML = "<i></i>";
-    layer.appendChild(this.el);
-    this.target = null;
-    this.rect = null;
-    this.w = -1;
-    this.h = -1;
-    this.radius = 10;
-    loop.add(this);
-  }
-
-  show(target) {
-    this.target = target;
-    this.rect = null;
-    const r = parseFloat(getComputedStyle(target).borderTopLeftRadius) || 0;
-    this.radius = clamp(r, 6, 40);
-    this.el.classList.remove("is-on");
-    this.pending = true;
-    this.loop.wake();
-  }
-
-  hide() {
-    this.target = null;
-    this.pending = false;
-    this.el.classList.remove("is-on");
-  }
-
-  measure() {
-    this.rect = this.target && this.target.isConnected ? this.target.getBoundingClientRect() : null;
-  }
-
-  render() {
-    const r = this.rect;
-    if (!r) return false;
-    const pad = 6;
-    const w = Math.max(r.width + pad * 2, 40);
-    const h = Math.max(r.height + pad * 2, 40);
-    const x = r.left + r.width / 2 - w / 2;
-    const y = r.top + r.height / 2 - h / 2;
-    if (Math.abs(w - this.w) > 0.5 || Math.abs(h - this.h) > 0.5) {
-      this.w = w;
-      this.h = h;
-      this.el.style.width = `${w.toFixed(1)}px`;
-      this.el.style.height = `${h.toFixed(1)}px`;
-      const small = Math.min(w, h);
-      this.el.style.borderRadius = `${Math.min(this.radius + pad, small / 2).toFixed(1)}px`;
-    }
-    this.el.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`;
-    if (this.pending) {
-      this.pending = false;
-      this.el.classList.add("is-on");
-    }
-    return !!this.target;
   }
 }

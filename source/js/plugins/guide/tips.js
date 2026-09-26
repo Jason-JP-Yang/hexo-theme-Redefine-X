@@ -20,7 +20,7 @@
  *   prepare(el)         reveal something before pointing (a menu, hidden
  *                       buttons); returns the undo
  *   resolve(el)         the exact element to point at once prepared
- *   frame(el)           extra elements the card must not cover
+ *   frame(el)           extra elements the bubble should cover least of
  *   fulfilled()         the reader has done it already: close, and count it
  *
  * `key` is what Understand stores. Two tips that are the same advice on
@@ -384,7 +384,6 @@ export function notes(ctx) {
         targets: () => [block],
         point: [0.5, 0.5],
         text: () => ({
-          kicker: t("note_kicker"),
           title: note.getAttribute("data-guide-title") || t("note_title"),
           body: note.getAttribute("data-guide-body") || "",
         }),

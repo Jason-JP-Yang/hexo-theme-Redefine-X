@@ -233,6 +233,7 @@ notifications:
 
 guide:
   label: ガイド
+  colon: "："
   menu_title: ガイド
 
 management:

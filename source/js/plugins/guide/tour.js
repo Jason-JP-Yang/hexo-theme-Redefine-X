@@ -27,7 +27,7 @@ export class Tour {
   /**
    * @param {object} def   {id, name, steps:[{id,title,body,scene,live,liveTitle,liveBody}]}
    *                       or {menu:true, entries, build(id)}
-   * @param {object} opts  {cursor, halo, from}
+   * @param {object} opts  {cursor, from}
    */
   constructor(def, opts = {}) {
     this.def = def;
@@ -309,10 +309,9 @@ export class Tour {
     this.scene.stop();
     this.root.classList.add("is-live");
     this.liveEl = el;
-    const { cursor, halo } = this.opts;
+    const { cursor } = this.opts;
     if (!cursor) return;
     const card = this.card.getBoundingClientRect();
-    halo.show(el);
     cursor.flyTo(anchorOf(el, [0.5, 0.6]), { from: { x: card.left + card.width / 2, y: card.top + 24 } });
   }
 
@@ -320,9 +319,7 @@ export class Tour {
     if (!this.liveEl) return;
     this.liveEl = null;
     this.root.classList.remove("is-live");
-    const { cursor, halo } = this.opts;
-    if (halo) halo.hide();
-    if (cursor) cursor.vanish();
+    if (this.opts.cursor) this.opts.cursor.vanish();
   }
 
   /** The guide's cursor, if it brought the reader here, steps into the card. */

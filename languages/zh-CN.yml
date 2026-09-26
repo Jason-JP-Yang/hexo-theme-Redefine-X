@@ -237,8 +237,7 @@ notifications:
 guide:
   label: 向导
   you: 你
-  kicker: 提示
-  note_kicker: 作者批注
+  colon: "："
   note_title: 来自作者的说明
   understand: 知道了
   more: 查看详情

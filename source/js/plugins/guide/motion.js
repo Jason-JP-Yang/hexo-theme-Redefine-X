@@ -1,7 +1,7 @@
 /**
  * Guide — motion primitives.
  *
- * Everything the cursor, the callout and the tour scenes move with: a spring,
+ * Everything the cursor, its label and the tour scenes move with: a spring,
  * the easing curves, the arc a flight follows, the drift that keeps a resting
  * cursor alive, and the frame loop that drives all of it.
  *
@@ -29,15 +29,16 @@ export function bezier(p0, p1, p2, p3, t) {
 // Fitts-shaped: a long flight is slower, but not proportionally so — a hand
 // crossing the screen does not take three times as long as one crossing a third.
 export function flightMs(distance) {
-  return clamp(340 + 125 * Math.log2(1 + distance / 28), 340, 1150);
+  return clamp(210 + 92 * Math.log2(1 + distance / 36), 210, 720);
 }
 
 // Two incommensurate sines per axis never visibly repeat, so a cursor waiting on
-// a target reads as held by a hand rather than as a looping animation.
+// a target reads as held by a hand rather than as a looping animation. Under a
+// pixel either way: felt, not watched.
 export function drift(t) {
   return {
-    x: 2.0 * Math.sin(t * 0.0019) + 1.0 * Math.sin(t * 0.0047 + 1.3),
-    y: 1.6 * Math.sin(t * 0.0016 + 0.7) + 1.1 * Math.sin(t * 0.0041 + 2.1),
+    x: 0.55 * Math.sin(t * 0.0013) + 0.3 * Math.sin(t * 0.0031 + 1.3),
+    y: 0.45 * Math.sin(t * 0.0011 + 0.7) + 0.3 * Math.sin(t * 0.0027 + 2.1),
   };
 }
 

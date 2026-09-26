@@ -2,7 +2,7 @@
  * Guide — the director.
  *
  * Decides WHICH tip the cursor gives, WHEN, and what happens after. The tips
- * themselves are data (tips.js); the cursor, its ring and the card are drawn by
+ * themselves are data (tips.js); the cursor and what it says are drawn by
  * cursor.js and callout.js; the walkthroughs behind "View More" are loaded only
  * when one is opened (tours.js).
  *
@@ -26,25 +26,25 @@
 
 import { isDone, markDone, markShown, wasShown, loadStrings, t, resetAll } from "./store.js";
 import { Loop, Run, isCancel, CANCELLED } from "./motion.js";
-import { Cursor, Halo } from "./cursor.js";
+import { Cursor } from "./cursor.js";
 import { Callout } from "./callout.js";
 import { catalog, notes } from "./tips.js";
 import { shown, rectRatio, ratioInView, unionRect, anchorOf, isIOS, isStandalone } from "./dom.js";
 import { onScroll, onRawScroll, getMetrics } from "../../tools/scrollScheduler.js";
 
 const T = {
-  SETTLE: 1500, // after a page view, before anything is considered
-  FIRST: 1100, // then, before the first tip
-  DWELL: 800, // a view tip's target must stay in view this long
-  CALM: 700, // and the page must have been still this long
-  INPUT: 1200, // or this long since the last press or key
-  ANSWER: 15000, // unanswered this long, the cursor moves on
-  NUDGE: 3800, // a "press here" gesture this often while waiting
+  SETTLE: 700, // after a page view, before anything is considered
+  FIRST: 300, // then, before the first tip
+  DWELL: 500, // a view tip's target must stay in view this long
+  CALM: 450, // and the page must have been still this long
+  INPUT: 700, // or this long since the last press or key outside the guide
+  ANSWER: 12000, // unanswered this long once it has been said, the cursor moves on
+  NUDGE: 5000, // a "press here" gesture this often while waiting, twice at most
   MIN_SHOWN: 2200, // on screen for less than this, a tip has not been seen
-  CHAIN: 700, // between links of a chain
-  COOLDOWN: 9000, // between unrelated tips
+  CHAIN: 200, // between links of a chain
+  COOLDOWN: 5000, // between unrelated tips
   LATER: 45000, // after "not now"
-  LINGER: 2600, // how long the cursor waits for a next tip before leaving
+  LINGER: 2000, // how long the cursor waits for a next tip before leaving
   PER_VIEW: 4, // tips per page view
 };
 
@@ -152,7 +152,7 @@ function untilReady(my) {
       const s = window.__redefineScroll;
       const flying = s && s.isScrollFlight && s.isScrollFlight();
       if (!preloaderOn() && !flying && performance.now() - start >= T.SETTLE) return resolve(true);
-      setTimeout(check, 250);
+      setTimeout(check, 150);
     };
     check();
   });
@@ -171,14 +171,8 @@ function ensureUI() {
 
   const loop = new Loop();
   const bounds = () => ({ w: document.documentElement.clientWidth, h: window.innerHeight });
-  ui = {
-    layer,
-    loop,
-    sr,
-    halo: new Halo(layer, loop),
-    cursor: new Cursor({ layer, loop, label: t("label", "Guide"), bounds }),
-    callout: new Callout(layer, loop, onAction),
-  };
+  const cursor = new Cursor({ layer, loop, label: t("label", "Guide"), bounds });
+  ui = { layer, loop, sr, cursor, callout: new Callout(cursor, onAction) };
   return ui;
 }
 
@@ -309,6 +303,7 @@ async function present({ tip, el }) {
     key: tip.key,
     run: new Run(),
     target: null,
+    anchor: null,
     shownAt: 0,
     outcome: null,
     resolve: null,
@@ -336,21 +331,14 @@ async function present({ tip, el }) {
     if (!text || !text.title) throw CANCELLED;
     a.target = target;
 
-    const anchor = anchorOf(target, tip.point);
-    await a.run.guard(u.cursor.flyTo(anchor));
-    if (!target.isConnected || busy(performance.now(), true)) throw CANCELLED;
-    if (ratioInView(target) < 0.3) {
-      a.outcome = "lost";
-      throw CANCELLED;
-    }
-
+    // Laid out before the flight, so the cursor arrives already facing the side
+    // the finished bubble fits on.
+    const anchor = (a.anchor = anchorOf(target, tip.point));
     const extra = tip.frame ? tip.frame(target) || [] : [];
-    const avoid = () => unionRect([target, ...extra]);
-    u.halo.show(target);
-    u.callout.open(
+    u.callout.prepare(
       {
         id: tip.id,
-        kicker: text.kicker || t("kicker"),
+        colon: t("colon", ": "),
         title: text.title,
         body: text.body,
         ok: t("understand"),
@@ -358,10 +346,17 @@ async function present({ tip, el }) {
         later: t("later"),
         wait: T.ANSWER,
       },
-      anchor,
-      avoid,
+      () => unionRect([target, ...extra]),
     );
-    announce(text.title);
+    await a.run.guard(u.cursor.flyTo(anchor));
+    if (!target.isConnected || busy(performance.now(), true)) throw CANCELLED;
+    if (ratioInView(target) < 0.3) {
+      a.outcome = "lost";
+      throw CANCELLED;
+    }
+
+    u.callout.speak();
+    announce(`${text.title}. ${u.callout.text}`);
     a.shownAt = performance.now();
 
     // Pressing the very thing the tip is about is the best answer there is.
@@ -403,16 +398,17 @@ function waitAnswer(a) {
       } catch {}
       if (overlayOpen()) return a.resolve("lost");
 
-      // The ring is measured every frame by the loop; reading its rect here
+      // The cursor measures its target every frame; reading that rect here
       // costs no layout of our own.
-      if (rectRatio(u.halo.rect) < 0.3) {
+      if (rectRatio(a.anchor.rect) < 0.3) {
         lostFor += dt;
         if (lostFor > 700) return a.resolve("lost");
       } else lostFor = 0;
 
-      if (u.callout.held || document.hidden) return;
+      // The clock starts once everything has been said.
+      if (!u.callout.ready || u.callout.held || document.hidden) return;
       elapsed += dt;
-      if (nudges < 3 && elapsed > T.NUDGE * (nudges + 1)) {
+      if (nudges < 2 && elapsed > T.NUDGE * (nudges + 1)) {
         nudges++;
         u.cursor.nudge();
       }
@@ -438,10 +434,7 @@ function conclude(a, outcome) {
     } catch {}
   }
   const u = ui;
-  if (u) {
-    u.callout.close();
-    u.halo.hide();
-  }
+  if (u) u.callout.close();
 
   const seen = a.shownAt && performance.now() - a.shownAt >= T.MIN_SHOWN;
   if (outcome === "understand" || outcome === "acted" || outcome === "fulfilled") markDone(a.key);
@@ -489,7 +482,7 @@ async function openTour(id, { from = null, key = null } = {}) {
   try {
     await loadStrings();
     const mod = await tours();
-    const result = await mod.openTour(id, ctx || readContext(), { from, cursor: u.cursor, halo: u.halo });
+    const result = await mod.openTour(id, ctx || readContext(), { from, cursor: u.cursor });
     if (result && result.completed && key) markDone(key);
   } catch (e) {
     console.error("[guide] the walkthrough could not open", e);
@@ -510,7 +503,7 @@ async function openMenu() {
   try {
     await loadStrings();
     const mod = await tours();
-    const result = await mod.openMenu(ctx || readContext(), { cursor: u.cursor, halo: u.halo });
+    const result = await mod.openMenu(ctx || readContext(), { cursor: u.cursor });
     reset = !!(result && result.reset);
   } catch (e) {
     console.error("[guide] the guide menu could not open", e);
@@ -540,7 +533,6 @@ function stopAll() {
     }
   } else if (ui) {
     ui.cursor.vanish();
-    ui.halo.hide();
     ui.callout.close();
   }
 }
@@ -597,17 +589,19 @@ function boot() {
     "guide",
   );
 
+  // Answering the guide is not the reader being busy with the page.
+  const outside = (e) => !(e.target && e.target.closest && e.target.closest(".gd-layer"));
   document.addEventListener(
     "pointerdown",
-    () => {
-      lastInput = performance.now();
+    (e) => {
+      if (outside(e)) lastInput = performance.now();
     },
     { capture: true, passive: true },
   );
   document.addEventListener(
     "keydown",
     (e) => {
-      lastInput = performance.now();
+      if (outside(e)) lastInput = performance.now();
       if (e.key === "Escape" && active && active.resolve && !overlayOpen()) active.resolve("later");
     },
     true,
