@@ -147,6 +147,9 @@ function runtimeSurface(target) {
 }
 
 function onClick(e) {
+  // The guide's Let's try presses controls for the reader with synthetic clicks;
+  // that is already counted as Use Guide, not as the reader using the control.
+  if (!e.isTrusted) return;
   // Modifier and middle clicks open a new tab: the reader is collecting links,
   // not navigating, and counting those as an open inflates every list.
   if (e.button > 1 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

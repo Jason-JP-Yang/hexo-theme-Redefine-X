@@ -260,6 +260,17 @@ guide:
   reset_confirm: Press again to confirm
   reset_done: Every tip will show again
   reset_note: Tips you marked as understood will appear again as you browse. Nothing else is reset.
+  lets_try: Let's try
+  lets_go: Let's go
+  welcome: You're finally back! Let's pick up where we left off.
+  prompt_down: There's more below — scroll down and I'll show you.
+  prompt_up: Next up is above — scroll back up a little.
+  prompt_idle: Still with me? There's plenty more below — keep scrolling.
+  prompt_comments: Nearly at the end — the discussion is just below. Scroll down to join in.
+  prompt_recommend: Before you go — a few more posts are waiting just above.
+  intro:
+    title: Hello, I'm your guide
+    body: I'm the virtual guide of <b>{site}</b>. I'll show you round — how to follow along, where everything is, the tools that make reading easier, and where the discussion happens. Press <b>Let's go</b> to start; you can find me again any time behind the compass in the side tools.
   tips:
     follow:
       title: Follow the blog
@@ -270,27 +281,69 @@ guide:
     ios_push:
       title: One more step for push on iPhone
       body: iOS delivers notifications only to sites added to the Home Screen. Add the blog there, open it from its icon, and push starts working. The inbox works either way.
+    follow_signed:
+      title: Follow the blog
+      body: New posts, instant notes and announcements, delivered to an inbox on this site — and, if you allow it, as push notifications on this device. You are already signed in, so one press does it.
+    inbox_manage:
+      title: Your inbox
+      body: Everything you follow lands here, newest first. <b>Manage subscription</b> decides what reaches you, and on which devices.
+    inbox_push:
+      title: Notifications on this device
+      body: Turn this on to hear the moment something new is published — even with the blog closed.
+    inbox_topics:
+      title: Choose what reaches you
+      body: Posts and instant notes can each be switched off; the inbox and announcements always stay on. Nothing here unfollows you.
+    inbox_back:
+      title: Back to your notifications
+      body: This arrow returns to the inbox.
+    inbox_close:
+      title: All set
+      body: Press anywhere outside the inbox to close it. The bell opens it again whenever you like.
     navbar:
       title: Everything is one menu away
       body: <b>Posts</b> holds Archives, Tags, Categories and the photo wall. <b>About</b> and <b>Links</b> hold the rest of the site.
     navbar_mobile:
       title: The menu
-      body: Archives, Tags, Categories, the photo wall and the rest of the site are behind this button.
-    notes:
-      title: Instant notes
-      body: Short updates rise here as bubbles — remarks that do not need a whole post.
+      body: Archives, Tags, Categories and the rest of the site are behind this button — the photo wall is under <b>Posts</b>.
     masonry:
       title: The photo wall
       body: Albums of photographs, laid out as a wall. Any photo opens full-size, and many carry the camera settings they were taken with.
-    posts:
-      title: Every tile is a post
-      body: A tile's size follows how much the post has to say, pinned posts come first, and posts in a series are gathered into one band. Open any tile to read it.
+    notes:
+      title: Instant notes
+      body: Short updates rise here as bubbles — remarks that do not need a whole post.
+    banner_scroll:
+      title: Straight to the posts
+      body: This arrow takes you past the banner to everything the blog has published.
+    author:
+      title: Who writes here
+      body: The author, and how much there is to read — posts, categories and tags, each one press away.
+    author_pager:
+      title: More than one author
+      body: This card turns to each collaborator in turn, with the posts, categories and tags each has written. Press a dot to go to someone directly, or swipe the card.
+    links:
+      title: Every way in
+      body: Archives by date, Tags and Categories by subject, the photo wall, and the author's GitHub — one press each.
     pulse:
       title: Site activity
       body: Each square is one day of visits over the past year. The deeper the colour, the busier the day.
-    pager:
-      title: More than one author
-      body: This card turns to each collaborator in turn. Press a dot to go to someone directly, or swipe the card.
+    post:
+      title: Start with this one?
+      body: Every tile is a post — its size follows how much the post has to say, pinned posts come first, and a series is gathered into one band. This one is a good place to begin.
+    tools:
+      title: Reading tools
+      body: The gear opens the tools every page has — text size, dark mode, this guide, and the way back to the top.
+    tools_font:
+      title: Text size
+      body: Makes the text larger; the button below it makes it smaller again. Your choice is kept on every page.
+    tools_theme:
+      title: Dark or light
+      body: Switches the whole blog between its dark and light themes.
+    guide_entry:
+      title: Every guide, whenever you want it
+      body: The compass in these tools opens every walkthrough, and can bring back the tips you have already dismissed.
+    tools_top:
+      title: Back to the top
+      body: Shows how much of the page you have read; press it to go straight back to the top.
     exif_toggle:
       title: This photo has camera data
       body: Press the arrow to unfold how it was taken — camera, lens, exposure and the rest.
@@ -309,15 +362,12 @@ guide:
     toc:
       title: Contents
       body: Shows or hides the table of contents. The section you are reading stays highlighted, and any heading is one press away.
-    tools:
-      title: Reading tools
-      body: Font size, dark mode, and jumps to the top or bottom of the page are all in here.
     comments:
       title: Join the discussion
       body: Comments on this blog are GitHub Discussions. Sign in with GitHub once, and you can comment, reply and react under any post.
-    guide_entry:
-      title: Every guide, whenever you want it
-      body: The compass in these tools opens every walkthrough, and can bring back the tips you have already dismissed.
+    recommend:
+      title: Read on
+      body: If you enjoyed this post, here is another you might like — picked from the ones most like it.
     album_photo:
       title: Browse the album
       body: Open a photo to see it full-size, then swipe or use the arrows to move through the whole album.

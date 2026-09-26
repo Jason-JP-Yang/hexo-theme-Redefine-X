@@ -68,7 +68,7 @@ function split(root) {
 export class Callout {
   /**
    * @param {import("./cursor.js").Cursor} cursor  the page cursor, whose label this becomes
-   * @param {(act: string) => void} onAction         "ok" | "more" | "later"
+   * @param {(act: string) => void} onAction         "ok" | "more" | "try" | "later"
    */
   constructor(cursor, onAction) {
     this.cursor = cursor;
@@ -83,6 +83,7 @@ export class Callout {
       '<div class="gd-say-actions"><div class="gd-say-actions-in">' +
         '<button type="button" class="gd-say-btn is-ok" data-act="ok"></button>' +
         '<button type="button" class="gd-say-btn" data-act="more"></button>' +
+        '<button type="button" class="gd-say-btn" data-act="try"></button>' +
         '<button type="button" class="gd-say-x" data-act="later"><i class="fa-regular fa-xmark" aria-hidden="true"></i></button>' +
         "</div></div>" +
         '<div class="gd-say-timer"></div><span class="gd-sr" id="gd-say-text"></span>',
@@ -94,6 +95,7 @@ export class Callout {
     this.actIn = this.actWrap.firstElementChild;
     this.ok = box.querySelector('[data-act="ok"]');
     this.more = box.querySelector('[data-act="more"]');
+    this.tryBtn = box.querySelector('[data-act="try"]');
     this.later = box.querySelector('[data-act="later"]');
     this.timer = box.querySelector(".gd-say-timer");
     this.srText = box.querySelector("#gd-say-text");
@@ -156,8 +158,9 @@ export class Callout {
 
   /**
    * Lay out what is about to be said, unseen, so the cursor can choose its side
-   * while it is still on the way.
-   * @param {object} spec  {id, colon, title, body, ok, more, later, wait}
+   * while it is still on the way. A button whose label is empty is left out, and
+   * with none at all the bubble is only what it says; `wait` 0 shows no clock.
+   * @param {object} spec  {id, colon, title, body, ok, more, try, later, wait}
    */
   prepare(spec) {
     clearTimeout(this.dropTimer);
@@ -184,12 +187,17 @@ export class Callout {
     this.srText.textContent = this.text;
 
     this.ok.textContent = spec.ok || "";
+    this.ok.hidden = !spec.ok;
     this.more.hidden = !spec.more;
     if (spec.more) this.more.innerHTML = `${spec.more}<i class="fa-solid fa-arrow-right" aria-hidden="true"></i>`;
+    this.tryBtn.hidden = !spec.try;
+    if (spec.try) this.tryBtn.innerHTML = `${spec.try}<i class="fa-solid fa-hand-pointer" aria-hidden="true"></i>`;
+    this.later.hidden = !spec.later;
     this.later.setAttribute("aria-label", spec.later || "");
     this.later.title = spec.later || "";
+    this.pill.classList.toggle("no-actions", !spec.ok && !spec.more && !spec.try && !spec.later);
     // Analytics marks — tools/uxEvents.js reads them off the button pressed.
-    for (const [btn, action] of [[this.ok, "understand"], [this.more, "more"]]) {
+    for (const [btn, action] of [[this.ok, "understand"], [this.more, "more"], [this.tryBtn, "try"]]) {
       btn.setAttribute("data-ux", "guide");
       btn.setAttribute("data-ux-action", action);
       btn.setAttribute("data-ux-id", spec.id || "");
@@ -386,7 +394,8 @@ export class Callout {
     this.state = "open";
     this.openAt = now;
     this.pill.classList.add("is-ready");
-    this.timer.style.setProperty("--gd-wait", `${this.spec.wait || 12000}ms`);
+    if (!this.spec.wait) return;
+    this.timer.style.setProperty("--gd-wait", `${this.spec.wait}ms`);
     this.timer.replaceChildren(document.createElement("i"));
   }
 

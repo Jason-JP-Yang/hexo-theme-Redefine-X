@@ -156,8 +156,10 @@ export class Tour {
       on = false;
       const dx = e.clientX - x0;
       if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(e.clientY - y0) * 1.5) {
-        if (dx < 0) this.forward();
-        else this.go(this.index - 1, -1);
+        // A swipe pages; it never presses Follow or Let's Explore.
+        if (dx < 0) {
+          if (!this.isLast()) this.forward();
+        } else this.go(this.index - 1, -1);
       }
     });
     el.addEventListener("pointercancel", () => (on = false));
@@ -271,9 +273,11 @@ export class Tour {
     if (this.mode === "menu") return this.close("close");
     if (this.mode !== "steps") return;
     if (!this.isLast()) return this.go(this.index + 1, 1);
-    // Follow / Let's Explore: placeholders for the guided run through the real
-    // page; they do nothing yet.
-    if (this.steps[this.index].final) return;
+    // The end of following. Follow is the page's own: the button is a
+    // .follow-trigger, which plugins/notifications.js answers by signing the
+    // reader in or following. Let's Explore opens the inbox for the guide to
+    // walk through (index.js reads both off the result).
+    if (this.steps[this.index].final) this.result[this.tour.following ? "explore" : "follow"] = true;
     this.finish();
   }
 
@@ -330,6 +334,7 @@ export class Tour {
     else if (!final) this.next.innerHTML = `${t("done")}${icon("fa-check")}`;
     else if (this.tour.following) this.next.innerHTML = `${t("explore")}${icon("fa-compass")}`;
     else this.next.innerHTML = `<i class="fa-regular fa-bell" aria-hidden="true"></i>${t("follow")}`;
+    this.next.classList.toggle("follow-trigger", final && !this.tour.following);
     // Only finishing a walkthrough is worth an analytics event; paging is not.
     ux(this.next, last && !final);
   }

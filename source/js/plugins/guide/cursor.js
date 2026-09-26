@@ -110,6 +110,7 @@ export class Cursor {
     this.shape = "";
     this.clip = null;
     this.redecide = false;
+    this.still = false;
 
     loop.add(this);
   }
@@ -183,7 +184,7 @@ export class Cursor {
       y = this.point.y;
       if (this.alive) {
         // Eased in from the landing, so settling and drifting are one motion.
-        const k = Math.min(1, (now - this.restAt) / 700);
+        const k = this.still ? 0 : Math.min(1, (now - this.restAt) / 700);
         const d = drift(now + this.seed);
         x = this.rx.step(x + d.x * k, dt);
         y = this.ry.step(y + d.y * k, dt);
@@ -225,7 +226,34 @@ export class Cursor {
       this.body.style.transform = `scale(${this.left ? -1 : 1}, ${this.up ? -1 : 1})`;
     }
 
-    return this.visible;
+    // A resting cursor that has come to a stop asks for no more frames.
+    if (!this.still || !this.alive) return this.visible;
+    return (
+      !!this.flight ||
+      Math.abs(this.vx) > 1 ||
+      Math.abs(this.vy) > 1 ||
+      Math.abs(this.rx.v) > 0.5 ||
+      Math.abs(this.ry.v) > 0.5 ||
+      Math.abs(this.lx.x - x) > 0.1 ||
+      Math.abs(this.ly.x - y) > 0.1 ||
+      this.pop.x < 0.999 ||
+      !this.turnX.settled(this.left ? 1 : 0) ||
+      !this.turnY.settled(this.up ? 1 : 0) ||
+      !!(this.speech && this.speech.active)
+    );
+  }
+
+  /** Rest without the drift — waiting at the side, where it should cost nothing. */
+  rest(on = true) {
+    this.still = on;
+    this.loop.wake();
+  }
+
+  /** A push along the page, the way a thumb gives it: the hint to scroll. */
+  bob(dir) {
+    if (!this.visible || this.flight || !this.alive) return;
+    this.ry.v += 230 * dir;
+    this.loop.wake();
   }
 
   /** Hang the label off the arrow's corner. */
