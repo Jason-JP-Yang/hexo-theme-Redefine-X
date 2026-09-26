@@ -1,452 +1,347 @@
 /**
  * Guide — the walkthroughs, as content.
  *
- * Every walkthrough is built for the reader in front of it: steps a signed-in
- * reader has already done are left out, the iPhone step is a required step on
- * an iPhone in Safari and an aside everywhere else, the permission prompt is
- * the one this device will actually show, and zooming is a pinch on a touch
- * screen and a scroll wheel elsewhere.
+ * Following is shown for the reader's own system — Windows, macOS, iPhone and
+ * iPad, or Android — with a picker to change it: each draws its own browser,
+ * notification and permission prompt, iPhone and iPad deliver push only to a
+ * site on the Home Screen, and a Mac can keep the blog in the Dock. The blog in
+ * every scene is the real site under its own CSS (mock/site.js); the devices and
+ * GitHub's pages are drawn by mock/device.js and mock/github.js.
  *
- * The mocks borrow the blog's own labels from `notifications_i18n`, so the inbox
- * in a scene says exactly what the real one says. GitHub's pages are English
- * everywhere, so theirs are not translated.
+ * Framing, set step by step: a step opens and closes on the whole device, and
+ * the camera goes in only where there is something to read — the banner that
+ * arrived, the inbox, the form being filled in, the prompt that opened — each
+ * shot at the zoom that suits it, and comes back out afterwards. A button
+ * outside the frame is panned into it before it is pressed.
+ *
+ * Every scene builds its markup lazily, at play time, after the home page has
+ * been read (`site.prepare()`).
  */
 
 import { Tour } from "./tour.js";
 import { t, tf, escapeHTML as e } from "./store.js";
-import { firstShown } from "./dom.js";
+import { PLATFORMS, PLATFORM_ICONS, detectPlatform, isPhone } from "./platform.js";
+import * as site from "./mock/site.js";
+import * as dev from "./mock/device.js";
+import * as gh from "./mock/github.js";
 
-const S = (k) => t(`scenes.${k}`);
 const M = (k) => e(t(`mock.${k}`));
-const N = (k, fallback) => e(((window.theme && window.theme.notifications_i18n) || {})[k] || fallback);
 
-function host() {
-  return (window.config && window.config.hostname) || location.hostname;
+// The navbar has a desktop row and a mobile row; a mock shows the one it measured room for.
+const inRow = (sel) => `.gd-site:not(.navbar-collapsed) .desktop ${sel}, .gd-site.navbar-collapsed .mobile ${sel}`;
+const BELL = { desk: inRow(".notifications-bell"), phone: ".gd-site .mobile .notifications-bell" };
+const FOLLOW = { desk: inRow(".follow-trigger"), phone: ".gd-site .mobile .follow-trigger" };
+const PANEL = ".gd-site .notifications-panel";
+const SCREEN = ".gd-screen";
+const GH_LOGIN = "github.com/login";
+const GH_SIGNUP = "github.com/signup";
+const GH_AUTHORIZE = "github.com/login/oauth/authorize";
+
+// ─── building blocks ─────────────────────────────────────────
+/** The blog in `where`'s page area (a key of dev.VIEW). */
+function blog(os, where, opts = {}) {
+  const v = dev.VIEW[where];
+  return site.site(Object.assign({ device: isPhone(os) ? "phone" : "desk", w: v.w, h: v.h, vh: v.vh || v.h }, opts));
 }
 
-function site() {
-  const el = document.querySelector(".navbar-content .logo-title");
-  return (el && el.textContent.trim()) || host();
-}
+/** GitHub's page area: the desktop browser's, or null for a phone's own width. */
+const ghView = (os) => (isPhone(os) ? null : dev.VIEW[os]);
 
-// Today, the way a lock screen in the reader's language would print it.
-function today() {
-  try {
-    const lang = document.documentElement.lang || undefined;
-    return new Intl.DateTimeFormat(lang, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
-  } catch {
-    return "";
-  }
-}
+/** Two pages in one browser; `is-b` on `.gd-swap` navigates to the second. */
+const swap = (a, b) => `<div class="gd-swap"><div class="gd-swap-a">${a}</div><div class="gd-swap-b">${b}</div></div>`;
 
-// ─── mock kit ────────────────────────────────────────────────
-const lines = (...widths) => `<div class="gd-m-lines">${widths.map((w) => `<i style="width:${w}%"></i>`).join("")}</div>`;
+const deskBrowser = (os, page, url) => (os === "macos" ? dev.macSafari(page, url) : dev.winChrome(page, { url }));
 
-const browser = (url, inner, cls = "") =>
-  `<div class="gd-m-browser ${cls}"><div class="gd-m-bar"><i></i><i></i><i></i>` +
-  `<span class="gd-m-url"><i class="fa-solid fa-lock" aria-hidden="true"></i><span class="gd-m-url-text">${e(url)}</span></span></div>` +
-  `<div class="gd-m-page">${inner}</div></div>`;
-
-const nav = (right) =>
-  `<div class="gd-m-nav"><span class="gd-m-logo">${e(site())}</span>` +
-  `<span class="gd-m-links"><i></i><i></i><i></i></span><span class="gd-m-right">${right}</span></div>`;
-
-const follow = (cls = "") =>
-  `<span class="gd-m-follow ${cls}"><i class="fa-regular fa-bell" aria-hidden="true"></i>${N("follow_nav", "Follow")}</span>`;
-
-const bell = (cls = "", badge = "") =>
-  `<span class="gd-m-bell ${cls}"><i class="fa-regular fa-bell" aria-hidden="true"></i>` +
-  `<b class="gd-m-badge">${badge}</b></span>`;
-
-const field = (label, cls, type = "") =>
-  `<div class="gd-m-field ${cls}"><span class="gd-m-label">${label}</span>` +
-  `<span class="gd-m-input ${type}"><span class="gd-m-val"></span><i class="gd-m-caret"></i></span></div>`;
-
-const toggle = (cls = "", on = false) => `<span class="gd-m-toggle ${cls}${on ? " is-on" : ""}"><i></i></span>`;
-
-const phone = (screen, cls = "") =>
-  `<div class="gd-m-phone ${cls}"><div class="gd-m-screen">` +
-  `<div class="gd-ios-status"><span>9:41</span><span class="gd-ios-icons"><i class="fa-solid fa-signal" aria-hidden="true"></i>` +
-  `<i class="fa-solid fa-wifi" aria-hidden="true"></i><i class="fa-solid fa-battery-full" aria-hidden="true"></i></span></div>` +
-  `${screen}<div class="gd-m-island"></div><div class="gd-m-homebar"></div></div></div>`;
-
-const photo = (cls) => `<div class="gd-v-photo ${cls}"><i></i></div>`;
-
-// The site's own Home Screen icon, so the installed app in a scene is this blog.
-function appIcon() {
-  const link = document.querySelector('link[rel="apple-touch-icon"], link[rel="icon"]');
-  const href = link && link.href ? String(link.href).replace(/["'()\\]/g, "") : "";
-  return href ? `<span class="gd-m-appicon" style="background-image:url('${href}')"></span>` : `<span class="gd-m-appicon"></span>`;
-}
-
-// ─── scenes: following ───────────────────────────────────────
-function feedScene() {
-  const title = M("post_title");
-  return {
-    cls: "gd-s-feed",
-    html:
-      browser(
-        host(),
-        nav(bell("gd-f-bell") + '<span class="gd-m-avatar"></span>') +
-          `<div class="gd-m-body">` +
-          `<div class="gd-m-card gd-m-new"><span class="gd-m-chip">${M("new")}</span><b>${title}</b>${lines(88, 64)}</div>` +
-          `<div class="gd-m-card"><b class="gd-m-skel"></b>${lines(92, 70)}</div>` +
-          `<div class="gd-m-card"><b class="gd-m-skel"></b>${lines(80)}</div>` +
-          `</div>` +
-          `<i class="gd-m-fly"></i>` +
-          `<div class="gd-m-drop"><div class="gd-m-drop-head">${N("title", "Notifications")}</div>` +
-          `<div class="gd-m-drop-item is-unread"><i></i><b>${title}</b><small>${M("now")}</small></div>` +
-          `<div class="gd-m-drop-item"><i></i><b>${M("note_title")}</b><small>2d</small></div></div>`,
-      ) +
-      `<div class="gd-m-toast">${appIcon()}<span class="gd-m-toast-text">` +
-      `<b>${e(site())}</b><small>${M("push_title")} · ${title}</small></span></div>`,
-    beats: [
-      { do: "auto", say: S("new_post"), then: (s) => s.set(".gd-m-page", "is-new"), ms: 1200 },
-      { do: "auto", say: S("to_inbox"), then: (s) => s.set(".gd-m-page", "is-sent"), ms: 1400 },
-      { do: "auto", say: S("push"), then: (s) => s.set(".gd-s-feed", "is-toast"), ms: 1700 },
-      { do: "press", at: ".gd-f-bell", say: S("open_bell"), then: (s) => s.set(".gd-m-page", "is-open"), ms: 1600 },
-    ],
+function go(url, extra) {
+  return (s) => {
+    s.set(".gd-swap", "is-b");
+    if (url) s.text(".gd-url", url);
+    if (extra) extra(s);
   };
 }
 
-function signupScene() {
-  return {
-    cls: "gd-s-signup",
-    html: browser(
-      "github.com/signup",
-      `<div class="gd-gh">` +
-        `<div class="gd-gh-panel gd-gh-form">` +
-        `<div class="gd-gh-title"><i class="fa-brands fa-github" aria-hidden="true"></i>Sign up to GitHub</div>` +
-        field("Email", "gd-f-email") +
-        field("Password", "gd-f-pass") +
-        field("Username", "gd-f-user") +
-        `<span class="gd-m-btn gd-gh-dark gd-f-go">Continue</span></div>` +
-        `<div class="gd-gh-panel gd-gh-verify"><div class="gd-gh-title">Verify your account</div>` +
-        `<small>Solve this puzzle so we know you are a real person</small>` +
-        `<div class="gd-gh-tiles"><i class="t1"><b class="fa-solid fa-dog"></b></i><i class="t2 gd-f-tile"><b class="fa-solid fa-dog"></b></i>` +
-        `<i class="t3"><b class="fa-solid fa-dog"></b></i></div></div>` +
-        `<div class="gd-gh-panel gd-gh-code"><div class="gd-gh-title">Confirm your email address</div>` +
-        `<small>Enter the code sent to you@example.com</small>` +
-        `<span class="gd-m-input gd-gh-digits gd-f-code"><span class="gd-m-val"></span><i class="gd-m-caret"></i></span></div>` +
-        `<div class="gd-gh-panel gd-gh-done"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><b>Welcome to GitHub</b>` +
-        `<small>@your-name</small></div>` +
-        `</div>`,
-    ),
-    beats: [
-      { do: "type", at: ".gd-f-email", text: "you@example.com", say: S("email") },
-      { do: "type", at: ".gd-f-pass", text: "correct-horse", mask: true, say: S("password") },
-      { do: "type", at: ".gd-f-user", text: "your-name", say: S("username") },
-      { do: "press", at: ".gd-f-go", say: S("create"), then: (s) => s.set(".gd-gh", "is-verify") },
-      { do: "press", at: ".gd-f-tile", say: S("puzzle"), then: (s) => s.set(".gd-gh", "is-code") },
-      { do: "type", at: ".gd-f-code", text: "48152673", say: S("code") },
-      { do: "auto", say: S("welcome"), then: (s) => s.set(".gd-gh", "is-done"), ms: 1600 },
-    ],
-  };
-}
+// The whole device — where every step starts and ends, and where the camera
+// steps back to between two things far apart.
+const WHOLE = { do: "shot", fit: true };
 
-function authorizeScene(variant) {
-  const fromComments = variant === "comments";
-  const blog = fromComments
-    ? `<div class="gd-auth-blog is-comments">${lines(90, 84, 60)}<div class="gd-c-box">` +
-      `<span class="gd-m-btn gd-gh-dark gd-f-start"><i class="fa-brands fa-github" aria-hidden="true"></i>${M("sign_in")}</span>` +
-      `<span class="gd-c-signed"><span class="gd-m-avatar"></span><span class="gd-m-input"><span class="gd-m-val">${M("write_comment")}</span></span></span></div></div>`
-    : `<div class="gd-auth-blog">` +
-      nav(follow("gd-f-start") + '<span class="gd-m-avatar gd-auth-me"></span>') +
-      `<div class="gd-m-body">${lines(92, 86, 70, 90, 54)}</div>` +
-      `<span class="gd-m-okay"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>${M("signed_in")}</span></div>`;
+/**
+ * Up close on `on` (one selector or several), with `pad` stage pixels round it,
+ * but never closer than `zoom` × the whole device: each shot sets its own, for
+ * what there is to read there. `still` frames it where it is now and stays.
+ */
+const focus = (on, zoom, pad = 20, still = false) => ({ do: "shot", on, pad, max: zoom, still });
 
-  return {
-    cls: "gd-s-auth",
-    html: browser(
-      host(),
-      blog +
-        `<div class="gd-auth-gh"><div class="gd-auth-pair"><span class="gd-auth-app">g</span>` +
-        `<span class="gd-auth-dots"><i></i><i></i><i></i></span><span class="gd-m-avatar"></span></div>` +
-        `<div class="gd-gh-title">Authorize giscus</div>` +
-        `<div class="gd-auth-sub"><b>giscus</b> by giscus would like permission to:</div>` +
-        `<ul class="gd-auth-perms">` +
-        `<li><i class="fa-regular fa-id-badge" aria-hidden="true"></i>Verify your GitHub identity (your-name)</li>` +
-        `<li><i class="fa-regular fa-folder-open" aria-hidden="true"></i>Know which resources you can access</li>` +
-        `<li><i class="fa-regular fa-user-pen" aria-hidden="true"></i>Act on your behalf</li></ul>` +
-        `<span class="gd-m-btn gd-gh-green gd-f-auth">Authorize giscus</span>` +
-        `<small class="gd-auth-note">Authorizing will redirect to https://giscus.app</small></div>` +
-        `<div class="gd-auth-wait"><i class="gd-m-spin"></i>${M("redirecting")}</div>`,
-    ),
-    beats: [
-      {
-        do: "press",
-        at: ".gd-f-start",
-        say: S(fromComments ? "press_signin" : "press_follow"),
-        then: (s) => {
-          s.set(".gd-m-page", "is-gh");
-          s.text(".gd-m-url-text", "github.com/login/oauth/authorize");
-        },
+/**
+ * A scene on this system's device, opening on the whole of it. A phone plays in
+ * a taller stage and scrolls by dragging.
+ */
+function scene(os, html, beats, extra = {}) {
+  const phone = isPhone(os);
+  const setup = extra.setup;
+  return Object.assign(
+    {
+      size: phone ? dev.PHONE : dev.DESK,
+      html,
+      view: { fit: true },
+      beats,
+      // For a shot that sets none: half a desktop across, two thirds of a phone down.
+      zoom: phone ? 1.8 : 2,
+      tall: phone,
+      touch: phone,
+    },
+    extra,
+    {
+      setup: (s) => {
+        site.fit(s);
+        if (setup) setup(s);
       },
-      { do: "wait", say: S("to_github"), ms: 1200 },
-      { do: "press", at: ".gd-f-auth", say: S("authorize"), then: (s) => s.set(".gd-m-page", "is-wait") },
-      {
-        do: "auto",
-        say: S("signed_in"),
-        then: (s) => {
-          s.set(".gd-m-page", "is-back");
-          s.text(".gd-m-url-text", host());
-        },
-        ms: 1800,
-      },
-    ],
-  };
-}
-
-function iosScreen() {
-  const rows = [
-    ["ios_copy", "fa-regular fa-copy"],
-    ["ios_reading_list", "fa-regular fa-glasses"],
-    ["ios_bookmark", "fa-regular fa-book"],
-    ["ios_favorites", "fa-regular fa-star"],
-    ["ios_quick_note", "fa-regular fa-note-sticky"],
-    ["ios_find", "fa-regular fa-magnifying-glass"],
-    ["ios_add_home", "fa-regular fa-square-plus", "gd-f-home"],
-    ["ios_markup", "fa-regular fa-pen-nib"],
-    ["ios_print", "fa-regular fa-print"],
-  ];
-  const apps = Array.from({ length: 11 }, (_, i) => `<i class="a${i % 8}"></i>`).join("");
-  return (
-    `<div class="gd-ios-safari">` +
-    `<div class="gd-ios-page">${nav(follow())}${lines(90, 76, 88, 60, 84, 70, 92, 50)}</div>` +
-    `<div class="gd-ios-bar"><span class="gd-ios-btn"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></span>` +
-    `<span class="gd-ios-addr">${e(host())}</span>` +
-    `<span class="gd-ios-btn gd-f-more"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></span></div>` +
-    `<div class="gd-ios-menu"><div class="gd-ios-mi gd-f-share"><span>${M("ios_share")}</span>` +
-    `<i class="fa-regular fa-arrow-up-from-bracket" aria-hidden="true"></i></div>` +
-    `<div class="gd-ios-mi"><span>${M("ios_bookmark")}</span><i class="fa-regular fa-book" aria-hidden="true"></i></div>` +
-    `<div class="gd-ios-mi"><span>${M("ios_reader")}</span><i class="fa-regular fa-align-left" aria-hidden="true"></i></div></div>` +
-    `<div class="gd-ios-sheet"><div class="gd-ios-sheet-head">${appIcon()}` +
-    `<span><b>${e(site())}</b><small>${e(host())}</small></span></div>` +
-    `<div class="gd-ios-list"><div class="gd-ios-scroll">` +
-    rows
-      .map(([k, icon, cls = ""]) => `<div class="gd-ios-row ${cls}"><span>${M(k)}</span><i class="${icon}" aria-hidden="true"></i></div>`)
-      .join("") +
-    `</div></div></div>` +
-    `<div class="gd-ios-add"><div class="gd-ios-add-head"><span>${M("ios_cancel")}</span><b>${M("ios_add_home")}</b>` +
-    `<span class="gd-ios-add-go gd-f-add">${M("ios_add")}</span></div>` +
-    `<div class="gd-ios-add-card">${appIcon()}<span><b>${e(site())}</b><small>${e(host())}</small></span></div>` +
-    `<div class="gd-ios-add-row"><span>${M("ios_web_app")}</span>${toggle("gd-f-webapp")}</div></div>` +
-    `</div>` +
-    `<div class="gd-ios-home"><div class="gd-ios-grid">${apps}<span class="gd-ios-new gd-f-icon">${appIcon()}` +
-    `<small>${e(site())}</small></span></div><div class="gd-ios-dock"><i class="a1"></i><i class="a3"></i><i class="a5"></i><i class="a7"></i></div></div>` +
-    `<div class="gd-ios-app">${nav(follow())}${lines(88, 72, 90, 64, 80)}</div>`
+    },
   );
 }
 
-function pwaScene() {
-  return {
-    cls: "gd-s-pwa",
-    size: { w: 360, h: 420 },
-    camera: { x: 180, y: 297, zoom: 1.2 },
-    park: { x: 256, y: 372 },
-    html: phone(iosScreen()),
-    beats: [
-      { do: "press", at: ".gd-f-more", say: S("tap_more"), then: (s) => s.set(".gd-m-phone", "is-menu") },
-      {
-        do: "press",
-        at: ".gd-f-share",
-        say: S("tap_share"),
-        then: (s) => {
-          s.set(".gd-m-phone", "is-menu", false);
-          s.set(".gd-m-phone", "is-sheet");
-        },
+// ─── following ───────────────────────────────────────────────
+function published(os) {
+  const push = () => {
+    const post = site.newestPost();
+    return dev.banner(os, { title: post.title, body: post.body || t("mock.post_body") });
+  };
+  const later = (s) => {
+    s.set(".gd-push", "is-on", false);
+    site.badge(s, 1);
+  };
+  const phone = isPhone(os);
+  const bell = phone ? BELL.phone : BELL.desk;
+  const html = phone
+    ? () => {
+        const page = blog(os, os === "ios" ? "app" : "android", { following: true, inbox: true });
+        return dev.phone(os, (os === "ios" ? dev.iosApp(page) : dev.andChrome(page)) + push());
+      }
+    : () => dev.desk(os, deskBrowser(os, blog(os, os, { following: true, inbox: true })), push());
+  // Noticed on the whole screen, then read up close — held while it leaves. A
+  // Mac's banner lands beside the bell and the camera goes straight on to the
+  // inbox; elsewhere it steps back first.
+  const onward = phone || os === "windows" ? [WHOLE] : [];
+  return scene(os, html, [
+    { do: "wait", ms: 300 },
+    { do: "auto", then: (s) => s.set(".gd-push", "is-on"), ms: 650 },
+    focus(phone ? [".gd-push", ".gd-site-head"] : ".gd-push", phone ? 1.8 : 2.4, 20, true),
+    { do: "wait", ms: 1700 },
+    { do: "auto", then: later, ms: 350 },
+    ...(phone ? [] : [...onward, focus([bell, PANEL], 1.9)]),
+    { do: "press", at: bell, then: (s) => site.openInbox(s), ms: 650 },
+    ...(phone ? [...onward, focus(PANEL, 1.7)] : []),
+    { do: "wait", ms: 2400 },
+    WHOLE,
+    { do: "wait", ms: 600 },
+  ]);
+}
+
+function installIOS() {
+  const html = () =>
+    dev.phone(
+      "ios",
+      dev.iosSafari(blog("ios", "safari")) +
+        dev.iosMore() +
+        '<div class="gd-ios-dim"></div>' +
+        dev.iosShare() +
+        dev.iosAddHome() +
+        dev.iosHome() +
+        `<div class="gd-ios-launch">${dev.iosApp(blog("ios", "app"))}</div>`,
+    );
+  const screen = (on, off) => (s) => {
+    if (off) s.set(SCREEN, off, false);
+    s.set(SCREEN, on);
+  };
+  return scene("ios", html, [
+    { do: "wait", ms: 400 },
+    // Safari's bar, where ⋯ opens its menu.
+    focus([".gd-ios-tabbar", ".gd-ios-menu"], 1.8, 16, true),
+    { do: "press", at: ".gd-f-more", then: screen("is-menu"), ms: 900 },
+    { do: "press", at: ".gd-f-share", then: screen("is-share", "is-menu"), ms: 1000 },
+    focus(".gd-ios-share", 1.6, 12),
+    { do: "scroll", in: ".gd-ios-list", to: ".gd-f-home", ms: 700 },
+    { do: "press", at: ".gd-f-home", then: screen("is-add"), ms: 1000 },
+    focus([".gd-ios-add-nav", ".gd-ios-toggle-row"], 1.8, 16),
+    { do: "press", at: ".gd-f-webapp", then: (s) => s.set(".gd-f-webapp", "is-on"), ms: 800 },
+    { do: "press", at: ".gd-f-add", then: screen("is-home", "is-add"), ms: 700 },
+    // The Home Screen as a whole, the blog's icon among the apps.
+    WHOLE,
+    { do: "press", at: ".gd-f-icon", then: screen("is-app"), ms: 1600 },
+  ]);
+}
+
+function installMac() {
+  const html = () => dev.desk("macos", dev.macSafari(blog("macos", "macos")), dev.macFileMenu() + dev.macAddDock());
+  const desk = (on, off) => (s) => {
+    if (off) s.set(".gd-desk", off, false);
+    if (on) s.set(".gd-desk", on);
+  };
+  return scene("macos", html, [
+    { do: "wait", ms: 400 },
+    focus([".gd-f-file", ".gd-mac-menu"], 2, 20, true),
+    { do: "press", at: ".gd-f-file", then: desk("is-menu"), ms: 900 },
+    { do: "press", at: ".gd-f-dock", then: desk("is-add", "is-menu"), ms: 800 },
+    focus(".gd-mac-add", 2.2),
+    { do: "press", at: ".gd-f-add", then: desk("is-docked", "is-add"), ms: 400 },
+    // The Dock taking the icon, and the blog opening from it, seen whole.
+    WHOLE,
+    {
+      do: "press",
+      at: ".gd-dock-new",
+      then: (s) => {
+        desk("is-app")(s);
+        s.text(".gd-mw .gd-url", dev.siteName());
       },
-      { do: "swipe", at: ".gd-ios-list", fy: 0.8, dy: -46, say: S("scroll"), then: (s) => s.set(".gd-m-phone", "is-scrolled") },
-      { do: "press", at: ".gd-f-home", say: S("tap_add_home"), then: (s) => s.set(".gd-m-phone", "is-add") },
-      { do: "focus", x: 180, y: 118, zoom: 1.2, ms: 650 },
-      { do: "press", at: ".gd-f-webapp", say: S("web_app"), then: (s) => s.set(".gd-f-webapp", "is-on") },
-      { do: "press", at: ".gd-f-add", say: S("tap_add"), then: (s) => s.set(".gd-m-phone", "is-home") },
-      { do: "focus", x: 180, y: 120, zoom: 1.2, ms: 650 },
-      { do: "wait", say: S("on_home"), ms: 900 },
-      { do: "press", at: ".gd-f-icon", say: S("open_icon"), then: (s) => s.set(".gd-m-phone", "is-app"), ms: 1600 },
-    ],
-  };
+      ms: 1800,
+    },
+  ]);
 }
 
-function allowScene(ctx) {
-  const mobile = ctx.ios || ctx.android;
-  if (!mobile) {
-    return {
-      cls: "gd-s-allow",
-      html:
-        browser(
-          host(),
-          nav(follow("gd-f-follow") + bell("gd-m-bell-new") + '<span class="gd-m-avatar"></span>') +
-            `<div class="gd-m-body">${lines(92, 80, 88, 66, 90)}</div>` +
-            `<span class="gd-m-okay"><i class="fa-solid fa-circle-check" aria-hidden="true"></i>${M("followed")}</span>`,
-        ) +
-        `<div class="gd-perm"><div class="gd-perm-head">${tf("mock.perm_wants", { host: host() })}</div>` +
-        `<div class="gd-perm-row"><i class="fa-regular fa-bell" aria-hidden="true"></i>${M("perm_show")}</div>` +
-        `<div class="gd-perm-btns"><span class="gd-m-btn gd-perm-no">${M("perm_block")}</span>` +
-        `<span class="gd-m-btn gd-perm-yes gd-f-allow">${M("perm_allow")}</span></div></div>`,
-      beats: [
-        { do: "press", at: ".gd-f-follow", say: S("press_follow"), then: (s) => s.set(".gd-s-allow", "is-ask") },
-        { do: "press", at: ".gd-f-allow", say: S("allow"), then: (s) => s.set(".gd-s-allow", "is-allowed") },
-        { do: "wait", say: S("now_bell"), ms: 1700 },
-      ],
-    };
-  }
+/** The blog, then GitHub's sign-in page, reached by pressing Follow. */
+function signin(os) {
+  const view = ghView(os);
+  const html = () => {
+    if (view) return dev.desk(os, deskBrowser(os, swap(blog(os, os), gh.signin(view))));
+    return dev.phone(
+      os,
+      os === "ios"
+        ? dev.iosApp(blog(os, "app")) + dev.iosInApp(gh.signin(), "github.com")
+        : dev.andChrome(swap(blog(os, "android"), gh.signin())),
+    );
+  };
+  const open = os === "ios" ? (s) => s.set(SCREEN, "is-web") : go(GH_LOGIN);
+  return scene(os, html, [
+    { do: "wait", ms: 300 },
+    { do: "press", at: view ? FOLLOW.desk : FOLLOW.phone, then: open, ms: 1000 },
+    focus([".gd-gh-signin h1", ".gd-gh-signin .gd-gh-fields"], view ? 2 : 1.8),
+    { do: "type", at: ".gd-f-login", text: "your-name" },
+    { do: "type", at: ".gd-f-password", text: "correct-horse", mask: true },
+    { do: "move", at: ".gd-f-signin", ms: 900 },
+    WHOLE,
+    { do: "wait", ms: 500 },
+  ]);
+}
 
-  const prompt = ctx.ios
-    ? `<div class="gd-ios-alert"><b>${tf("mock.ios_alert", { site: site() })}</b><small>${M("ios_alert_body")}</small>` +
-      `<div class="gd-ios-alert-btns"><span>${M("ios_dont")}</span><span class="gd-f-allow">${M("ios_allow")}</span></div></div>`
-    : `<div class="gd-and-perm"><i class="fa-regular fa-bell" aria-hidden="true"></i>` +
-      `<b>${tf("mock.perm_android", { host: host() })}</b>` +
-      `<div class="gd-and-btns"><span>${M("perm_block")}</span><span class="gd-f-allow">${M("perm_allow")}</span></div></div>`;
+/** From the sign-in page to GitHub's sign-up page, filled in. */
+function register(os) {
+  const view = ghView(os);
+  const page = () => swap(gh.signin(view), gh.signup(view));
+  const html = () => {
+    if (view) return dev.desk(os, deskBrowser(os, page(), GH_LOGIN));
+    return dev.phone(os, os === "ios" ? dev.iosApp(blog(os, "app")) + dev.iosInApp(page(), "github.com") : dev.andChrome(page(), GH_LOGIN));
+  };
+  const z = view ? 2 : 1.8;
+  return scene(
+    os,
+    html,
+    [
+      { do: "wait", ms: 400 },
+      { do: "press", at: ".gd-f-create", then: go(os === "ios" ? "" : GH_SIGNUP), ms: 1200 },
+      focus([".gd-gh-signup .gd-gh-form h1", ".gd-gh-signup .gd-gh-fields"], z),
+      { do: "type", at: ".gd-f-email", text: "you@example.com" },
+      { do: "type", at: ".gd-f-pass", text: "correct-horse-battery", mask: true },
+      { do: "type", at: ".gd-f-user", text: "your-name" },
+      { do: "scroll", in: ".gd-gh-signup .gd-gh-right", to: ".gd-f-go" },
+      focus(".gd-gh-signup .gd-gh-submit", z),
+      { do: "press", at: ".gd-f-go", ms: 900 },
+      WHOLE,
+      { do: "wait", ms: 500 },
+    ],
+    // The sheet on iPhone is already open on GitHub.
+    os === "ios" ? { setup: (s) => s.set(SCREEN, "is-web") } : {},
+  );
+}
+
+/**
+ * GitHub asks whether giscus may act for the reader. Authorize shows it is
+ * working, then GitHub hands the reader back to the blog.
+ */
+function authorize(os, login) {
+  const view = ghView(os);
+  const html = () => {
+    if (view) return dev.desk(os, deskBrowser(os, swap(gh.authorize(view, login), blog(os, os)), GH_AUTHORIZE));
+    if (os === "ios") return dev.phone(os, dev.iosApp(blog(os, "app")) + dev.iosInApp(gh.authorize(null, login), "github.com"));
+    return dev.phone(os, dev.andChrome(swap(gh.authorize(null, login), blog(os, "android")), GH_AUTHORIZE));
+  };
+  const back = os === "ios" ? (s) => s.set(SCREEN, "is-web", false) : go(dev.host());
+  return scene(
+    os,
+    html,
+    [
+      { do: "wait", ms: 400 },
+      // What giscus asks for, and the button that grants it.
+      focus([".gd-gh-box", ".gd-f-auth"], view ? 2 : 1.8),
+      { do: "wait", ms: 1200 },
+      { do: "press", at: ".gd-f-auth", then: (s) => s.set(".gd-f-auth", "is-busy"), ms: 1500 },
+      WHOLE,
+      { do: "auto", then: back, ms: 1400 },
+    ],
+    os === "ios" ? { setup: (s) => s.set(SCREEN, "is-web") } : {},
+  );
+}
+
+/** Follow again, and allow the system's notification prompt. */
+function allow(os) {
+  const ask = { windows: dev.chromeAllow, macos: dev.macAllow, ios: dev.iosAllow, android: dev.andAllow }[os];
+  const prompt = { windows: ".gd-cperm", macos: ".gd-mac-perm", ios: ".gd-ios-alert", android: ".gd-and-perm" }[os];
+  const phone = isPhone(os);
+  const root = phone ? SCREEN : ".gd-desk";
+  const kind = phone ? "phone" : "desk";
+  const html = () => {
+    if (!phone) return dev.desk(os, deskBrowser(os, blog(os, os)), ask());
+    return dev.phone(os, (os === "ios" ? dev.iosApp(blog(os, "app")) : dev.andChrome(blog(os, "android"))) + ask());
+  };
+  return scene(os, html, [
+    { do: "wait", ms: 300 },
+    { do: "press", at: FOLLOW[kind], then: (s) => s.set(root, "is-ask"), ms: 600 },
+    focus(prompt, phone ? 1.8 : 2.2),
+    {
+      do: "press",
+      at: ".gd-f-allow",
+      then: (s) => {
+        s.set(root, "is-ask", false);
+        site.follow(s, true);
+      },
+      ms: 400,
+    },
+    // Back out to the whole page, where Follow has become the bell.
+    WHOLE,
+    { do: "move", at: BELL[kind], ms: 1600 },
+  ]);
+}
+
+function step(tour, id, sceneSpec, key = id) {
+  return { id, title: t(`tours.${tour}.steps.${key}.title`), body: t(`tours.${tour}.steps.${key}.body`), scene: sceneSpec };
+}
+
+function followTour(ctx, platform) {
+  const os = PLATFORMS.includes(platform) ? platform : detectPlatform();
+  const steps = [step("follow", "published", published(os))];
+  if (os === "ios") steps.push(step("follow", "install", installIOS(), "install_ios"));
+  if (os === "macos") steps.push(step("follow", "install", installMac(), "install_mac"));
+  const first = step("follow", "signin", signin(os));
+  if (ctx.signedIn && ctx.login) first.body += `<p class="gd-note">${tf("tours.follow.signed_in", { login: ctx.login })}</p>`;
+  steps.push(
+    first,
+    step("follow", "register", register(os)),
+    step("follow", "authorize", authorize(os, ctx.login || "your-name")),
+    Object.assign(step("follow", "allow", allow(os)), { final: true }),
+  );
   return {
-    cls: "gd-s-allow is-phone",
-    size: { w: 360, h: 420 },
-    camera: { x: 180, y: 112, zoom: 1.2 },
-    park: { x: 250, y: 150 },
-    html: phone(
-      `<div class="gd-ios-app is-on">${nav(follow("gd-f-follow") + bell("gd-m-bell-new"))}${lines(88, 72, 90, 64, 80, 70)}</div>` +
-        `<div class="gd-phone-dim"></div>${prompt}`,
-    ),
-    beats: [
-      { do: "press", at: ".gd-f-follow", say: S("press_follow"), then: (s) => s.set(".gd-m-phone", "is-ask") },
-      { do: "focus", x: 180, y: ctx.ios ? 210 : 330, zoom: 1.2, ms: 600 },
-      { do: "press", at: ".gd-f-allow", say: S("allow"), then: (s) => s.set(".gd-m-phone", "is-allowed") },
-      { do: "focus", x: 180, y: 112, zoom: 1.2, ms: 600 },
-      { do: "wait", say: S("now_bell"), ms: 1600 },
-    ],
+    id: "follow",
+    name: t("tours.follow.name"),
+    steps,
+    following: !!ctx.following,
+    platform: os,
+    platforms: PLATFORMS.map((id) => ({ id, name: t(`platforms.${id}`), icon: PLATFORM_ICONS[id] })),
+    rebuild: (p) => followTour(ctx, p),
   };
 }
 
-function inboxScene() {
-  const item = (cls, title, meta) =>
-    `<div class="gd-np-item ${cls}"><i></i><span><b>${title}</b><small>${meta}</small></span></div>`;
-  return {
-    cls: "gd-s-inbox",
-    html:
-      browser(host(), nav(bell("gd-f-bell has-count", "3") + '<span class="gd-m-avatar"></span>') + `<div class="gd-m-body">${lines(92, 84, 70, 88, 60)}</div>`) +
-      `<div class="gd-np"><div class="gd-np-head"><b>${N("title", "Notifications")}</b><small>${N("mark_read", "Mark all read")}</small></div>` +
-      `<div class="gd-np-view"><div class="gd-np-pages">` +
-      `<div class="gd-np-page">` +
-      item("is-unread", M("post_title"), M("now")) +
-      item("is-unread", M("note_title"), "3h") +
-      item("is-unread", M("announce_title"), "1d") +
-      `<div class="gd-np-foot gd-f-manage">${N("manage", "Manage subscription")}<i class="fa-solid fa-chevron-right" aria-hidden="true"></i></div></div>` +
-      `<div class="gd-np-page"><div class="gd-np-sec">${N("section_delivery", "What you receive")}</div>` +
-      `<div class="gd-np-row"><span>${N("opt_posts", "Receive new blog posts")}</span>${toggle("", true)}</div>` +
-      `<div class="gd-np-row"><span>${N("opt_notes", "Receive new instant notes")}</span>${toggle("gd-f-notes", true)}</div>` +
-      `<div class="gd-np-row"><span>${N("opt_announcements", "Receive blog announcements")}</span>${toggle("", true)}</div>` +
-      `<div class="gd-np-sec">${N("section_devices", "Registered devices")}</div>` +
-      `<div class="gd-np-dev"><i class="fa-regular fa-laptop" aria-hidden="true"></i><span>${N("this_browser", "This browser")}</span>` +
-      `<small>${N("device_laptop", "Laptop")}</small></div></div>` +
-      `</div></div></div>`,
-    beats: [
-      { do: "press", at: ".gd-f-bell", say: S("open_inbox"), then: (s) => s.set(".gd-s-inbox", "is-open"), ms: 1300 },
-      { do: "press", at: ".gd-f-manage", say: S("manage"), then: (s) => s.set(".gd-s-inbox", "is-manage"), ms: 1000 },
-      { do: "press", at: ".gd-f-notes", say: S("toggle_topic"), then: (s) => s.set(".gd-f-notes", "is-on", false) },
-    ],
-  };
-}
+// ─── comments ────────────────────────────────────────────────
+// Authored on the old 360×225 canvas (`canvas`), in the mock kit of guide.styl.
+const photo = (cls) => `<div class="gd-v-photo ${cls}"><i></i></div>`;
 
-function pushScene(ctx) {
-  const title = M("post_title");
-  if (ctx.ios || ctx.android) {
-    return {
-      cls: "gd-s-push is-phone",
-      size: { w: 360, h: 420 },
-      camera: { x: 180, y: 120, zoom: 1.2 },
-      park: { x: 250, y: 200 },
-      html: phone(
-        `<div class="gd-lock"><div class="gd-lock-time">9:41</div><div class="gd-lock-date">${e(today())}</div>` +
-          `<div class="gd-lock-note gd-f-note">${appIcon()}<span><b>${e(site())}</b>` +
-          `<small>${M("push_title")}: ${title}</small></span><em>${M("now")}</em></div></div>` +
-          `<div class="gd-ios-app gd-push-post">${nav("")}<div class="gd-post-title">${title}</div>${lines(90, 80, 86, 62, 88)}</div>`,
-      ),
-      beats: [
-        { do: "auto", say: S("arrives"), then: (s) => s.set(".gd-m-phone", "is-note"), ms: 1400 },
-        { do: "press", at: ".gd-f-note", say: S("open_post"), then: (s) => s.set(".gd-m-phone", "is-post"), ms: 1600 },
-      ],
-    };
-  }
-  return {
-    cls: "gd-s-push",
-    html:
-      `<div class="gd-desk">` +
-      browser("example.com", `<div class="gd-m-body">${lines(80, 92, 70, 86, 60, 90)}</div>`, "gd-desk-win") +
-      browser(host(), nav("") + `<div class="gd-m-body"><div class="gd-post-title">${title}</div>${lines(90, 84, 70, 88)}</div>`, "gd-desk-post") +
-      `<div class="gd-toast gd-f-note">${appIcon()}<span><b>${e(site())}</b>` +
-      `<small>${e(host())}</small><em>${M("push_title")}: ${title}</em></span></div></div>`,
-    beats: [
-      { do: "auto", say: S("arrives"), then: (s) => s.set(".gd-desk", "is-note"), ms: 1400 },
-      { do: "press", at: ".gd-f-note", say: S("open_post"), then: (s) => s.set(".gd-desk", "is-post"), ms: 1700 },
-    ],
-  };
-}
-
-function checklistScene(rows) {
-  return {
-    cls: "gd-s-check",
-    html:
-      `<div class="gd-check">` +
-      rows.map((r) => `<div class="gd-check-row"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>${e(r)}</span></div>`).join("") +
-      `</div>`,
-    beats: rows.map((_, i) => ({
-      do: "auto",
-      then: (s) => s.world.querySelectorAll(".gd-check-row")[i].classList.add("is-on"),
-      ms: 520,
-    })),
-    hold: 3200,
-  };
-}
-
-// ─── scenes: the image viewer ────────────────────────────────
-function viewerWorld(state) {
-  return {
-    cls: `gd-s-viewer ${state}`,
-    html:
-      `<div class="gd-v-article">${lines(92, 84, 70)}<div class="gd-v-thumb gd-f-img">${photo("p1")}</div>${lines(90, 66)}</div>` +
-      `<div class="gd-v-backdrop gd-f-backdrop"></div>` +
-      `<div class="gd-v-frame"><div class="gd-v-track">${photo("p1 gd-f-full")}${photo("p2")}</div></div>` +
-      `<span class="gd-v-side prev"><i class="fa-regular fa-angle-left" aria-hidden="true"></i></span>` +
-      `<span class="gd-v-side next gd-f-next"><i class="fa-regular fa-angle-right" aria-hidden="true"></i></span>` +
-      `<div class="gd-v-switch"><i class="fa-regular fa-angle-left" aria-hidden="true"></i><span class="gd-v-dots"><b></b><b></b><b></b></span>` +
-      `<i class="fa-regular fa-angle-right" aria-hidden="true"></i></div>` +
-      `<span class="gd-v-info gd-f-info"><i class="fa-solid fa-comment-image" aria-hidden="true"></i></span>` +
-      `<div class="gd-v-panel"><b>${M("photo_caption")}</b>` +
-      `<dl><dt>${M("exif_camera")}</dt><dd>X100VI</dd><dt>${M("exif_lens")}</dt><dd>23mm</dd>` +
-      `<dt>${M("exif_exposure")}</dt><dd>f/2.8 · 1/500s</dd><dt>ISO</dt><dd>160</dd></dl></div>`,
-  };
-}
-
-function viewerScenes(ctx) {
-  const open = Object.assign(viewerWorld(""), {
-    beats: [
-      { do: "press", at: ".gd-f-img", say: S("tap_image"), then: (s) => s.set(".gd-s-viewer", "is-open"), ms: 1500 },
-    ],
-  });
-  const zoom = Object.assign(viewerWorld("is-open is-still"), {
-    beats: [
-      ctx.touch
-        ? { do: "pinch", at: ".gd-v-frame", fx: 0.58, fy: 0.46, say: S("pinch"), then: (s) => s.set(".gd-s-viewer", "is-zoom"), ms: 1300 }
-        : { do: "wheel", at: ".gd-v-frame", fx: 0.58, fy: 0.46, say: S("wheel"), then: (s) => s.set(".gd-s-viewer", "is-zoom"), ms: 1300 },
-      { do: "wait", ms: 900 },
-    ],
-  });
-  const pan = Object.assign(viewerWorld("is-open is-still is-zoom"), {
-    beats: [
-      { do: "swipe", at: ".gd-v-frame", fx: 0.55, fy: 0.55, dx: -58, dy: -22, ms: 800, say: S("drag"), then: (s) => s.set(".gd-s-viewer", "is-pan") },
-      { do: "press", at: ".gd-f-next", say: S(ctx.touch ? "swipe_next" : "next_image"), then: (s) => s.set(".gd-s-viewer", "is-next"), ms: 1500 },
-    ],
-  });
-  const info = Object.assign(viewerWorld("is-open is-still"), {
-    beats: [
-      { do: "press", at: ".gd-f-info", say: S("info"), then: (s) => s.set(".gd-s-viewer", "is-info"), ms: 1900 },
-      { do: "press", at: ".gd-f-backdrop", fx: 0.08, fy: 0.9, say: S("close_viewer"), then: (s) => s.set(".gd-s-viewer", "is-closed"), ms: 1500 },
-    ],
-  });
-  return { open, zoom, pan, info };
-}
-
-// ─── scenes: comments ────────────────────────────────────────
 const comment = (name, body, reactions, cls = "") =>
   `<div class="gd-c-item ${cls}"><span class="gd-m-avatar"></span><div class="gd-c-main">` +
   `<div class="gd-c-meta"><b>${name}</b><small>${M("days_ago")}</small></div><div class="gd-c-text">${body}</div>` +
@@ -454,6 +349,7 @@ const comment = (name, body, reactions, cls = "") =>
 
 function threadScene() {
   return {
+    canvas: true,
     cls: "gd-s-comments",
     html:
       `<div class="gd-c-head"><b>${M("comments_count")}</b><span class="gd-c-gh"><i class="fa-brands fa-github" aria-hidden="true"></i>GitHub Discussions</span></div>` +
@@ -461,18 +357,19 @@ function threadScene() {
       comment("reader-one", M("sample_comment"), `<span>👍 3</span><span>❤️ 1</span>`, "gd-f-first") +
       comment("jason-jp-yang", M("sample_reply"), `<span>🎉 2</span>`, "is-reply"),
     beats: [
-      { do: "move", at: ".gd-f-first", fx: 0.62, fy: 0.3, say: S("thread"), ms: 1200 },
-      { do: "move", at: ".gd-f-first .gd-c-react", fx: 0.3, say: S("reactions"), ms: 1100 },
-      { do: "press", at: ".gd-f-signin", say: S("sign_in_box"), ms: 1300 },
+      { do: "move", at: ".gd-f-first", fx: 0.62, fy: 0.3, ms: 1200 },
+      { do: "move", at: ".gd-f-first .gd-c-react", fx: 0.3, ms: 1100 },
+      { do: "press", at: ".gd-f-signin", ms: 1300 },
     ],
   };
 }
 
 function writeScene() {
   return {
+    canvas: true,
     cls: "gd-s-comments is-write",
     size: { w: 360, h: 300 },
-    camera: { x: 180, y: 112, zoom: 1 },
+    view: { x: 180, y: 112, zoom: 1 },
     html:
       `<div class="gd-c-box is-signed"><div class="gd-c-tabs"><span class="gd-c-tab is-on">${M("write")}</span>` +
       `<span class="gd-c-tab gd-f-preview">${M("preview")}</span></div>` +
@@ -484,10 +381,10 @@ function writeScene() {
       comment("your-name", t("mock.sample_rendered"), "", "gd-c-mine") +
       `</div>`,
     beats: [
-      { do: "type", at: ".gd-f-text", text: t("mock.sample_markdown"), say: S("type_comment") },
-      { do: "press", at: ".gd-f-preview", say: S("preview"), then: (s) => s.set(".gd-s-comments", "is-preview") },
-      { do: "press", at: ".gd-f-send", say: S("send"), then: (s) => s.set(".gd-s-comments", "is-sent"), ms: 500 },
-      { do: "focus", x: 180, y: 200, zoom: 1, ms: 800 },
+      { do: "type", at: ".gd-f-text", text: t("mock.sample_markdown") },
+      { do: "press", at: ".gd-f-preview", then: (s) => s.set(".gd-s-comments", "is-preview") },
+      { do: "press", at: ".gd-f-send", then: (s) => s.set(".gd-s-comments", "is-sent"), ms: 500 },
+      { do: "focus", view: { x: 180, y: 200, zoom: 1 }, ms: 800 },
       { do: "wait", ms: 1200 },
     ],
   };
@@ -498,6 +395,7 @@ function reactScene() {
     .map((x) => `<span class="${x === "🎉" ? "gd-f-party" : ""}">${x}</span>`)
     .join("");
   return {
+    canvas: true,
     cls: "gd-s-comments is-react",
     html:
       `<div class="gd-c-list">` +
@@ -510,7 +408,7 @@ function reactScene() {
       `<div class="gd-c-photo">${photo("p2")}<span class="gd-c-heart gd-f-heart"><i class="fa-regular fa-heart" aria-hidden="true"></i>` +
       `<i class="fa-solid fa-heart" aria-hidden="true"></i><b><span class="n0">4</span><span class="n1">5</span></b></span></div>`,
     beats: [
-      { do: "press", at: ".gd-f-smile", say: S("react"), then: (s) => s.set(".gd-s-comments", "is-pick") },
+      { do: "press", at: ".gd-f-smile", then: (s) => s.set(".gd-s-comments", "is-pick") },
       {
         do: "press",
         at: ".gd-f-party",
@@ -519,90 +417,36 @@ function reactScene() {
           s.set(".gd-s-comments", "is-reacted");
         },
       },
-      { do: "press", at: ".gd-f-heart", say: S("heart"), then: (s) => s.set(".gd-s-comments", "is-liked"), ms: 1500 },
-    ],
-  };
-}
-
-// ─── walkthroughs ────────────────────────────────────────────
-const followTarget = () =>
-  firstShown([".navbar-content .navbar-follow .follow-trigger", ".home-content-container .follow-cta", ".follow-cta"]);
-const bellTarget = () =>
-  firstShown([".navbar-list .notifications-bell", ".navbar-content .mobile .notifications-bell"]);
-
-function step(tour, id, scene, extra = {}) {
-  return Object.assign(
-    { id, title: t(`tours.${tour}.steps.${id}.title`), body: t(`tours.${tour}.steps.${id}.body`), scene },
-    extra,
-  );
-}
-
-function followTour(ctx) {
-  const steps = [];
-  const signed = ctx.signedIn;
-  const why = step("follow", "why", feedScene());
-  if (signed && ctx.login) why.body += `<p class="gd-note">${tf("tours.follow.signed_in", { login: ctx.login })}</p>`;
-  steps.push(why);
-  if (!signed) {
-    steps.push(step("follow", "github", signupScene()));
-    steps.push(step("follow", "authorize", authorizeScene("follow")));
-  }
-  if (ctx.ios && !ctx.standalone) steps.push(step("follow", "ios", pwaScene()));
-  steps.push(step("follow", "allow", allowScene(ctx)));
-  steps.push(step("follow", "inbox", inboxScene()));
-  steps.push(step("follow", "push", pushScene(ctx)));
-  if (!ctx.ios) steps.push(step("follow", "iphone", pwaScene()));
-
-  const rows = [t("mock.check_github"), t("mock.check_authorize"), t("mock.check_allow")];
-  if (ctx.ios) rows.push(t("mock.check_home"));
-  const following = ctx.following;
-  steps.push(
-    step("follow", following ? "ready_following" : "ready_off", checklistScene(rows), {
-      live: following ? bellTarget : followTarget,
-      liveTitle: t(`tours.follow.steps.${following ? "ready_following" : "ready"}.title`),
-      liveBody: t(`tours.follow.steps.${following ? "ready_following" : "ready"}.body`),
-    }),
-  );
-  return { id: "follow", name: t("tours.follow.name"), steps };
-}
-
-function viewerTour(ctx) {
-  const s = viewerScenes(ctx);
-  return {
-    id: "viewer",
-    name: t("tours.viewer.name"),
-    steps: [
-      step("viewer", "open", s.open),
-      step("viewer", "zoom", s.zoom),
-      step("viewer", "pan", s.pan),
-      step("viewer", "info", s.info),
+      { do: "press", at: ".gd-f-heart", then: (s) => s.set(".gd-s-comments", "is-liked"), ms: 1500 },
     ],
   };
 }
 
 function commentsTour(ctx) {
+  const os = detectPlatform();
   const steps = [step("comments", "thread", threadScene())];
   if (!ctx.signedIn) {
-    steps.push(step("follow", "github", signupScene()));
-    steps.push(step("comments", "authorize", authorizeScene("comments")));
+    steps.push(step("follow", "register", register(os)));
+    steps.push(step("comments", "authorize", authorize(os, "your-name")));
   }
   steps.push(step("comments", "write", writeScene()));
   steps.push(step("comments", "react", reactScene()));
   return { id: "comments", name: t("tours.comments.name"), steps };
 }
 
-const TOURS = { follow: followTour, viewer: viewerTour, comments: commentsTour };
-const ICONS = { follow: "fa-regular fa-bell", viewer: "fa-regular fa-image", comments: "fa-regular fa-comments" };
+const TOURS = { follow: followTour, comments: commentsTour };
+const ICONS = { follow: "fa-regular fa-bell", comments: "fa-regular fa-comments" };
 
-export function openTour(id, ctx, opts = {}) {
+export async function openTour(id, ctx, opts = {}) {
   const build = TOURS[id];
-  if (!build) return Promise.resolve(null);
+  if (!build) return null;
+  await site.prepare();
   return new Tour(build(ctx || {}), opts).open();
 }
 
 export function openMenu(ctx, opts = {}) {
   ctx = ctx || {};
-  const available = Object.keys(TOURS).filter((id) => id !== "follow" || (ctx && ctx.notifications));
+  const available = Object.keys(TOURS).filter((id) => id !== "follow" || ctx.notifications);
   const entries = available.map((id) => {
     const def = TOURS[id](ctx);
     return {
@@ -613,7 +457,12 @@ export function openMenu(ctx, opts = {}) {
       count: tf("menu_steps", { n: def.steps.length }),
     };
   });
-  return new Tour({ menu: true, entries, build: (id) => (TOURS[id] ? TOURS[id](ctx) : null) }, opts).open();
+  const build = async (id) => {
+    if (!TOURS[id]) return null;
+    await site.prepare();
+    return TOURS[id](ctx);
+  };
+  return new Tour({ menu: true, entries, build }, opts).open();
 }
 
 export function closeAll() {

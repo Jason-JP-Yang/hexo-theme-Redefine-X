@@ -109,7 +109,7 @@ export class Callout {
     this.units = [];
     this.text = "";
     this.written = new Map();
-    this.g = { w: 0, h: 0, fw: 0, fh: 0, sw: 0, sh: 0, avoid: null, decide: false };
+    this.g = { w: 0, h: 0, fw: 0, fh: 0, sw: 0, sh: 0, decide: false };
 
     this.w = new Spring(0, 420, 40);
     this.th = new Spring(0, 520, 44);
@@ -158,15 +158,12 @@ export class Callout {
    * Lay out what is about to be said, unseen, so the cursor can choose its side
    * while it is still on the way.
    * @param {object} spec  {id, colon, title, body, ok, more, later, wait}
-   * @param {() => DOMRect|null} avoid  what the bubble should cover least of
    */
-  prepare(spec, avoid) {
+  prepare(spec) {
     clearTimeout(this.dropTimer);
     this.fresh = this.state === "idle";
     this.state = "prepared";
     this.spec = spec;
-    this.avoidFn = avoid || null;
-    this.avoid = null;
     this.holds.clear();
     this.skip = false;
     this.decide = false;
@@ -271,7 +268,6 @@ export class Callout {
       this.m = this.read();
       this.decide = this.state === "prepared";
     }
-    if (this.decide && this.avoidFn) this.avoid = this.avoidFn();
   }
 
   /** The finished bubble, and where every character ends — one layout, read once. */
@@ -310,7 +306,6 @@ export class Callout {
     if (!m) {
       g.w = g.fw = g.sw = L.w;
       g.h = g.fh = g.sh = L.h;
-      g.avoid = null;
       g.decide = false;
       return g;
     }
@@ -378,7 +373,6 @@ export class Callout {
     g.fh = this.fh.x;
     g.sw = hushing ? L.w : m.W;
     g.sh = hushing ? L.h : m.H;
-    g.avoid = this.avoid;
     g.decide = this.decide;
     this.decide = false;
 

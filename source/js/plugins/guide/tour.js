@@ -1,12 +1,10 @@
 /**
  * Guide — the progress card behind "View More".
  *
- * One card: a stage where the current step is acted out, the step's own text
- * under it, and a footer with the progress dots and Back / Next. Steps can also
- * be LIVE: the stage folds away, the card drops to the bottom of the screen, the
- * page shows through, and the page's own cursor flies out of the card to the
- * real control the step is about — only if that control is on screen, because
- * the guide never scrolls the page.
+ * One card: a stage where the current step is acted out by the page's own
+ * cursor, the step's text under it, and a footer with the progress dots and
+ * Back / Next. A walkthrough that differs by system carries a picker beside its
+ * name, preset to the reader's system; changing it rebuilds the steps in place.
  *
  * It is a modal dialog: focus moves into it and is kept there, Esc closes it,
  * ←/→ page through it, and the page behind does not scroll while it is open.
@@ -19,13 +17,13 @@
 import { t, markTour } from "./store.js";
 import { Scene } from "./scene.js";
 import { reducedMotion, clamp } from "./motion.js";
-import { shown, ratioInView, anchorOf } from "./dom.js";
 
 let current = null;
 
 export class Tour {
   /**
-   * @param {object} def   {id, name, steps:[{id,title,body,scene,live,liveTitle,liveBody}]}
+   * @param {object} def   {id, name, steps:[{id,title,body,scene,final}], following,
+   *                       platform, platforms:[{id,name,icon}], rebuild(platform)}
    *                       or {menu:true, entries, build(id)}
    * @param {object} opts  {cursor, from}
    */
@@ -35,7 +33,6 @@ export class Tour {
     this.index = 0;
     this.completed = false;
     this.result = {};
-    this.liveEl = null;
     this.reduced = reducedMotion();
   }
 
@@ -52,7 +49,6 @@ export class Tour {
         this.root.classList.add("is-open");
         if (this.def.menu) this.showMenu();
         else this.start(this.def, this.opts.from);
-        this.enterFromCursor();
       });
     });
   }
@@ -70,19 +66,21 @@ export class Tour {
       '<header class="gd-tour-head">' +
       '<span class="gd-tour-kicker"><i class="fa-regular fa-compass" aria-hidden="true"></i><span></span></span>' +
       '<span class="gd-tour-name" id="gd-tour-name"></span>' +
+      '<div class="gd-pick" hidden>' +
+      '<button type="button" class="gd-pick-btn" aria-haspopup="listbox" aria-expanded="false">' +
+      '<i aria-hidden="true"></i><span></span><i class="gd-pick-caret fa-solid fa-chevron-down" aria-hidden="true"></i></button>' +
+      '<ul class="gd-pick-list" role="listbox"></ul></div>' +
       '<span class="gd-tour-count"></span>' +
       '<button type="button" class="gd-tour-close"><i class="fa-regular fa-xmark" aria-hidden="true"></i></button>' +
       "</header>" +
-      '<div class="gd-tour-stage">' +
-      '<div class="gd-view"><div class="gd-cam"></div></div>' +
-      '<div class="gd-caption"><span></span></div>' +
-      '<button type="button" class="gd-try"></button>' +
-      "</div>" +
+      // A picture, not a page: nothing in it can be focused, pressed or read out.
+      '<div class="gd-tour-stage"><div class="gd-view" inert aria-hidden="true"><div class="gd-cam"></div></div></div>' +
       '<div class="gd-tour-text"></div>' +
       '<footer class="gd-tour-foot">' +
       '<div class="gd-dots" role="group"></div>' +
       '<div class="gd-tour-nav">' +
       '<button type="button" class="gd-btn gd-btn-quiet" data-nav="back"></button>' +
+      '<button type="button" class="gd-btn gd-btn-quiet" data-nav="done" hidden></button>' +
       '<button type="button" class="gd-btn gd-btn-primary" data-nav="next"></button>' +
       "</div>" +
       "</footer>" +
@@ -93,25 +91,39 @@ export class Tour {
     this.textBox = root.querySelector(".gd-tour-text");
     this.dots = root.querySelector(".gd-dots");
     this.back = root.querySelector('[data-nav="back"]');
+    this.done = root.querySelector('[data-nav="done"]');
     this.next = root.querySelector('[data-nav="next"]');
     this.count = root.querySelector(".gd-tour-count");
     this.nameEl = root.querySelector(".gd-tour-name");
+    this.pick = root.querySelector(".gd-pick");
+    this.pickBtn = root.querySelector(".gd-pick-btn");
+    this.pickList = root.querySelector(".gd-pick-list");
 
     root.querySelector(".gd-tour-kicker span").textContent = t("label", "Guide");
     const close = root.querySelector(".gd-tour-close");
     close.setAttribute("aria-label", t("close"));
     close.title = t("close");
     this.back.textContent = t("back");
+    this.done.textContent = t("done");
 
     close.addEventListener("click", () => this.close("close"));
     root.querySelector(".gd-tour-mask").addEventListener("click", () => this.close("close"));
     this.back.addEventListener("click", () => this.go(this.index - 1, -1));
     this.next.addEventListener("click", () => this.forward());
+    this.done.addEventListener("click", () => this.finish());
     this.dots.addEventListener("click", (e) => {
       const dot = e.target.closest("[data-step]");
       if (dot) this.go(Number(dot.dataset.step), Number(dot.dataset.step) > this.index ? 1 : -1);
     });
     this.textBox.addEventListener("click", (e) => this.menuClick(e));
+    this.pickBtn.addEventListener("click", () => this.togglePick());
+    this.pickList.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-platform]");
+      if (item) this.choose(item.dataset.platform);
+    });
+    root.addEventListener("pointerdown", (e) => {
+      if (this.pick.classList.contains("is-open") && !this.pick.contains(e.target)) this.togglePick(false);
+    });
 
     root.addEventListener("keydown", (e) => this.key(e));
     // The page behind a modal does not scroll: wheel and touch are swallowed
@@ -126,15 +138,7 @@ export class Tour {
     root.addEventListener("touchmove", hold, { passive: false });
 
     this.swipe(this.textBox);
-
-    this.scene = new Scene(this.stage, {
-      label: t("you", "You"),
-      tryLabel: t("try"),
-      watchLabel: t("watch"),
-      turnLabel: t("your_turn"),
-      doneLabel: t("try_done"),
-      onPracticed: () => this.next.classList.add("is-ready"),
-    });
+    this.scene = new Scene(this.stage, { cursor: this.opts.cursor || null });
   }
 
   swipe(el) {
@@ -163,13 +167,16 @@ export class Tour {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      this.close("close");
+      if (this.pick.classList.contains("is-open")) {
+        this.togglePick(false);
+        this.pickBtn.focus({ preventScroll: true });
+      } else this.close("close");
       return;
     }
-    if (this.mode === "steps" && !e.target.closest("input, textarea")) {
+    if (this.mode === "steps" && !e.target.closest("input, textarea, .gd-pick")) {
       if (e.key === "ArrowRight") {
         e.preventDefault();
-        this.forward();
+        if (!this.isLast()) this.forward();
         return;
       }
       if (e.key === "ArrowLeft") {
@@ -180,7 +187,7 @@ export class Tour {
     }
     if (e.key === "Tab") {
       const f = Array.from(this.card.querySelectorAll("button, [href], [tabindex]")).filter(
-        (el) => !el.hidden && el.offsetParent !== null && el.tabIndex >= 0,
+        (el) => !el.hidden && el.offsetParent !== null && el.tabIndex >= 0 && !el.closest("[inert]"),
       );
       if (!f.length) return;
       const first = f[0];
@@ -195,32 +202,85 @@ export class Tour {
     }
   }
 
+  // ─── the system picker ─────────────────────────────────────
+  renderPick() {
+    const def = this.tour;
+    this.pick.hidden = !def.platforms;
+    if (!def.platforms) return;
+    const now = def.platforms.find((p) => p.id === def.platform) || def.platforms[0];
+    this.pickBtn.firstElementChild.className = now.icon;
+    this.pickBtn.querySelector("span").textContent = now.name;
+    this.pickBtn.setAttribute("aria-label", `${t("platform")}: ${now.name}`);
+    this.pickList.innerHTML = def.platforms
+      .map(
+        (p) =>
+          `<li role="option" tabindex="-1" data-platform="${p.id}" aria-selected="${p.id === now.id}">` +
+          `<i class="${p.icon}" aria-hidden="true"></i><span></span><i class="gd-pick-tick fa-solid fa-check" aria-hidden="true"></i></li>`,
+      )
+      .join("");
+    this.pickList.querySelectorAll("li").forEach((li, i) => {
+      li.querySelector("span").textContent = def.platforms[i].name;
+    });
+  }
+
+  togglePick(open = !this.pick.classList.contains("is-open")) {
+    this.pick.classList.toggle("is-open", open);
+    this.pickBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      const sel = this.pickList.querySelector('[aria-selected="true"]');
+      if (sel) sel.focus({ preventScroll: true });
+    }
+  }
+
+  choose(platform) {
+    this.togglePick(false);
+    if (!this.tour || !this.tour.rebuild || platform === this.tour.platform) return;
+    const at = this.steps[this.index] && this.steps[this.index].id;
+    const def = this.tour.rebuild(platform);
+    if (!def) return;
+    // Stay on the same step where the new system has it, else the one in its place.
+    const same = def.steps.findIndex((s) => s.id === at);
+    this.start(def, null, same >= 0 ? same : Math.min(this.index, def.steps.length - 1));
+    this.pickBtn.focus({ preventScroll: true });
+  }
+
   // ─── steps ─────────────────────────────────────────────────
-  start(def, from) {
+  start(def, from, index = -1) {
     this.mode = "steps";
     this.tour = def;
     this.steps = def.steps;
     this.completed = false;
     this.root.classList.remove("is-menu");
+    // A walkthrough on a phone is framed in a taller stage, the same for every step.
+    this.root.classList.toggle("is-tall", this.steps.some((s) => s.scene && s.scene.tall));
     this.nameEl.textContent = def.name;
+    this.renderPick();
     this.dots.innerHTML = this.steps
       .map((s, i) => `<button type="button" class="gd-dot" data-step="${i}" aria-label="${i + 1} / ${this.steps.length}"></button>`)
       .join("");
-    const at = from ? this.steps.findIndex((s) => s.id === from) : 0;
+    const at = index >= 0 ? index : from ? this.steps.findIndex((s) => s.id === from) : 0;
     this.go(at > 0 ? at : 0, 0, true);
-    setTimeout(() => this.next.focus({ preventScroll: true }), 60);
+    if (index < 0) setTimeout(() => this.next.focus({ preventScroll: true }), 60);
+  }
+
+  isLast() {
+    return this.mode === "steps" && this.index >= this.steps.length - 1;
   }
 
   forward() {
     if (this.mode === "menu") return this.close("close");
     if (this.mode !== "steps") return;
-    if (this.index >= this.steps.length - 1) {
-      this.completed = true;
-      markTour(this.tour.id);
-      this.close("done");
-      return;
-    }
-    this.go(this.index + 1, 1);
+    if (!this.isLast()) return this.go(this.index + 1, 1);
+    // Follow / Let's Explore: placeholders for the guided run through the real
+    // page; they do nothing yet.
+    if (this.steps[this.index].final) return;
+    this.finish();
+  }
+
+  finish() {
+    this.completed = true;
+    markTour(this.tour.id);
+    this.close("done");
   }
 
   go(i, dir, first = false) {
@@ -239,31 +299,39 @@ export class Tour {
     });
     this.count.textContent = `${i + 1} / ${this.steps.length}`;
     this.back.hidden = i === 0;
-    this.next.classList.remove("is-ready");
-    this.next.innerHTML = last
-      ? `${t("done")}<i class="fa-solid fa-check" aria-hidden="true"></i>`
-      : `${t("next")}<i class="fa-solid fa-arrow-right" aria-hidden="true"></i>`;
-    // Only finishing a walkthrough is worth an analytics event; paging is not.
-    if (last) {
-      this.next.setAttribute("data-ux", "guide");
-      this.next.setAttribute("data-ux-action", "finish");
-      this.next.setAttribute("data-ux-id", this.tour.id);
-    } else this.next.removeAttribute("data-ux");
+    this.labelNext(step, last);
 
-    const live = step.live ? step.live() : null;
-    const liveOk = live && shown(live) && ratioInView(live) >= 0.5;
-    this.slide(
-      liveOk ? step.liveTitle || step.title : step.title,
-      liveOk ? step.liveBody || step.body : step.body,
-      dir,
-    );
-    if (liveOk) this.enterLive(live);
+    this.slide(step.title, step.body, dir);
+    this.root.classList.toggle("no-stage", !step.scene);
+    if (step.scene) this.scene.load(step.scene);
     else {
-      this.leaveLive();
-      if (step.scene) this.scene.load(step.scene);
-      else this.scene.stop();
-      this.root.classList.toggle("no-stage", !step.scene);
+      this.scene.stop();
+      if (this.opts.cursor) this.opts.cursor.vanish();
     }
+  }
+
+  /**
+   * The last step of a walkthrough that ends in following: Follow for a reader
+   * who does not follow yet, Done beside Let's Explore for one who does.
+   */
+  labelNext(step, last) {
+    const icon = (name) => `<i class="fa-solid ${name}" aria-hidden="true"></i>`;
+    const ux = (btn, on) => {
+      if (on) {
+        btn.setAttribute("data-ux", "guide");
+        btn.setAttribute("data-ux-action", "finish");
+        btn.setAttribute("data-ux-id", this.tour.id);
+      } else btn.removeAttribute("data-ux");
+    };
+    const final = last && step.final;
+    this.done.hidden = !(final && this.tour.following);
+    ux(this.done, !this.done.hidden);
+    if (!last) this.next.innerHTML = `${t("next")}${icon("fa-arrow-right")}`;
+    else if (!final) this.next.innerHTML = `${t("done")}${icon("fa-check")}`;
+    else if (this.tour.following) this.next.innerHTML = `${t("explore")}${icon("fa-compass")}`;
+    else this.next.innerHTML = `<i class="fa-regular fa-bell" aria-hidden="true"></i>${t("follow")}`;
+    // Only finishing a walkthrough is worth an analytics event; paging is not.
+    ux(this.next, last && !final);
   }
 
   /** Swap the step's text, sliding in from the side it was paged towards. */
@@ -304,44 +372,17 @@ export class Tour {
     }, 420);
   }
 
-  // ─── live steps ────────────────────────────────────────────
-  enterLive(el) {
-    this.scene.stop();
-    this.root.classList.add("is-live");
-    this.liveEl = el;
-    const { cursor } = this.opts;
-    if (!cursor) return;
-    const card = this.card.getBoundingClientRect();
-    cursor.flyTo(anchorOf(el, [0.5, 0.6]), { from: { x: card.left + card.width / 2, y: card.top + 24 } });
-  }
-
-  leaveLive() {
-    if (!this.liveEl) return;
-    this.liveEl = null;
-    this.root.classList.remove("is-live");
-    if (this.opts.cursor) this.opts.cursor.vanish();
-  }
-
-  /** The guide's cursor, if it brought the reader here, steps into the card. */
-  async enterFromCursor() {
-    const { cursor } = this.opts;
-    if (!cursor || !cursor.visible || this.liveEl) return;
-    const stage = this.stage.getBoundingClientRect();
-    const r = stage.width ? stage : this.card.getBoundingClientRect();
-    const spot = { x: r.left + r.width * 0.72, y: r.top + r.height * 0.72 };
-    await cursor.flyTo(() => spot, { duration: 640 });
-    if (!this.liveEl) cursor.vanish();
-  }
-
   // ─── the menu ──────────────────────────────────────────────
   showMenu() {
     this.mode = "menu";
     this.root.classList.add("is-menu", "no-stage");
     this.scene.stop();
+    this.pick.hidden = true;
     this.nameEl.textContent = t("menu_title");
     this.count.textContent = "";
     this.dots.innerHTML = "";
     this.back.hidden = true;
+    this.done.hidden = true;
     this.next.innerHTML = t("close");
     this.next.removeAttribute("data-ux");
 
@@ -381,12 +422,12 @@ export class Tour {
     }, 60);
   }
 
-  menuClick(e) {
+  async menuClick(e) {
     if (this.mode !== "menu") return;
     const row = e.target.closest("[data-tour]");
     if (row) {
-      const def = this.def.build(row.dataset.tour);
-      if (def) this.start(def, null);
+      const def = await this.def.build(row.dataset.tour);
+      if (def && !this.closed) this.start(def, null);
       return;
     }
     const reset = e.target.closest("[data-reset]");
@@ -408,8 +449,12 @@ export class Tour {
     if (this.closed) return;
     this.closed = true;
     if (current === this) current = null;
-    this.leaveLive();
     this.scene.stop();
+    // The cursor leaves with the card; it only travels when it has somewhere to go.
+    if (this.opts.cursor) {
+      this.opts.cursor.vanish();
+      if (this.opts.cursor.clip === this.scene.clipFn) this.opts.cursor.setClip(null);
+    }
     this.root.classList.remove("is-open");
     this.root.classList.add("is-closing");
     const done = () => {

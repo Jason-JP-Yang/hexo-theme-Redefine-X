@@ -10,7 +10,9 @@
  * a pass each frame would run every scroll subscriber in the theme 60×/s for as
  * long as a tip is on screen. The loop keeps the scheduler's contract instead:
  * every item measures first, then every item writes, and it only runs while
- * something it owns is visible.
+ * something it owns is visible. An item may also `prepare` before anyone
+ * measures — a scene's camera does, so the cursor reads this frame's camera,
+ * not the last one.
  */
 
 export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -106,6 +108,7 @@ export class Loop {
     this.raf = 0;
     const dt = this.last && now - this.last < 100 ? (now - this.last) / 1000 : 1 / 60;
     this.last = now;
+    for (const item of this.items) if (item.prepare) item.prepare(now, dt);
     for (const item of this.items) item.measure(now);
     let again = false;
     for (const item of this.items) if (item.render(now, dt)) again = true;

@@ -49,24 +49,6 @@ export function rectRatio(r) {
 
 export const ratioInView = (el) => (el && el.isConnected ? rectRatio(el.getBoundingClientRect()) : 0);
 
-/** The union of several elements' rects — what a card must not cover. */
-export function unionRect(els) {
-  let l = Infinity;
-  let t = Infinity;
-  let r = -Infinity;
-  let b = -Infinity;
-  for (const el of els) {
-    if (!el || !el.isConnected) continue;
-    const x = el.getBoundingClientRect();
-    if (!x.width && !x.height) continue;
-    l = Math.min(l, x.left);
-    t = Math.min(t, x.top);
-    r = Math.max(r, x.right);
-    b = Math.max(b, x.bottom);
-  }
-  return l === Infinity ? null : { left: l, top: t, right: r, bottom: b, width: r - l, height: b - t };
-}
-
 /**
  * A live point on an element, as fractions of its box. Clamped to the part of
  * the element that is on screen, so a tall photo half scrolled away is pointed

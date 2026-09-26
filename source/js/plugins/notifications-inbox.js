@@ -459,7 +459,8 @@ function wireChrome(panel) {
 }
 
 // ─── list ────────────────────────────────────────────────────
-function itemHTML(item) {
+// Exported for the guide, whose inbox mock is this list, not a copy of it.
+export function itemHTML(item) {
   const unread = !item.read_at;
   const icon =
     item.type === "note"

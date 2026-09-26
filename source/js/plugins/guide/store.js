@@ -96,6 +96,9 @@ export function t(path, fallback = "") {
   return typeof v === "string" ? v : fallback;
 }
 
+/** The newest post a reader can open, {title, body}, as the build found it. */
+export const newest = () => (strings && strings.newest) || null;
+
 /** `t()` with `{name}` placeholders filled in. Values are escaped. */
 export function tf(path, values) {
   return t(path).replace(/\{(\w+)\}/g, (m, k) => (k in values ? escapeHTML(values[k]) : m));

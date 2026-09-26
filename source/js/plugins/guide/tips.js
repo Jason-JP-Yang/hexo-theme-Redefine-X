@@ -20,7 +20,6 @@
  *   prepare(el)         reveal something before pointing (a menu, hidden
  *                       buttons); returns the undo
  *   resolve(el)         the exact element to point at once prepared
- *   frame(el)           extra elements the bubble should cover least of
  *   fulfilled()         the reader has done it already: close, and count it
  *
  * `key` is what Understand stores. Two tips that are the same advice on
@@ -90,7 +89,7 @@ export function catalog() {
       when: (c) => c.notifications && c.following,
       target: bell,
       tour: "follow",
-      tourFrom: "inbox",
+      tourFrom: "published",
       text: () => copy("bell"),
     }),
     tip({
@@ -100,7 +99,7 @@ export function catalog() {
       when: (c) => c.notifications && c.following && c.ios && !c.standalone,
       target: bell,
       tour: "follow",
-      tourFrom: "ios",
+      tourFrom: "install",
       text: () => copy("ios_push"),
     }),
 
@@ -124,7 +123,6 @@ export function catalog() {
       prepare: (el) => (el.classList.contains("navbar-item") ? borrowClass(el, "guide-hover") : null),
       settle: 260,
       resolve: (el) => (el.classList.contains("navbar-item") ? el.querySelector(":scope > a") || el : el),
-      frame: (el) => [el.closest(".navbar-item") && el.closest(".navbar-item").querySelector(".sub-menu")],
       point: [0.5, 0.62],
       text: (c, el) => copy(el.closest(".navbar-item") ? "navbar" : "navbar_mobile"),
     }),
@@ -147,7 +145,6 @@ export function catalog() {
       prepare: (item) => borrowClass(item, "guide-hover"),
       settle: 260,
       resolve: (item) => menuLinkIn(item, "/masonry"),
-      frame: (a) => [a.closest(".sub-menu")],
       point: [0.3, 0.6],
       text: () => copy("masonry"),
     }),
@@ -203,7 +200,6 @@ export function catalog() {
       targets: () => qa(`${article} .image-exif-container`).slice(0, 20),
       accept: (box) => shown(box.querySelector(".image-exif-toggle-btn")),
       resolve: (box) => box.querySelector(".image-exif-toggle-btn"),
-      frame: (btn) => [btn.closest(".image-exif-info-card")],
       point: [0.5, 0.5],
       text: () => copy("exif_toggle"),
     }),
@@ -221,7 +217,6 @@ export function catalog() {
       prepare: (box) => borrowClass(box, "guide-reveal"),
       settle: 260,
       resolve: (box) => box.querySelector(".image-exif-info-card"),
-      frame: (card) => [card.closest(".image-exif-image-wrapper")],
       point: [0.25, 0.3],
       text: () => copy("exif_hover"),
     }),
@@ -238,7 +233,6 @@ export function catalog() {
       accept: (box) => !!imageIn(box),
       resolve: imageIn,
       point: [0.5, 0.5],
-      tour: "viewer",
       text: () => copy("viewer"),
     }),
     tip({
@@ -328,7 +322,6 @@ export function catalog() {
       order: 10,
       targets: () => qa("#masonry-container .masonry-item").slice(0, 8),
       point: [0.5, 0.45],
-      tour: "viewer",
       text: () => copy("album_photo"),
     }),
     tip({

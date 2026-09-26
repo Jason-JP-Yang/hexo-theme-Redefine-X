@@ -1,10 +1,9 @@
 /**
  * Guide — the virtual cursor.
  *
- * One class serves both places a cursor appears: the page itself (a fixed layer,
- * viewport coordinates) and the inside of a tour scene (a scaled stage, the
- * scene's own coordinates). It never dispatches an event. Every "press" it makes
- * is a picture of a press: a squeeze of the arrow and a ripple under the tip.
+ * One cursor, on a fixed layer in viewport coordinates, for the page and for the
+ * walkthroughs alike. It never dispatches an event. Every "press" it makes is a
+ * picture of a press: a squeeze of the arrow and a ripple under the tip.
  *
  * How it moves:
  *   • A flight is an arc, not a line — a cubic Bézier bowed to one side, the
@@ -15,10 +14,13 @@
  *     under it.
  *   • At rest it follows its target on a spring and its label follows it on a
  *     softer one, so a scrolling page carries both with a little weight.
- *   • The label hangs off one corner of the arrow — below right by default,
- *     turned left near the right edge and up near the bottom, the arrow
- *     mirroring to match. That corner stays put while the label grows away
- *     from it, and the finished label never leaves the view.
+ *   • The label hangs off one corner of the arrow: below right, the arrow
+ *     pointing up left. It turns left only when it does not fit on the right,
+ *     up only when it does not fit below, and back the moment it fits again,
+ *     the arrow mirroring to match. That corner stays put while the label
+ *     grows away from it, and the finished label never leaves the view.
+ *   • Inside a walkthrough the view is the stage (`setClip`): arrow, arc and
+ *     label all stay on it, whatever the camera does.
  * Reduced motion turns all of that off: it appears in place.
  */
 
@@ -35,13 +37,7 @@ const DX = 10; // the tip to the label's near corner, across
 const DY = 19; // and down: clear of the arrow even when the label slides under it
 const EDGE = 8; // kept clear of the view's edges
 const SLACK = 6; // how far a label must overflow before it turns at rest
-
-// How much of `a` a box at (left, top) of size w × h covers.
-function cover(a, left, top, w, h) {
-  const x = Math.min(left + w, a.right) - Math.max(left, a.left);
-  const y = Math.min(top + h, a.bottom) - Math.max(top, a.top);
-  return x > 0 && y > 0 ? x * y : 0;
-}
+const INSET = 6; // the tip's margin inside a clip
 
 // The shift that brings [start, start + size] inside [lo, hi], or pins it to lo.
 const inside = (start, size, lo, hi) =>
@@ -112,8 +108,30 @@ export class Cursor {
     this.sx = 0;
     this.sy = 0;
     this.shape = "";
+    this.clip = null;
+    this.redecide = false;
 
     loop.add(this);
+  }
+
+  /**
+   * Keep the cursor and its label inside a rect of the layer, or let them roam
+   * the whole view again (null).
+   * @param {(() => {left:number,top:number,right:number,bottom:number}) | null} fn
+   */
+  setClip(fn) {
+    if (this.clip === fn) return;
+    this.clip = fn;
+    this.redecide = true;
+    this.loop.wake();
+  }
+
+  /** The area the cursor lives in, in the layer's coordinates. */
+  area() {
+    const c = this.clip && this.clip();
+    if (c) return c;
+    const { w, h } = this.bounds();
+    return { left: 0, top: 0, right: w, bottom: h };
   }
 
   setLabel(text) {
@@ -172,6 +190,12 @@ export class Cursor {
       }
     }
 
+    const c = this.clip && !(f && f.exit) ? this.clip() : null;
+    if (c) {
+      x = clamp(x, c.left + INSET, c.right - INSET);
+      y = clamp(y, c.top + INSET, c.bottom - INSET);
+    }
+
     const inv = dt > 0 ? 1 / dt : 60;
     this.vx = this.vx * 0.6 + (x - this.x) * inv * 0.4;
     this.vy = this.vy * 0.6 + (y - this.y) * inv * 0.4;
@@ -219,17 +243,18 @@ export class Cursor {
     const m = EDGE * k;
     const lx = this.alive ? this.lx.step(x, dt) : x;
     const ly = this.alive ? this.ly.step(y, dt) : y;
-    const { w: vw, h: vh } = this.bounds();
+    const B = this.area();
     const f = this.flight;
     // Leaving, the label goes with the arrow instead of being held in view.
     const leaving = !!(f && f.exit);
 
-    // Decided for where the cursor is going, then kept. In flight nothing is
-    // re-decided; at rest a side changes only once the other one fits and this
-    // one clearly does not, so nothing flips back and forth on a boundary.
-    const decide = this.fresh || !!(g && g.decide);
+    // Decided for where the cursor is going as a flight sets off, and kept for
+    // the flight; at rest it is kept up to date, with a margin either way so
+    // nothing flips back and forth on a boundary.
+    const decide = this.fresh || this.redecide || !!(g && g.decide);
     if (!leaving && (decide || !f)) {
-      this.orient(decide, f ? f.last : { x, y }, g ? g.sw : L.w, g ? g.sh : L.h, g && g.avoid, vw, vh, dx, dy, m);
+      this.orient(decide, f ? f.last : { x, y }, g ? g.sw : L.w, g ? g.sh : L.h, B, dx, dy, m);
+      this.redecide = false;
     }
     const snap = this.fresh || !this.alive;
     this.fresh = false;
@@ -248,8 +273,8 @@ export class Cursor {
     const cx = lx + dx - 2 * dx * tx;
     const cy = ly + dy - 2 * dy * ty;
     if (!leaving) {
-      this.sx = inside(cx - fw * tx, fw, m, vw - m);
-      this.sy = inside(cy - fh * ty, fh, m, vh - m);
+      this.sx = inside(cx - fw * tx, fw, B.left + m, B.right - m);
+      this.sy = inside(cy - fh * ty, fh, B.top + m, B.bottom - m);
     }
     const bx = cx - w * tx + this.sx;
     const by = cy - h * ty + this.sy;
@@ -266,24 +291,21 @@ export class Cursor {
   }
 
   /**
-   * Choose the corner. Below and to the right unless the finished label does not
-   * fit there; a new tip prefers the side covering less of what it is about.
+   * Choose the corner: below and to the right, each axis turned only while the
+   * finished label (sw × sh) does not fit that way and the other way is better.
+   * At rest, leaving the default needs a clear overflow (SLACK) and it is taken
+   * back as soon as the label fits again.
    */
-  orient(decide, p, sw, sh, avoid, vw, vh, dx, dy, m) {
-    const r = vw - m - p.x - dx;
-    const l = p.x - dx - m;
-    const d = vh - m - p.y - dy;
-    const u = p.y - dy - m;
-    if (decide) {
-      this.up = d < sh && (u >= sh || u > d);
-      if (r >= sw && l >= sw) {
-        const top = this.up ? p.y - dy - sh : p.y + dy;
-        this.left = !!avoid && cover(avoid, p.x - dx - sw, top, sw, sh) < cover(avoid, p.x + dx, top, sw, sh);
-      } else this.left = r >= sw ? false : l >= sw ? true : l > r;
-      return;
-    }
-    if (this.left ? l < sw - SLACK && r >= sw : r < sw - SLACK && l >= sw) this.left = !this.left;
-    if (this.up ? u < sh - SLACK && d >= sh : d < sh - SLACK && u >= sh) this.up = !this.up;
+  orient(decide, p, sw, sh, B, dx, dy, m) {
+    const r = B.right - m - p.x - dx;
+    const l = p.x - dx - B.left - m;
+    const d = B.bottom - m - p.y - dy;
+    const u = p.y - dy - B.top - m;
+    const s = decide ? 0 : SLACK;
+    if (decide || !this.left) this.left = r < sw - s && (l >= sw || l > r);
+    else if (r >= sw) this.left = false;
+    if (decide || !this.up) this.up = d < sh - s && (u >= sh || u > d);
+    else if (d >= sh) this.up = false;
   }
 
   // ─── visibility ────────────────────────────────────────────
@@ -314,21 +336,24 @@ export class Cursor {
     if (this.speech) this.speech.drop();
   }
 
+  /** Stay where it is, letting go of whatever it was flying to or resting on. */
+  hold() {
+    if (this.flight) this.flight.done(false);
+    this.flight = null;
+    if (!this.visible) return;
+    const x = this.x;
+    const y = this.y;
+    this.rx.snap(x);
+    this.ry.snap(y);
+    this.restAt = performance.now();
+    this.anchor = () => ({ x, y });
+  }
+
   /** Fade out where it is — for a page that is being navigated away from. */
   vanish() {
     if (this.flight) this.flight.done(false);
     this.flight = null;
     this.hideNow();
-  }
-
-  /** Rest at a point without a flight, e.g. the starting spot of a freshly built scene. */
-  park(x, y) {
-    if (this.flight) this.flight.done(false);
-    this.flight = null;
-    this.anchor = () => ({ x, y });
-    this.restAt = performance.now();
-    if (!this.visible) this.show(x, y);
-    this.loop.wake();
   }
 
   // ─── flights ───────────────────────────────────────────────
@@ -348,9 +373,10 @@ export class Cursor {
 
   /**
    * Fly to a (live) anchor. Resolves true on arrival, false if superseded.
+   * A hidden cursor flies in from close by, or with `appear` shows up in place.
    * @param {() => ({x:number,y:number}|null)} anchor
    */
-  flyTo(anchor, { from = null, exit = false, duration = null } = {}) {
+  flyTo(anchor, { from = null, exit = false, duration = null, appear = false, straight = false } = {}) {
     return new Promise((resolve) => {
       if (this.flight) this.flight.done(false);
       this.flight = null;
@@ -360,7 +386,7 @@ export class Cursor {
 
       if (!this.visible) {
         if (exit) return resolve(true);
-        const s = from || this.entryPoint(p);
+        const s = from || (appear ? p : this.entryPoint(p));
         this.show(s.x, s.y);
       }
 
@@ -388,11 +414,28 @@ export class Cursor {
 
       const ux = dist ? dx / dist : 0;
       const uy = dist ? dy / dist : 0;
-      this.side = -this.side;
-      const bend = Math.min(dist * 0.2, 120) * this.side;
+      let side = (this.side = -this.side);
+      // A drag is drawn in a line; only a hand crossing the screen arcs.
+      let arc = straight ? 0 : Math.min(dist * 0.2, 120);
+      const c = this.clip && !exit && arc ? this.clip() : null;
+      if (c) {
+        // Bowed towards the middle of the clip, and never so far that it leaves.
+        const mx = sx + dx / 2;
+        const my = sy + dy / 2;
+        side = ((c.left + c.right) / 2 - mx) * -uy + ((c.top + c.bottom) / 2 - my) * ux >= 0 ? 1 : -1;
+        const px = -uy * side;
+        const py = ux * side;
+        const room = Math.min(
+          px > 0.01 ? (c.right - INSET - mx) / px : px < -0.01 ? (c.left + INSET - mx) / px : Infinity,
+          py > 0.01 ? (c.bottom - INSET - my) / py : py < -0.01 ? (c.top + INSET - my) / py : Infinity,
+        );
+        // The arc peaks at about half its bend.
+        arc = Math.max(0, Math.min(arc, room * 1.8));
+      }
+      const bend = arc * side;
       const nx = -uy * bend;
       const ny = ux * bend;
-      const over = exit ? 0 : Math.min(6, dist * 0.025);
+      const over = exit || straight ? 0 : Math.min(6, dist * 0.025);
       const x0 = sx - p.x;
       const y0 = sy - p.y;
 
@@ -400,7 +443,8 @@ export class Cursor {
       this.flight = {
         start: performance.now(),
         dur: duration || flightMs(dist),
-        ease: exit ? ease.in : ease.inOut,
+        // A drag eases out like the content it pulls (scene.js scrolls with the same curve).
+        ease: exit ? ease.in : straight ? ease.out : ease.inOut,
         x0,
         y0,
         x1: x0 + dx * 0.3 + nx,
@@ -417,6 +461,8 @@ export class Cursor {
           resolve(ok);
         },
       };
+      // The corner is chosen for the destination as it sets off, so it turns in flight.
+      if (!exit) this.redecide = true;
       this.loop.wake();
     });
   }

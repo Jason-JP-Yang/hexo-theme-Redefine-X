@@ -9,6 +9,10 @@
  * every tip never downloads them. English is the base table and the site
  * language is laid over it key by key, so a partly translated language still
  * says everything.
+ *
+ * `newest` rides along: the latest post a reader can open — not sticky-first
+ * like the home page, never one behind the vault or a draft — as its
+ * notification would announce it, for the follow walkthrough to show.
  */
 
 const fs = require("fs");
@@ -32,7 +36,32 @@ function merge(base, over) {
   return out;
 }
 
-hexo.extend.generator.register("redefine_guide", function () {
+function plain(html, max) {
+  const text = String(html || "")
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+// The same selection and body as notifications-generator.js's post entries.
+function newest(posts) {
+  const post = posts
+    .sort("-date")
+    .toArray()
+    .find((p) => p && !p.vault && p.draft !== true && p.hidden !== true && p.published !== false && p.notify !== false);
+  if (!post) return null;
+  return { title: String(post.title || ""), body: plain(post.excerpt || post.description || post.content || "", 160) };
+}
+
+hexo.extend.generator.register("redefine_guide", function (locals) {
   const theme = hexo.theme.config || {};
   if (theme.global && theme.global.guide === false) return [];
 
@@ -41,6 +70,8 @@ hexo.extend.generator.register("redefine_guide", function () {
   let strings = table(path.join(dir, "en.yml"));
   const own = path.join(dir, `${lang}.yml`);
   if (lang !== "en" && fs.existsSync(own)) strings = merge(strings, table(own));
+  const post = newest(locals.posts);
+  if (post) strings.newest = post;
 
   return [{ path: "guide-i18n.json", data: JSON.stringify(strings) }];
 });

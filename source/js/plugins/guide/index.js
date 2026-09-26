@@ -29,7 +29,7 @@ import { Loop, Run, isCancel, CANCELLED } from "./motion.js";
 import { Cursor } from "./cursor.js";
 import { Callout } from "./callout.js";
 import { catalog, notes } from "./tips.js";
-import { shown, rectRatio, ratioInView, unionRect, anchorOf, isIOS, isStandalone } from "./dom.js";
+import { shown, rectRatio, ratioInView, anchorOf, isIOS, isStandalone } from "./dom.js";
 import { onScroll, onRawScroll, getMetrics } from "../../tools/scrollScheduler.js";
 
 const T = {
@@ -334,20 +334,16 @@ async function present({ tip, el }) {
     // Laid out before the flight, so the cursor arrives already facing the side
     // the finished bubble fits on.
     const anchor = (a.anchor = anchorOf(target, tip.point));
-    const extra = tip.frame ? tip.frame(target) || [] : [];
-    u.callout.prepare(
-      {
-        id: tip.id,
-        colon: t("colon", ": "),
-        title: text.title,
-        body: text.body,
-        ok: t("understand"),
-        more: tip.tour ? t("more") : "",
-        later: t("later"),
-        wait: T.ANSWER,
-      },
-      () => unionRect([target, ...extra]),
-    );
+    u.callout.prepare({
+      id: tip.id,
+      colon: t("colon", ": "),
+      title: text.title,
+      body: text.body,
+      ok: t("understand"),
+      more: tip.tour ? t("more") : "",
+      later: t("later"),
+      wait: T.ANSWER,
+    });
     await a.run.guard(u.cursor.flyTo(anchor));
     if (!target.isConnected || busy(performance.now(), true)) throw CANCELLED;
     if (ratioInView(target) < 0.3) {

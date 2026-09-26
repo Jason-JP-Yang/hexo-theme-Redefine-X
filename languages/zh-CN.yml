@@ -236,7 +236,6 @@ notifications:
 
 guide:
   label: 向导
-  you: 你
   colon: "："
   note_title: 来自作者的说明
   understand: 知道了
@@ -245,11 +244,15 @@ guide:
   next: 下一步
   back: 上一步
   done: 完成
+  follow: 关注
+  explore: 开始探索
+  platform: 设备
+  platforms:
+    windows: Windows
+    macos: macOS
+    ios: iPhone / iPad
+    android: Android
   close: 关闭
-  try: 亲自试试
-  watch: 再看一遍
-  your_turn: 轮到你了
-  try_done: 完成——就是这么简单。
   menu_title: 使用指南
   menu_lede: 本博客中功能多于外观所示的部分，各有一份演示。可随时打开，不会改动任何设置。
   menu_steps: "{n} 步"
@@ -330,58 +333,30 @@ guide:
   tours:
     follow:
       name: 关注本博客
-      desc: 收件箱、推送通知，以及登录的方式。
+      desc: 新内容进入本站的收件箱并以通知送达你的设备，以及登录的方式。
       signed_in: 你已经以 <b>@{login}</b> 登录，GitHub 相关的步骤均已完成。
       steps:
-        why:
-          title: 关注之后会得到什么
-          body: 关注后，新文章、即时笔记与公告会进入本站的收件箱，位于导航栏的铃铛之后。如果同时允许通知，这些内容还会以推送通知送达此设备，即使博客没有打开。接收的主题可自行选择，也可以随时取消关注。
-        github:
-          title: 一个 GitHub 账号
-          body: 登录本博客使用的是 GitHub 账号，与评论所用的是同一个。如果还没有账号，请在 <b>github.com/signup</b> 注册：填写邮箱、密码与用户名，完成简短的人机验证，再输入 GitHub 发送到邮箱的验证码。注册免费，大约需要两分钟。已有账号可直接进入下一步。
-        authorize:
+        published:
+          title: 有新内容发布时
+          body: 新文章、即时笔记或公告会以两种方式送达：设备上的系统通知（即使博客没有打开），以及导航栏铃铛后的收件箱，在你读过之前会一直保留在那里。
+        install_ios:
+          title: 将博客添加到主屏幕
+          body: iPhone 与 iPad 只向已添加到主屏幕的网站发送通知。在 Safari 中轻点 <b>⋯</b>，再轻点<b>共享</b>，向下滚动到<b>添加到主屏幕</b>，打开<b>作为网页 App 打开</b>并轻点<b>添加</b>。之后从新的图标打开博客，并在其中关注。需要 iOS 16.4 或更高版本。
+        install_mac:
+          title: 将博客放入程序坞
+          body: 在 Mac 上为可选步骤。在 Safari 中选择<b>文件 → 添加到程序坞…</b>并按下<b>添加</b>，此后博客可从程序坞以独立窗口打开。无论是否添加，Safari 都会送达博客的通知。需要 macOS Sonoma 或更高版本。
+        signin:
           title: 通过 giscus 登录
-          body: 按下<b>关注</b>后，博客会将你带到 GitHub，为评论背后的应用 <b>giscus</b> 授权。它会请求：验证你的 GitHub 身份、了解你可访问的资源、代表你执行操作——你写下的评论正是由此发布。按下 <b>Authorize giscus</b> 后会回到博客，并已处于登录状态。授权可随时在 GitHub 的 Settings → Applications 中撤销。
-        ios:
-          title: 在 iPhone 与 iPad 上，先添加到主屏幕
-          body: iOS 与 iPadOS 只向安装到主屏幕的网站发送网页推送。在 Safari 中轻点 <b>⋯</b>，再轻点<b>共享</b>（若标签页布局为“底部”或“顶部”，可直接轻点共享），向下滚动找到<b>添加到主屏幕</b>，打开<b>作为网页 App 打开</b>，然后轻点<b>添加</b>。之后从新图标打开博客，再在其中关注。需要 iOS 16.4 或更高版本。
+          body: 关注使用你的 GitHub 账号，经由同样支撑评论区的 <b>giscus</b> 完成。按下<b>关注</b>后，GitHub 会请你登录以继续前往 giscus。已有账号时，在此登录后直接前往授权步骤。
+        register:
+          title: 注册 GitHub 账号
+          body: 没有账号时，选择 <b>Create an account</b>。填写邮箱、密码与用户名，选择国家或地区，然后按下 <b>Create account</b>。随后 GitHub 会请你完成一个简短的验证谜题，并输入发送到邮箱的验证码。账号免费。
+        authorize:
+          title: 为 giscus 授权
+          body: 首次登录时，GitHub 会询问是否允许 giscus 验证你的 GitHub 身份、了解你可访问的资源、代表你执行操作——你写下的评论正是由此发布。按下 <b>Authorize</b> 即返回博客，并已处于登录状态。授权可随时在 GitHub 的 Settings → Applications 中撤销。
         allow:
           title: 关注，并允许通知
-          body: 回到博客后按下<b>关注</b>。浏览器会询问是否允许本站显示通知——选择<b>允许</b>即可在此设备上接收推送。选择<b>屏蔽</b>同样会完成关注：所有内容照常进入收件箱，只是没有提醒。关注完成后，关注按钮会变为铃铛。
-        inbox:
-          title: 铃铛就是收件箱
-          body: 关注的内容按时间倒序汇集在铃铛之后，未读数量显示在角标上。<b>管理订阅</b>可在新文章、即时笔记与公告之间选择，列出所有注册了推送的浏览器并可逐一移除，也可以完全取消关注。
-        push:
-          title: 有新内容发布时
-          body: 新文章会以通知的形式送达，附带标题与开头几行，按下即可打开文章。只有在内容发布时才会发送通知，绝不用于评论或推广。在某个浏览器中退出登录会停止该处的推送，重新登录后会自动恢复。
-        iphone:
-          title: 也在 iPhone 上阅读？
-          body: iOS 只向主屏幕上的网站发送推送。在 iPhone 上用 Safari 打开博客，轻点 <b>⋯</b> → <b>共享</b> → <b>添加到主屏幕</b>，打开<b>作为网页 App 打开</b>，轻点<b>添加</b>，再从新图标中关注。同一个 GitHub 账号在所有设备上共用一个收件箱。
-        ready:
-          title: 随时可以开始
-          body: 关注按钮就在这里。准备好时按下即可，接下来的步骤会按刚才演示的顺序出现。
-        ready_off:
-          title: 以上就是全部
-          body: 准备好时，按下导航栏中的<b>关注</b>即可，接下来的步骤会按刚才演示的顺序出现。
-        ready_following:
-          title: 你已关注本博客
-          body: 所有送达的内容都汇集在铃铛之后。随时可以打开，并在其中通过<b>管理订阅</b>调整主题或设备。
-    viewer:
-      name: 图片查看器
-      desc: 缩放、平移、切换图片，以及查看相机参数。
-      steps:
-        open:
-          title: 打开图片
-          body: 按下文章中的任意图片，或照片墙中的任意照片，它会从页面中放大为全屏查看器，其余内容会退到后方，直到关闭为止。
-        zoom:
-          title: 放大
-          body: 在图片上滚动鼠标滚轮，或用双指捏合，即可最多放大六倍。缩放以指针所在位置或双指之间的位置为中心。
-        pan:
-          title: 查看细节，然后切换
-          body: 放大后拖动图片即可查看各处细节。两侧的箭头、下方的箭头与页码圆点可在文中所有图片之间切换；在触屏上，滑动也能达到同样效果。
-        info:
-          title: 详细信息与关闭
-          body: 角落的信息按钮会显示图片说明；对附有相机参数的照片，还会显示拍摄参数。按 <b>Esc</b> 或轻点图片周围的深色区域即可关闭查看器。
+          body: 回到博客后，再按一次<b>关注</b>。系统随即询问是否允许本站发送通知：选择<b>允许</b>即可在此设备上接收。选择<b>阻止</b>仍会关注本博客——所有内容照常进入收件箱，只是不再弹出通知。随后关注按钮会变为铃铛。
     comments:
       name: 评论与登录
       desc: 使用 GitHub 账号参与任意文章下的讨论。
@@ -391,76 +366,24 @@ guide:
           body: 每篇文章在 GitHub Discussions 中都有自己的讨论串，并通过 giscus 显示在这里。你的评论会以 GitHub 的名字与头像显示，也可以在 GitHub 上查找、编辑或删除。
         authorize:
           title: 通过 giscus 登录
-          body: 在评论框中按下 <b>Sign in with GitHub</b>。GitHub 会请你为 <b>giscus</b> 授权——验证你的身份、了解你可访问的资源、代表你执行操作，你写下的内容正是由此发布。按下 <b>Authorize giscus</b> 后会回到文章，并已处于登录状态。
+          body: 在评论框中按下 <b>Sign in with GitHub</b>。GitHub 会请你为 <b>giscus</b> 授权——验证你的身份、了解你可访问的资源、代表你执行操作，你写下的内容正是由此发布。按下 <b>Authorize</b> 后会回到文章，并已处于登录状态。
         write:
           title: 撰写、预览、发送
           body: 在输入框中输入内容，支持 Markdown，包括代码、链接与列表。<b>Preview</b> 会在按下 <b>Comment</b> 之前显示排版效果，回复会附在所回复的评论之下。
         react:
           title: 表态，并持续关注
           body: 笑脸按钮可以用表情代替评论。同一次登录也可为照片墙中的照片点赞、关注本博客——这是本站唯一需要的账号。
-  scenes:
-    new_post: 新文章发布
-    to_inbox: 进入你的收件箱
-    push: ……同时以推送通知送达
-    open_bell: 随时打开铃铛查看
-    email: 填写邮箱
-    password: 设置密码
-    username: 选择用户名
-    create: 继续
-    puzzle: 完成简短的验证
-    code: 输入邮件中的验证码
-    welcome: 账号已就绪
-    press_follow: 按下关注
-    press_signin: 按下 Sign in with GitHub
-    to_github: GitHub 请你为 giscus 授权
-    authorize: 为 giscus 授权
-    signed_in: 回到博客，已登录
-    tap_more: 轻点 ⋯
-    tap_share: 轻点共享
-    scroll: 向下滚动列表
-    tap_add_home: 轻点添加到主屏幕
-    web_app: 打开“作为网页 App 打开”
-    tap_add: 轻点添加
-    on_home: 博客已在主屏幕上
-    open_icon: 从新图标打开
-    allow: 选择允许
-    now_bell: 已关注——按钮变成了铃铛
-    open_inbox: 打开收件箱
-    manage: 管理订阅
-    toggle_topic: 选择接收的内容
-    arrives: 收到一条通知
-    open_post: 按下即可打开文章
-    tap_image: 按下图片
-    wheel: 滚动以缩放
-    pinch: 捏合以缩放
-    drag: 拖动查看细节
-    next_image: 下一张图片
-    swipe_next: 滑动，或轻点箭头
-    info: 查看详细信息
-    close_viewer: 轻点外侧以关闭
-    thread: 每篇文章都有自己的讨论串
-    reactions: 表态显示在每条评论下方
-    sign_in_box: 在评论框中登录
-    type_comment: 写下你的评论
-    preview: 预览
-    send: 按下 Comment
-    react: 添加表态
-    heart: 用同一账号为照片点赞
   mock:
-    new: 新
     now: 刚刚
     post_title: 设计一个虚拟光标
+    post_body: 一个指向博客中功能多于外观之处的光标，并说明它们的作用。
     note_title: 今晚重拍了港口相册
     announce_title: 博客现已支持推送通知
-    push_title: 新文章
     sign_in: Sign in with GitHub
-    write_comment: 写下评论
-    signed_in: 已登录
-    followed: 已关注
-    redirecting: 正在跳转…
     ios_share: 共享
     ios_bookmark: 添加书签
     ios_reader: 显示阅读器
+    ios_new_tab: 新建标签页
     ios_copy: 拷贝
     ios_reading_list: 添加到阅读列表
     ios_favorites: 添加到个人收藏
@@ -471,20 +394,44 @@ guide:
     ios_print: 打印
     ios_cancel: 取消
     ios_add: 添加
+    ios_done: 完成
+    ios_search: 搜索
     ios_web_app: 作为网页 App 打开
     ios_alert: "“{site}”想给你发送通知"
     ios_alert_body: 通知可能包括提醒、声音和图标标记。这些可在“设置”中配置。
     ios_dont: 不允许
     ios_allow: 允许
+    mac_file: 文件
+    mac_edit: 编辑
+    mac_view: 显示
+    mac_history: 历史记录
+    mac_bookmarks: 书签
+    mac_window: 窗口
+    mac_help: 帮助
+    mac_new_window: 新建窗口
+    mac_new_private: 新建无痕浏览窗口
+    mac_new_tab: 新建标签页
+    mac_open_file: 打开文件…
+    mac_open_location: 打开位置…
+    mac_close_window: 关闭窗口
+    mac_close_all: 关闭所有窗口
+    mac_close_tab: 关闭标签页
+    mac_save_as: 存储为…
+    mac_share: 共享
+    mac_export_pdf: 导出为 PDF…
+    mac_add_dock: 添加到程序坞…
+    mac_print: 打印…
+    mac_add_title: 添加到程序坞
+    mac_name: 名称
+    mac_add: 添加
+    mac_alert: "“{host}”想要给你发送通知"
+    mac_alert_body: 通知可能包括提醒、声音和标记。这些可在“系统设置”中配置。
+    win_search: 搜索
     perm_wants: "{host} 想要"
     perm_show: 显示通知
     perm_block: 屏蔽
     perm_allow: 允许
     perm_android: "{host} 想要向你发送通知"
-    photo_caption: 黄昏时的港口
-    exif_camera: 相机
-    exif_lens: 镜头
-    exif_exposure: 曝光
     days_ago: 2 天前
     comments_count: 3 条评论
     sample_comment: 写得很清楚，谢谢！
@@ -494,10 +441,14 @@ guide:
     comment: Comment
     sample_markdown: 写得很好——**谢谢！**
     sample_rendered: 写得很好——<b>谢谢！</b>
-    check_github: 一个 GitHub 账号
-    check_authorize: 已为 giscus 授权并登录
-    check_allow: 已关注，并允许通知
-    check_home: 已添加到主屏幕
+    apps:
+      facetime: FaceTime通话
+      clock: 时钟
+      files: 文件
+      findmy: 查找
+      measure: 测距仪
+      voicememos: 语音备忘录
+      shortcuts: 快捷指令
 
 management:
   a_title: 访问分析

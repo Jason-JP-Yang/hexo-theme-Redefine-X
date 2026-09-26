@@ -235,7 +235,6 @@ notifications:
 
 guide:
   label: 導覽
-  you: 你
   colon: "："
   note_title: 來自作者的說明
   understand: 知道了
@@ -244,11 +243,15 @@ guide:
   next: 下一步
   back: 上一步
   done: 完成
+  follow: 追蹤
+  explore: 開始探索
+  platform: 裝置
+  platforms:
+    windows: Windows
+    macos: macOS
+    ios: iPhone / iPad
+    android: Android
   close: 關閉
-  try: 親自試試
-  watch: 再看一次
-  your_turn: 輪到你了
-  try_done: 完成——就是這麼簡單。
   menu_title: 使用指南
   menu_lede: 本部落格中功能多於外觀所示的部分，各有一份示範。可隨時開啟，不會變更任何設定。
   menu_steps: "{n} 步"
@@ -329,58 +332,30 @@ guide:
   tours:
     follow:
       name: 追蹤本部落格
-      desc: 收件匣、推播通知，以及登入的方式。
+      desc: 新內容進入本站的收件匣並以通知送達你的裝置，以及登入的方式。
       signed_in: 你已經以 <b>@{login}</b> 登入，GitHub 相關的步驟皆已完成。
       steps:
-        why:
-          title: 追蹤之後會得到什麼
-          body: 追蹤後，新文章、即時筆記與公告會進入本站的收件匣，位於導覽列的鈴鐺之後。如果同時允許通知，這些內容還會以推播通知送達這台裝置，即使部落格沒有開啟。接收的主題可自行選擇，也可以隨時取消追蹤。
-        github:
-          title: 一個 GitHub 帳號
-          body: 登入本部落格使用的是 GitHub 帳號，與留言所用的是同一個。如果還沒有帳號，請在 <b>github.com/signup</b> 註冊：填寫電子郵件、密碼與使用者名稱，完成簡短的真人驗證，再輸入 GitHub 寄到信箱的驗證碼。註冊免費，大約需要兩分鐘。已有帳號可直接進入下一步。
-        authorize:
+        published:
+          title: 有新內容發布時
+          body: 新文章、即時筆記或公告會以兩種方式送達：裝置上的系統通知（即使部落格沒有開啟），以及導覽列鈴鐺後的收件匣，在你讀過之前會一直保留在那裡。
+        install_ios:
+          title: 將部落格加入主畫面
+          body: iPhone 與 iPad 只向已加入主畫面的網站傳送通知。在 Safari 中點一下 <b>⋯</b>，再點一下<b>分享</b>，向下捲動到<b>加入主畫面</b>，開啟<b>以網頁 App 開啟</b>並點一下<b>加入</b>。之後從新的圖像開啟部落格，並在其中追蹤。需要 iOS 16.4 或以上版本。
+        install_mac:
+          title: 將部落格加入 Dock
+          body: 在 Mac 上為選用步驟。在 Safari 中選擇<b>檔案 → 加入 Dock…</b>並按下<b>加入</b>，此後部落格可從 Dock 以獨立視窗開啟。無論是否加入，Safari 都會送達部落格的通知。需要 macOS Sonoma 或以上版本。
+        signin:
           title: 透過 giscus 登入
-          body: 按下<b>追蹤</b>後，部落格會將你帶到 GitHub，為留言背後的應用程式 <b>giscus</b> 授權。它會請求：驗證你的 GitHub 身分、了解你可存取的資源、代表你執行操作——你寫下的留言正是由此發布。按下 <b>Authorize giscus</b> 後會回到部落格，並已處於登入狀態。授權可隨時在 GitHub 的 Settings → Applications 中撤銷。
-        ios:
-          title: 在 iPhone 與 iPad 上，先加入主畫面
-          body: iOS 與 iPadOS 只向安裝到主畫面的網站傳送網頁推播。在 Safari 中點一下 <b>⋯</b>，再點一下<b>分享</b>（若標籤頁佈局為「底部」或「頂部」，可直接點一下分享），向下捲動找到<b>加入主畫面</b>，開啟<b>以網頁 App 開啟</b>，然後點一下<b>加入</b>。之後從新圖示開啟部落格，再在其中追蹤。需要 iOS 16.4 或以上版本。
+          body: 追蹤使用你的 GitHub 帳號，經由同樣支撐留言區的 <b>giscus</b> 完成。按下<b>追蹤</b>後，GitHub 會請你登入以繼續前往 giscus。已有帳號時，在此登入後直接前往授權步驟。
+        register:
+          title: 註冊 GitHub 帳號
+          body: 沒有帳號時，選擇 <b>Create an account</b>。填寫電子郵件、密碼與使用者名稱，選擇國家或地區，然後按下 <b>Create account</b>。隨後 GitHub 會請你完成一個簡短的驗證謎題，並輸入寄到信箱的驗證碼。帳號免費。
+        authorize:
+          title: 為 giscus 授權
+          body: 首次登入時，GitHub 會詢問是否允許 giscus 驗證你的 GitHub 身分、了解你可存取的資源、代表你執行操作——你寫下的留言正是由此發布。按下 <b>Authorize</b> 即回到部落格，並已處於登入狀態。授權可隨時在 GitHub 的 Settings → Applications 中撤銷。
         allow:
           title: 追蹤，並允許通知
-          body: 回到部落格後按下<b>追蹤</b>。瀏覽器會詢問是否允許本站顯示通知——選擇<b>允許</b>即可在這台裝置上接收推播。選擇<b>封鎖</b>同樣會完成追蹤：所有內容照常進入收件匣，只是沒有提醒。追蹤完成後，追蹤按鈕會變為鈴鐺。
-        inbox:
-          title: 鈴鐺就是收件匣
-          body: 追蹤的內容依時間倒序匯集在鈴鐺之後，未讀數量顯示在標記上。<b>管理訂閱</b>可在新文章、即時筆記與公告之間選擇，列出所有註冊了推播的瀏覽器並可逐一移除，也可以完全取消追蹤。
-        push:
-          title: 有新內容發布時
-          body: 新文章會以通知的形式送達，附帶標題與開頭幾行，按下即可開啟文章。只有在內容發布時才會傳送通知，絕不用於留言或推廣。在某個瀏覽器中登出會停止該處的推播，重新登入後會自動恢復。
-        iphone:
-          title: 也在 iPhone 上閱讀？
-          body: iOS 只向主畫面上的網站傳送推播。在 iPhone 上用 Safari 開啟部落格，點一下 <b>⋯</b> → <b>分享</b> → <b>加入主畫面</b>，開啟<b>以網頁 App 開啟</b>，點一下<b>加入</b>，再從新圖示中追蹤。同一個 GitHub 帳號在所有裝置上共用一個收件匣。
-        ready:
-          title: 隨時可以開始
-          body: 追蹤按鈕就在這裡。準備好時按下即可，接下來的步驟會依剛才示範的順序出現。
-        ready_off:
-          title: 以上就是全部
-          body: 準備好時，按下導覽列中的<b>追蹤</b>即可，接下來的步驟會依剛才示範的順序出現。
-        ready_following:
-          title: 你已追蹤本部落格
-          body: 所有送達的內容都匯集在鈴鐺之後。隨時可以開啟，並在其中透過<b>管理訂閱</b>調整主題或裝置。
-    viewer:
-      name: 圖片檢視器
-      desc: 縮放、平移、切換圖片，以及查看相機參數。
-      steps:
-        open:
-          title: 開啟圖片
-          body: 按下文章中的任一圖片，或照片牆中的任一照片，它會從頁面中放大為全螢幕檢視器，其餘內容會退到後方，直到關閉為止。
-        zoom:
-          title: 放大
-          body: 在圖片上捲動滑鼠滾輪，或以雙指捏合，即可最多放大六倍。縮放以指標所在位置或雙指之間的位置為中心。
-        pan:
-          title: 查看細節，然後切換
-          body: 放大後拖曳圖片即可查看各處細節。兩側的箭頭、下方的箭頭與頁碼圓點可在文中所有圖片之間切換；在觸控螢幕上，滑動也能達到同樣效果。
-        info:
-          title: 詳細資訊與關閉
-          body: 角落的資訊按鈕會顯示圖片說明；對附有相機參數的照片，還會顯示拍攝參數。按 <b>Esc</b> 或點一下圖片周圍的深色區域即可關閉檢視器。
+          body: 回到部落格後，再按一次<b>追蹤</b>。系統隨即詢問是否允許本站傳送通知：選擇<b>允許</b>即可在此裝置上接收。選擇<b>封鎖</b>仍會追蹤本部落格——所有內容照常進入收件匣，只是不再跳出通知。隨後追蹤按鈕會變為鈴鐺。
     comments:
       name: 留言與登入
       desc: 使用 GitHub 帳號參與任一文章下的討論。
@@ -390,76 +365,24 @@ guide:
           body: 每篇文章在 GitHub Discussions 中都有自己的討論串，並透過 giscus 顯示在這裡。你的留言會以 GitHub 的名稱與頭像顯示，也可以在 GitHub 上尋找、編輯或刪除。
         authorize:
           title: 透過 giscus 登入
-          body: 在留言框中按下 <b>Sign in with GitHub</b>。GitHub 會請你為 <b>giscus</b> 授權——驗證你的身分、了解你可存取的資源、代表你執行操作，你寫下的內容正是由此發布。按下 <b>Authorize giscus</b> 後會回到文章，並已處於登入狀態。
+          body: 在留言框中按下 <b>Sign in with GitHub</b>。GitHub 會請你為 <b>giscus</b> 授權——驗證你的身分、了解你可存取的資源、代表你執行操作，你寫下的內容正是由此發布。按下 <b>Authorize</b> 後會回到文章，並已處於登入狀態。
         write:
           title: 撰寫、預覽、送出
           body: 在輸入框中輸入內容，支援 Markdown，包括程式碼、連結與清單。<b>Preview</b> 會在按下 <b>Comment</b> 之前顯示排版效果，回覆會附在所回覆的留言之下。
         react:
           title: 表態，並持續關注
           body: 笑臉按鈕可以用表情代替留言。同一次登入也可為照片牆中的照片按讚、追蹤本部落格——這是本站唯一需要的帳號。
-  scenes:
-    new_post: 新文章發布
-    to_inbox: 進入你的收件匣
-    push: ……同時以推播通知送達
-    open_bell: 隨時開啟鈴鐺查看
-    email: 填寫電子郵件
-    password: 設定密碼
-    username: 選擇使用者名稱
-    create: 繼續
-    puzzle: 完成簡短的驗證
-    code: 輸入郵件中的驗證碼
-    welcome: 帳號已就緒
-    press_follow: 按下追蹤
-    press_signin: 按下 Sign in with GitHub
-    to_github: GitHub 請你為 giscus 授權
-    authorize: 為 giscus 授權
-    signed_in: 回到部落格，已登入
-    tap_more: 點一下 ⋯
-    tap_share: 點一下分享
-    scroll: 向下捲動清單
-    tap_add_home: 點一下加入主畫面
-    web_app: 開啟「以網頁 App 開啟」
-    tap_add: 點一下加入
-    on_home: 部落格已在主畫面上
-    open_icon: 從新圖示開啟
-    allow: 選擇允許
-    now_bell: 已追蹤——按鈕變成了鈴鐺
-    open_inbox: 開啟收件匣
-    manage: 管理訂閱
-    toggle_topic: 選擇接收的內容
-    arrives: 收到一則通知
-    open_post: 按下即可開啟文章
-    tap_image: 按下圖片
-    wheel: 捲動以縮放
-    pinch: 捏合以縮放
-    drag: 拖曳查看細節
-    next_image: 下一張圖片
-    swipe_next: 滑動，或點一下箭頭
-    info: 查看詳細資訊
-    close_viewer: 點一下外側以關閉
-    thread: 每篇文章都有自己的討論串
-    reactions: 表態顯示在每則留言下方
-    sign_in_box: 在留言框中登入
-    type_comment: 寫下你的留言
-    preview: 預覽
-    send: 按下 Comment
-    react: 加上表態
-    heart: 用同一帳號為照片按讚
   mock:
-    new: 新
     now: 剛剛
     post_title: 設計一個虛擬游標
+    post_body: 一個指向部落格中功能多於外觀之處的游標，並說明它們的作用。
     note_title: 今晚重拍了港口相簿
     announce_title: 部落格現已支援推播通知
-    push_title: 新文章
     sign_in: Sign in with GitHub
-    write_comment: 寫下留言
-    signed_in: 已登入
-    followed: 已追蹤
-    redirecting: 正在跳轉…
     ios_share: 分享
     ios_bookmark: 加入書籤
     ios_reader: 顯示閱讀器
+    ios_new_tab: 新增標籤頁
     ios_copy: 拷貝
     ios_reading_list: 加入閱讀列表
     ios_favorites: 加入喜好項目
@@ -470,20 +393,44 @@ guide:
     ios_print: 列印
     ios_cancel: 取消
     ios_add: 加入
+    ios_done: 完成
+    ios_search: 搜尋
     ios_web_app: 以網頁 App 開啟
     ios_alert: "「{site}」想要傳送通知給你"
     ios_alert_body: 通知可能包含提示、聲音和圖像標記。你可以在「設定」中進行設定。
     ios_dont: 不允許
     ios_allow: 允許
+    mac_file: 檔案
+    mac_edit: 編輯
+    mac_view: 顯示方式
+    mac_history: 瀏覽記錄
+    mac_bookmarks: 書籤
+    mac_window: 視窗
+    mac_help: 輔助說明
+    mac_new_window: 新增視窗
+    mac_new_private: 新增私密瀏覽視窗
+    mac_new_tab: 新增標籤頁
+    mac_open_file: 打開檔案…
+    mac_open_location: 打開位置…
+    mac_close_window: 關閉視窗
+    mac_close_all: 關閉所有視窗
+    mac_close_tab: 關閉標籤頁
+    mac_save_as: 儲存為…
+    mac_share: 分享
+    mac_export_pdf: 輸出為 PDF…
+    mac_add_dock: 加入 Dock…
+    mac_print: 列印…
+    mac_add_title: 加入 Dock
+    mac_name: 名稱
+    mac_add: 加入
+    mac_alert: "「{host}」想要傳送通知給你"
+    mac_alert_body: 通知可能包含提示、聲音和標記。你可以在「系統設定」中進行設定。
+    win_search: 搜尋
     perm_wants: "{host} 要求"
     perm_show: 顯示通知
     perm_block: 封鎖
     perm_allow: 允許
     perm_android: "{host} 想要傳送通知"
-    photo_caption: 黃昏時的港口
-    exif_camera: 相機
-    exif_lens: 鏡頭
-    exif_exposure: 曝光
     days_ago: 2 天前
     comments_count: 3 則留言
     sample_comment: 寫得很清楚，謝謝！
@@ -493,10 +440,14 @@ guide:
     comment: Comment
     sample_markdown: 寫得很好——**謝謝！**
     sample_rendered: 寫得很好——<b>謝謝！</b>
-    check_github: 一個 GitHub 帳號
-    check_authorize: 已為 giscus 授權並登入
-    check_allow: 已追蹤，並允許通知
-    check_home: 已加入主畫面
+    apps:
+      facetime: FaceTime
+      clock: 時鐘
+      files: 檔案
+      findmy: 尋找
+      measure: 測距儀
+      voicememos: 語音備忘錄
+      shortcuts: 捷徑
 
 management:
   a_title: 訪問分析
