@@ -393,10 +393,17 @@ export class Cursor {
     return { x: clamp(p.x + dir * 120, 12, w - 12), y: clamp(p.y + 150, 12, h - 12) };
   }
 
+  // Out by the nearest edge, far enough for the label hanging off it to go too.
   exitPoint() {
     const { w, h } = this.bounds();
-    const right = this.x > w / 2;
-    return { x: right ? w + 60 : -60, y: clamp(this.y + h * 0.18, -40, h + 40) };
+    const L = this.label || { w: 80, h: 30 };
+    const { x, y } = this;
+    const d = [x, w - x, y, h - y];
+    const i = d.indexOf(Math.min(...d));
+    if (i === 0) return { x: -40 - (this.left ? 0 : L.w), y };
+    if (i === 1) return { x: w + 40 + (this.left ? L.w : 0), y };
+    if (i === 2) return { x, y: -50 - (this.up ? 0 : L.h) };
+    return { x, y: h + 40 + (this.up ? L.h : 0) };
   }
 
   /**
@@ -498,7 +505,7 @@ export class Cursor {
   leave() {
     if (!this.visible) return Promise.resolve(true);
     const out = this.exitPoint();
-    return this.flyTo(() => out, { exit: true, duration: 420 });
+    return this.flyTo(() => out, { exit: true, duration: 420, straight: true });
   }
 
   // ─── gestures (pictures only) ──────────────────────────────

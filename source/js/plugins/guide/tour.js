@@ -109,7 +109,12 @@ export class Tour {
     close.addEventListener("click", () => this.close("close"));
     root.querySelector(".gd-tour-mask").addEventListener("click", () => this.close("close"));
     this.back.addEventListener("click", () => this.go(this.index - 1, -1));
-    this.next.addEventListener("click", () => this.forward());
+    // A press that only pages must not reach the page's own listeners: by then the
+    // button already wears the next step's marks — Follow's .follow-trigger among them.
+    this.next.addEventListener("click", (e) => {
+      if (!this.isLast()) e.stopPropagation();
+      this.forward();
+    });
     this.done.addEventListener("click", () => this.finish());
     this.dots.addEventListener("click", (e) => {
       const dot = e.target.closest("[data-step]");
@@ -327,7 +332,7 @@ export class Tour {
         btn.setAttribute("data-ux-id", this.tour.id);
       } else btn.removeAttribute("data-ux");
     };
-    const final = last && step.final;
+    const final = last && !!step.final;
     this.done.hidden = !(final && this.tour.following);
     ux(this.done, !this.done.hidden);
     if (!last) this.next.innerHTML = `${t("next")}${icon("fa-arrow-right")}`;
@@ -455,10 +460,12 @@ export class Tour {
     this.closed = true;
     if (current === this) current = null;
     this.scene.stop();
-    // The cursor leaves with the card; it only travels when it has somewhere to go.
-    if (this.opts.cursor) {
-      this.opts.cursor.vanish();
-      if (this.opts.cursor.clip === this.scene.clipFn) this.opts.cursor.setClip(null);
+    // The cursor leaves with the card — unless it goes on to the inbox from here.
+    const c = this.opts.cursor;
+    if (c) {
+      if (this.result.explore || this.result.follow) c.hold();
+      else c.vanish();
+      if (c.clip === this.scene.clipFn) c.setClip(null);
     }
     this.root.classList.remove("is-open");
     this.root.classList.add("is-closing");

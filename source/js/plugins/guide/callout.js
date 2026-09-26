@@ -122,6 +122,8 @@ export class Callout {
     this.fh = new Spring(0, 260, 32);
 
     this.pill.addEventListener("click", (e) => {
+      // Not a press outside whatever the page has open (the inbox closes on those).
+      e.stopPropagation();
       const btn = e.target.closest("[data-act]");
       if (btn && this.state === "open") onAction(btn.dataset.act);
       // Pressing the bubble while it is still talking finishes the sentence.

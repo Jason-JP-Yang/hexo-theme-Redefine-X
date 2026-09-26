@@ -61,6 +61,8 @@ export function anchorOf(el, point = [0.5, 0.5]) {
   const at = () => {
     if (!el.isConnected) return (at.rect = null);
     const r = (at.rect = el.getBoundingClientRect());
+    // Folded away (a closed menu): nowhere, rather than the view's top-left corner.
+    if (!r.width && !r.height) return null;
     const vw = document.documentElement.clientWidth;
     const vh = window.innerHeight;
     const x = r.left + r.width * fx;

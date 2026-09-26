@@ -31,6 +31,7 @@
  *   tour / tourFrom     View More opens that walkthrough
  *   prompt              what the cursor says while waiting for a scroll
  *   fulfilled()         the reader has done it already: close, and count it
+ *   stay                no Understand and no clock: it waits for `fulfilled`
  *
  * `key` is what Understand stores; two stops that give the same advice on
  * different layouts share one.
@@ -171,7 +172,7 @@ function home(ctx) {
               text: copy("follow_signed"),
               tryIt: async (el, g) => {
                 if (await g.press(el)) el.click();
-                await g.explore(true);
+                g.explore(true);
               },
             }
           : { text: copy("follow"), tour: "follow" }),
@@ -425,7 +426,10 @@ export const inbox = {
   open: async (g) => {
     if (panelOpen()) return;
     const b = bell();
-    if (b && (await g.press(b))) b.click();
+    if (!b) {
+      const any = q(".notifications-bell");
+      if (any) any.click();
+    } else if (await g.press(b)) b.click();
     await g.wait(520);
   },
   alive: panelOpen,
@@ -461,6 +465,9 @@ export const inbox = {
       target: () => q("#notifications-mask"),
       host: panel,
       point: outside,
+      // Waits for the inbox to be closed, so the page's route takes over from here.
+      stay: true,
+      fulfilled: () => !panelOpen(),
       tryIt: async (el, g) => {
         const [fx, fy] = outside();
         if (await g.press(el, fx, fy)) el.click();

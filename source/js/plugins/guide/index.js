@@ -10,9 +10,9 @@
  *   • It flies straight from one stop to the next. A next stop below the screen
  *     is neither skipped nor scrolled to: the cursor waits at the bottom edge,
  *     asks the reader to scroll, and goes to it the moment it is in view.
- *   • A stop tied to reading — a photo, a code block, the author's note — waits
- *     for the reader to reach it; meanwhile the cursor rests beside the side
- *     tools rather than leaving.
+ *   • A stop tied to reading — a photo, a code block, the author's note, the end
+ *     of an article — waits for the reader to reach it. With nothing to say, the
+ *     cursor is gone: it never stays on screen without a word.
  *   • Whatever takes the reader away — an overlay, typing, another tab, a page
  *     turn — only pauses the flow, and it picks up the moment the page is free.
  *     A reader back after a while is welcomed first; one left idle is invited on.
@@ -57,7 +57,7 @@ const T = {
 // Anything open over the page. The guide's own card is on the list too: while
 // it is open the page behind it is not the reader's focus. The inbox is not,
 // while the guide is the one walking the reader through it.
-const COVERS = [".image-viewer-container.active", ".search-pop-overlay.active", "body.navbar-drawer-show", ".is-editing", ".gd-tour"];
+const COVERS = [".image-viewer-container.active", ".search-pop-overlay.active", "body.navbar-drawer-show", ".is-editing", ".gd-tour:not(.is-closing)"];
 const BUSY = COVERS.concat("#notifications-panel.is-open").join(",");
 const BUSY_BUT_INBOX = COVERS.join(",");
 
@@ -69,7 +69,6 @@ let toursModule = null;
 let opening = false;
 let lastScroll = 0;
 let lastInput = 0;
-let lastMove = 0;
 let hiddenAt = 0;
 let booted = false;
 
@@ -146,14 +145,15 @@ function typing() {
   return !!(sel && !sel.isCollapsed && String(sel).trim());
 }
 
-function untilReady(my) {
+function untilReady(f) {
   const start = performance.now();
   return new Promise((resolve) => {
     const check = () => {
-      if (my !== token) return resolve(false);
+      if (!f.live) return resolve(false);
       const s = window.__redefineScroll;
       const flying = s && s.isScrollFlight && s.isScrollFlight();
-      if (!preloaderOn() && !flying && performance.now() - start >= T.SETTLE) return resolve(true);
+      // A flow begun for the inbox is under way already.
+      if (!preloaderOn() && !flying && (f.detour || performance.now() - start >= T.SETTLE)) return resolve(true);
       setTimeout(check, 150);
     };
     check();
@@ -197,14 +197,6 @@ function announce(text) {
 const vw = () => document.documentElement.clientWidth;
 const vh = () => window.innerHeight;
 
-// Beside the side tools, where the cursor waits for the next thing to show.
-function parkPoint() {
-  const rail = document.querySelector(".side-tools-container .visible-tools-list");
-  const r = rail && rail.getBoundingClientRect();
-  if (r && r.width) return { x: Math.max(16, r.left - 72), y: Math.max(16, r.top + 12) };
-  return { x: vw() - 120, y: vh() - 120 };
-}
-
 // Where the cursor asks for a scroll: the edge the target will come in by, as
 // nearly above or below it as the screen allows.
 function edgePoint(el, up) {
@@ -225,19 +217,8 @@ function side(el) {
   return r.top + r.height / 2 > vh() / 2 ? 1 : -1;
 }
 
-/** To the side tools; `show` brings back a cursor that is not on screen. */
-function park(show = true) {
-  if (!ui) return;
-  const c = ui.cursor;
-  if (!c.visible && !show) return;
-  c.rest(true);
-  if (!c.flight && c.visible && c.anchor === parkPoint) return;
-  ui.callout.close();
-  c.flyTo(parkPoint, { appear: !c.visible });
-}
-
 function leave() {
-  if (!ui || !ui.cursor.visible) return;
+  if (!ui || !ui.cursor.visible || (ui.cursor.flight && ui.cursor.flight.exit)) return;
   ui.callout.close();
   ui.cursor.rest(false);
   ui.cursor.leave();
@@ -261,11 +242,13 @@ class Flow {
     this.quiet = false;
     this.greet = false;
     this.idles = 0;
+    this.invited = 0;
     this.answer = null;
     this.waker = null;
     this.running = false;
     // A route taken on request (the inbox), before the page's own carries on.
     this.detour = null;
+    this.follow = false;
     this.through = new Set();
     this.opened = false;
   }
@@ -308,13 +291,13 @@ async function play(f) {
   const r = f.run;
   f.running = true;
   try {
-    if (!(await untilReady(f.my))) return;
+    if (!(await untilReady(f))) return;
     await r.guard(loadStrings());
     if (!f.live) return;
     f.stops = plan(ctx);
     ensureUI().cursor.setLabel(t("label", "Guide"));
     for (const s of f.stops) if (s.mode === "reach") arm(f, s);
-    await r.wait(T.FIRST);
+    if (!f.detour) await r.wait(T.FIRST);
 
     for (;;) {
       await free(f);
@@ -331,13 +314,13 @@ async function play(f) {
       if (next && next.stop) {
         const why = await visit(f, next);
         if (why === "later") return hush(f);
-        if (why !== "busy" && why !== "greet") await r.wait(T.CHAIN);
+        // Left waiting for a scroll that does not come: the invitation, from where it waits.
+        if (why === "idle" && (await invite(f, next.el)) === "later") return hush(f);
+        if (why !== "busy" && why !== "greet" && why !== "idle") await r.wait(T.CHAIN);
         continue;
       }
-      // Nothing to say right now: wait by the tools while something may still
-      // come, leave when nothing will — and welcome and invite either way.
-      if (next) park();
-      else leave();
+      // Nothing to say right now: gone until there is — welcome and invite either way.
+      leave();
       await f.pause(T.TICK);
       if (idleDue(f) && (await invite(f)) === "later") return hush(f);
     }
@@ -353,14 +336,14 @@ async function free(f) {
   for (;;) {
     if (!f.live) throw CANCELLED;
     // The guide's own card borrows the cursor; anything else is only out of its way.
-    const own = opening || !!document.querySelector(".gd-tour");
+    const own = opening || !!document.querySelector(".gd-tour:not(.is-closing)");
     if (document.hidden || own || overlayOpen()) {
       if (!own) conceal();
       await f.pause(250);
       continue;
     }
     if (typing()) {
-      park(false);
+      leave();
       await f.pause(250);
       continue;
     }
@@ -541,11 +524,11 @@ async function present(f, s, el) {
       colon: t("colon", ": "),
       title: text.title,
       body: text.body,
-      ok: t(s.ok || "understand"),
+      ok: s.stay ? "" : t(s.ok || "understand"),
       more: s.tour ? t("more") : "",
       try: tryable ? t("lets_try") : "",
       later: t("later"),
-      wait: T.ANSWER,
+      wait: s.stay ? 0 : T.ANSWER,
     });
     await f.run.guard(u.cursor.flyTo(anchor, { appear: s.mode === "place" }));
     if (target && !target.isConnected) return { why: "lost" };
@@ -608,7 +591,7 @@ function answer(f, a) {
         nudges++;
         ui.cursor.nudge();
       }
-      if (elapsed >= T.ANSWER) a.resolve("timeout");
+      if (!a.stop.stay && elapsed >= T.ANSWER) a.resolve("timeout");
     }, 200);
   });
 }
@@ -625,7 +608,7 @@ function hands(f) {
       return el.isConnected;
     },
     wait: (ms) => f.run.wait(ms),
-    explore: (follow = false) => f.run.guard(explore(follow)),
+    explore,
   };
 }
 
@@ -647,11 +630,17 @@ async function beckon(f, s, el, up) {
   const u = ui;
   const c = u.cursor;
   c.rest(true);
-  const say = t(s.prompt || (up ? "prompt_up" : "prompt_down"));
-  u.callout.prepare({ id: `${s.id}:scroll`, colon: t("colon", ": "), title: "", body: say, later: t("later"), wait: 0 });
+  // Just after the idle invitation, it only waits.
+  const quiet = performance.now() - f.invited < T.PROMPT + 500;
+  if (!quiet) {
+    const say = t(s.prompt || (up ? "prompt_up" : "prompt_down"));
+    u.callout.prepare({ id: `${s.id}:scroll`, colon: t("colon", ": "), title: "", body: say, later: t("later"), wait: 0 });
+  }
   await f.run.guard(c.flyTo(() => edgePoint(el, up)));
-  u.callout.speak();
-  announce(u.callout.text);
+  if (!quiet) {
+    u.callout.speak();
+    announce(u.callout.text);
+  }
 
   const a = { stop: s, resolve: null, outcome: null, timer: 0 };
   f.answer = a;
@@ -660,7 +649,7 @@ async function beckon(f, s, el, up) {
       new Promise((resolve) => {
         const since = performance.now();
         let bobbed = since;
-        let folded = false;
+        let folded = quiet;
         a.resolve = (why) => {
           if (a.outcome) return;
           a.outcome = why;
@@ -673,6 +662,7 @@ async function beckon(f, s, el, up) {
           if (!el.isConnected) return a.resolve("gone");
           if (overlayOpen()) return a.resolve("busy");
           if (side(el) === 0) return a.resolve("arrived");
+          if (!up && idleDue(f)) return a.resolve("idle");
           const now = performance.now();
           if (!folded && now - since > T.PROMPT) {
             folded = true;
@@ -707,19 +697,20 @@ async function welcome(f) {
 
 function idleDue(f) {
   if (f.quiet || f.idles >= T.IDLES || document.hidden || overlayOpen() || typing()) return false;
-  if (performance.now() - Math.max(lastInput, lastScroll, lastMove) < T.IDLE) return false;
+  if (performance.now() - Math.max(lastInput, lastScroll, f.invited) < T.IDLE) return false;
   const m = getMetrics();
   return m.docH - m.viewportH > 200 && m.scrollY + m.viewportH < m.docH - 120;
 }
 
-/** Idle and not at the foot of the page: an invitation to read on. */
-async function invite(f) {
+/** Idle and not at the foot of the page: an invitation to read on — beside `el`, when one is waited for. */
+async function invite(f, el = null) {
   f.idles++;
   const u = ensureUI();
   const c = u.cursor;
   c.rest(true);
   u.callout.prepare({ id: "idle", colon: t("colon", ": "), title: "", body: t("prompt_idle"), later: t("later"), wait: 0 });
-  await f.run.guard(c.flyTo(() => ({ x: vw() * 0.5, y: vh() - 104 }), { appear: !c.visible }));
+  const at = el ? () => edgePoint(el, false) : () => ({ x: vw() * 0.5, y: vh() - 104 });
+  await f.run.guard(c.flyTo(at, { appear: !c.visible }));
   u.callout.speak();
   announce(u.callout.text);
 
@@ -753,6 +744,7 @@ async function invite(f) {
     );
   } finally {
     clearInterval(a.timer);
+    f.invited = performance.now();
     if (f.answer === a) f.answer = null;
     u.callout.close();
   }
@@ -762,10 +754,10 @@ async function invite(f) {
 /**
  * Walk the reader through their inbox — Let's Explore, or Let's try on the home
  * page's first stop — then carry on with the page. `follow`: a Follow was just
- * pressed, and the reader has to be a follower before there is an inbox.
+ * pressed, and the reader has to be a follower before there is an inbox. Taken
+ * at once, so nothing else is said in between.
  */
-async function explore(follow = false) {
-  if (follow && !(await becomeFollower())) return;
+function explore(follow = false) {
   let f = flow;
   if (!f || !f.live || !f.running) {
     begin();
@@ -774,6 +766,7 @@ async function explore(follow = false) {
   if (!f) return;
   f.quiet = false;
   f.detour = inbox;
+  f.follow = follow;
   f.through = new Set();
   f.opened = false;
   f.wake("detour");
@@ -791,6 +784,13 @@ async function becomeFollower(ms = 15000) {
 /** The detour's own stops, in order; the reader closing the inbox ends it early. */
 async function detour(f) {
   const d = f.detour;
+  if (f.follow) {
+    f.follow = false;
+    if (!(await f.run.guard(becomeFollower()))) {
+      f.detour = null;
+      return "done";
+    }
+  }
   if (!f.opened) {
     f.opened = true;
     await d.open(hands(f));
@@ -942,21 +942,14 @@ function boot() {
     "guide",
   );
 
-  // Answering the guide is not the reader being busy with the page.
-  const outside = (e) => !(e.target && e.target.closest && e.target.closest(".gd-layer"));
+  // Answering the guide, or paging its card, is not the reader being busy with the page.
+  const outside = (e) => !(e.target && e.target.closest && e.target.closest(".gd-layer, .gd-tour"));
   document.addEventListener(
     "pointerdown",
     (e) => {
       if (outside(e)) lastInput = performance.now();
     },
     { capture: true, passive: true },
-  );
-  document.addEventListener(
-    "pointermove",
-    () => {
-      lastMove = performance.now();
-    },
-    { passive: true },
   );
   document.addEventListener(
     "keydown",
