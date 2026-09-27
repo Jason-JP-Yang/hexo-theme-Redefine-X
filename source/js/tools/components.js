@@ -336,10 +336,15 @@
   };
   const NEWLINES = /\r?\n/;
 
+  // A path with a space or a bracket is written between angle brackets, the
+  // markdown standard's spelling for it; the path itself never carries them.
+  const linkDest = (path) => (/[\s()<>]/.test(path) ? "<" + path.replace(/[<>]/g, encodeURIComponent) + ">" : path);
+  const linkPath = (dest) => (/^<.*>$/.test(dest) ? dest.slice(1, -1) : dest);
+
   /** The image line and the exif-info comment the tag's body is made of. */
   function parseExifBody(content) {
     const text = String(content == null ? "" : content);
-    const image = text.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+    const image = text.match(/!\[([^\]]*)\]\((<[^<>\n]*>|[^)]+)\)/);
     const info = {};
 
     const comment = text.match(/<!--\s*exif-info([\s\S]*?)-->/);
@@ -349,12 +354,12 @@
         if (pair && EXIF_LABELS[pair[1]]) info[pair[1]] = pair[2].trim();
       }
     }
-    return { description: image ? image[1] : "", path: image ? image[2] : "", info };
+    return { description: image ? image[1] : "", path: image ? linkPath(image[2].trim()) : "", info };
   }
 
   /** The inverse: fields back into the tag's body. */
   function buildExifBody(fields) {
-    const lines = [`![${fields.description || ""}](${fields.path || ""})`];
+    const lines = [`![${fields.description || ""}](${linkDest(String(fields.path || ""))})`];
     const written = Object.keys(EXIF_LABELS).filter((key) => (fields.info || {})[key]);
     if (written.length) {
       lines.push("<!-- exif-info");

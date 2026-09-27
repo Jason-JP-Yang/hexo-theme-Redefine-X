@@ -986,6 +986,7 @@ editor:
   pick_use_many: "Add {n} pictures"
   pick_one_only: One picture at a time
   pick_unused: Nowhere - nothing uses it yet
+  pick_into: Uploads go to
   pick_unused_preview: Not published because nothing uses it, so there is nothing to preview. Use it and save, and the build publishes it.
   file_too_large: "{name} is over 100 MB - GitHub takes no single file that large."
   edit_album: Edit this album

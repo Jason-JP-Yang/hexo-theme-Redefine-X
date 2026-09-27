@@ -137,14 +137,30 @@ function replaceOne(text, from, to, bare) {
   }
 }
 
-/** Rewrite every spelling of every applied pair, in order. */
-function rewriteWith(pairs, text) {
+const MASONRY_DIR = "source/masonry/";
+const MASONRY_DATA = "_data/masonry.yml";
+
+/**
+ * Rewrite every spelling of every applied pair, in order.
+ *
+ * `albums` adds the one spelling only masonry.yml uses: an album's own
+ * photograph named RELATIVE to `source/masonry/`. Moved from anywhere but that
+ * album's editor — the post editor, another album — it was never rewritten,
+ * and the album went on naming a file that had left. Only there, because a
+ * bare `folder/x.jpg` anywhere else is not a reference to anything.
+ */
+function rewriteWith(pairs, text, albums) {
   let out = text;
   for (const move of pairs) {
     const from = spellings(move.from);
     const to = spellings(move.to);
     for (let i = 0; i < from.length; i++) {
       if (from[i] !== to[i]) out = replaceOne(out, from[i], to[i], i === 2);
+    }
+    if (albums && move.from.startsWith(MASONRY_DIR)) {
+      const was = move.from.slice(MASONRY_DIR.length);
+      const now = move.to.startsWith(MASONRY_DIR) ? move.to.slice(MASONRY_DIR.length) : to[1];
+      if (was !== now) out = replaceOne(out, was, now, true);
     }
   }
   return out;
@@ -230,6 +246,36 @@ function identical(a, b) {
   }
   const one = digest(a);
   return !!one && one === digest(b);
+}
+
+/** One file under two spellings: a rename of letter case on a case-blind disk. */
+function sameFile(a, b) {
+  try {
+    const x = fs.statSync(a);
+    const y = fs.statSync(b);
+    if (x.ino && y.ino) return x.ino === y.ino && x.dev === y.dev;
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Change only the case of a name: through a temporary one, or the disk says it is already there. */
+function recase(from, to) {
+  const tmp = from + ".rdfx-move";
+  try {
+    fs.renameSync(from, tmp);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(tmp, to);
+    return true;
+  } catch (e) {
+    try {
+      if (fs.existsSync(tmp)) fs.renameSync(tmp, from);
+    } catch (err) {
+      /* the picture is at the temporary name; the held note says where it was going */
+    }
+    return false;
+  }
 }
 
 function carry(from, to) {
@@ -387,6 +433,17 @@ function applyMoves(opts) {
       applied.push(pair);
       continue;
     }
+    // `Photo.png` → `photo.png` on Windows: both "exist" because they are one
+    // file, `identical` agrees, and the unlink below deleted the only copy.
+    if (landed && sameFile(from, to)) {
+      if (!recase(from, to)) {
+        held.push(move);
+        continue;
+      }
+      moved += 1;
+      applied.push(pair);
+      continue;
+    }
     if (landed) {
       // Both ends exist. Same bytes is an interrupted move; anything else is a
       // picture that would be destroyed by finishing this one.
@@ -425,7 +482,8 @@ function applyMoves(opts) {
       } catch (e) {
         continue;
       }
-      const next = rewriteWith(applied, text);
+      const albums = path.relative(sourceDir, file).replace(/\\/g, "/") === MASONRY_DATA;
+      const next = rewriteWith(applied, text, albums);
       if (next === text) continue;
       fs.writeFileSync(file, next);
       touched += 1;

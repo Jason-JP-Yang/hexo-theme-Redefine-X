@@ -162,7 +162,26 @@ const HR = /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
 const QUOTE = /^\s{0,3}>\s?/;
 const UL_ITEM = /^(\s*)([-*+])\s+(.*)$/;
 const OL_ITEM = /^(\s*)(\d+)([.)])\s+(.*)$/;
-const IMAGE_ONLY = /^!\[([^\]]*)\]\(\s*(\S+?)(?:\s+["']([^"']*)["'])?\s*\)$/;
+const IMAGE_ONLY = /^!\[([^\]]*)\]\(\s*(<[^<>\n]*>|\S+?)(?:\s+["']([^"']*)["'])?\s*\)$/;
+
+/**
+ * A picture's address as a markdown link destination, and back.
+ *
+ * A path with a space or a bracket in it is not one CommonMark — or marked, the
+ * site's renderer — reads bare: `![](/images/a b.png)` is published as the
+ * literal text, which is what a post here had been doing. The standard spelling
+ * for such a destination is between angle brackets, and it is only that
+ * spelling: everywhere inside the editor the address stays the plain path.
+ */
+export function linkDest(url) {
+  const s = String(url || "");
+  return /[\s()<>]/.test(s) ? "<" + s.replace(/[<>]/g, encodeURIComponent) + ">" : s;
+}
+
+function linkPath(dest) {
+  const s = String(dest || "");
+  return s.length > 1 && s[0] === "<" && s.endsWith(">") ? s.slice(1, -1) : s;
+}
 const TABLE_DIVIDER = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 const INDENTED_CODE = /^(?: {4}|\t)\s*\S/;
 const MATH_OPEN = /^\s*\$\$\s*$/;
@@ -358,7 +377,7 @@ export function parseBlocks(body) {
       // address there had it overwritten with its own markdown line, so the
       // canvas asked the server for `/![](/images/x.jpeg)` and a save re-emitted
       // that inside a second set of brackets.
-      push(block("image", { alt: m[1], url: m[2], title: m[3] || "" }), i, i + 1);
+      push(block("image", { alt: m[1], url: linkPath(m[2]), title: m[3] || "" }), i, i + 1);
       i += 1;
       continue;
     }
@@ -518,7 +537,7 @@ function emitImage(b) {
   const written = EXIF_KEYS.filter((k) => info[k]);
   if (!b.exifTitle && !written.length) {
     // Plain markdown, where a quoted third argument IS the hover title.
-    return "![" + (b.alt || "") + "](" + b.url + (b.title ? ' "' + b.title + '"' : "") + ")";
+    return "![" + (b.alt || "") + "](" + linkDest(b.url) + (b.title ? ' "' + b.title + '"' : "") + ")";
   }
 
   // Inside the tag it is NOT. `extractImageInfo` reads the path with
@@ -526,7 +545,7 @@ function emitImage(b) {
   // page gets `src="/images/x.png &quot;hover&quot;"` — a broken picture, from
   // a field that looked harmless. The tag has no hover text; the caption title
   // and the description are what it carries, and they are written above.
-  const line = "![" + (b.alt || "") + "](" + b.url + ")";
+  const line = "![" + (b.alt || "") + "](" + linkDest(b.url) + ")";
   const args = [b.exifTitle || "", b.autoExif === false ? "auto-exif:false" : ""].filter(Boolean).join(" ");
   const body = written.length
     ? [line, "<!-- exif-info"].concat(written.map((k) => k + ": " + info[k]), ["-->"]).join("\n")
@@ -536,7 +555,10 @@ function emitImage(b) {
 
 function imageFromExif(args, body) {
   const auto = args.match(/auto-exif\s*:\s*(true|false)/i);
-  const image = body.match(/!\[([^\]]*)\]\(\s*(\S+?)(?:\s+["']([^"']*)["'])?\s*\)/);
+  // `[^)]+?`, not `\S+?`: the tag reads its path up to the `)`, spaces and all
+  // (scripts/modules/image-exif.js), and an editor that could not see what the
+  // published page shows would lose it on the first save.
+  const image = body.match(/!\[([^\]]*)\]\(\s*(<[^<>\n]*>|[^)]+?)(?:\s+["']([^"']*)["'])?\s*\)/);
   const comment = body.match(/<!--\s*exif-info([\s\S]*?)-->/);
   const info = {};
 
@@ -548,7 +570,7 @@ function imageFromExif(args, body) {
   }
 
   return block("image", {
-    url: image ? image[2] : "",
+    url: image ? linkPath(image[2]) : "",
     alt: image ? image[1] : "",
     title: image && image[3] ? image[3] : "",
     exifTitle: args.replace(/auto-exif\s*:\s*(true|false)/i, "").trim(),
@@ -685,7 +707,7 @@ const INLINE_RULES = [
       ` data-tex="${escapeHTML(m[1])}" contenteditable="false">` +
       `<span class="ed-math-src">${escapeHTML(m[1])}</span></span>`,
   },
-  { name: "image", re: /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/, html: (m) => `<img data-md="image" src="${escapeHTML(m[2])}" alt="${escapeHTML(m[1])}"${m[3] ? ` title="${escapeHTML(m[3])}"` : ""}>` },
+  { name: "image", re: /!\[([^\]]*)\]\((<[^<>\n]*>|[^)\s]+)(?:\s+"([^"]*)")?\)/, html: (m) => `<img data-md="image" src="${escapeHTML(linkPath(m[2]))}" alt="${escapeHTML(m[1])}"${m[3] ? ` title="${escapeHTML(m[3])}"` : ""}>` },
   { name: "link", re: /\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/, html: (m) => `<a data-md="link" href="${escapeHTML(m[2])}"${m[3] ? ` title="${escapeHTML(m[3])}"` : ""}>${inlineToHTML(m[1])}</a>` },
   { name: "strong", re: /\*\*([^*]+)\*\*/, html: (m) => `<strong data-md="strong">${inlineToHTML(m[1])}</strong>` },
   { name: "strike", re: /~~([^~]+)~~/, html: (m) => `<del data-md="strike">${inlineToHTML(m[1])}</del>` },
@@ -790,7 +812,7 @@ export function htmlToInline(node) {
       out += "$" + (child.getAttribute("data-tex") || child.textContent) + "$";
     } else if (tag === "img") {
       const title = child.getAttribute("title");
-      out += `![${child.getAttribute("alt") || ""}](${child.getAttribute("src") || ""}${title ? ` "${title}"` : ""})`;
+      out += `![${child.getAttribute("alt") || ""}](${linkDest(child.getAttribute("src") || "")}${title ? ` "${title}"` : ""})`;
     } else if (tag === "a") {
       const title = child.getAttribute("title");
       out += `[${htmlToInline(child)}](${child.getAttribute("href") || ""}${title ? ` "${title}"` : ""})`;

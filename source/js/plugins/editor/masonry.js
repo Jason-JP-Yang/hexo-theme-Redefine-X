@@ -75,6 +75,7 @@ import {
   openPicker,
   openSheet,
   pickerLive,
+  safeName,
   sheetLive,
   siteAddress,
 } from "./picker.js";
@@ -1091,6 +1092,10 @@ async function pickImage(current, browse, multiple) {
         markDirty("assets", where);
       },
       onStageChange: (path) => markDirty("assets", path),
+      // Where this album keeps its photographs: an upload with nothing, or only
+      // the masonry root, selected goes there — not into the post folder and not
+      // loose into `source/masonry`.
+      home: defaultFolder,
       naturalSize: (src) => naturalSize(src, state.pending),
       bindImage: (img, src) => bindImage(img, src, state.pending),
     },
@@ -1152,8 +1157,13 @@ function defaultFolder() {
     const cut = stored.lastIndexOf("/");
     if (cut > 0) return "source/masonry/" + stored.slice(0, cut);
   }
-  const title = albumTitle(itemFields(state.item));
-  return title ? "source/masonry/" + title : "source/masonry";
+  // The picture browser's own naming rule: an album called `Hong Kong: Peak`
+  // would otherwise be a folder a Windows checkout cannot create, and a space
+  // in every photograph's address.
+  // Never the root itself: photographs loose in `source/masonry` belong to no
+  // album on disk, which is how fourteen of them ended up scattered there.
+  const title = safeName(albumTitle(itemFields(state.item)));
+  return "source/masonry/" + (title || "untitled");
 }
 
 /** An address the album now uses, mapped back to where the bytes still are. */
@@ -2877,6 +2887,9 @@ function onKey(e) {
   }
 
   if (!e.metaKey && !e.ctrlKey) {
+    // Never through a dialogue: a key pressed in the picture browser or the
+    // property sheet, off any text field, deleted the photograph behind it.
+    if (document.querySelector(".ed-picker-mask, .ed-ask")) return;
     if ((e.key === "Delete" || e.key === "Backspace") && state.selected && !typing() && !isTitle()) {
       e.preventDefault();
       act("delete");

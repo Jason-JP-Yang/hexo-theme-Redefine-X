@@ -1833,9 +1833,13 @@ $ed-pop-h = 620px
     cursor text
     color var(--first-text-color)
 
+    // The row is `user-select: none`, and a name inherits it: on iOS and
+    // Android that is a field the caret cannot enter, so the name is its own.
     .ed-pick-name
       color var(--first-text-color)
       outline none
+      -webkit-user-select text
+      user-select text
 
     .ed-pick-icon
       color var(--third-text-color)

@@ -118,9 +118,13 @@ function parseArgs(args) {
 /**
  * Validate content structure - must contain exactly one image and optionally one exif-info comment
  */
+// `![alt](path)`, the path bare or — when it holds a space or a bracket, as the
+// editor writes it — between angle brackets, the markdown standard's spelling.
+const IMAGE = /!\[([^\]]*)\]\((<[^<>\n]*>|[^)]+)\)/;
+
 function validateContent(content, hexoLog) {
   // Check for markdown image pattern
-  const imageMatches = content.match(/!\[([^\]]*)\]\(([^)]+)\)/g);
+  const imageMatches = content.match(new RegExp(IMAGE.source, "g"));
 
   if (!imageMatches || imageMatches.length === 0) {
     throw new Error("[image-exif] Content must include one image. Use ![description](path/to/image).");
@@ -139,7 +143,7 @@ function validateContent(content, hexoLog) {
 
   // Check for other content that shouldn't be there
   const cleanedContent = content
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "")           // Remove image
+    .replace(new RegExp(IMAGE.source, "g"), "")         // Remove image
     .replace(/<!--\s*exif-info[\s\S]*?-->/g, "")        // Remove exif-info comment
     .replace(/<!--[^>]*-->/g, "")                       // Remove other HTML comments (Hexo placeholders)
     .trim();
@@ -159,12 +163,13 @@ function validateContent(content, hexoLog) {
  * Extract image info from markdown
  */
 function extractImageInfo(content) {
-  const imageMatch = content.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+  const imageMatch = content.match(IMAGE);
   if (!imageMatch) return null;
 
+  const dest = imageMatch[2].trim();
   return {
     description: imageMatch[1] || "",
-    path: imageMatch[2],
+    path: /^<.*>$/.test(dest) ? dest.slice(1, -1) : dest,
   };
 }
 

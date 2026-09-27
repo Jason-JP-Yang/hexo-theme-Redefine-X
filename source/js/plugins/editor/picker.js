@@ -66,6 +66,10 @@ function rootOf(path) {
 }
 
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg|bmp)$/i;
+// What may be added: the formats the build publishes, named. `image/*` let an
+// iPhone hand over HEIC, which nothing here transcodes and most browsers cannot
+// show — and naming the formats is what makes iOS convert a HEIC photo to JPEG.
+const ACCEPT = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml"];
 const MENU_MAX = 40;
 const SPLIT_KEY = "rdfx.picker.split";
 // The width the panel stops being two columns, matching $media-max-width.
@@ -103,8 +107,28 @@ function nameOf(path) {
   return String(path).split("/").pop();
 }
 
-function safeName(name) {
-  return String(name).replace(/[\\/]/g, "-").replace(/^\.+/, "").trim();
+/**
+ * A name that stays ONE path segment everywhere a picture's address goes: a
+ * markdown link, a URL (`#`, `?` and `%` end or re-read a path), a Windows
+ * checkout (`<>:"/\|?*`, a trailing dot, a device name), and Hexo, which skips
+ * anything starting with `_` or `.`. Letters of every script are kept; runs of
+ * anything else become one `-`.
+ */
+export function safeName(name) {
+  let out = String(name)
+    .normalize("NFC")
+    .replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-._]+|[-.]+$/g, "");
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(out)) out = "x-" + out;
+  return out;
+}
+
+/** A file keeps its extension: a PNG renamed `photo.jpg` is still a PNG. */
+function safeFileName(name, was) {
+  const ext = (String(was).match(/\.[^./]+$/) || [""])[0];
+  const stem = safeName(String(name).replace(IMAGE, ""));
+  return stem ? stem + ext : "";
 }
 
 function readableSize(bytes) {
@@ -777,6 +801,7 @@ export function openPicker(ctx, opts = {}) {
     let soft = !!chosen;
     let searching = false;
     let cursor = 0;
+    let steered = false;
     let hits = [];
     let done = false;
 
@@ -1373,7 +1398,11 @@ export function openPicker(ctx, opts = {}) {
         stage.hidden = false;
         if (!note.isConnected) stage.appendChild(note);
         stage.dataset.empty = "1";
-        meta.innerHTML = one ? factsOf(one, sizeOf(one)) : "";
+        // With no picture chosen, where an upload would land is said before it
+        // happens, not found out from the commit afterwards.
+        meta.innerHTML = one
+          ? factsOf(one, sizeOf(one))
+          : metaRow(t("pick_into", "Uploads go to"), siteAddress(uploadDir()));
         return void travel(before);
       }
 
@@ -1511,6 +1540,7 @@ export function openPicker(ctx, opts = {}) {
     function openMenu() {
       searching = true;
       cursor = 0;
+      steered = false;
       paintMenu();
       if (menu.hidden) {
         menu.hidden = false;
@@ -1540,6 +1570,7 @@ export function openPicker(ctx, opts = {}) {
         repaint();
         input.value = addresses().join(", ") + ", ";
         cursor = 0;
+        steered = false;
         return void paintMenu();
       }
       closeMenu();
@@ -1548,7 +1579,13 @@ export function openPicker(ctx, opts = {}) {
       select(path);
     }
 
+    /**
+     * Enter takes a hit only when one was asked for — typed, or stepped to with
+     * the arrows. With the field untouched the menu is the whole library in
+     * name order, and Enter used to swap the selection for its first picture.
+     */
     function takeHit() {
+      if (!queryOf() && !steered) return void closeMenu();
       const hit = hits[cursor];
       if (hit) choose(hit.path);
     }
@@ -1567,11 +1604,25 @@ export function openPicker(ctx, opts = {}) {
       renaming = path;
 
       const was = nameOf(path);
+      const isFile = node.type === "file";
       node.label.contentEditable = "true";
       node.label.spellcheck = false;
       node.row.dataset.editing = "1";
+      // A draggable row swallows the pointer: the caret could not be placed and,
+      // on a phone, the name could not be edited at all.
+      node.row.draggable = false;
       node.label.focus();
-      document.execCommand("selectAll", false, null);
+      // The name, not its extension, the way every file manager offers it.
+      const text = node.label.firstChild;
+      const stem = isFile ? was.replace(/\.[^.]+$/, "").length : was.length;
+      if (text && window.getSelection) {
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, Math.min(stem, text.length));
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
 
       const stop = (commit) => {
         if (renaming !== path) return;
@@ -1579,16 +1630,20 @@ export function openPicker(ctx, opts = {}) {
         settleName = null;
         node.label.contentEditable = "false";
         delete node.row.dataset.editing;
+        node.row.draggable = true;
         node.label.removeEventListener("keydown", onKeys);
         node.label.removeEventListener("blur", onBlur);
 
-        const next = safeName(node.label.textContent);
-        if (!commit || !next || next === was) {
-          node.label.textContent = was;
-          return;
-        }
-        node.label.textContent = next;
-        applyMove(path, parentOf(path) + "/" + next);
+        const next = isFile ? safeFileName(node.label.textContent, was) : safeName(node.label.textContent);
+        const to = parentOf(path) + "/" + next;
+        node.label.textContent = was;
+        if (!commit || !next || next === was) return;
+        // Taken — by any spelling a Windows checkout would call the same name —
+        // is said by lighting what holds it, not by quietly keeping the old name
+        // under a label that shows the new one.
+        const clash = taken(to, path);
+        if (clash) return void flash(clash);
+        applyMove(path, to);
       };
 
       const onKeys = (e) => {
@@ -1612,6 +1667,16 @@ export function openPicker(ctx, opts = {}) {
       if (settleName) settleName();
     }
 
+    /**
+     * The node already called `to`, compared the way a Windows checkout
+     * compares: `Photo.png` and `photo.png` cannot both exist there.
+     */
+    function taken(to, except) {
+      const want = to.toLowerCase();
+      for (const path of nodes.keys()) if (path !== except && path.toLowerCase() === want) return path;
+      return "";
+    }
+
     /* ─── moving, which is also what a rename is ───────────────────────── */
 
     /**
@@ -1624,7 +1689,7 @@ export function openPicker(ctx, opts = {}) {
      * simply re-keyed in place.
      */
     function applyMove(from, to, quiet) {
-      if (!from || !to || from === to || nodes.has(to)) return false;
+      if (!from || !to || from === to || taken(to, from)) return false;
 
       const node = nodes.get(from);
       if (!node) return false;
@@ -1670,12 +1735,31 @@ export function openPicker(ctx, opts = {}) {
 
     /* ─── acting on it ─────────────────────────────────────────────────── */
 
-    /** Where a new picture or folder goes: the selected folder, or the default. */
+    /** The editor's own place for new pictures: an album's folder, or posts'. */
+    function home() {
+      const own = ctx.home ? ctx.home() : "";
+      if (own && rootOf(own)) return own;
+      const posts = ROOTS[0] + "/posts";
+      return nodes.has(posts) ? posts : ROOTS[0];
+    }
+
+    /** The folder the selection is in, roots included — where a new folder goes. */
     function currentDir() {
       const node = chosen && nodes.get(chosen);
       if (node) return node.type === "dir" ? chosen : parentOf(chosen) || ROOTS[0];
-      const posts = ROOTS[0] + "/posts";
-      return nodes.has(posts) ? posts : ROOTS[0];
+      return rootOf(home()) || ROOTS[0];
+    }
+
+    /**
+     * Where an upload goes: the selected folder, or the folder the selected
+     * picture is in — but never a root, which holds folders rather than
+     * pictures. A root, or nothing selected, means the editor's own place. The
+     * album editor used to send an upload with nothing selected to the POST
+     * folder, and one with `source/masonry` selected loose into the root.
+     */
+    function uploadDir() {
+      const dir = currentDir();
+      return chosen && nodes.get(chosen) && !isRoot(dir) ? dir : home();
     }
 
     function addNode(entry) {
@@ -1692,25 +1776,10 @@ export function openPicker(ctx, opts = {}) {
       if (act === "close") return finish(null);
 
       if (act === "upload") {
-        const list = await pickFiles();
-        if (!list.length) return;
-        const dir = currentDir();
-        const added = [];
-        // Staged quietly and recorded once: one upload of five pictures is one
-        // step, not five.
-        for (const file of list) {
-          const asset = await ctx.upload(file, dir, true);
-          if (!asset) continue;
-          const path = ctx.stage.resolve(asset.path);
-          if (added.includes(path)) continue;
-          added.push(path);
-          addNode({ path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
-        }
-        if (!added.length) return;
-        if (ctx.onStageChange) ctx.onStageChange(added[0]);
-        reveal(added[added.length - 1]);
-        soft = false;
-        return void pickMany(added);
+        // Decided before the file dialogue opens: what is selected now is what
+        // the author was looking at when they asked.
+        const dir = uploadDir();
+        return void uploadInto(await pickFiles(), dir);
       }
 
       if (act === "deselect") {
@@ -1723,10 +1792,14 @@ export function openPicker(ctx, opts = {}) {
       if (act === "delete") return void discardPicked();
 
       if (act === "mkdir") {
+        // The label goes through the same rule as a typed name. "New folder" was
+        // written as it reads, and a space in a folder is a space in every
+        // picture's address — which markdown does not read as a picture at all.
         const base = currentDir();
-        let name = t("pick_folder", "New folder");
+        const label = safeName(t("pick_folder", "New folder")) || "folder";
+        let name = label;
         let n = 2;
-        while (nodes.has(`${base}/${name}`)) name = `${t("pick_folder", "New folder")} ${n++}`;
+        while (taken(`${base}/${name}`, "")) name = `${label}-${n++}`;
         const path = `${base}/${name}`;
         ctx.stage.folder(path);
         if (ctx.onStageChange) ctx.onStageChange(path);
@@ -1741,11 +1814,33 @@ export function openPicker(ctx, opts = {}) {
       }
     }
 
+    /**
+     * Stage pictures into `dir` and select them. Quietly, then recorded once:
+     * one upload of five pictures is one step, not five.
+     */
+    async function uploadInto(list, dir) {
+      const added = [];
+      for (const file of list || []) {
+        if (!file || !(ACCEPT.includes(file.type) || /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(file.name))) continue;
+        const asset = await ctx.upload(file, dir, true);
+        if (!asset) continue;
+        const path = ctx.stage.resolve(asset.path);
+        if (added.includes(path)) continue;
+        added.push(path);
+        addNode({ path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
+      }
+      if (!added.length) return;
+      if (ctx.onStageChange) ctx.onStageChange(added[0]);
+      reveal(added[added.length - 1]);
+      soft = false;
+      pickMany(added);
+    }
+
     function pickFiles() {
       return new Promise((res) => {
         const el = document.createElement("input");
         el.type = "file";
-        el.accept = "image/*";
+        el.accept = ACCEPT.join(",");
         el.multiple = true;
         el.hidden = true;
         document.body.appendChild(el);
@@ -1856,6 +1951,7 @@ export function openPicker(ctx, opts = {}) {
         e.preventDefault();
         if (menu.hidden) return void openMenu();
         cursor = Math.max(0, Math.min(hits.length - 1, cursor + (e.key === "ArrowDown" ? 1 : -1)));
+        steered = true;
         paintMenu();
         const on = menu.querySelector('[data-on="1"]');
         if (on) on.scrollIntoView({ block: "nearest" });
@@ -1989,11 +2085,17 @@ export function openPicker(ctx, opts = {}) {
       if (!canDrop(target)) return;
       e.preventDefault();
       let landed = "";
+      let clash = "";
       for (const path of dragging) {
         const to = `${target}/${nameOf(path)}`;
-        if (parentOf(path) !== target && applyMove(path, to, true)) landed = landed || to;
+        if (parentOf(path) === target) continue;
+        if (applyMove(path, to, true)) landed = landed || to;
+        else clash = clash || taken(to, path);
       }
       if (landed && ctx.onStageChange) ctx.onStageChange(landed);
+      // A picture the folder already has a picture of that name for stays
+      // where it was — and the one in the way is lit, so it is not a mystery.
+      if (clash) flash(clash);
       dragging = [];
     });
 
@@ -2002,6 +2104,54 @@ export function openPicker(ctx, opts = {}) {
       scroller.stop();
       paintDrop("");
       for (const el of side.querySelectorAll("[data-carry]")) delete el.dataset.carry;
+    });
+
+    /* ─── pictures dragged in from the desktop ─────────────────────────── */
+
+    // Without these the browser's own default ran: a picture dropped on the
+    // dialogue was OPENED in place of the editor, unsaved work and all. Dropped
+    // on a folder it goes into that folder; anywhere else, where an upload goes.
+    const bringsFiles = (e) =>
+      !dragging.length && !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+
+    function fileTarget(e) {
+      const row = e.target.closest && e.target.closest(".ed-pick-row");
+      if (!row || !side.contains(row)) return uploadDir();
+      const path = row.parentElement.dataset.path;
+      const node = nodes.get(path);
+      const dir = node && node.type === "dir" ? path : parentOf(path);
+      return dir && !isRoot(dir) ? dir : home();
+    }
+
+    let fileDrop = "";
+    function paintFileDrop(dir) {
+      if (dir === fileDrop) return;
+      const was = nodes.get(fileDrop);
+      if (was) delete was.row.dataset.into;
+      fileDrop = dir;
+      const now = nodes.get(dir);
+      if (now) now.row.dataset.into = "1";
+    }
+
+    mask.addEventListener("dragover", (e) => {
+      if (!bringsFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      if (side.contains(e.target)) scroller.track(e.clientY);
+      paintFileDrop(fileTarget(e));
+    });
+
+    mask.addEventListener("dragleave", (e) => {
+      if (bringsFiles(e) && !mask.contains(e.relatedTarget)) paintFileDrop("");
+    });
+
+    mask.addEventListener("drop", (e) => {
+      if (!bringsFiles(e)) return;
+      e.preventDefault();
+      scroller.stop();
+      const dir = fileTarget(e);
+      paintFileDrop("");
+      uploadInto(Array.from(e.dataTransfer.files || []), dir);
     });
 
     /* ─── the splitter ─────────────────────────────────────────────────── */
