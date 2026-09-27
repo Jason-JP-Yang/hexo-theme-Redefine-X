@@ -182,12 +182,37 @@ function index(text, yaml) {
   return { lines, albums, byCategory };
 }
 
+// U+2028, U+2029 and U+00A0 from their code points: a literal one in a source
+// file is a line terminator to some parsers and invisible to every reader.
+const [LS, PS, NBSP] = [0x2028, 0x2029, 0xa0].map((c) => String.fromCharCode(c));
+const ESCAPES = { n: "\n", r: "\r", t: "\t", 0: "\0", a: "\x07", b: "\b", e: "\x1b", f: "\f", v: "\v", N: "\x85", L: LS, P: PS, _: NBSP };
+
+/**
+ * A category name as js-yaml reads it, or the pairing by name misses. The
+ * editor quotes a name that holds ` #`, a quote, a backslash or a control
+ * character (source/js/plugins/editor/yaml-scalar.js), so the comment is only
+ * stripped outside quotes and the escapes are undone.
+ */
 function unquote(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+#.*$/, "")
-    .replace(/^["']|["']$/g, "")
-    .trim();
+  const s = String(value || "").trim();
+  const quote = s[0] === '"' || s[0] === "'" ? s[0] : "";
+  if (!quote) return s.replace(/\s+#.*$/, "").trim();
+
+  let end = 1;
+  for (; end < s.length; end++) {
+    if (quote === '"' && s[end] === "\\") end += 1;
+    else if (s[end] === quote) {
+      if (quote === "'" && s[end + 1] === "'") end += 1;
+      else break;
+    }
+  }
+  const body = s.slice(1, end);
+  if (quote === "'") return body.replace(/''/g, "'");
+  return body.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[\s\S])/g, (m, c) => {
+    if (c.length === 1) return c in ESCAPES ? ESCAPES[c] : c;
+    const code = parseInt(c.slice(1), 16);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
 }
 
 /**

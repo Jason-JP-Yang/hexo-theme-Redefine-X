@@ -25,6 +25,8 @@
  * construct — survives as literal text through both directions.
  */
 
+import { readScalar, valueEnd, writeScalar } from "./yaml-scalar.js";
+
 const BLOCK_ID = { n: 0 };
 
 export function nextId() {
@@ -87,31 +89,15 @@ export function parseFrontMatter(front) {
       out[key] = value
         .slice(1, -1)
         .split(",")
-        .map((s) => unquote(s.trim()))
+        .map((s) => readScalar(s.trim()))
         .filter(Boolean);
       continue;
     }
-    out[key] = unquote(value);
+    out[key] = readScalar(value);
   }
   return out;
 }
 
-function unquote(value) {
-  const s = String(value).trim();
-  if (s.length > 1 && ((s[0] === '"' && s.endsWith('"')) || (s[0] === "'" && s.endsWith("'")))) {
-    return s.slice(1, -1).replace(/\\"/g, '"');
-  }
-  return s;
-}
-
-function quoteIfNeeded(value) {
-  const s = String(value == null ? "" : value);
-  if (!s) return "";
-  if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(s) || /:\s/.test(s) || /^\s|\s$/.test(s)) {
-    return '"' + s.replace(/"/g, '\\"') + '"';
-  }
-  return s;
-}
 
 /**
  * Keys Hexo's Post schema declares as String, where a bare `key:` is fatal.
@@ -147,12 +133,9 @@ export function setFrontMatterKey(front, key, value) {
     }
   }
 
-  // The line itself plus any indented list that belongs to it.
-  let end = start;
-  if (start >= 0) {
-    end = start + 1;
-    while (end < lines.length && /^\s*-\s?/.test(lines[end])) end++;
-  }
+  // The line itself plus everything its value occupies — a list, a block, and
+  // whatever an older multi-line write left under it (see yaml-scalar.js).
+  const end = start >= 0 ? valueEnd(lines, start, 0) : start;
 
   if (value === null || value === undefined) {
     if (start < 0) return lines.join("\n");
@@ -160,9 +143,9 @@ export function setFrontMatterKey(front, key, value) {
     return lines.join("\n");
   }
 
-  const written = isList ? "" : quoteIfNeeded(value);
+  const written = isList ? "" : writeScalar(value);
   const replacement = isList
-    ? [key + ":"].concat(value.filter(Boolean).map((item) => "  - " + quoteIfNeeded(item)))
+    ? [key + ":"].concat(value.filter(Boolean).map((item) => "  - " + writeScalar(item)))
     : [key + ": " + (written || emptyFor(key))];
 
   if (start < 0) lines.push.apply(lines, replacement);

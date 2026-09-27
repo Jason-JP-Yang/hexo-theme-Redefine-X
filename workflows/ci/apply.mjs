@@ -224,7 +224,14 @@ for (const file of files) {
         admin
       );
     } catch (err) {
-      refuse(err.message);
+      // This log is public. A YAML error quotes the lines around it — an album's
+      // name, description and picture paths — and the merge's own refusals quote
+      // album and category names; only the kind of refusal and where is printed.
+      refuse(
+        err && err.name === "YAMLException"
+          ? `masonry.yml does not parse: ${err.reason || "invalid YAML"} (line ${err.mark ? err.mark.line + 1 : "?"})`
+          : String((err && err.message) || err).replace(/"[^"]*"/g, '"…"')
+      );
     }
     // A save that changed only categories names no album; it is still a change,
     // and the merge refuses one from a save it was not cleared for.

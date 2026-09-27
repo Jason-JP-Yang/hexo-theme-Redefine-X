@@ -1830,15 +1830,9 @@ export function openPicker(ctx, opts = {}) {
       return Object.assign({}, all[0], { all });
     }
 
-    side.addEventListener("dblclick", (e) => {
-      const row = e.target.closest(".ed-pick-row");
-      if (!row || opts.browse) return;
-      settleRename();
-      const path = row.parentElement.dataset.path;
-      const node = nodes.get(path);
-      if (node && node.type === "file") finish(answer([path]));
-    });
-
+    // The button is the ONLY way to answer. Double-clicking a row used to choose
+    // it too, and two quick clicks while picking several — or a double tap on a
+    // phone — closed the browser on one picture the author never meant to use.
     ok.addEventListener("click", () => {
       // Before the selection is read: committing the name is what moves it onto
       // the file's new address, so reading first answers with the old one.

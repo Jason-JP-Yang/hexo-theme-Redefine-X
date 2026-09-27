@@ -42,6 +42,8 @@
  * previous sibling when a node is removed.
  */
 
+import { readScalar, sweepStray, valueEnd, writeScalar } from "./yaml-scalar.js";
+
 /* ─── lines ────────────────────────────────────────────────────────────────── */
 
 /** Lines WITH their terminators, so joining them is the identity. */
@@ -67,6 +69,15 @@ function isBlank(row) {
   return !String(row).trim();
 }
 
+/**
+ * A block's own keys with every row no key could own taken out. A no-op on a
+ * file that parses; on one an older multi-line write broke, it is what lets the
+ * album be saved again rather than refused by the runner.
+ */
+function sweep(text, width) {
+  return sweepStray(rowsOf(text), width).join("");
+}
+
 /** Trailing blank lines, split off the end of a block. */
 function splitTail(rows) {
   let cut = rows.length;
@@ -76,28 +87,10 @@ function splitTail(rows) {
 
 /* ─── values ───────────────────────────────────────────────────────────────── */
 
-function unquote(value) {
-  const s = String(value == null ? "" : value).trim();
-  if (s.length > 1 && ((s[0] === '"' && s.endsWith('"')) || (s[0] === "'" && s.endsWith("'")))) {
-    return s.slice(1, -1).replace(/\\"/g, '"');
-  }
-  return s;
-}
-
-/**
- * The same rule markdown.js applies to front matter: quote only what YAML would
- * otherwise read as something else. Album names and paths hold spaces, slashes
- * and Chinese, none of which needs quoting — and quoting them would rewrite
- * every line of a file that was fine.
- */
-export function quoteYaml(value) {
-  const s = String(value == null ? "" : value);
-  if (!s) return "";
-  if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(s) || /:\s/.test(s) || /\s$/.test(s) || /^\s/.test(s)) {
-    return '"' + s.replace(/"/g, '\\"') + '"';
-  }
-  return s;
-}
+// Values go through yaml-scalar.js, the rule the front matter uses too: plain
+// wherever YAML reads the characters back as written — album names and paths
+// hold spaces, slashes and Chinese, and quoting those would rewrite every line
+// of a file that was fine — and one escaped line wherever it would not.
 
 const TRUTHY = /^(true|yes|on|1)$/i;
 
@@ -121,7 +114,7 @@ export function readKeys(body, width) {
     if (isBlank(row) || /^\s*#/.test(row)) continue;
     if (indentOf(row) !== width || !row.startsWith(pad)) continue;
     const m = row.slice(width).match(/^([A-Za-z_][\w.-]*)\s*:\s*(.*?)\s*$/);
-    if (m) out[m[1]] = unquote(m[2]);
+    if (m) out[m[1]] = readScalar(m[2]);
   }
   return out;
 }
@@ -129,10 +122,11 @@ export function readKeys(body, width) {
 /**
  * Write one key into a block of lines, in place.
  *
- * The line and anything indented under it are replaced together; a key the
- * block does not carry is appended at the end of its own-key region, which for
- * an album is immediately before `images:` because that key and its entries are
- * held separately. `null` removes it.
+ * The line and everything its value occupies are replaced together — see
+ * `valueEnd`, which also takes what an older multi-line write left under it. A
+ * key the block does not carry is appended at the end of its own-key region,
+ * which for an album is immediately before `images:` because that key and its
+ * entries are held separately. `null` removes it.
  */
 export function setKey(body, width, key, value, eol) {
   const rows = rowsOf(body);
@@ -147,11 +141,7 @@ export function setKey(body, width, key, value, eol) {
     }
   }
 
-  let end = at;
-  if (at >= 0) {
-    end = at + 1;
-    while (end < rows.length && !isBlank(rows[end]) && indentOf(rows[end]) > width) end += 1;
-  }
+  const end = at >= 0 ? valueEnd(rows, at, width) : at;
 
   if (value === null || value === undefined || value === "") {
     if (at < 0) return rows.join("");
@@ -159,7 +149,7 @@ export function setKey(body, width, key, value, eol) {
     return rows.join("");
   }
 
-  const line = `${pad}${key}: ${quoteYaml(value)}${eol}`;
+  const line = `${pad}${key}: ${writeScalar(value)}${eol}`;
   if (at < 0) {
     // The last line of a block that ends at EOF may carry no terminator, and
     // appending after it would join two keys onto one line.
@@ -250,7 +240,7 @@ export function setImageField(node, key, value) {
 }
 
 export function makeImage(lead, eol, path) {
-  const node = makeNode(lead, `${" ".repeat(lead.length)}image: ${quoteYaml(path)}${eol}`, "");
+  const node = makeNode(lead, `${" ".repeat(lead.length)}image: ${writeScalar(path)}${eol}`, "");
   node.eol = eol;
   return node;
 }
@@ -277,7 +267,7 @@ function parseItem(rows, eol) {
     const node = makeNode(split.lead, body, tail);
     node.kind = "item";
     node.eol = eol;
-    node.pre = node.body;
+    node.pre = sweep(node.body, width);
     node.imagesLine = "";
     node.images = [];
     node.imageLead = " ".repeat(width + 2) + "- ";
@@ -286,7 +276,7 @@ function parseItem(rows, eol) {
     return node;
   }
 
-  const pre = split.rows.slice(0, at).join("");
+  const pre = sweep(split.rows.slice(0, at).join(""), width);
   const imagesLine = split.rows[at];
   const rest = split.rows.slice(at + 1);
 
@@ -317,7 +307,7 @@ function parseItem(rows, eol) {
   node.imagesLine = imagesLine;
   node.images = images;
   node.imageLead = images.length ? images[0].lead : " ".repeat(width + 2) + "- ";
-  node.post = rest2.body;
+  node.post = sweep(rest2.body, width);
   delete node.body;
   return node;
 }
@@ -350,7 +340,7 @@ export function makeItem(lead, eol, fields) {
   node.pre = "";
   for (const [key, value] of Object.entries(fields || {})) {
     if (value === null || value === undefined || value === "") continue;
-    node.pre += `${" ".repeat(width)}${key}: ${quoteYaml(value)}${eol}`;
+    node.pre += `${" ".repeat(width)}${key}: ${writeScalar(value)}${eol}`;
   }
   if (!node.pre) node.pre = `${" ".repeat(width)}name: ${eol}`;
   node.imagesLine = "";
@@ -385,7 +375,7 @@ function parseCategory(rows, eol) {
 
   if (at < 0) {
     const { body, tail } = splitTail(split.rows);
-    node.pre = body;
+    node.pre = sweep(body, width);
     node.tail = tail;
     node.listLine = "";
     node.items = [];
@@ -395,7 +385,7 @@ function parseCategory(rows, eol) {
     return node;
   }
 
-  node.pre = split.rows.slice(0, at).join("");
+  node.pre = sweep(split.rows.slice(0, at).join(""), width);
   node.listLine = split.rows[at];
 
   const rest = split.rows.slice(at + 1);
@@ -461,7 +451,7 @@ export function makeCategory(eol, name, thumbs) {
   const node = makeNode("- ", "", "");
   node.kind = "category";
   node.eol = eol;
-  node.pre = `  links_category: ${quoteYaml(name)}${eol}  has_thumbnail: ${thumbs ? "true" : "false"}${eol}`;
+  node.pre = `  links_category: ${writeScalar(name)}${eol}  has_thumbnail: ${thumbs ? "true" : "false"}${eol}`;
   node.listLine = `  list:${eol}`;
   node.items = [];
   node.itemLead = "  - ";
