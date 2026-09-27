@@ -33,8 +33,10 @@ import {
   getPanel,
   t,
 } from "./notifications-inbox.js";
+import { isStandalone, onFresh } from "../tools/freshness.js";
 
-const POLL_MS = 5 * 60 * 1000; // background unread refresh while a tab is open
+// Unread refresh while a tab is open. An installed app is on freshness.js's minute.
+const POLL_MS = 5 * 60 * 1000;
 // Read by the inline script in head.ejs, which has to choose between the bell
 // and the Follow button before the first paint.
 const FOLLOW_KEY = "blog-following";
@@ -115,11 +117,7 @@ function needsHomeScreenInstall() {
   const isIOS =
     /iPad|iPhone|iPod/.test(ua) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  if (!isIOS) return false;
-  const standalone =
-    window.navigator.standalone === true ||
-    window.matchMedia("(display-mode: standalone)").matches;
-  return !standalone;
+  return isIOS && !isStandalone();
 }
 
 function permissionState() {
@@ -857,8 +855,9 @@ export function initNotifications() {
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => {
-      if (document.visibilityState === "visible") refresh({ quiet: true });
+      if (document.visibilityState === "visible" && !isStandalone()) refresh({ quiet: true });
     }, POLL_MS);
+    onFresh(() => refresh({ quiet: true }));
 
     ensureRegistration().then(() => {
       reconcileSubscription();

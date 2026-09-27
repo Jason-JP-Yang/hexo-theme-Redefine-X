@@ -114,10 +114,21 @@
         }) %>
     <% } %>
     <!--- Icon Part-->
-    <link rel="icon" type="image/png" href="<%= url_for(theme.defaults.favicon) %>" sizes="192x192">
-    <link rel="apple-touch-icon" sizes="180x180" href="<%= url_for(theme.defaults.favicon) %>">
+    <%# Rendered by scripts/pwa-generator.js; the favicon stands in until they exist.
+        The touch icon is opaque on purpose: iOS paints transparency black. %>
+    <% const pwa = pwa_icons(); %>
+    <% if (pwa.icon) { %>
+        <link rel="icon" type="image/png" sizes="192x192" href="<%= pwa.icon %>">
+    <% } %>
+    <link rel="apple-touch-icon" sizes="180x180" href="<%= pwa.touch || url_for(theme.defaults.favicon) %>">
     <meta name="theme-color" content="<%= theme.colors.primary %>">
     <%- favicon_tag(theme.defaults.favicon) %>
+    <%# The installable app. iOS delivers Web Push only to a site installed to the
+        Home Screen, and a site cannot be installed without a manifest. %>
+    <link rel="manifest" href="<%- url_for('/manifest.json') %>">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="<%= pwa.name %>">
     <!--- Page Info-->
     <%
     let title = page.title;
@@ -191,14 +202,6 @@
     <% } %>
 
     <% const backend = backend_config(); %>
-    <%# PWA manifest. Emitted by scripts/notifications-generator.js. Required for
-        Web Push on iOS, which only delivers to a site installed to the Home
-        Screen — and a site cannot be installed without this. %>
-    <% if (backend.notifications.enable) { %>
-        <link rel="manifest" href="<%- url_for('/manifest.json') %>">
-        <meta name="theme-color" content="<%= theme.colors.primary %>">
-        <meta name="apple-mobile-web-app-capable" content="yes">
-    <% } %>
 
     <%# The last answers to "does this reader follow?" and "is this an admin?",
         read back before the first paint so the swaps they drive never flash. %>

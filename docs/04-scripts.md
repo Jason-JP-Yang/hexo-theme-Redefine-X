@@ -118,6 +118,9 @@ Registers the `export_config` helper used by `head.ejs`. Serializes site essenti
 ## `scripts/data-handle.js`
 On `generateBefore`: merges `source/_data/*.yml` into `hexo.theme.config` — full config override (`_config`/`redefine`/`_redefine`), plus `links`, `essays`/`shuoshuo`, `masonry`/`gallery`/`photos`, and `bookmarks`/`tools`. This is how the friends/essays/masonry/bookmarks pages get their data.
 
+## `scripts/pwa-generator.js`
+Emits `manifest.json` and renders its icons with sharp at `before_generate`: 192/512 `any` icons from `defaults.favicon`, 192/512 maskable icons and the 180px apple-touch icon from `defaults.avatar` (opaque, content measured into the safe zone). The PNGs are cached in `source/build/pwa/` under `source/build/.pwa.json`, keyed by the source's content hash, so a runner publishes the committed bytes. `pwa_icons()` gives `head.ejs` the URLs.
+
 ## `scripts/masonry-generator.js` & `masonry-reactions.js`
 
 ### `masonry-generator.js`

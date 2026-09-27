@@ -17,6 +17,8 @@ import initPulseCard from "./layouts/pulseCard.js";
 import initProfilePager from "./layouts/profilePager.js";
 import initUxEvents from "./tools/uxEvents.js";
 import initFrameFit from "./tools/frameFit.js";
+import initFreshness from "./tools/freshness.js";
+import initPullRefresh from "./tools/pullRefresh.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
 import initInstantNotes from "./plugins/instantNotes.js";
 import initVault from "./plugins/vault.js";
@@ -151,6 +153,9 @@ export function initMain() {
   // Last, and once: inside a heatmap frame the page is held still and its real
   // height reported back. A no-op everywhere else.
   initFrameFit();
+  // Once each, never per page view: both live outside #swup.
+  initFreshness();
+  initPullRefresh();
 }
 
 document.addEventListener("DOMContentLoaded", initMain);

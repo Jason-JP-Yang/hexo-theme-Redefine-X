@@ -3,15 +3,11 @@
 "use strict";
 
 /**
- * Build-time half of the notification subsystem. Emits two files:
- *
- *   changelog.json — the ONLY source the backend reads on its own. A GitHub
- *                    webhook fires on push to the deploy repo, the Worker reads
- *                    this file at the pushed commit, and every entry in it
- *                    becomes a notification exactly once (dedupe is by `id`).
- *   manifest.json  — a minimal PWA manifest. Not decoration: iOS delivers Web
- *                    Push only to a site installed to the Home Screen, and a
- *                    site cannot be installed without a manifest.
+ * Build-time half of the notification subsystem. Emits changelog.json — the
+ * ONLY source the backend reads on its own. A GitHub webhook fires on push to
+ * the deploy repo, the Worker reads this file at the pushed commit, and every
+ * entry in it becomes a notification exactly once (dedupe is by `id`). The PWA
+ * manifest that iOS push depends on is scripts/pwa-generator.js.
  *
  * Why a separate file rather than reusing atom.xml: the feed is generated with
  * `content: true`, so it carries every post's full body — megabytes, rewritten
@@ -55,26 +51,6 @@ function toIso(value) {
   const date = value.toDate ? value.toDate() : new Date(value);
   if (isNaN(date.getTime())) return clock.iso();
   return clock.iso(date);
-}
-
-/**
- * The Home Screen label. Cut on a word boundary, never mid-word: this string is
- * what sits under the icon on a phone, where a truncated word is the difference
- * between an installed app and a broken-looking one.
- */
-function shortName(title) {
-  const clean = String(title || "Blog").trim();
-  if (clean.length <= 12) return clean;
-
-  const words = clean.split(/\s+/);
-  let out = "";
-  for (const word of words) {
-    const next = out ? `${out} ${word}` : word;
-    if (next.length > 12) break;
-    out = next;
-  }
-  // A single word longer than the budget has no boundary to cut on.
-  return out || clean.slice(0, 12);
 }
 
 /** Absolute URL — a notification is read outside the site, so nothing may be relative. */
@@ -209,46 +185,6 @@ hexo.extend.generator.register("redefine_changelog", function (locals) {
       ),
     },
   ];
-});
-
-// ─── manifest ───────────────────────────────────────────────
-hexo.extend.generator.register("redefine_manifest", function () {
-  const theme = hexo.theme.config || {};
-  if (!backend.resolve(theme).notifications.enable) return [];
-
-  const config = hexo.config;
-  const icon = (theme.defaults && (theme.defaults.logo || theme.defaults.favicon)) || "";
-  const colors = theme.colors || {};
-
-  const title = (theme.info && theme.info.title) || config.title || "Blog";
-
-  const manifest = {
-    name: title,
-    short_name: shortName(title),
-    description: config.description || "",
-    start_url: config.root || "/",
-    scope: config.root || "/",
-    // "standalone" is what makes iOS treat the Home Screen entry as an installed
-    // app, which is the precondition for it delivering push at all.
-    display: "standalone",
-    theme_color: colors.primary || "#A31F34",
-    background_color: colors.default_mode === "dark" ? "#1a1a1a" : "#ffffff",
-    icons: icon
-      ? [
-          {
-            src: absolute(config.url, icon),
-            // No size is asserted: the theme's logo is whatever the author set,
-            // and claiming "192x192" for an image that is not would make the
-            // install prompt reject it.
-            sizes: "any",
-            type: /\.svg$/i.test(icon) ? "image/svg+xml" : "image/png",
-            purpose: "any",
-          },
-        ]
-      : [],
-  };
-
-  return [{ path: "manifest.json", data: JSON.stringify(manifest, null, 2) }];
 });
 
 // ─── the admin management page ──────────────────────────────

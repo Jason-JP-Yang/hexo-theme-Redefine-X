@@ -436,7 +436,10 @@ export function layoutCompactCompose(panel, opts = {}) {
 export function rebuildCompactWithFade(panel, notes) {
   panel._composeCompact = false;
   buildDOM(notes, panel);
-  fadeInBubbles((panel._bubbleEls || []).filter((b) => b.style.display !== "none"));
+  const shown = (panel._bubbleEls || []).filter((b) => b.style.display !== "none");
+  fadeInBubbles(shown);
+  // Revealed by the fade, so a later relayout glides them instead of skipping them.
+  shown.forEach((b) => b.classList.remove("is-entering"));
   ensureMoreButton(panel);
   evaluateMoreButton(panel);
   updateTitleShift(panel);

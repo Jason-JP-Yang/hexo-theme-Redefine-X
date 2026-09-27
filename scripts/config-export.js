@@ -22,6 +22,13 @@ hexo.extend.helper.register("export_config", function () {
     hexo_config.path = this.config.search.path;
   }
 
+  // The build these scripts belong to — what tools/freshness.js compares
+  // version.json against. Only a deploying build publishes that file.
+  const deploy = require("./lib/deploy");
+  if (deploy.resolve(this.theme).enable) {
+    hexo_config.build = deploy.build().id;
+  }
+
   let theme_config = {
     articles: this.theme.articles,
     colors: this.theme.colors,

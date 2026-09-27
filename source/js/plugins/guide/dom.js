@@ -122,10 +122,4 @@ export function isIOS() {
   return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
-export function isStandalone() {
-  try {
-    return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
-  } catch {
-    return false;
-  }
-}
+export { isStandalone } from "../../tools/freshness.js";

@@ -30,6 +30,8 @@ Shared helpers initialized first in `refresh()` (DOM utilities, event helpers, c
 | `imageViewer.js` | Lightbox for article images (drives `utils/image-viewer.ejs`) |
 | `runtime.js` | Footer "site running time" counter (`footer.runtime` + `start`) |
 | `tocToggle.js` | Open/close the table of contents |
+| `freshness.js` | Installed-app clock: every minute (and on return) re-checks `version.json` against `window.config.build` and runs `onFresh` subscribers (notifications, instant notes); a new build turns every later visit into a full load |
+| `pullRefresh.js` | Pull to refresh on every platform — touch pull or wheel/trackpad overscroll at the top; the browser's own pull is disabled by `html.ptr-zone` while the first screen shows |
 
 ### `js/layouts/` — layout behaviors
 | File | Responsibility |

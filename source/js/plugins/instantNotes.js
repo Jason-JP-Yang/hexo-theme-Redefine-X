@@ -22,19 +22,21 @@ import {
   repositionExpandedListInstant, expandedOrder,
   layoutCompactCompose, rebuildCompactWithFade,
 } from "./instant-notes-layout.js";
-import { createBubble, isNoteActive, clearWrap } from "./instant-notes-bubble.js";
+import { createBubble, isNoteActive, clearWrap, fadeOutBubbles } from "./instant-notes-bubble.js";
 import {
   wireSelector, refreshSelectorButtons, preloadEmojiMart,
 } from "./instant-notes-pickers.js";
 import { initNotoAnim } from "./noto-anim.js";
 import {
   GLIDE, PAD, EMOJI_TOP_EXTRA, FRAME_MS, FADE_OUT_MS, FADE_IN_MS, FADE_BLUR,
-  clamp, prefersReducedMotion,
+  clamp, prefersReducedMotion, timeAgo,
 } from "./instant-notes-utils.js";
+import { onFresh } from "../tools/freshness.js";
 
 // Cache fetched public notes briefly so rapid swup navigations skip the worker.
 let _notesCache = null;
 const NOTES_TTL = 60000;
+let _pollWired = false;
 
 // ─── Textarea auto-resize ─────────────────────────────────────────────────────
 function autoResizeTextarea(textarea) {
@@ -117,6 +119,10 @@ export default function initInstantNotes() {
 
   wireResize(panel);
   wireAuthChange(panel);
+  if (!_pollWired) {
+    _pollWired = true;
+    onFresh(pollNotes);
+  }
 
   // Emoji picker assets load eagerly for EVERYONE (admin or not) so opening
   // the selector later is instant.
@@ -126,7 +132,7 @@ export default function initInstantNotes() {
   const notesPromise = fresh
     ? Promise.resolve(_notesCache.data)
     : fetchNotes(apiUrl).then((d) => {
-        _notesCache = { data: d, ts: Date.now() };
+        if (d) _notesCache = { data: d, ts: Date.now() };
         return d;
       });
 
@@ -155,6 +161,7 @@ export default function initInstantNotes() {
 }
 
 // ─── Fetch ────────────────────────────────────────────────────────────────────
+// null on failure, never []: a poll must not read a dropped request as "no notes".
 async function fetchNotes(apiUrl) {
   try {
     const r = await fetch(`${apiUrl}/api/notes`, { mode: "cors", cache: "no-cache" });
@@ -163,8 +170,80 @@ async function fetchNotes(apiUrl) {
     return Array.isArray(d) ? d : d.notes || [];
   } catch (e) {
     console.warn("[InstantNotes] fetch failed:", e);
-    return [];
+    return null;
   }
+}
+
+// ─── App clock (tools/freshness.js) ───────────────────────────────────────────
+// An installed app keeps the home page open for days. Every minute the notes are
+// read again; a changed set cross-fades in the way a posted note does, and time
+// labels are brought up to date in place — or by the same cross-fade when the
+// label changes length, since a wider card would crowd its packed neighbour.
+const notesKey = (list) =>
+  list.map((n) => [n.id, n.text, n.emoji, n.color, n.created_at].join("\u0001")).join("\u0002");
+
+function pollBusy(panel) {
+  return !!(panel._expanded || panel._composeCompact || panel._animating || panel.contains(document.activeElement));
+}
+
+async function pollNotes() {
+  const panel = document.getElementById("instant-notes");
+  if (!panel || !panel._apiUrl || pollBusy(panel)) return;
+  const notes = await fetchNotes(panel._apiUrl);
+  if (!notes) return;
+  _notesCache = { data: notes, ts: Date.now() };
+  if (!panel.isConnected || pollBusy(panel)) return;
+
+  const list = notes.slice(0, 5);
+  if (notesKey(list) !== notesKey(panel._notes || []) || !relabel(panel)) swapNotes(panel, list);
+}
+
+/** Refresh every time label in place; false when one would change width. */
+function relabel(panel) {
+  const stale = [];
+  for (const el of panel._bubbleEls || []) {
+    const label = el.querySelector(".instant-note-time");
+    if (!label || !el._note) continue;
+    const next = timeAgo(el._note.created_at);
+    if (label.textContent === next) continue;
+    if (label.textContent.length !== next.length) return false;
+    stale.push([label, next]);
+  }
+  stale.forEach(([label, next]) => (label.textContent = next));
+  return true;
+}
+
+function swapNotes(panel, list) {
+  const shown = (panel._bubbleEls || []).filter((b) => b.style.display !== "none");
+  if (!shown.length) {
+    // Nothing on screen yet: the first notes arrive the way they do on a page load.
+    if (!list.length) return;
+    buildDOM(list, panel);
+    initNotoAnim();
+    revealNotes(panel);
+    return;
+  }
+
+  panel._animating = true;
+  fadeOutBubbles(shown);
+  setTimeout(() => {
+    panel._animating = false;
+    if (!panel.isConnected) return;
+    if (list.length) {
+      rebuildCompactWithFade(panel, list);
+      initNotoAnim();
+      return;
+    }
+    const field = panel.querySelector("#instant-notes-field");
+    if (field) field.innerHTML = "";
+    Object.assign(panel, { _notes: [], _bubbleEls: [], _hasEmoji: [], _plan: null });
+    // An admin keeps the compose card on the avatar, as on a load with no notes.
+    if (panel._isAdmin) return void layoutCompactCompose(panel, { reveal: true });
+    panel.classList.remove("notes-visible");
+    panel.querySelector("#instant-notes-avatar")?.classList.remove("avatar-visible");
+    document.querySelector(".home-banner-container")?.classList.remove("has-notes");
+    evaluateMoreButton(panel);
+  }, prefersReducedMotion() ? 0 : FADE_OUT_MS);
 }
 
 // ─── Wait for preloader ────────────────────────────────────────────────────────
