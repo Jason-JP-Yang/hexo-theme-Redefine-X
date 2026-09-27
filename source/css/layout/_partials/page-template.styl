@@ -371,7 +371,7 @@ $friend-link-item-border-radius = 9px
   // Login prompt toast
   .masonry-login-prompt
     position fixed
-    bottom 20px
+    bottom unquote('calc(20px + var(--safe-bottom))')
     left 50%
     transform translateX(-50%) translateY(20px)
     z-index 9999

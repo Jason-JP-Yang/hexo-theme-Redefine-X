@@ -98,6 +98,10 @@ $gd-gh = -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, 
 // The navbar's two measured switches are measured again at the mock's width
 // and set on .gd-site (mock/site.js `fit`).
 .gd-site
+  // A mocked device has no home indicator: the viewer's own insets stay out of it.
+  --safe-left 0px
+  --safe-right 0px
+  --safe-bottom 0px
   position relative
   overflow hidden
   background var(--background-color)

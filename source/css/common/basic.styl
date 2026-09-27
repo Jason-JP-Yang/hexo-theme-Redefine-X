@@ -51,6 +51,13 @@ html, body
 
   --navbar-height: $navbar-height
 
+  // Safe-area insets: non-zero only in the installed app, the one place head.ejs
+  // sets viewport-fit=cover. Read through these so the guide's mock of the site
+  // can zero them (guide-mock.styl).
+  --safe-left unquote('env(safe-area-inset-left, 0px)')
+  --safe-right unquote('env(safe-area-inset-right, 0px)')
+  --safe-bottom unquote('env(safe-area-inset-bottom, 0px)')
+
   // Tailwind's preflight font token lists the PLATFORM emoji fonts (Segoe UI
   // Emoji / Apple Color Emoji) ahead of Noto — override it so every
   // tailwind-fonted element resolves emoji to the Noto Color Emoji webfont.

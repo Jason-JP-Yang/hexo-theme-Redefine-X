@@ -59,3 +59,8 @@ $home-banner-icon-size = 1.6rem
   &.notes-expanded .content .description
     opacity 0
     pointer-events none
+
+// Above the home indicator / gesture bar in the installed app (basic.styl);
+// Tailwind's `bottom-0.5` everywhere else.
+.home-banner-container .home-banner-bottom
+  bottom unquote('calc(0.125rem + var(--safe-bottom))')

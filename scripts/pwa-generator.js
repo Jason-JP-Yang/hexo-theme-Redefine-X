@@ -32,13 +32,16 @@ const INDEX_FILE = ".pwa.json";
 const SPEC = 1;
 
 // `reach` is how far from the centre the picture's content may extend, as a
-// share of the side. Maskable icons must keep it inside the spec's safe circle
-// (radius 0.4); a touch icon only loses its corners to the squircle.
+// share of the side. A maskable icon has to fit the tightest crop it meets, and
+// that is not the spec's safe circle (radius 0.4): Chrome and Edge pin an
+// Android shortcut's maskable icon as an adaptive bitmap WITHOUT the spec's
+// padding, so only a circle of radius 1/3 shows. A touch icon only loses its
+// corners to the squircle.
 const ICONS = [
   { file: "icon-192.png", size: 192, from: "favicon", purpose: "any" },
   { file: "icon-512.png", size: 512, from: "favicon", purpose: "any" },
-  { file: "maskable-192.png", size: 192, from: "avatar", reach: 0.38, purpose: "maskable" },
-  { file: "maskable-512.png", size: 512, from: "avatar", reach: 0.38, purpose: "maskable" },
+  { file: "maskable-192.png", size: 192, from: "avatar", reach: 0.3, purpose: "maskable" },
+  { file: "maskable-512.png", size: 512, from: "avatar", reach: 0.3, purpose: "maskable" },
   { file: "apple-touch-icon.png", size: 180, from: "avatar", reach: 0.44 },
 ];
 
@@ -207,6 +210,9 @@ hexo.extend.generator.register("redefine_manifest", function () {
   const colors = theme.colors || {};
   const name = appName(theme, config);
   const lang = [].concat(config.language || [])[0];
+  // The page's own background, not the brand colour: it is the status bar and
+  // title bar of the app window until head.ejs takes over with the live theme.
+  const ground = colors.default_mode === "dark" ? "#202124" : "#ffffff";
 
   const manifest = {
     id: root,
@@ -219,8 +225,8 @@ hexo.extend.generator.register("redefine_manifest", function () {
     // What makes iOS treat the Home Screen entry as an installed app, which is
     // the precondition for it delivering Web Push at all.
     display: "standalone",
-    theme_color: colors.primary || "#A31F34",
-    background_color: colors.default_mode === "dark" ? "#202124" : "#ffffff",
+    theme_color: ground,
+    background_color: ground,
     icons: rendered
       .filter((icon) => icon.purpose)
       .map((icon) => ({

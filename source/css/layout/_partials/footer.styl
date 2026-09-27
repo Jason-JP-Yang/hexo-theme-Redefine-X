@@ -1,6 +1,10 @@
 @require '../../common/variables'
 
 .footer
+  // `py-5`, plus the home indicator / gesture bar in the installed app
+  // (basic.styl), so the last line is never under it.
+  padding-bottom unquote('calc(1.25rem + var(--safe-bottom))')
+
   .odometer.odometer-auto-theme, .odometer.odometer-theme-default
     display inline-block
     vertical-align baseline

@@ -351,9 +351,12 @@ function syncHead(panel) {
 
 /** The tallest a page may be: the panel's own ceiling, less its fixed chrome. */
 function pageCap(panel) {
-  const max = parseFloat(getComputedStyle(panel).maxHeight);
+  const style = getComputedStyle(panel);
+  const max = parseFloat(style.maxHeight);
   const ceiling = Number.isFinite(max) ? max : window.innerHeight * 0.8;
-  let chrome = 0;
+  // The sheet's padding is the home-indicator inset in an installed app; the
+  // panel is border-box, so it comes out of the same ceiling.
+  let chrome = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
   panel.querySelectorAll(".np-head, .np-progress").forEach((el) => {
     chrome += el.getBoundingClientRect().height;
   });

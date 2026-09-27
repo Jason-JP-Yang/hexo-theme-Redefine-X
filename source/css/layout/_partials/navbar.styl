@@ -35,6 +35,9 @@ $logo-image-box-width = 34px
     align-items center
     z-index $z-index-5
     transition max-width 0.3s ease
+    // Clear of the notch in a landscape app window (basic.styl).
+    padding-left var(--safe-left)
+    padding-right var(--safe-right)
 
     &.has-home-banner
       max-width $navbar-width-home
@@ -298,6 +301,7 @@ $logo-image-box-width = 34px
 
   .navbar-drawer
     padding $navbar-height 0 20px 0
+    padding-bottom unquote('calc(20px + var(--safe-bottom))')
     transform translateX(100%)
     transform-origin top
     z-index $z-index-2

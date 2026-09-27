@@ -1,6 +1,9 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <%# A browser keeps the brand colour; an installed app's status bar takes the
+        page's background (the script below) — colors.styl's light and dark ones. %>
+    <meta name="theme-color" content="<%= theme.colors.primary %>" data-light="#ffffff" data-dark="#202124">
     <meta name="keywords" content="<%= page.keywords || config.keywords || 'Hexo Theme Redefine' %>">
     <% if (!theme.global.open_graph) { %>
         <meta name="description" content="<%= page.description || config.description || 'Hexo Theme Redefine' %>">
@@ -12,7 +15,20 @@
         (function() {
             const THEME_KEY = "REDEFINE-X-STATUS";
             const DARK = "dark", LIGHT = "light";
-            
+
+            // An installed app runs edge to edge — the page fills the strip under
+            // the home indicator or gesture bar — and paints its status bar in the
+            // page's colour. The top edge cannot be drawn under on Android, nor on
+            // iOS without black-translucent, which WebKit bug 301108 breaks.
+            const app = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+            const bar = document.querySelector('meta[name="theme-color"]');
+            if (app) {
+                document.querySelector('meta[name="viewport"]').content += ", viewport-fit=cover";
+                window.addEventListener("redefine:color-scheme-change", (e) => {
+                    bar.content = bar.dataset[e.detail.isDark ? DARK : LIGHT];
+                });
+            }
+
             // Get preferred theme
             function getTheme() {
                 try {
@@ -35,6 +51,7 @@
                 root.classList.add(theme);
                 root.classList.remove(isDark ? LIGHT : DARK);
                 root.style.colorScheme = theme;
+                if (app) bar.content = bar.dataset[theme];
             }
             
             // Initial application
@@ -121,7 +138,6 @@
         <link rel="icon" type="image/png" sizes="192x192" href="<%= pwa.icon %>">
     <% } %>
     <link rel="apple-touch-icon" sizes="180x180" href="<%= pwa.touch || url_for(theme.defaults.favicon) %>">
-    <meta name="theme-color" content="<%= theme.colors.primary %>">
     <%- favicon_tag(theme.defaults.favicon) %>
     <%# The installable app. iOS delivers Web Push only to a site installed to the
         Home Screen, and a site cannot be installed without a manifest. %>

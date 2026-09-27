@@ -19,6 +19,9 @@
 
   .main-content-container
     padding-top $navbar-height
+    // The notch side of a landscape phone, in the installed app (basic.styl).
+    padding-left var(--safe-left)
+    padding-right var(--safe-right)
     position relative
     transition padding 0.2s ease
 
@@ -114,7 +117,7 @@
   .post-tools
     position fixed
     top: $navbar-height + $spacing-unit
-    right $spacing-unit
+    right unquote('calc(' + $spacing-unit + ' + var(--safe-right))')
     transition-t('top', '0', '0.2', 'ease')
 
     .navbar-shrink &
@@ -128,7 +131,7 @@
 
     +redefine-tablet()
       top: ($navbar-height * 0.9 + $spacing-unit)
-      right 10px
+      right unquote('calc(10px + var(--safe-right))')
       transform scale(0.82)
       transform-origin right top
 
@@ -140,8 +143,8 @@
 
   .right-side-tools-container
     position fixed
-    bottom 5%
-    right $spacing-unit
+    bottom unquote('calc(5% + var(--safe-bottom))')
+    right unquote('calc(' + $spacing-unit + ' + var(--safe-right))')
     opacity 1
     transition opacity 0.2s ease
 
@@ -151,4 +154,4 @@
       transition opacity 0.2s ease
 
     +redefine-mobile()
-      right 12px
+      right unquote('calc(12px + var(--safe-right))')
