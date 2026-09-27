@@ -986,6 +986,8 @@ editor:
   pick_use_many: "添加 {n} 张图片"
   pick_one_only: 一次只能使用一张图片
   pick_unused: 未发布（尚无引用）
+  pick_unused_preview: 这张图片尚未被任何地方引用，因此没有发布，无法预览。使用并保存后，构建会将其发布。
+  file_too_large: "{name} 超过 100 MB，GitHub 不接受这么大的单个文件。"
   edit_album: 编辑这个相册
   no_album: 这个相册不在你可写入的仓库里。
   editing_draft_album: 你正在编辑挡在这个相册前面的草稿。

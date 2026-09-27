@@ -1,11 +1,11 @@
 /**
- * The GitHub side of a save: three requests, one commit, one branch.
+ * The GitHub side of a save: a blob per part, then one tree, one commit, one branch.
  *
  * What used to be here was a whole repository client — listings, blob reads,
  * conflict detection against a tree, a commit that assembled dozens of files
  * into the source of the site. None of it is needed: the editor reads from the
- * published site now, and what it writes is ONE sealed payload that only the
- * runner can open.
+ * published site now, and what it writes is ONE sealed save, in parts, that
+ * only the runner can open.
  *
  * ── Why the queue branch is rewritten rather than appended to ───────────────
  *
@@ -29,7 +29,18 @@
  * can write.
  */
 
-const PAYLOAD = "payload.bin";
+/**
+ * A save is sealed in PARTS, each its own blob, all in one commit.
+ *
+ * `POST /git/blobs` refuses a request past roughly 42 MB of raw bytes —
+ * "Sorry, your input was too large to process" — however far below git's own
+ * 100 MB file limit the blob is. 24 MiB a part keeps every request well under
+ * it, and is also the unit a dropped connection costs: a part is retried, not
+ * the save.
+ */
+export const PART_BYTES = 24 * 1024 * 1024;
+
+const partName = (i) => `payload.${String(i).padStart(3, "0")}.bin`;
 
 function url(repo, path) {
   return `${String(repo.api).replace(/\/+$/, "")}/repos/${repo.owner}/${repo.repo}${path}`;
@@ -73,18 +84,19 @@ async function call(repo, path, init, reader) {
 }
 
 /**
- * The blob upload, as the one request whose size is the save's: an XHR, because
- * fetch reports no upload progress and the publish rail fills with these bytes.
+ * One blob upload: an XHR, because fetch reports no upload progress and the
+ * publish rail fills with these bytes. `retry` says whether trying again could
+ * help — a dropped connection, a 5xx or a rate limit, never a refusal.
  */
-function upload(repo, path, body, onProgress) {
+function upload(repo, body, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", url(repo, path));
+    xhr.open("POST", url(repo, "/git/blobs"));
     xhr.setRequestHeader("Authorization", "Bearer " + repo.token);
     for (const [name, value] of Object.entries(HEADERS)) xhr.setRequestHeader(name, value);
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && onProgress) onProgress(event.loaded, event.total);
+      if (event.lengthComputable && onProgress) onProgress(event.loaded);
     };
     xhr.onload = () => {
       let data = {};
@@ -93,11 +105,70 @@ function upload(repo, path, body, onProgress) {
       } catch {}
       if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
       if (xhr.status === 401) return reject(Object.assign(new Error("github rejected the token"), { status: 401 }));
-      reject(new Error(data.message || `upload the save failed (${xhr.status})`));
+      const limited = xhr.status === 429 || (xhr.status === 403 && /rate limit/i.test(data.message || ""));
+      reject(
+        Object.assign(new Error(data.message || `upload the save failed (${xhr.status})`), {
+          retry: limited || xhr.status >= 500,
+          wait: Number(xhr.getResponseHeader("Retry-After")) || 0,
+        })
+      );
     };
-    xhr.onerror = () => reject(new Error("upload the save failed: the network dropped it"));
+    xhr.onerror = () =>
+      reject(Object.assign(new Error("upload the save failed: the network dropped it"), { retry: true }));
     xhr.send(body);
   });
+}
+
+/** Base64 without a megabyte-long string built a character at a time. */
+function toBase64(bytes) {
+  if (typeof bytes.toBase64 === "function") return Promise.resolve(bytes.toBase64());
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(",") + 1));
+    reader.onerror = () => reject(reader.error || new Error("could not encode the save"));
+    reader.readAsDataURL(new Blob([bytes]));
+  });
+}
+
+/** What one part costs on the wire, for a progress bar that is right before it starts. */
+const wireSize = (bytes) => 4 * Math.ceil(bytes.length / 3) + 40;
+
+const RETRIES = [2000, 6000, 15000];
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * Every part, one after another, each retried on its own. Sequential because
+ * the connection is the bottleneck either way, and GitHub throttles bursts of
+ * content creation. A part's bytes are released once GitHub holds them.
+ *
+ * @returns {Promise<string[]>} the blob shas, in part order
+ */
+export async function uploadParts(repo, parts, onProgress) {
+  const sizes = parts.map(wireSize);
+  const total = sizes.reduce((a, b) => a + b, 0);
+  let sent = 0;
+  const shas = [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const content = await toBase64(parts[i]);
+    const body = new Blob(['{"encoding":"base64","content":"', content, '"}'], { type: "application/json" });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const blob = await upload(repo, body, (loaded) => onProgress && onProgress(sent + Math.min(loaded, sizes[i]), total));
+        shas.push(blob.sha);
+        break;
+      } catch (err) {
+        if (!err.retry || attempt >= RETRIES.length) {
+          throw parts.length > 1 ? new Error(`part ${i + 1} of ${parts.length}: ${err.message}`) : err;
+        }
+        await sleep(Math.max(RETRIES[attempt], err.wait * 1000));
+      }
+    }
+    sent += sizes[i];
+    parts[i] = null;
+    if (onProgress) onProgress(sent, total);
+  }
+  return shas;
 }
 
 async function json(repo, path, init, what) {
@@ -110,23 +181,23 @@ async function json(repo, path, init, what) {
 }
 
 /**
- * Push one sealed payload onto the queue branch.
+ * Put the uploaded parts on the queue branch as one commit.
  *
  * Rootless on purpose: `parents: []` means the branch carries this save and
  * nothing before it, so a refused save leaves no history to unpick and the
- * runner's checkout of it is one file deep.
+ * runner's checkout of it is only the parts.
  */
-export async function pushQueue(repo, base64, message, onProgress) {
+export async function pushQueue(repo, shas, message) {
   const branch = repo.queue || "editor-queue";
-
-  const blob = await upload(repo, "/git/blobs", JSON.stringify({ content: base64, encoding: "base64" }), onProgress);
 
   const tree = await json(
     repo,
     "/git/trees",
     {
       method: "POST",
-      body: JSON.stringify({ tree: [{ path: PAYLOAD, mode: "100644", type: "blob", sha: blob.sha }] }),
+      body: JSON.stringify({
+        tree: shas.map((sha, i) => ({ path: partName(i), mode: "100644", type: "blob", sha })),
+      }),
     },
     "build the save"
   );

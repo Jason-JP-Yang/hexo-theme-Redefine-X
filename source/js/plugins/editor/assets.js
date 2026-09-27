@@ -219,7 +219,7 @@ function routeFor(src) {
 }
 
 /** Listed with no route: the build found nothing using it and published nothing. */
-function unpublished(src) {
+export function unpublished(src) {
   const row = record(src);
   return !!row && !row[0];
 }
@@ -427,11 +427,10 @@ export function bindImage(img, src, list) {
   }
 
   img.dataset.edSrc = value;
-  // Nothing on the site to ask for: straight to the repository.
+  // Unused, so published nowhere — and the site is the only place the editor
+  // reads bytes from. Nothing to ask for until a save makes it used.
   if (!staged(here(value), list) && unpublished(here(value))) {
-    repoURL(value, list).then((url) => {
-      if (img.dataset.edSrc === value) settle(url);
-    });
+    img.dataset.ready = "err";
     return;
   }
   img.onerror = () => {

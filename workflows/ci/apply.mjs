@@ -25,7 +25,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { open, postId, master, unwrapSubmission, fromB64url } from "./lib/vault.mjs";
+import { open, postId, master, unwrapSubmission, fromB64url, readParts, openSave } from "./lib/vault.mjs";
 import { merge as mergeAlbums } from "./lib/masonry.mjs";
 
 /* ─── what may be written at all ───────────────────────────────────────────── */
@@ -60,13 +60,8 @@ const DRAFT = /\.draft\.md$/;
  * what refused a collaborator the one thing the Worker had just issued them a
  * claim row for — creating something of their own.
  */
-function draftBody(data) {
-  let text = "";
-  try {
-    text = Buffer.from(String(data || ""), "base64").toString("utf8");
-  } catch {
-    return false;
-  }
+function draftBody(bytes) {
+  const text = bytes ? bytes.toString("utf8") : "";
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   return !!front && /^draft:\s*(true|yes|on|1)\s*$/im.test(front[1]);
 }
@@ -81,6 +76,9 @@ const ASSET = /^source\/(images|masonry)\/.+\.[a-z0-9]+$/i;
 // appending a note. The picker only ever moves pictures, so nothing legitimate
 // is outside this.
 const MOVABLE = /^source\/(?:images|masonry)\//;
+// GitHub refuses any file over 100 MiB in a push, and this tree is pushed back
+// to the source after the build — refused here, before anything is written.
+const FILE_MAX = 100 * 1024 * 1024;
 
 /* ─── arguments ────────────────────────────────────────────────────────────── */
 
@@ -107,13 +105,15 @@ try {
   refuse("the submission key was not issued by this deployment");
 }
 
+// `--payload` is the queue checkout, or its `payload.bin` as older workflows
+// pass it; a save in parts has none, and lib/vault.mjs looks beside it.
 let payload;
 try {
-  payload = JSON.parse(open(key, fs.readFileSync(args.payload)).toString("utf8"));
+  payload = openSave(key, readParts(args.payload));
 } catch {
   refuse("the payload does not open under the key the receipt issued");
 }
-if (payload.v !== 1) refuse(`unknown payload version ${payload.v}`);
+if (payload.v !== 1 && payload.v !== 2) refuse(`unknown payload version ${payload.v}`);
 
 const files = Array.isArray(payload.files) ? payload.files : [];
 if (!files.length) refuse("the payload changes nothing");
@@ -144,6 +144,8 @@ for (const file of files) {
   if (!rel) refuse("an operation carries no path");
   if (FORBIDDEN.some((re) => re.test(rel))) refuse(`${rel} is protected`);
   if (op !== "write" && op !== "delete" && op !== "append") refuse(`${rel}: unknown operation ${op}`);
+  const bytes = file.bytes || Buffer.alloc(0);
+  if (bytes.length > FILE_MAX) refuse(`${rel} is over 100 MB, which GitHub will not take`);
 
   // ── the picture-move journal ─────────────────────────────────────────────
   //
@@ -156,7 +158,7 @@ for (const file of files) {
     if (op !== "append") refuse("the picture-move journal may only be appended to");
     let notes;
     try {
-      notes = JSON.parse(Buffer.from(String(file.data || ""), "base64").toString("utf8"));
+      notes = JSON.parse(bytes.toString("utf8"));
     } catch {
       refuse("the picture-move notes are not readable");
     }
@@ -193,7 +195,6 @@ for (const file of files) {
   // creates.
   if (rel === KEYRING) {
     if (op !== "write") refuse("the keyring may not be deleted");
-    const bytes = Buffer.from(String(file.data || ""), "base64");
     try {
       JSON.parse(open(master(), fromB64url(bytes.toString("utf8").trim())).toString("utf8"));
     } catch {
@@ -218,7 +219,7 @@ for (const file of files) {
       merged = mergeAlbums(
         yaml,
         before.toString("utf8"),
-        Buffer.from(String(file.data || ""), "base64").toString("utf8"),
+        bytes.toString("utf8"),
         allowed,
         admin
       );
@@ -249,11 +250,11 @@ for (const file of files) {
       // and refusing it was the hole that made a collaborator unable to start
       // anything at all.
       if (op === "delete") refuse(`only an admin may unpublish ${rel}`);
-      if (!exists && !draftBody(file.data)) refuse(`only an admin may publish a new article (${rel})`);
+      if (!exists && !draftBody(bytes)) refuse(`only an admin may publish a new article (${rel})`);
     }
 
     if (op === "delete") deletes.push({ rel });
-    else writes.push({ rel, bytes: Buffer.from(String(file.data || ""), "base64") });
+    else writes.push({ rel, bytes });
     continue;
   }
 
@@ -267,7 +268,7 @@ for (const file of files) {
     if (!allowed.has(id)) refuse(`${rel} names an owner this save was not cleared for`);
     owners.add(id);
     if (op === "delete") deletes.push({ rel });
-    else writes.push({ rel, bytes: Buffer.from(String(file.data || ""), "base64") });
+    else writes.push({ rel, bytes });
     continue;
   }
 

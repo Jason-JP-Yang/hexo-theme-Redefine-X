@@ -41,7 +41,8 @@
 #
 # ── Why a save is DISPATCHED rather than pushed into a run ──────────────────
 #
-# A save is a rootless commit holding one file. GitHub runs a push-triggered
+# A save is a rootless commit holding its sealed parts (payload.NNN.bin — one
+# blob each, since GitHub's blob API refuses a request past ~42 MB). GitHub runs a push-triggered
 # workflow from the workflow file in the PUSHED commit's tree — and that commit
 # has none, so pushing a save started nothing at all. Dispatching runs the
 # workflow from `main`, which is also the only copy of it the editor's token can
@@ -268,7 +269,7 @@ jobs:
           RDFX_EDITOR_PUBKEY: ${{ vars.RDFX_EDITOR_PUBKEY }}
         run: |
           git -C queue log -1 --format=%B > "${RUNNER_TEMP}/message.txt"
-          node verifier/ci/verify-receipt.mjs queue/payload.bin "${RUNNER_TEMP}/message.txt"
+          node verifier/ci/verify-receipt.mjs queue "${RUNNER_TEMP}/message.txt"
 
       - name: Clear a save that did not verify
         if: failure() && inputs.reason == 'editor'
@@ -367,7 +368,7 @@ jobs:
         run: |
           WRAPPED=$(git -C queue log -1 --format=%B | grep -iE '^Editor-Key:' | tail -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '[:space:]')
           node src/themes/redefine-x/workflows/ci/apply.mjs \
-            --payload queue/payload.bin \
+            --payload queue \
             --wrapped "$WRAPPED" \
             --ids '${{ needs.verify.outputs.ids }}' \
             --admin '${{ needs.verify.outputs.admin }}' \

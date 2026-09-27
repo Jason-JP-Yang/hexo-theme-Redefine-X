@@ -683,7 +683,7 @@ export async function save(doc, mode, pending, choice, stage) {
   // to move, so the rename can only happen by committing it under the new name.
   for (const asset of pending || []) {
     const at = stage ? stage.resolve(asset.path) : asset.path;
-    files.push({ operation: "create", path: at, content: repo.toBase64(asset.bytes) });
+    files.push({ operation: "create", path: at, bytes: asset.bytes });
   }
   files.push(...(await movedFiles(stage)));
 

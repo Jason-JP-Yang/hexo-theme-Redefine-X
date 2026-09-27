@@ -2326,7 +2326,7 @@ async function onCanvasDrop(e) {
   for (const file of files) {
     if (!file.type.startsWith("image/")) continue;
     const asset = await stageImage(file);
-    insertBlock(makeBlock("image", { url: asset.site, alt: "" }), null, false);
+    if (asset) insertBlock(makeBlock("image", { url: asset.site, alt: "" }), null, false);
   }
 }
 
@@ -2469,6 +2469,11 @@ function dropStaged(origins, where) {
  * `quiet` leaves the step to the caller, which is staging several at once.
  */
 async function stageImage(file, dir, quiet) {
+  // Said now, not at the save: GitHub takes no single file over 100 MB.
+  if (file.size > repo.FILE_MAX) {
+    notice("error", t("file_too_large", "{name} is over 100 MB - GitHub takes no single file that large.").replace("{name}", file.name));
+    return null;
+  }
   const bytes = new Uint8Array(await file.arrayBuffer());
   let path = await repo.assetPath(file.name, bytes);
   // The picker says which folder is open; a paste or a drop has no opinion and
@@ -3724,7 +3729,7 @@ async function onCanvasPaste(e) {
     if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
     e.preventDefault();
     const asset = await stageImage(item.getAsFile());
-    insertBlock(makeBlock("image", { url: asset.site, alt: "" }), state.focused ? state.focused.block.id : null, false);
+    if (asset) insertBlock(makeBlock("image", { url: asset.site, alt: "" }), state.focused ? state.focused.block.id : null, false);
     return;
   }
 }

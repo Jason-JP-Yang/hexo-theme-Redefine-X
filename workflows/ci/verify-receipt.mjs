@@ -14,22 +14,22 @@
  *   2. The receipt has not expired. A receipt lifted out of a public commit is
  *      worthless within the half hour, and a replay of one inside its window
  *      can only ever re-apply the same payload, because —
- *   3. — the sha256 of the sealed payload is what the receipt names. A payload
- *      swapped for another under a valid receipt fails here.
+ *   3. — the digest of the sealed payload is what the receipt names (for a save
+ *      in parts, the sha256 of every part's sha256). A payload swapped, or a
+ *      part dropped, added or reordered, under a valid receipt fails here.
  *   4. The one-time key opens under VAULT_MASTER. A payload sealed with a key
  *      this deployment did not issue cannot be opened, so it cannot be applied.
  *
  * What it does NOT check is which files the payload touches. That is apply.mjs,
  * because it needs the private repository in hand to know which albums changed.
  *
- * Usage:  node ci/verify-receipt.mjs <payload-file> <message-file>
+ * Usage:  node ci/verify-receipt.mjs <queue-checkout | payload-file> <message-file>
  * Writes a one-line JSON verdict to stdout and the outputs GitHub Actions needs
  * to $GITHUB_OUTPUT.
  */
 
 import fs from "node:fs";
-import crypto from "node:crypto";
-import { trailer, verifyEd25519, unwrapSubmission } from "./lib/vault.mjs";
+import { trailer, verifyEd25519, unwrapSubmission, readParts, saveDigest } from "./lib/vault.mjs";
 
 // How long a receipt is worth anything, plus a minute of clock drift between
 // the Worker and this runner. Must not be shorter than the Worker's own TTL.
@@ -77,8 +77,12 @@ const age = Math.floor(Date.now() / 1000) - Number(receipt.ts || 0);
 if (!Number.isFinite(age) || age < -120) refuse("the receipt is dated in the future");
 if (age > MAX_AGE_S) refuse(`the receipt expired ${age - MAX_AGE_S}s ago`);
 
-const sealed = fs.readFileSync(payloadFile);
-const digest = crypto.createHash("sha256").update(sealed).digest("hex");
+let digest = "";
+try {
+  digest = saveDigest(readParts(payloadFile));
+} catch (err) {
+  refuse(err.message);
+}
 if (digest !== String(receipt.hash)) refuse("the payload is not the one the receipt was issued for");
 
 // Unwrapped and then thrown away. The key is never an output and never a file:

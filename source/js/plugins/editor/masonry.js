@@ -1115,6 +1115,11 @@ async function pickImage(current, browse, multiple) {
  * post editor's `source/images/posts/`.
  */
 async function stageImage(file, dir, quiet) {
+  // Said now, not at the save: GitHub takes no single file over 100 MB.
+  if (file.size > repo.FILE_MAX) {
+    notice("error", t("file_too_large", "{name} is over 100 MB - GitHub takes no single file that large.").replace("{name}", file.name));
+    return null;
+  }
   const bytes = new Uint8Array(await file.arrayBuffer());
   let path = await repo.assetPath(file.name, bytes);
   const home = dir || defaultFolder();
@@ -2333,7 +2338,7 @@ async function buildCommit(mode) {
   const files = state.pending.map((asset) => ({
     operation: "create",
     path: state.stage.resolve(asset.path),
-    content: repo.toBase64(asset.bytes),
+    bytes: asset.bytes,
     owner: owners[0] || "",
   }));
   files.push({

@@ -1194,6 +1194,19 @@ export function openPicker(ctx, opts = {}) {
       `<i class="fa-solid fa-images" aria-hidden="true"></i>` +
       escapeHTML(t("pick_hint", "Choose a picture, or drag one onto a folder to move it."));
 
+    // An unused picture is published nowhere, and the site is the only place
+    // the editor reads bytes from — so it is said, not shown as a broken plate.
+    const unseen = document.createElement("p");
+    unseen.className = "ed-pick-blank";
+    unseen.innerHTML =
+      `<i class="fa-solid fa-eye-slash" aria-hidden="true"></i>` +
+      escapeHTML(
+        t(
+          "pick_unused_preview",
+          "Not published because nothing uses it, so there is nothing to preview. Use it and save, and the build publishes it."
+        )
+      );
+
     // Below this there is no picture worth looking at, only a strip of one.
     // The pane is then the file's details alone, which is the right answer on a
     // phone with the tree pulled most of the way down.
@@ -1341,6 +1354,7 @@ export function openPicker(ctx, opts = {}) {
         shape = null;
         if (old) old.remove();
         blank.remove();
+        unseen.remove();
         delete stage.dataset.empty;
         stage.hidden = true;
         meta.innerHTML = "";
@@ -1349,17 +1363,22 @@ export function openPicker(ctx, opts = {}) {
       many.hidden = true;
       many.innerHTML = "";
 
-      if (!one) {
+      // A note in place of the picture: the hint when nothing is chosen, or why
+      // an unused one cannot be shown.
+      const note = !one ? blank : (nodes.get(one) || {}).unused ? unseen : null;
+      if (note) {
         shape = null;
         if (old) old.remove();
+        (note === blank ? unseen : blank).remove();
         stage.hidden = false;
-        if (!blank.isConnected) stage.appendChild(blank);
+        if (!note.isConnected) stage.appendChild(note);
         stage.dataset.empty = "1";
-        meta.innerHTML = "";
+        meta.innerHTML = one ? factsOf(one, sizeOf(one)) : "";
         return void travel(before);
       }
 
       blank.remove();
+      unseen.remove();
       delete stage.dataset.empty;
 
       const size = sizeOf(one);

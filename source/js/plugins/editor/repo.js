@@ -38,9 +38,19 @@ import {
   vaultPrefix,
 } from "../../tools/vaultCrypto.js";
 
+import { fromBase64 } from "./repo-bytes.js";
+
 export { toBase64, fromBase64, decodeText } from "./repo-bytes.js";
 
 const TICKET_MS = 90 * 60 * 1000;
+
+// GitHub refuses any single file over 100 MiB in a push, and the runner's push
+// of the source happens AFTER the build — so such a file is refused up front.
+export const FILE_MAX = 100 * 1024 * 1024;
+
+// A receipt is good for half an hour at the runner, counted from its signing.
+// One older than this once the parts are up is issued again for the same bytes.
+const RECEIPT_FRESH_MS = 10 * 60 * 1000;
 
 const POSTS_DIR = "source/_posts";
 const MASONRY = "source/_data/masonry.yml";
@@ -400,13 +410,8 @@ async function ownerOf(file) {
  * which is what stopped a collaborator from ever creating one, however clearly
  * the body said `draft: true`.
  */
-function draftBody(content) {
-  let text = "";
-  try {
-    text = atob(String(content || ""));
-  } catch (err) {
-    return false;
-  }
+function draftBody(bytes) {
+  const text = bytes ? new TextDecoder().decode(bytes) : "";
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   return !!front && /^draft:\s*(true|yes|on|1)\s*$/im.test(front[1]);
 }
@@ -419,14 +424,14 @@ function draftBody(content) {
  * off the files rather than off the caller's intent, so the same test runs
  * whichever surface asked, and refused again at the Worker and at the runner.
  */
-function publishes(files) {
+function publishes(files, bytesOf) {
   return files.some((file) => {
     const rel = String(file.path || "");
     if (!rel.startsWith(POSTS_DIR + "/") || !/\.md$/i.test(rel) || /\.draft\.md$/i.test(rel)) {
       return false;
     }
     // A new article that is still a draft changes nothing the site shows.
-    if (file.operation === "create" && draftBody(file.content)) return false;
+    if (file.operation === "create" && draftBody(bytesOf.get(file))) return false;
     return file.operation === "create" || file.operation === "delete";
   });
 }
@@ -434,15 +439,30 @@ function publishes(files) {
 /**
  * One save: sealed, signed, and pushed to a branch of its own.
  *
- * `files` is the same shape every caller already builds —
- * `[{ operation, path, content, sha }]` with `content` already base64 — so a
+ * `files` is `[{ operation, path, content | bytes, sha }]` — `content` base64,
+ * or `bytes` for a picture, which then never goes through base64 at all — so a
  * post, its pictures and the keyring that opens it travel together and the
  * runner applies all of them or none.
+ *
+ * However large the save, it is ONE commit and ONE run: sealed in parts small
+ * enough for GitHub's blob endpoint (see repo-github.js), uploaded one part at
+ * a time, and put on the queue branch together.
  */
 export async function commit(files, message) {
+  const bytesOf = new Map();
   for (const file of files) {
     const bad = checkPath(file.path);
     if (bad) throw Object.assign(new Error(bad), { path: file.path, kind: "path" });
+    if (file.operation === "delete") continue;
+    const bytes = file.bytes instanceof Uint8Array ? file.bytes : fromBase64(file.content);
+    if (bytes.length > FILE_MAX) {
+      const name = String(file.path).split("/").pop();
+      throw Object.assign(
+        new Error(`${name} is ${(bytes.length / 1048576).toFixed(1)} MB — GitHub takes no single file over 100 MB`),
+        { path: file.path, kind: "size" }
+      );
+    }
+    bytesOf.set(file, bytes);
   }
 
   await ready();
@@ -470,41 +490,32 @@ export async function commit(files, message) {
   const [first] = owners;
   if (!first) throw new Error("this save names nothing that can be checked");
 
-  const payload = JSON.stringify({
-    v: 1,
-    message: String(message || ""),
-    files: files.map((file) => {
-      const owner = resolved.get(file);
-      const one = Array.isArray(owner) ? owner[0] : owner;
-      return {
-        op: file.operation === "delete" ? "delete" : file.operation === "append" ? "append" : "write",
-        path: String(file.path).replace(/^\/+/, ""),
-        owner: one || first,
-        ...(file.operation === "delete" ? {} : { data: file.content }),
-      };
-    }),
+  const entries = files.map((file) => {
+    const owner = resolved.get(file);
+    const one = Array.isArray(owner) ? owner[0] : owner;
+    return {
+      op: file.operation === "delete" ? "delete" : file.operation === "append" ? "append" : "write",
+      path: String(file.path).replace(/^\/+/, ""),
+      owner: one || first,
+      bytes: bytesOf.get(file) || null,
+    };
   });
 
   const key = crypto.getRandomValues(new Uint8Array(32));
-  const sealed = await sealPayload(key, payload);
-  const hash = await sha256Bytes(sealed);
+  const parts = await sealParts(key, packSave(message, entries));
+  const hash = await saveDigest(parts);
+  const publish = publishes(files, bytesOf);
 
-  const { base, headers } = await auth();
-  const res = await fetch(base + "/api/editor/submit", {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      owners: Array.from(owners),
-      hash,
-      key: bytesToB64url(key),
-      publish: publishes(files),
-    }),
+  // Asked BEFORE the upload, so a save this identity may not make is refused
+  // before a byte of it is sent — and again after a long one, for the same
+  // bytes, so the run is never handed a receipt that expires while it queues.
+  let receipt = await clearSave(owners, hash, key, publish);
+  const issued = Date.now();
+
+  const shas = await githubDriver.uploadParts(repo, parts, (loaded, total) => {
+    if (commitWatcher && total) commitWatcher(loaded / total);
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || "this save was not authorised");
-  }
-  const receipt = await res.json();
+  if (Date.now() - issued > RECEIPT_FRESH_MS) receipt = await clearSave(owners, hash, key, publish);
 
   // Whose work this is. The receipt already names the identity the Worker
   // verified — that is what the runner reads — so this trailer is the ordinary
@@ -516,14 +527,12 @@ export async function commit(files, message) {
     `Editor-Key: ${receipt.wrapped}\n` +
     (me ? `Co-authored-by: ${me.name} <${me.email}>\n` : "");
 
-  const result = await githubDriver.pushQueue(repo, bytesToB64(sealed), `${message}\n\n${trailers}`, (loaded, total) => {
-    if (commitWatcher && total) commitWatcher(loaded / total);
-  });
+  const result = await githubDriver.pushQueue(repo, shas, `${message}\n\n${trailers}`);
   textCache = new Map();
 
   // ── start the run the save cannot start by itself ─────────────────────────
   //
-  // The commit just pushed is ROOTLESS and holds one file, so nothing happens
+  // The commit just pushed is ROOTLESS and holds only the save's parts, so nothing happens
   // when GitHub sees it: a push-triggered workflow is taken from the pushed
   // commit's own tree, and that tree has no workflow in it. The Worker starts
   // the run instead, from `main`, naming this exact commit — the page cannot,
@@ -539,6 +548,7 @@ export async function commit(files, message) {
   let started = false;
   let why = "";
   try {
+    const { base, headers } = await auth();
     const res = await fetch(base + "/api/editor/dispatch", {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
@@ -577,16 +587,59 @@ async function refuseWhileBuilding(repo) {
 
 /* ─── sealing ──────────────────────────────────────────────────────────────── */
 
-async function sealPayload(rawKey, text) {
-  const key = await crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt"]);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const body = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text))
+/**
+ * The save as bytes (version 2): a 4-byte big-endian header length, the header
+ * as JSON, then every file's bytes back to back in header order. Version 1 put
+ * each file into the JSON as base64, which the upload then base64'd again — 1.78
+ * bytes on the wire for every byte of photograph. workflows/ci/lib/vault.mjs
+ * `openSave` reads both.
+ *
+ * Returned as segments rather than one array: the parts are cut straight from
+ * them, so the whole save never exists twice in memory.
+ */
+function packSave(message, entries) {
+  const header = new TextEncoder().encode(
+    JSON.stringify({
+      v: 2,
+      message: String(message || ""),
+      files: entries.map(({ bytes, ...rest }) => ({ ...rest, size: bytes ? bytes.length : 0 })),
+    })
   );
-  const out = new Uint8Array(iv.length + body.length);
-  out.set(iv, 0);
-  out.set(body, iv.length);
-  return out;
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, header.length);
+  return [length, header, ...entries.filter((e) => e.bytes && e.bytes.length).map((e) => e.bytes)];
+}
+
+/** Each part `iv ‖ ciphertext ‖ tag` under the save's one key, like v1's single blob. */
+async function sealParts(rawKey, segments) {
+  const key = await crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["encrypt"]);
+  const total = segments.reduce((n, s) => n + s.length, 0);
+  const parts = [];
+  let at = 0;
+  let within = 0;
+
+  for (let start = 0; start < total; start += githubDriver.PART_BYTES) {
+    const plain = new Uint8Array(Math.min(githubDriver.PART_BYTES, total - start));
+    for (let filled = 0; filled < plain.length; ) {
+      const segment = segments[at];
+      const take = Math.min(segment.length - within, plain.length - filled);
+      plain.set(segment.subarray(within, within + take), filled);
+      filled += take;
+      within += take;
+      if (within === segment.length) {
+        at += 1;
+        within = 0;
+      }
+    }
+
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain));
+    const part = new Uint8Array(iv.length + body.length);
+    part.set(iv, 0);
+    part.set(body, iv.length);
+    parts.push(part);
+  }
+  return parts;
 }
 
 async function sha256Bytes(bytes) {
@@ -596,14 +649,31 @@ async function sha256Bytes(bytes) {
     .join("");
 }
 
-/** Base64 for the wire, in chunks — a megabyte of photographs in one
- *  `String.fromCharCode(...bytes)` overflows the argument stack. */
-function bytesToB64(bytes) {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+/**
+ * What the receipt is issued against: the sha256 of every part's sha256, one
+ * per line, in part order — so a part dropped, added, reordered or altered is
+ * a different save. Hashed part by part, which is what lets a save of any size
+ * be hashed without being joined first.
+ */
+async function saveDigest(parts) {
+  const each = [];
+  for (const part of parts) each.push(await sha256Bytes(part));
+  return sha256Bytes(new TextEncoder().encode(each.join("\n")));
+}
+
+/** The Worker's receipt for this save — asked for with a session fresh each time. */
+async function clearSave(owners, hash, key, publish) {
+  const { base, headers } = await auth();
+  const res = await fetch(base + "/api/editor/submit", {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ owners: Array.from(owners), hash, key: bytesToB64url(key), publish }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "this save was not authorised");
   }
-  return btoa(bin);
+  return res.json();
 }
 
 /* ─── where the build has got to ───────────────────────────────────────────── */
