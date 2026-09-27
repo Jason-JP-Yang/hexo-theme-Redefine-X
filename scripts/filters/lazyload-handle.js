@@ -9,9 +9,9 @@
 
 const fs = require("fs");
 const path = require("path");
-const imageSize = require("image-size");
 const http = require("http");
 const https = require("https");
+const { measureFile, measureBuffer } = require("../lib/image-dims");
 
 const DEFAULT_FALLBACK_DIMENSIONS = { width: 1000, height: 500 };
 const REMOTE_MAX_BYTES = 12 * 1024 * 1024; // 12MB safety cap
@@ -30,6 +30,30 @@ function escapeHtmlAttr(value) {
 
 function stripQueryAndHash(url) {
   return String(url).split("#")[0].split("?")[0];
+}
+
+/** An attribute value as written in HTML — `&amp;` in a file name is `&`. */
+function decodeEntities(value) {
+  return String(value)
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/** `https://<this site>/images/x.png` is a local file, not a download. */
+function ownSitePath(src) {
+  const site = String(hexo.config.url || "").replace(/\/+$/, "");
+  if (!site) return null;
+  const bare = site.replace(/^https?:/i, "");
+  const s = String(src);
+  for (const prefix of [site, bare]) {
+    if (prefix && s.toLowerCase().startsWith(prefix.toLowerCase() + "/")) return s.slice(prefix.length);
+  }
+  return null;
 }
 
 function normalizeRemoteUrl(src) {
@@ -122,35 +146,27 @@ async function getImageDimensions(src, imgTag, data) {
   const fromTag = tryGetDimensionsFromTag(imgTag);
   if (fromTag) return fromTag;
 
-  const s = String(src).trim();
+  const s = decodeEntities(String(src).trim());
 
-  if (s.startsWith("data:")) {
-    const buffer = decodeDataUrlToBuffer(s);
-    if (buffer) {
-      try {
-        const size = imageSize(buffer);
-        if (size && size.width && size.height) return { width: size.width, height: size.height };
-      } catch {
-        // ignore
-      }
-    }
-    return null;
-  }
+  if (s.startsWith("data:")) return measureBuffer(decodeDataUrlToBuffer(s));
 
   if (s.startsWith("blob:")) return null;
+
+  // This site's own absolute address is a file on this disk. Asking the network
+  // for it measured nothing on a runner, offline, or before the first deploy.
+  const own = ownSitePath(s);
+  if (own) {
+    const local = resolveLocalImagePath(own, data);
+    if (local) {
+      const size = await measureFile(local);
+      if (size) return size;
+    }
+  }
 
   if (/^https?:\/\//i.test(s) || s.startsWith("//")) {
     const normalized = normalizeRemoteUrl(s);
     if (!remoteSizeCache.has(normalized)) {
-      remoteSizeCache.set(
-        normalized,
-        (async () => {
-          const buffer = await fetchUrlBuffer(normalized);
-          const size = imageSize(buffer);
-          if (size && size.width && size.height) return { width: size.width, height: size.height };
-          return null;
-        })(),
-      );
+      remoteSizeCache.set(normalized, fetchUrlBuffer(normalized).then(measureBuffer));
     }
 
     try {
@@ -161,16 +177,7 @@ async function getImageDimensions(src, imgTag, data) {
   }
 
   const localPath = resolveLocalImagePath(s, data);
-  if (localPath) {
-    try {
-      const size = imageSize(localPath);
-      if (size && size.width && size.height) return { width: size.width, height: size.height };
-    } catch {
-      // ignore
-    }
-  }
-
-  return null;
+  return localPath ? measureFile(localPath) : null;
 }
 
 function resolveLocalImagePath(src, data) {
@@ -181,50 +188,45 @@ function resolveLocalImagePath(src, data) {
   if (siteRoot !== "/" && rel.startsWith(siteRoot)) {
     rel = rel.slice(siteRoot.length);
   }
-  rel = rel.replace(/^\//, "");
+  rel = rel.replace(/^\/+/, "").replace(/^\.\//, "");
 
-  const relDecoded = (() => {
+  // Every spelling the file could have been written in: escaped by the
+  // markdown renderer, escaped by hand, or a literal `%` in the name — and the
+  // `.jpg`/`.jpeg` pair img-optimizer also accepts.
+  const spellings = new Set([rel]);
+  for (const decode of [decodeURIComponent, decodeURI]) {
     try {
-      return decodeURIComponent(rel);
+      spellings.add(decode(rel));
     } catch {
-      return rel;
+      /* a malformed escape: keep the other spellings */
     }
-  })();
-
-  const candidates = [];
-
-  if (hexo.source_dir) {
-    candidates.push(path.join(hexo.source_dir, relDecoded));
+  }
+  for (const one of Array.from(spellings)) {
+    const alt = one.replace(/\.jpe?g$/i, (ext) => (ext.toLowerCase() === ".jpg" ? ".jpeg" : ".jpg"));
+    if (alt !== one) spellings.add(alt);
   }
 
-  if (hexo.theme_dir) {
-    candidates.push(path.join(hexo.theme_dir, "source", relDecoded));
-  }
+  const bases = [];
+  if (hexo.source_dir) bases.push(hexo.source_dir);
+  if (hexo.theme_dir) bases.push(path.join(hexo.theme_dir, "source"));
 
+  // Relative to the page that wrote it, for anything not rooted at the site.
   const sourcePath = data && (data.full_source || data.source);
-  if (sourcePath) {
+  if (sourcePath && !rawSrc.startsWith("/")) {
     const sourceFullPath = path.isAbsolute(sourcePath)
       ? sourcePath
       : path.join(hexo.source_dir || "", sourcePath);
-    candidates.push(path.join(path.dirname(sourceFullPath), relDecoded));
+    bases.push(path.dirname(sourceFullPath));
   }
 
-  if (hexo.source_dir && !rawSrc.startsWith("/")) {
-    const rawDecoded = (() => {
+  for (const base of bases) {
+    for (const one of spellings) {
+      const candidate = path.join(base, one);
       try {
-        return decodeURIComponent(rawSrc);
+        if (fs.statSync(candidate).isFile()) return candidate;
       } catch {
-        return rawSrc;
+        /* not here */
       }
-    })();
-    candidates.push(path.join(hexo.source_dir, rawDecoded));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      if (candidate && fs.existsSync(candidate)) return candidate;
-    } catch {
-      // ignore
     }
   }
   return null;
@@ -302,7 +304,8 @@ async function processImgTag(imgTag, dataContext = null) {
     return imgTag;
   }
 
-  const srcMatch = imgTag.match(/\bsrc\s*=\s*(["'])([^"']*)\1/i);
+  // Not `\bsrc`: that also matches the `src` inside `data-src`.
+  const srcMatch = imgTag.match(/[\s"']src\s*=\s*(["'])([^"']*)\1/i);
   if (!srcMatch) {
     return imgTag;
   }
@@ -317,8 +320,8 @@ async function processImgTag(imgTag, dataContext = null) {
     return imgTag;
   }
 
-  // For dimension detection, prefer data-original-src if available (set by img-optimizer)
-  // because imageSize doesn't support AVIF format
+  // Measured off the source (data-original-src, set by img-optimizer): the
+  // transcode keeps its aspect ratio, and the source is the file on disk.
   const originalSrcMatch = imgTag.match(/\bdata-original-src\s*=\s*(["'])([^"']*)\1/i);
   const dimensionSrc = originalSrcMatch ? originalSrcMatch[2] : displaySrc;
 

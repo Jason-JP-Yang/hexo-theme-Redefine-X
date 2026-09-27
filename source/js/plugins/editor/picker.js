@@ -188,11 +188,14 @@ export async function loadTree(force) {
     // `row[4]` is the theme's own picture: published under the same `images/`
     // key, but not a file in this repository, so nothing here may rename it.
     if (!IMAGE.test(key) || (row && row[4])) continue;
+    // An empty route is a picture the build found nothing using.
+    const unused = !!row && row[0] === "";
     files.set("source/" + key, {
-      route: (row && row[0]) || key,
+      route: unused ? "" : (row && row[0]) || key,
       width: (row && row[1]) || 0,
       height: (row && row[2]) || 0,
       size: (row && row[3]) || 0,
+      unused,
     });
   }
   // Keyed by published route as well as source path; only the latter is a file.
@@ -283,9 +286,21 @@ export function createStage() {
       else moves.push({ from: existing ? existing.to : start, to });
       folders.delete(to.replace(/\/[^/]+$/, ""));
     },
+    /** Drop the unsaved moves of a picture that is being thrown away. */
+    forget(path) {
+      const start = this.origin(path);
+      for (let i = moves.length - 1; i >= 0; i--) {
+        if (!moves[i].noted && moves[i].from === start) moves.splice(i, 1);
+      }
+    },
     /** A folder that exists only here. Renaming one re-keys it in place. */
     folder(path) {
       if (path) folders.add(path);
+    },
+    dropFolder(path) {
+      for (const held of Array.from(folders)) {
+        if (held === path || held.startsWith(path + "/")) folders.delete(held);
+      }
     },
     renameFolder(from, to) {
       if (!folders.has(from)) return false;
@@ -672,9 +687,9 @@ function searchScore(path, query) {
 /* ─── the dialogue ─────────────────────────────────────────────────────────── */
 
 /**
- * @param {object} ctx   { t, stage, pending, upload }
- * @param {object} opts  { current }
- * @returns {Promise<{path: string, site: string} | null>}
+ * @param {object} ctx   { t, stage, pending, upload, used, discard }
+ * @param {object} opts  { current, browse, multiple }
+ * @returns {Promise<{path: string, site: string, all: Array} | null>}
  */
 /**
  * The browser that is open, if one is.
@@ -702,9 +717,11 @@ export function openPicker(ctx, opts = {}) {
         <header class="ed-picker-bar">
           <span class="ed-picker-name"><i class="fa-solid fa-images" aria-hidden="true"></i>${escapeHTML(t("pick_title", "Pictures"))}</span>
           <span class="ed-picker-acts">
-            <button type="button" data-act="upload" title="${escapeHTML(t("pick_upload", "Add a picture"))}"><i class="fa-solid fa-arrow-up-from-bracket"></i></button>
+            <button type="button" data-act="upload" title="${escapeHTML(t("pick_upload", "Add pictures"))}"><i class="fa-solid fa-arrow-up-from-bracket"></i></button>
             <button type="button" data-act="mkdir" title="${escapeHTML(t("pick_mkdir", "New folder"))}"><i class="fa-solid fa-folder-plus"></i></button>
             <button type="button" data-act="rename" title="${escapeHTML(t("pick_rename", "Rename"))}"><i class="fa-solid fa-i-cursor"></i></button>
+            <button type="button" data-act="deselect" title="${escapeHTML(t("pick_deselect", "Clear selection"))}" hidden><i class="fa-solid fa-square-minus"></i></button>
+            <button type="button" data-act="delete" class="is-danger" title="${escapeHTML(t("pick_delete", "Delete"))}" hidden><i class="fa-solid fa-trash"></i></button>
             <button type="button" data-act="close" title="${escapeHTML(t("close", "Close"))}"><i class="fa-solid fa-xmark"></i></button>
           </span>
         </header>
@@ -715,6 +732,7 @@ export function openPicker(ctx, opts = {}) {
           <div class="ed-pick-view">
             <div class="ed-pick-stage"></div>
             <dl class="ed-pick-meta"></dl>
+            <div class="ed-pick-many" hidden></div>
           </div>
         </div>
 
@@ -742,11 +760,21 @@ export function openPicker(ctx, opts = {}) {
     const input = mask.querySelector(".ed-pick-input");
     const menu = mask.querySelector(".ed-pick-menu");
     const ok = mask.querySelector(".ed-pick-ok");
+    const many = mask.querySelector(".ed-pick-many");
+    const okLabel = ok.querySelector("span");
+    const actBtn = (act) => mask.querySelector(`.ed-picker-acts [data-act="${act}"]`);
 
     /** path → { el, row, kids, type, size, staged, fresh } */
     const nodes = new Map();
     let rows = [];
     let chosen = opts.current ? String(opts.current).replace(/^\//, "source/") : "";
+    // Every selected path; `chosen` is the one the last click landed on, and
+    // `anchor` is where a Shift range starts. A folder is only ever alone in it.
+    const picked = new Set(chosen ? [chosen] : []);
+    let anchor = chosen;
+    // The opening selection is the caller's, not a tap: on a touch screen the
+    // first tap replaces it rather than adding to it.
+    let soft = !!chosen;
     let searching = false;
     let cursor = 0;
     let hits = [];
@@ -818,6 +846,7 @@ export function openPicker(ctx, opts = {}) {
           <span class="ed-pick-name"></span>
           ${entry.staged ? `<em class="ed-pick-flag">${escapeHTML(t("pick_new", "new"))}</em>` : ""}
           ${entry.fresh ? `<em class="ed-pick-flag">${escapeHTML(t("pick_unsaved", "unsaved"))}</em>` : ""}
+          ${isDir ? "" : `<span class="ed-pick-check" aria-hidden="true"><i class="fa-solid fa-check"></i></span>`}
         </div>
         ${isDir ? `<div class="ed-pick-kids"><div class="ed-pick-kids-in"></div></div>` : ""}`;
 
@@ -832,6 +861,7 @@ export function openPicker(ctx, opts = {}) {
         height: entry.height || 0,
         route: entry.route || "",
         sealed: !!entry.sealed,
+        unused: !!entry.unused,
         staged: !!entry.staged,
         fresh: !!entry.fresh,
       };
@@ -904,12 +934,140 @@ export function openPicker(ctx, opts = {}) {
 
     function paintSelection() {
       for (const [path, node] of nodes) {
-        node.row.dataset.on = path === chosen ? "1" : "0";
+        node.row.dataset.on = picked.has(path) ? "1" : "0";
         // Choosing anything takes the step's mark down. The author has moved on,
         // and a row wearing the mark's colours is a row not wearing the ones that
         // say it is selected.
         unlight(node.row);
       }
+      paintActs();
+    }
+
+    /** The selected pictures, in the order they were picked. */
+    function pickedFiles() {
+      return Array.from(picked).filter((path) => {
+        const node = nodes.get(path);
+        return node ? node.type === "file" : IMAGE.test(path);
+      });
+    }
+
+    function addresses() {
+      const files = pickedFiles();
+      if (files.length) return files.map(siteAddress);
+      return chosen ? [siteAddress(chosen)] : [];
+    }
+
+    /** File rows the author can actually see, top to bottom — what Shift spans. */
+    function shownFiles() {
+      const out = [];
+      for (const el of side.querySelectorAll('.ed-pick-node[data-type="file"]')) {
+        let up = el.parentElement && el.parentElement.closest(".ed-pick-node");
+        while (up && up.dataset.open === "1") up = up.parentElement && up.parentElement.closest(".ed-pick-node");
+        if (!up) out.push(el.dataset.path);
+      }
+      return out;
+    }
+
+    /* ─── deleting what this session added ─────────────────────────────── */
+
+    /**
+     * Only a picture added in this session, and only while nothing in the open
+     * document points at it — under any name the staged tidy-up has given it.
+     * Anything already committed is the repository's, and is removed there.
+     */
+    function aliases(path) {
+      let now = ctx.stage.origin(path);
+      const out = new Set([siteAddress(path), siteAddress(now)]);
+      for (const move of ctx.stage.moves) {
+        if (now === move.from) now = move.to;
+        else if (now.startsWith(move.from + "/")) now = move.to + now.slice(move.from.length);
+        else continue;
+        out.add(siteAddress(now));
+      }
+      return Array.from(out);
+    }
+
+    /** The document's text, emitted at most once per question and only if asked. */
+    function usage() {
+      let text = null;
+      return () => (text == null ? (text = ctx.usage ? String(ctx.usage() || "") : "") : text);
+    }
+
+    function inUse(path, read) {
+      const text = read();
+      return aliases(path).some((address) => {
+        const bare = address.replace(/^\//, "");
+        // An album names its own photographs relative to source/masonry/.
+        const forms = [bare, bare.replace(/^masonry\//, "")];
+        return forms.some((form) => text.includes(form) || text.includes(encodeURI(form)));
+      });
+    }
+
+    function removable(path, read) {
+      const node = nodes.get(path);
+      return !!node && node.type === "file" && node.staged && !inUse(path, read);
+    }
+
+    /** A folder goes only if everything under it could go, and something is new. */
+    function deletable(path, read) {
+      if (!ctx.usage || !ctx.discard || isRoot(path)) return false;
+      const node = nodes.get(path);
+      if (!node) return false;
+      if (node.type === "file") return removable(path, read);
+      let fresh = node.fresh;
+      for (const [held, inner] of nodes) {
+        if (!held.startsWith(path + "/")) continue;
+        if (inner.type === "file") {
+          if (!removable(held, read)) return false;
+          fresh = true;
+        } else if (inner.fresh) fresh = true;
+      }
+      return fresh;
+    }
+
+    function discardPicked() {
+      const read = usage();
+      const targets = Array.from(picked);
+      if (!targets.length || !targets.every((path) => deletable(path, read))) return;
+
+      const files = new Set();
+      const dirs = [];
+      for (const path of targets) {
+        if (nodes.get(path).type === "file") {
+          files.add(path);
+          continue;
+        }
+        dirs.push(path);
+        for (const [held, inner] of nodes) {
+          if (inner.type === "file" && held.startsWith(path + "/")) files.add(held);
+        }
+      }
+
+      const origins = Array.from(files, (path) => ctx.stage.origin(path));
+      for (const path of files) ctx.stage.forget(path);
+      for (const dir of dirs) ctx.stage.dropFolder(dir);
+
+      const where = parentOf(targets[0]);
+      picked.clear();
+      chosen = "";
+      anchor = "";
+      ctx.discard(origins, where);
+      restage(where);
+    }
+
+    /** Delete and Clear exist only while they can do something. */
+    function showAct(act, on) {
+      const btn = actBtn(act);
+      if (!btn || btn.hidden === !on) return;
+      btn.hidden = !on;
+      if (on) pop(btn);
+    }
+
+    function paintActs() {
+      showAct("deselect", pickedFiles().length > 1);
+      const read = usage();
+      showAct("delete", picked.size > 0 && Array.from(picked).every((path) => deletable(path, read)));
+      actBtn("rename").disabled = picked.size > 1;
     }
 
     let lit = null;
@@ -986,7 +1144,8 @@ export function openPicker(ctx, opts = {}) {
       if (here && nodes.has(here)) reveal(here, true);
       else for (const root of ROOTS) open(root, true);
 
-      if (chosen && !nodes.has(chosen)) chosen = "";
+      for (const held of Array.from(picked)) if (!nodes.has(held)) picked.delete(held);
+      if (chosen && !nodes.has(chosen)) chosen = Array.from(picked).pop() || "";
       paintSelection();
       paintPath(false);
       paintPreview(false);
@@ -994,7 +1153,7 @@ export function openPicker(ctx, opts = {}) {
 
     function paintPath(animate) {
       if (document.activeElement === input && searching) return;
-      input.value = chosen ? siteAddress(chosen) : "";
+      input.value = addresses().join(", ");
       if (animate) field.animate(
         [{ opacity: 0.35, transform: "translateY(3px)" }, { opacity: 1, transform: "none" }],
         { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
@@ -1093,12 +1252,82 @@ export function openPicker(ctx, opts = {}) {
 
     // The pane changes size for three reasons — the window, the splitter and
     // the phone turning — and the answer above depends on all of them.
-    const refit = new ResizeObserver(() => fitShot());
+    const refit = new ResizeObserver(() => {
+      fitShot();
+      paintFades();
+    });
     refit.observe(view);
 
+    /** The file's facts. The shape is passed in because the caller already asked. */
+    function factsOf(path, size) {
+      const node = nodes.get(path);
+      const origin = ctx.stage.origin(path);
+      return (
+        metaRow(t("pick_name", "Name"), nameOf(path)) +
+        metaRow(t("pick_where", "Folder"), parentOf(path).replace(/^source\//, "/")) +
+        metaRow(t("pick_dims", "Size"), size ? `${size.width} × ${size.height}` : "—") +
+        metaRow(t("pick_bytes", "File"), readableSize(node && node.size) || "—") +
+        metaRow(t("pick_served", "Served at"), servedAt(node)) +
+        (origin === path ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)))
+      );
+    }
+
+    // The enumeration carries the shape, so the box is right before a byte
+    // arrives. `naturalSize` is asked first for the one case it knows better: a
+    // picture added in this session, measured here rather than by a build.
+    function sizeOf(path) {
+      const node = nodes.get(path);
+      return ctx.naturalSize(siteAddress(path)) || (node && node.width ? { width: node.width, height: node.height } : null);
+    }
+
+    /**
+     * Several pictures: their facts one under another, and no picture. The list
+     * scrolls inside the pane's own height — the pane is a fixed box and must
+     * not grow — with a fade at whichever edge has more beyond it.
+     */
+    function paintMany(files) {
+      const keep = many.hidden ? 0 : many.scrollTop;
+      let total = 0;
+      for (const path of files) total += (nodes.get(path) || {}).size || 0;
+      const sum = readableSize(total);
+      many.innerHTML =
+        `<p class="ed-pick-count"><i class="fa-solid fa-images" aria-hidden="true"></i>` +
+        `<span>${escapeHTML(t("pick_many", "{n} pictures selected").replace("{n}", files.length))}</span>` +
+        (sum ? `<em>${escapeHTML(sum)}</em>` : "") +
+        `</p>` +
+        files.map((path) => `<dl class="ed-pick-meta">${factsOf(path, sizeOf(path))}</dl>`).join("");
+      many.hidden = false;
+      many.scrollTop = keep;
+      paintFades();
+    }
+
+    function paintFades() {
+      if (many.hidden) return;
+      const top = many.scrollTop;
+      many.classList.toggle("has-top", top > 1);
+      many.classList.toggle("has-bottom", top + many.clientHeight < many.scrollHeight - 1);
+    }
+
+    many.addEventListener("scroll", paintFades, { passive: true });
+
+    /** The answer the footer button gives, and whether it may give it. */
+    function paintOk(files) {
+      if (opts.browse) return;
+      const n = files.length;
+      const over = n > 1 && !opts.multiple;
+      ok.disabled = !n || over;
+      okLabel.textContent =
+        n > 1 && opts.multiple
+          ? t("pick_use_many", "Add {n} pictures").replace("{n}", n)
+          : over
+            ? t("pick_one_only", "One picture at a time")
+            : t("pick_use", "Use this picture");
+    }
+
     function paintPreview(animate) {
-      const known = !!chosen && IMAGE.test(chosen);
-      ok.disabled = !known;
+      const files = pickedFiles();
+      const one = files.length === 1 ? files[0] : "";
+      paintOk(files);
 
       // The picture being left is locked again before the next one is opened,
       // so one click on a withheld image decrypts that image and nothing else,
@@ -1108,7 +1337,19 @@ export function openPicker(ctx, opts = {}) {
       const before = animate === false || stage.hidden ? 0 : stage.getBoundingClientRect().height;
       const old = shotNode();
 
-      if (!known) {
+      if (files.length > 1) {
+        shape = null;
+        if (old) old.remove();
+        blank.remove();
+        delete stage.dataset.empty;
+        stage.hidden = true;
+        meta.innerHTML = "";
+        return void paintMany(files);
+      }
+      many.hidden = true;
+      many.innerHTML = "";
+
+      if (!one) {
         shape = null;
         if (old) old.remove();
         stage.hidden = false;
@@ -1121,37 +1362,23 @@ export function openPicker(ctx, opts = {}) {
       blank.remove();
       delete stage.dataset.empty;
 
-      const node = nodes.get(chosen);
-      const origin = ctx.stage.origin(chosen);
-      const address = siteAddress(chosen);
-      // The enumeration carries the shape, so the box is right before a byte
-      // arrives. `naturalSize` is asked first for the one case it knows better:
-      // a picture added in this session, measured here rather than by a build.
-      const size =
-        ctx.naturalSize(address) || (node && node.width ? { width: node.width, height: node.height } : null);
-
+      const size = sizeOf(one);
       // A nominal 3:2 for the only thing that can be unmeasured — a picture
       // staged in this session that could not be read.
       shape = size && size.width && size.height ? size : { width: 1200, height: 800 };
 
       // The details first: their height is what the picture's is subtracted from.
-      meta.innerHTML =
-        metaRow(t("pick_name", "Name"), nameOf(chosen)) +
-        metaRow(t("pick_where", "Folder"), parentOf(chosen).replace(/^source\//, "/")) +
-        metaRow(t("pick_dims", "Size"), size ? `${size.width} × ${size.height}` : "—") +
-        metaRow(t("pick_bytes", "File"), readableSize(node && node.size) || "—") +
-        metaRow(t("pick_served", "Served at"), servedAt(node)) +
-        (origin === chosen ? "" : metaRow(t("pick_moved", "Moving from"), siteAddress(origin)));
+      meta.innerHTML = factsOf(one, size);
 
       const shot = document.createElement("img");
       shot.decoding = "async";
-      shot.alt = nameOf(chosen);
+      shot.alt = nameOf(one);
       if (old) old.replaceWith(shot);
       else stage.appendChild(shot);
 
       fitShot();
       travel(before);
-      ctx.bindImage(shot, address);
+      ctx.bindImage(shot, siteAddress(one));
     }
 
     /**
@@ -1164,24 +1391,78 @@ export function openPicker(ctx, opts = {}) {
       if (!node) return "";
       if (node.staged) return t("pick_new", "new");
       if (node.sealed) return t("encrypted", "Encrypted");
+      if (node.unused) return t("pick_unused", "Nowhere - nothing uses it yet");
       return node.route ? "/" + node.route : "";
     }
 
-    function select(path, animate) {
-      chosen = path;
+    function repaint(animate) {
       paintSelection();
       paintPath(animate !== false);
       paintPreview(animate);
     }
 
+    function select(path, animate) {
+      chosen = path;
+      anchor = path;
+      picked.clear();
+      if (path) picked.add(path);
+      repaint(animate);
+    }
+
+    function pickMany(paths) {
+      picked.clear();
+      for (const path of paths) picked.add(path);
+      chosen = paths[paths.length - 1] || "";
+      anchor = chosen;
+      repaint();
+    }
+
+    /** Ctrl/Cmd on a desktop, any tap on a touch screen: in or out of the set. */
+    function toggle(path) {
+      const held = nodes.get(chosen);
+      if (held && held.type === "dir") return select(path);
+      if (picked.has(path)) {
+        picked.delete(path);
+        chosen = Array.from(picked).pop() || "";
+      } else {
+        picked.add(path);
+        chosen = path;
+      }
+      anchor = path;
+      repaint();
+    }
+
+    /** Shift: every visible picture from the anchor to here. Ctrl too keeps the rest. */
+    function range(path, add) {
+      const order = shownFiles();
+      const from = order.indexOf(anchor);
+      const to = order.indexOf(path);
+      if (from < 0 || to < 0) return select(path);
+      if (!add) picked.clear();
+      for (const held of Array.from(picked)) if ((nodes.get(held) || {}).type === "dir") picked.delete(held);
+      const span = order.slice(Math.min(from, to), Math.max(from, to) + 1);
+      for (const held of from <= to ? span : span.reverse()) picked.add(held);
+      chosen = path;
+      repaint();
+    }
+
+    const coarse = () => window.matchMedia("(pointer: coarse)").matches;
+
     /* ─── the search menu ──────────────────────────────────────────────── */
 
+    /**
+     * The field lists every selected address, comma-separated. Only what comes
+     * after the last comma is a query — and not when it is one of those
+     * addresses, which would filter the list down to what is already chosen.
+     */
+    function queryOf() {
+      const parts = input.value.split(",");
+      const last = parts[parts.length - 1].trim();
+      return last && !addresses().includes(last) ? last.toLowerCase().replace(/^\//, "") : "";
+    }
+
     function paintMenu() {
-      // The field holds the chosen file's address when nothing has been typed,
-      // and that is not a query — it would filter the list down to the one
-      // thing already chosen, which is the one thing nobody is looking for.
-      const raw = input.value.trim();
-      const query = raw && raw !== siteAddress(chosen) ? raw.toLowerCase().replace(/^\//, "") : "";
+      const query = queryOf();
       const all = files();
 
       hits = (query
@@ -1198,8 +1479,8 @@ export function openPicker(ctx, opts = {}) {
         ? hits
             .map(
               (hit, i) =>
-                `<button type="button" class="ed-pick-hit" data-path="${escapeHTML(hit.path)}" data-on="${i === cursor ? "1" : "0"}">
-                   <i class="fa-solid fa-image" aria-hidden="true"></i>
+                `<button type="button" class="ed-pick-hit" data-path="${escapeHTML(hit.path)}" data-on="${i === cursor ? "1" : "0"}"${picked.has(hit.path) ? ` data-picked="1"` : ""}>
+                   <i class="fa-solid ${picked.has(hit.path) ? "fa-circle-check" : "fa-image"}" aria-hidden="true"></i>
                    <span class="ed-pick-hit-name">${escapeHTML(nameOf(hit.path))}</span>
                    <span class="ed-pick-hit-dir">${escapeHTML(parentOf(hit.path).replace(/^source\//, "/"))}</span>
                  </button>`
@@ -1224,12 +1505,33 @@ export function openPicker(ctx, opts = {}) {
       if (restore !== false) paintPath(false);
     }
 
+    /**
+     * A comma in the field means "and this one too": the hit joins the pictures
+     * already chosen and the field stays open for the next name. Without one,
+     * the hit replaces the selection, as it always has.
+     */
+    function choose(path) {
+      const node = nodes.get(path);
+      if (input.value.includes(",") && node && node.type === "file" && pickedFiles().length) {
+        picked.add(path);
+        chosen = path;
+        anchor = path;
+        soft = false;
+        reveal(path);
+        repaint();
+        input.value = addresses().join(", ") + ", ";
+        cursor = 0;
+        return void paintMenu();
+      }
+      closeMenu();
+      reveal(path);
+      soft = false;
+      select(path);
+    }
+
     function takeHit() {
       const hit = hits[cursor];
-      if (!hit) return;
-      closeMenu();
-      reveal(hit.path);
-      select(hit.path);
+      if (hit) choose(hit.path);
     }
 
     /* ─── renaming, in place ───────────────────────────────────────────── */
@@ -1302,11 +1604,11 @@ export function openPicker(ctx, opts = {}) {
      * A folder that exists only in this session has no files to record, so it is
      * simply re-keyed in place.
      */
-    function applyMove(from, to) {
-      if (!from || !to || from === to || nodes.has(to)) return;
+    function applyMove(from, to, quiet) {
+      if (!from || !to || from === to || nodes.has(to)) return false;
 
       const node = nodes.get(from);
-      if (!node) return;
+      if (!node) return false;
 
       const affected = Array.from(nodes.keys()).filter((p) => p === from || p.startsWith(from + "/"));
       ctx.stage.renameFolder(from, to);
@@ -1316,8 +1618,9 @@ export function openPicker(ctx, opts = {}) {
       }
       // Recorded where it happens rather than when the browser closes: a tidy-up
       // is half a dozen moves, and an author who undoes one of them means that
-      // one, not the whole afternoon.
-      if (ctx.onStageChange) ctx.onStageChange(to);
+      // one, not the whole afternoon. A dragged selection is one move, recorded
+      // once by the caller.
+      if (!quiet && ctx.onStageChange) ctx.onStageChange(to);
 
       const moved = new Map();
       for (const path of affected) {
@@ -1334,8 +1637,16 @@ export function openPicker(ctx, opts = {}) {
       place(to);
       open(parentOf(to), true);
 
-      if (chosen === from || chosen.startsWith(from + "/")) select(to + chosen.slice(from.length));
-      else paintPath(false);
+      const remap = (path) => (path === from || path.startsWith(from + "/") ? to + path.slice(from.length) : path);
+      const was = Array.from(picked);
+      picked.clear();
+      for (const path of was) picked.add(remap(path));
+      anchor = remap(anchor);
+      if (chosen === from || chosen.startsWith(from + "/")) {
+        chosen = remap(chosen);
+        repaint();
+      } else paintPath(false);
+      return true;
     }
 
     /* ─── acting on it ─────────────────────────────────────────────────── */
@@ -1362,15 +1673,35 @@ export function openPicker(ctx, opts = {}) {
       if (act === "close") return finish(null);
 
       if (act === "upload") {
-        const file = await pickFile();
-        if (!file) return;
-        const asset = await ctx.upload(file, currentDir());
-        if (!asset) return;
-        const path = ctx.stage.resolve(asset.path);
-        addNode({ path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
-        reveal(path);
-        return void select(path);
+        const list = await pickFiles();
+        if (!list.length) return;
+        const dir = currentDir();
+        const added = [];
+        // Staged quietly and recorded once: one upload of five pictures is one
+        // step, not five.
+        for (const file of list) {
+          const asset = await ctx.upload(file, dir, true);
+          if (!asset) continue;
+          const path = ctx.stage.resolve(asset.path);
+          if (added.includes(path)) continue;
+          added.push(path);
+          addNode({ path, type: "file", staged: true, size: asset.bytes ? asset.bytes.byteLength : 0 });
+        }
+        if (!added.length) return;
+        if (ctx.onStageChange) ctx.onStageChange(added[0]);
+        reveal(added[added.length - 1]);
+        soft = false;
+        return void pickMany(added);
       }
+
+      if (act === "deselect") {
+        picked.clear();
+        chosen = "";
+        anchor = "";
+        return void repaint();
+      }
+
+      if (act === "delete") return void discardPicked();
 
       if (act === "mkdir") {
         const base = currentDir();
@@ -1387,22 +1718,25 @@ export function openPicker(ctx, opts = {}) {
       }
 
       if (act === "rename") {
-        if (chosen && !isRoot(chosen)) beginRename(chosen);
+        if (picked.size <= 1 && chosen && !isRoot(chosen)) beginRename(chosen);
       }
     }
 
-    function pickFile() {
+    function pickFiles() {
       return new Promise((res) => {
         const el = document.createElement("input");
         el.type = "file";
         el.accept = "image/*";
+        el.multiple = true;
         el.hidden = true;
         document.body.appendChild(el);
-        el.addEventListener("change", () => {
-          const file = el.files && el.files[0];
+        const settle = () => {
+          const list = Array.from(el.files || []);
           el.remove();
-          res(file || null);
-        });
+          res(list);
+        };
+        el.addEventListener("change", settle);
+        el.addEventListener("cancel", settle);
         el.click();
       });
     }
@@ -1451,6 +1785,8 @@ export function openPicker(ctx, opts = {}) {
       e.preventDefault();
       const path = row.parentElement.dataset.path;
       const node = nodes.get(path);
+      const was = soft;
+      soft = false;
       if (node && node.type === "dir") {
         // Clicking the row selects the folder; only the chevron folds it, so a
         // click meant for "put the next picture here" never closes the branch.
@@ -1459,9 +1795,21 @@ export function openPicker(ctx, opts = {}) {
         } else {
           open(path, true);
         }
+        return void select(path);
       }
-      select(path);
+      // A touch screen has no modifier keys, so every tap is a multi-select —
+      // except the first, which replaces what the caller opened on.
+      const touch = coarse();
+      if (e.shiftKey && !touch) range(path, e.ctrlKey || e.metaKey);
+      else if (touch && was) select(path);
+      else if (touch || e.ctrlKey || e.metaKey) toggle(path);
+      else select(path);
     });
+
+    function answer(files) {
+      const all = files.map((path) => ({ path, site: siteAddress(path) }));
+      return Object.assign({}, all[0], { all });
+    }
 
     side.addEventListener("dblclick", (e) => {
       const row = e.target.closest(".ed-pick-row");
@@ -1469,20 +1817,23 @@ export function openPicker(ctx, opts = {}) {
       settleRename();
       const path = row.parentElement.dataset.path;
       const node = nodes.get(path);
-      if (node && node.type === "file") finish({ path, site: siteAddress(path) });
+      if (node && node.type === "file") finish(answer([path]));
     });
 
     ok.addEventListener("click", () => {
-      // Before `chosen` is read: committing the name is what moves the selection
-      // onto the file's new address, so reading first answers with the old one.
+      // Before the selection is read: committing the name is what moves it onto
+      // the file's new address, so reading first answers with the old one.
       settleRename();
-      if (!chosen || !IMAGE.test(chosen)) return;
-      finish({ path: chosen, site: siteAddress(chosen) });
+      const files = pickedFiles();
+      if (!files.length || (files.length > 1 && !opts.multiple)) return;
+      finish(answer(files));
     });
 
     /* The one field: what is chosen, and the way to look for something else. */
     input.addEventListener("focus", () => {
-      input.select();
+      // Several chosen: the caret goes to the end, where ", name" adds one more.
+      if (pickedFiles().length > 1) input.setSelectionRange(input.value.length, input.value.length);
+      else input.select();
       openMenu();
     });
     input.addEventListener("input", openMenu);
@@ -1504,10 +1855,7 @@ export function openPicker(ctx, opts = {}) {
     menu.addEventListener("mousedown", (e) => e.preventDefault());
     menu.addEventListener("click", (e) => {
       const hit = e.target.closest("[data-path]");
-      if (!hit) return;
-      closeMenu();
-      reveal(hit.dataset.path);
-      select(hit.dataset.path);
+      if (hit) choose(hit.dataset.path);
     });
 
     /* ─── dragging, the way a block is dragged ─────────────────────────── */
@@ -1523,7 +1871,9 @@ export function openPicker(ctx, opts = {}) {
      * language for the same gesture is how a control stops feeling like part of
      * the same program.
      */
-    let dragging = "";
+    // Everything being carried: the selection when the row taken hold of is part
+    // of one, otherwise that row alone.
+    let dragging = [];
     let dropAt = "";
     const scroller = createEdgeScroll(side);
 
@@ -1537,18 +1887,18 @@ export function openPicker(ctx, opts = {}) {
     }
 
     function canDrop(target) {
-      if (!dragging || !target) return false;
-      if (target === dragging) return false;
-      if ((target + "/").startsWith(dragging + "/")) return false;
-      return parentOf(dragging) !== target;
+      if (!dragging.length || !target) return false;
+      if (dragging.some((path) => (target + "/").startsWith(path + "/"))) return false;
+      return dragging.some((path) => parentOf(path) !== target);
     }
 
     /** Where inside `target` the carried row will be, once it is sorted in. */
     function landing(target) {
       const holder = nodes.get(target);
-      if (!holder || !holder.kids) return null;
-      const key = rank({ type: nodes.get(dragging).type, path: dragging });
-      const rows = Array.from(holder.kids.children).filter((el) => el.dataset.path !== dragging);
+      const lead = dragging[0];
+      if (!holder || !holder.kids || !nodes.get(lead)) return null;
+      const key = rank({ type: nodes.get(lead).type, path: lead });
+      const rows = Array.from(holder.kids.children).filter((el) => !dragging.includes(el.dataset.path));
       const before = rows.find((el) => {
         const other = nodes.get(el.dataset.path);
         return other && rank({ type: other.type, path: el.dataset.path }) > key;
@@ -1582,17 +1932,30 @@ export function openPicker(ctx, opts = {}) {
       if (!row || row.dataset.editing) return;
       const path = row.parentElement.dataset.path;
       if (isRoot(path)) return;
-      dragging = path;
+      const files = pickedFiles();
+      dragging = files.length > 1 && files.includes(path) ? files : [path];
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", dragging);
+      e.dataTransfer.setData("text/plain", dragging.join("\n"));
       // The clipped clone the blocks use, so the ghost is the row rather than
-      // whatever the pointer happened to be over inside it.
+      // whatever the pointer happened to be over inside it — carrying a count
+      // when it stands for several.
+      let count = null;
+      if (dragging.length > 1) {
+        count = document.createElement("em");
+        count.className = "ed-pick-carry";
+        count.textContent = String(dragging.length);
+        row.appendChild(count);
+      }
       setDragImage(e, row);
-      row.dataset.carry = "1";
+      if (count) count.remove();
+      for (const held of dragging) {
+        const node = nodes.get(held);
+        if (node) node.row.dataset.carry = "1";
+      }
     });
 
     side.addEventListener("dragover", (e) => {
-      if (!dragging) return;
+      if (!dragging.length) return;
       const target = dropFolder(e);
       scroller.track(e.clientY);
       if (!canDrop(target)) return void paintDrop("");
@@ -1602,22 +1965,27 @@ export function openPicker(ctx, opts = {}) {
     });
 
     side.addEventListener("dragleave", (e) => {
-      if (dragging && !side.contains(e.relatedTarget)) paintDrop("");
+      if (dragging.length && !side.contains(e.relatedTarget)) paintDrop("");
     });
 
     side.addEventListener("drop", (e) => {
-      if (!dragging) return;
+      if (!dragging.length) return;
       const target = dropFolder(e);
       paintDrop("");
       scroller.stop();
       if (!canDrop(target)) return;
       e.preventDefault();
-      applyMove(dragging, `${target}/${nameOf(dragging)}`);
-      dragging = "";
+      let landed = "";
+      for (const path of dragging) {
+        const to = `${target}/${nameOf(path)}`;
+        if (parentOf(path) !== target && applyMove(path, to, true)) landed = landed || to;
+      }
+      if (landed && ctx.onStageChange) ctx.onStageChange(landed);
+      dragging = [];
     });
 
     side.addEventListener("dragend", () => {
-      dragging = "";
+      dragging = [];
       scroller.stop();
       paintDrop("");
       for (const el of side.querySelectorAll("[data-carry]")) delete el.dataset.carry;
@@ -1761,8 +2129,10 @@ export function openPicker(ctx, opts = {}) {
         select(chosen, false);
       } else {
         chosen = "";
+        anchor = "";
+        picked.clear();
         for (const root of ROOTS) open(root, true);
-        paintPath(false);
+        repaint(false);
       }
       drawn();
     });

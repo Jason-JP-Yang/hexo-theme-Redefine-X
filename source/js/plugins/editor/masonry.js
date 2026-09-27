@@ -961,10 +961,16 @@ function insertImage(node, at) {
  */
 async function addImage(at) {
   const anchor = at == null ? null : tileOf((images()[at] || {}).id);
-  const picked = await pickImage("");
-  if (!picked || !state.on) return;
-  const node = makeImage(state.item.imageLead, state.item.eol, storedLike(picked.site));
-  insertImage(node, at == null ? (state.selected ? indexOf(state.selected) + 1 : images().length) : at);
+  const picked = await pickImage("", false, true);
+  if (!picked || !picked.length || !state.on) return;
+  // In the order they were picked, one after another from the same place, and
+  // recorded as the one step the author took.
+  let index = at == null ? (state.selected ? indexOf(state.selected) + 1 : images().length) : at;
+  let node = null;
+  for (const one of picked) {
+    node = makeImage(state.item.imageLead, state.item.eol, storedLike(one.site));
+    insertImage(node, index++);
+  }
   state.selected = node.id;
   markDirty("images", node.id);
   await paintCanvas(true, anchor && anchor.isConnected ? anchor : undefined);
@@ -1061,20 +1067,34 @@ function closeSheet() {
 
 /* ─── pictures ─────────────────────────────────────────────────────────────── */
 
-async function pickImage(current, browse) {
+/**
+ * @param {boolean} [multiple]  adding to the album takes several at once; every
+ *   other question here names ONE picture. With it the answer is an array.
+ */
+async function pickImage(current, browse, multiple) {
   const had = state.pending.length;
   const opened = history.mark();
   const picked = await openPicker(
     {
       t,
       stage: state.stage,
-      pending: state.pending,
+      // A getter: a step replaces `state.pending` with its own copy, and a
+      // browser holding the old array would list what the step took away.
+      get pending() {
+        return state.pending;
+      },
       upload: stageImage,
+      usage: () => (state.doc ? emitMasonry(state.doc) : "") + "\n" + (state.item ? emitItem(state.item) : ""),
+      discard: (origins, where) => {
+        const gone = new Set(origins);
+        state.pending = state.pending.filter((asset) => !gone.has(asset.path));
+        markDirty("assets", where);
+      },
       onStageChange: (path) => markDirty("assets", path),
       naturalSize: (src) => naturalSize(src, state.pending),
       bindImage: (img, src) => bindImage(img, src, state.pending),
     },
-    { current, browse }
+    { current, browse, multiple }
   );
   // Tidying is a change to the album even when nothing was chosen: the renames
   // travel in this album's commit. `browse` is the browser opened BY a step, on
@@ -1083,8 +1103,8 @@ async function pickImage(current, browse) {
   if (!picked) return null;
   if (history.mark() !== opened && state.pending.length === had) history.fold();
 
-  const staged = state.pending.find((a) => state.stage.resolve(a.path) === picked.path);
-  return staged || { path: picked.path, site: picked.site };
+  const own = (hit) => state.pending.find((a) => state.stage.resolve(a.path) === hit.path) || hit;
+  return multiple ? picked.all.map(own) : own({ path: picked.path, site: picked.site });
 }
 
 /**
@@ -1094,7 +1114,7 @@ async function pickImage(current, browse) {
  * added while editing one lands in that album's own folder rather than in the
  * post editor's `source/images/posts/`.
  */
-async function stageImage(file, dir) {
+async function stageImage(file, dir, quiet) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let path = await repo.assetPath(file.name, bytes);
   const home = dir || defaultFolder();
@@ -1115,7 +1135,7 @@ async function stageImage(file, dir) {
   if (size && size.width) Object.assign(asset, size);
 
   state.pending.push(asset);
-  markDirty("assets", asset.path);
+  if (!quiet) markDirty("assets", asset.path);
   return asset;
 }
 

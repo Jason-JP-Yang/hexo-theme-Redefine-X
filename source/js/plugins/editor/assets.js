@@ -215,7 +215,13 @@ function record(src) {
 /** The path this image is published at, compressed or not. */
 function routeFor(src) {
   const row = record(src);
-  return row ? row[0] : manifestKey(src);
+  return row && row[0] ? row[0] : manifestKey(src);
+}
+
+/** Listed with no route: the build found nothing using it and published nothing. */
+function unpublished(src) {
+  const row = record(src);
+  return !!row && !row[0];
 }
 
 /**
@@ -421,6 +427,13 @@ export function bindImage(img, src, list) {
   }
 
   img.dataset.edSrc = value;
+  // Nothing on the site to ask for: straight to the repository.
+  if (!staged(here(value), list) && unpublished(here(value))) {
+    repoURL(value, list).then((url) => {
+      if (img.dataset.edSrc === value) settle(url);
+    });
+    return;
+  }
   img.onerror = () => {
     img.onerror = null;
     img.onload = null;

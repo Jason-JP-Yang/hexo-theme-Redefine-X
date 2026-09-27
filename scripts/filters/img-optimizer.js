@@ -3,9 +3,10 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const imageSize = require("image-size");
 const { spawn } = require("child_process");
 const { BuildIndex, skipAvif, skipReason, ciHost, quickEncode } = require("../lib/build-index");
+const { measureFile } = require("../lib/image-dims");
+const { findUsed } = require("../lib/image-usage");
 
 const INDEX_FILE = ".images.json";
 
@@ -629,33 +630,91 @@ const weights = new Map();
 // key as the site's. They are published and usable, but they are not in the
 // content repository, so the editor's browser must not offer to rename them.
 const themeOwned = new Set();
+// The site's pictures nothing refers to: listed for the editor, published nowhere.
+const unused = new Set();
 // Extensions the encoder has no work for but the manifest must still name,
 // because the manifest is what the editor's picture browser lists.
 const LISTED = /^\.(avif|gif|webp|bmp)$/i;
 
+const isListable = (ext) => PathManager.isSupportedBitmap(ext) || PathManager.isSupportedSvg(ext) || LISTED.test(ext);
+
 /**
- * The source image's own pixels, read from its header.
+ * Which of the SITE's pictures nothing uses — decided before one is encoded.
+ *
+ * The theme's own pictures are never candidates: they belong to the theme
+ * package, and some are named by code in ways a text search cannot follow.
+ * See scripts/lib/image-usage.js for what counts as a use.
+ */
+function markUnused(files) {
+  unused.clear();
+  const candidates = [];
+  for (const abs of files) {
+    if (!abs.startsWith(hexo.source_dir) || !isListable(path.extname(abs))) continue;
+    const rel = abs.slice(hexo.source_dir.length).replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!rel.startsWith("build/")) candidates.push(rel);
+  }
+  if (!candidates.length) return;
+
+  const used = findUsed({
+    sourceDir: hexo.source_dir,
+    baseDir: hexo.base_dir,
+    themeDir: hexo.theme_dir,
+    candidates,
+    memory: [JSON.stringify(hexo.config || {}), JSON.stringify(hexo.theme.config || {})],
+  });
+  for (const rel of candidates) if (!used.has(rel)) unused.add(rel);
+}
+
+/**
+ * Take every route an unused picture could be served at back out: the
+ * original, which Hexo's asset generator publishes, and a cached transcode
+ * under source/build/, which it publishes too. Stale copies a previous build
+ * left in public/ go with them. A product another, USED picture shares
+ * (`x.jpg` and `x.png` both become `x.avif`) stays.
+ */
+function withholdUnused() {
+  if (!unused.size) return;
+  const kept = new Set(Object.values(transcodeMap()));
+  let removed = 0;
+  for (const rel of unused) {
+    const ext = path.extname(rel);
+    const routes = [rel];
+    if (PathManager.isSupportedBitmap(ext) || PathManager.isSupportedSvg(ext)) {
+      const { routePath } = PathManager.buildOptimizedPath(rel, PathManager.isSupportedBitmap(ext));
+      if (!kept.has(routePath)) routes.push(routePath);
+    }
+    for (const route of routes) {
+      if (hexo.route.get(route)) hexo.route.remove(route);
+      if (!hexo.public_dir) continue;
+      const file = path.join(hexo.public_dir, route);
+      try {
+        if (fs.existsSync(file)) {
+          fs.unlinkSync(file);
+          removed++;
+        }
+      } catch (e) {
+        hexo.log.warn(`[img-optimizer] Could not remove unused ${route} from public: ${e.message}`);
+      }
+    }
+  }
+  if (removed) hexo.log.info(`[img-optimizer] Removed ${removed} unused image file(s) left in public.`);
+}
+
+/**
+ * The source image's own pixels.
  *
  * Measured for every candidate rather than only for the ones a page referenced,
  * because the editor's picture browser previews files nothing has used yet and
- * has to reserve the right box for them. AVIF cannot be measured by this
- * library and does not need to be: the transcode preserves the aspect ratio, so
- * the source's size is the one the page lays out with.
+ * has to reserve the right box for them. The transcode preserves the aspect
+ * ratio, so the source's size is the one the page lays out with.
  */
 async function measure(relPath, absPath) {
   if (dims.has(relPath)) return;
-  try {
-    const size = imageSize(absPath);
-    if (size && size.width && size.height) {
-      return void dims.set(relPath, { width: size.width, height: size.height });
-    }
-  } catch (e) {
-    /* fall through to the decoder, which reads more than the header */
-  }
+  const size = await measureFile(absPath);
+  if (size) return void dims.set(relPath, size);
 
-  // A file the header reader cannot parse — an unusual JPEG, a CMYK profile —
-  // is still an image the encoder can open. One process for the handful that
-  // get here is cheaper than a picture laid out at the wrong shape.
+  // Neither the whole-file header read nor sharp could: one ffprobe for the
+  // handful that get here is cheaper than a picture at the wrong shape.
   try {
     const meta = await ImageMeta.probe(absPath);
     if (meta && meta.width && meta.height) dims.set(relPath, { width: meta.width, height: meta.height });
@@ -666,12 +725,16 @@ async function measure(relPath, absPath) {
 
 async function scanAndProcessAllImages() {
   const config = ConfigManager.get();
+  unused.clear();
   if (!config.ENABLE_AVIF && !config.ENABLE_SVG) {
     hexo.log.debug("[img-optimizer] Image optimization disabled.");
     return;
   }
 
   index = new BuildIndex(path.join(hexo.source_dir, "build"), INDEX_FILE);
+  // Per build: under `hexo server` a picture that stopped being used must not
+  // keep the transcode an earlier pass recorded for it.
+  successfulConversions.clear();
   indexedKeys.clear();
   uncompressed.length = 0;
   quick.length = 0;
@@ -694,12 +757,26 @@ async function scanAndProcessAllImages() {
 
   const files = await gatherFiles();
   hexo.log.info(`[img-optimizer] Found ${files.length} candidate files.`);
+  markUnused(files);
 
   const tasks = files.map(absPath => processFile(absPath, config));
   await Promise.all(tasks);
 
   index.prune(indexedKeys);
   index.flush();
+
+  // Not an error, and not something the build may fix by itself: deleting a
+  // source file is the author's decision, taken on their own machine.
+  if (unused.size) {
+    const list = Array.from(unused).sort();
+    const shown = list.slice(0, 100).map((rel) => `    source/${rel}`);
+    if (list.length > shown.length) shown.push(`    … and ${list.length - shown.length} more`);
+    hexo.log.warn(
+      `[img-optimizer] ${list.length} image(s) are not used anywhere and were NOT published ` +
+        `(neither the original nor a transcode):\n` + shown.join("\n") +
+        `\n  Delete them locally if they are no longer needed.`
+    );
+  }
 
   // The report the CI step used to print before the build started, moved to the
   // one place that actually knows the answer. Not fatal: an image with no
@@ -779,7 +856,10 @@ function manifestBody(hidden) {
   // a file the author cannot reach.
   const keys = new Set([...dims.keys(), ...weights.keys(), ...Object.keys(map)]);
   for (const rel of keys) {
-    const route = map[rel] || rel;
+    // An unused picture is still the author's to pick, so it is listed — with
+    // no route, because nothing publishes it. The editor reads its bytes from
+    // the repository instead.
+    const route = unused.has(rel) ? "" : map[rel] || rel;
     if (hidden && hidden.has(route)) continue;
     const wh = dims.get(rel) || sizes.get(route) || sizes.get(rel) || null;
     const row = [route, wh ? wh.width : 0, wh ? wh.height : 0, weights.get(rel) || 0];
@@ -992,6 +1072,14 @@ async function processFile(absPath, config) {
     /* unreadable is the scan's problem, not this check's */
   }
 
+  // Named in the manifest for the editor, encoded never. A transcode cached by
+  // an earlier build keeps its index entry, so the picture costs nothing to
+  // publish again the day something uses it.
+  if (unused.has(relPath)) {
+    if (index.get(relPath)) indexedKeys.add(relPath);
+    return;
+  }
+
   if (!isBitmap && !isSvg) return;
 
   if ((isBitmap && !config.ENABLE_AVIF) || (isSvg && !config.ENABLE_SVG)) {
@@ -1172,6 +1260,7 @@ hexo.extend.filter.register("after_generate", function () {
   // Late enough to survive _routerRefresh, early enough that the generate
   // console still writes it: that console reads route.list() after this hook.
   publishManifest();
+  withholdUnused();
 
   // Safety Cleanup & Public Sync
   const toDelete = [];

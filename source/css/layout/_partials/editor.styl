@@ -1586,10 +1586,24 @@ $ed-pop-h = 620px
     color var(--second-text-color)
     font-size 0.78rem
     cursor pointer
-    transition background $ed-fade
+    transition background $ed-fade, color $ed-fade, opacity $ed-fade
 
     &:hover
       background var(--third-background-color)
+
+    // Delete and Clear exist only while they can act; `display grid` above
+    // would otherwise beat the UA's own `[hidden]`.
+    &[hidden]
+      display none
+
+    &:disabled
+      opacity 0.35
+      cursor default
+      background transparent
+
+    &.is-danger:hover
+      background var(--box-red-bg)
+      color var(--box-red-text)
 
 .ed-picker-foot
   display flex
@@ -1908,6 +1922,46 @@ $ed-pop-h = 620px
   font-size 0.6rem
   font-style normal
 
+// A touch screen's tick. There every tap adds to the selection rather than
+// replacing it, so each picture says so before the first tap, not after.
+.ed-pick-check
+  display none
+  flex-shrink 0
+  place-items center
+  width 17px
+  height 17px
+  border 1.5px solid var(--border-color)
+  border-radius 50%
+  color transparent
+  font-size 0.55rem
+  transition background $ed-fade, border-color $ed-fade, color $ed-fade
+
+@media (pointer: coarse)
+  .ed-pick-check
+    display grid
+
+.ed-pick-row[data-on="1"] .ed-pick-check
+  border-color $ed-on-primary
+  background $ed-on-primary
+
+// One class heavier than the selected row's white `i`, or the tick is white on white.
+.ed-pick-row[data-on="1"] .ed-pick-check i
+  color var(--primary-color)
+
+// How many a dragged selection stands for, on the ghost of the row held. That
+// row is always a selected one, so the badge is the selection's colours reversed.
+.ed-pick-carry
+  flex-shrink 0
+  min-width 18px
+  padding 1px 6px
+  border-radius 999px
+  background $ed-on-primary
+  color var(--primary-color)
+  font-size 0.62rem
+  font-style normal
+  font-weight 700
+  text-align center
+
 .ed-pick-view
   display flex
   flex-direction column
@@ -2036,6 +2090,10 @@ $ed-pop-h = 620px
   margin 0
   font-size 0.72rem
 
+  // Empty while several are chosen; gone, so the pane's gap goes with it.
+  &:empty
+    display none
+
   dt
     color var(--third-text-color)
 
@@ -2044,6 +2102,56 @@ $ed-pop-h = 620px
     color var(--second-text-color)
     font-family $ed-mono
     overflow-wrap anywhere
+
+// Several pictures: their facts one under another, scrolling INSIDE the pane.
+// The pane is a fixed box, so the list never makes it taller; it fades out at
+// whichever edge has more beyond it — the vault log's mask, toggled from JS.
+.ed-pick-many
+  --ed-fade-top 0px
+  --ed-fade-bottom 0px
+  flex 1 1 auto
+  min-height 0
+  overflow-y auto
+  overscroll-behavior contain
+  ed-scroll()
+  -webkit-mask-image linear-gradient(to bottom, transparent 0, #000 var(--ed-fade-top), #000 calc(100% - var(--ed-fade-bottom)), transparent 100%)
+  mask-image linear-gradient(to bottom, transparent 0, #000 var(--ed-fade-top), #000 calc(100% - var(--ed-fade-bottom)), transparent 100%)
+
+  &[hidden]
+    display none
+
+  &.has-top
+    --ed-fade-top 22px
+
+  &.has-bottom
+    --ed-fade-bottom 22px
+
+  > .ed-pick-meta + .ed-pick-meta
+    margin-top 10px
+    padding-top 10px
+    border-top 1px solid var(--border-color)
+
+.ed-pick-count
+  display flex
+  align-items center
+  gap 8px
+  margin 0 0 10px
+  padding-bottom 10px
+  border-bottom 1px solid var(--border-color)
+  color var(--first-text-color)
+  font-size 0.76rem
+  font-weight 650
+
+  > i
+    color var(--primary-color)
+
+  > em
+    margin-left auto
+    color var(--third-text-color)
+    font-family $ed-mono
+    font-size 0.7rem
+    font-style normal
+    font-weight 400
 
 // The one field along the bottom: what is chosen, and the way to look for
 // something else. It is the same control because they are the same question.
@@ -2146,6 +2254,9 @@ $ed-pop-h = 620px
   color var(--third-text-color)
   font-family $ed-mono
   font-size 0.68rem
+
+.ed-pick-hit[data-picked="1"] i
+  color var(--primary-color)
 
 .ed-pick-ok
   flex-shrink 0
@@ -2856,20 +2967,30 @@ html.blog-editing .page-template-container
     flex-wrap wrap
     align-items center
 
+  // A zero basis, so the card's line-breaking never sees the row's content
+  // width: `auto` let a row wider than the room left beside the steps drop onto
+  // a line of its own. The row then keeps its buttons on ONE line and they
+  // give up width together — the same buttons, slightly narrower, on a phone.
   .ed-toolbar-row
-    flex 1 1 auto
+    flex 1 1 0
+    flex-wrap nowrap
     min-width 0
+
+    .ed-tool
+      flex 0 1 30px
+      min-width 0
 
   // If it ever opens, it opens under the whole row rather than beside it.
   .ed-toolbar-sub
     flex 1 0 100%
+    flex-wrap wrap
 
-  // Three steps, a minimise button and eight controls have to fit one line at a
-  // phone's width. Two pixels each is the difference between one row and two.
   +redefine-mobile()
     .ed-tool
-      width 28px
       height 28px
+
+    .ed-tool-sep
+      margin 0 3px
 
 // ─── which category this album is in ────────────────────────
 // The picture browser's own search field, so the only two search boxes in this

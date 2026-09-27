@@ -963,7 +963,7 @@ editor:
   g_exposure: Exposure
   g_other: Other
   pick_title: Pictures
-  pick_upload: Add a picture
+  pick_upload: Add pictures
   pick_mkdir: New folder
   pick_rename: Rename
   pick_folder: New folder
@@ -980,6 +980,12 @@ editor:
   pick_bytes: File
   pick_served: Served at
   pick_moved: Moving from
+  pick_delete: Delete what was added
+  pick_deselect: Clear selection
+  pick_many: "{n} pictures selected"
+  pick_use_many: "Add {n} pictures"
+  pick_one_only: One picture at a time
+  pick_unused: Nowhere - nothing uses it yet
   edit_album: Edit this album
   no_album: This album is not in the repository you can write to.
   editing_draft_album: You are editing the draft that stands in front of this album.

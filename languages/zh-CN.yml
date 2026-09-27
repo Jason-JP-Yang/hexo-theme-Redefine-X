@@ -980,6 +980,12 @@ editor:
   pick_bytes: 大小
   pick_served: 实际路径
   pick_moved: 移动自
+  pick_delete: 删除新增内容
+  pick_deselect: 取消选择
+  pick_many: "已选 {n} 张图片"
+  pick_use_many: "添加 {n} 张图片"
+  pick_one_only: 一次只能使用一张图片
+  pick_unused: 未发布（尚无引用）
   edit_album: 编辑这个相册
   no_album: 这个相册不在你可写入的仓库里。
   editing_draft_album: 你正在编辑挡在这个相册前面的草稿。

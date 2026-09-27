@@ -2406,8 +2406,18 @@ async function pickImage(current, browse) {
     {
       t,
       stage: state.stage,
-      pending: state.pending,
+      get pending() {
+        return state.pending;
+      },
       upload: stageImage,
+      // Everything the post says, front matter included — what a picture added
+      // in this session must not appear in before the browser may delete it. A
+      // burst still being typed is read first; an untouched post is not re-read.
+      usage: () => {
+        history.flush();
+        return state.doc ? docToMarkdown(state.doc) : "";
+      },
+      discard: (origins, where) => dropStaged(origins, where),
       // A tidy-up is half a dozen separate decisions, so each one is a step of
       // its own rather than one lump recorded when the browser closes.
       onStageChange: (path) => markDirty("assets", path),
@@ -2442,8 +2452,23 @@ async function pickImage(current, browse) {
   return staged || { path: picked.path, site: picked.site };
 }
 
-/** Read a file off disk, hold it as a blob, and queue it for the next commit. */
-async function stageImage(file, dir) {
+/**
+ * Take pictures this session added back out of the next commit. The blob URL
+ * is kept: undo puts the asset back, and a save or close revokes it anyway.
+ */
+function dropStaged(origins, where) {
+  const gone = new Set(origins);
+  for (let i = state.pending.length - 1; i >= 0; i--) {
+    if (gone.has(state.pending[i].path)) state.pending.splice(i, 1);
+  }
+  markDirty("assets", where);
+}
+
+/**
+ * Read a file off disk, hold it as a blob, and queue it for the next commit.
+ * `quiet` leaves the step to the caller, which is staging several at once.
+ */
+async function stageImage(file, dir, quiet) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let path = await repo.assetPath(file.name, bytes);
   // The picker says which folder is open; a paste or a drop has no opinion and
@@ -2466,7 +2491,7 @@ async function stageImage(file, dir) {
   if (size && size.width) Object.assign(asset, size);
 
   state.pending.push(asset);
-  markDirty("assets", asset.path);
+  if (!quiet) markDirty("assets", asset.path);
   return asset;
 }
 
