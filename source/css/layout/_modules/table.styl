@@ -1,0 +1,295 @@
+// ========================================================================================
+//                                        TABLES
+// ========================================================================================
+// Every table the build frames — a markdown table (filters/table-handle.js) and
+// a `{% table %}` (tools/components.js) — is the same three boxes:
+//
+//   .table-container   does not scroll: the surface, and the FRAME drawn over
+//                      everything (::after), so nothing inside can cover it
+//     .table-scroll    scrolls, on the site's thin scrollbar, and fades its
+//                      content at an edge with more beyond (layouts/tableFit.js)
+//       table          collapsed borders, so every join is resolved per edge
+//
+// The frame draws the outside, so no cell ever does unless it asks for a line
+// of its own — which is what keeps a rounded corner a rounded corner.
+//
+// Colour: the box palette's saturated face (`$dark-box-*-bg`) is the one set of
+// hues. A soft fill is that hue mixed into the page, so it is a tint in either
+// theme; a solid fill is the hue itself with the palette's own ink on it.
+
+$table-radius = $redefine-border-radius-small
+
+:root
+  --tf-mix 15%
+
+  for $tc in $table-colours
+    {'--tc-' + $tc} lookup('$dark-box-' + $tc + '-bg')
+    {'--tc-' + $tc + '-ink'} lookup('$dark-box-' + $tc + '-text')
+
+.dark
+  --tf-mix 32%
+
+.markdown-body
+  --table-rule unquote('color-mix(in oklab, var(--default-text-color) 12%, transparent)')
+  --table-rule-strong unquote('color-mix(in oklab, var(--default-text-color) 46%, transparent)')
+  --table-frame unquote('color-mix(in oklab, var(--default-text-color) 16%, var(--background-color))')
+  --table-head unquote('color-mix(in oklab, var(--default-text-color) 5%, var(--background-color))')
+  --table-head-rule unquote('color-mix(in oklab, var(--default-text-color) 22%, transparent)')
+  --table-band unquote('color-mix(in oklab, var(--default-text-color) 2.5%, var(--background-color))')
+
+.markdown-body .table-container
+  position relative
+  width 100%
+  margin 1rem 0 1.2rem
+  box-sizing border-box
+  border-radius $table-radius
+  background var(--background-color)
+
+  // Over the content, not around it: the scroller fades what it holds at an
+  // edge (see below), and a border inside that fade would fade with it.
+  &::after
+    content ""
+    position absolute
+    inset 0
+    z-index 3
+    border-top var(--tf-t, 1px solid var(--table-frame))
+    border-right var(--tf-r, 1px solid var(--table-frame))
+    border-bottom var(--tf-b, 1px solid var(--table-frame))
+    border-left var(--tf-l, 1px solid var(--table-frame))
+    border-radius $table-radius
+    pointer-events none
+    transition border-color 0.2s ease
+
+  // The same frame a picture's size is measured on: a share of the widest
+  // column, clipped to the one it is in.
+  &.is-sized
+    width unquote('min(100%, calc(var(--table-size) * ' + $content-max-width + '))')
+    margin-left auto
+    margin-right auto
+
+  &.is-fit
+    width fit-content
+    max-width 100%
+    margin-left auto
+    margin-right auto
+
+    > .table-scroll > table
+      width auto
+
+.markdown-body .table-scroll
+  position relative
+  overflow-x auto
+  overflow-y hidden
+  overscroll-behavior-x contain
+  border-radius $table-radius
+  scrollbar-width thin
+  scrollbar-color var(--scrollbar-color) transparent
+
+  &::-webkit-scrollbar
+    height 9px
+
+  &::-webkit-scrollbar-track
+    background transparent
+
+  &::-webkit-scrollbar-thumb
+    border 2px solid transparent
+    border-radius 999px
+    background var(--scrollbar-color)
+    background-clip content-box
+
+  &:hover::-webkit-scrollbar-thumb
+    background var(--scrollbar-color-hover)
+    background-clip content-box
+
+  > table
+    width 100%
+    margin 0
+    border-collapse collapse
+    border-spacing 0
+    font-size 0.95em
+    line-height 1.6
+    background transparent
+    box-shadow none
+    border-radius 0
+
+    // Set only while too full for its column; see layouts/tableFit.js.
+    &[data-fit-width]
+      max-width none
+
+  th, td
+    padding 0.42em 0.78em
+    border 1px solid var(--table-rule)
+    vertical-align middle
+    overflow-wrap break-word
+    transition border-color 0.2s ease, border-width 0.2s ease, background-color 0.2s ease, color 0.2s ease
+
+    // What a cell holds sits close: the article's own spacing is measured for a
+    // column of prose, and in a cell it was most of the height.
+    > :first-child
+      margin-top 0 !important
+
+    > :last-child
+      margin-bottom 0 !important
+
+    p
+      margin-bottom 0.45em
+      line-height inherit
+
+    ul, ol
+      margin-bottom 0.45em
+
+    li
+      line-height 1.6
+
+    img, .img-preloader
+      margin 0.3em auto
+      border-radius $redefine-border-radius-xsmall * 2
+
+    figure
+      margin 0.3em 0
+
+    figcaption
+      margin-top 3px
+      margin-bottom 0
+      font-size 0.8rem
+
+    .note, .note-large, .code-container, .mathjax-block, blockquote
+      margin-top 0.4em
+      margin-bottom 0.4em
+
+    // A picture's size, inside a cell, is a share of the cell.
+    --img-ref 100%
+
+  th
+    font-weight 600
+    color var(--second-text-color)
+    background-color var(--table-head)
+
+  thead th
+    border-bottom-color var(--table-head-rule)
+
+// ── the outside belongs to the frame ────────────────────────────
+// A `{% table %}` cell says which edges it is on; a markdown table has no spans,
+// so its first and last rows and cells are those edges.
+.markdown-body .table-scroll > table
+  .e-t
+    border-top-style none
+
+  .e-r
+    border-right-style none
+
+  .e-b
+    border-bottom-style none
+
+  .e-l
+    border-left-style none
+
+.markdown-body .table-container:not(.rich-table) > .table-scroll > table
+  > :first-child > tr:first-child > *
+    border-top-style none
+
+  > :last-child > tr:last-child > *
+    border-bottom-style none
+
+  tr > :first-child
+    border-left-style none
+
+  tr > :last-child
+    border-right-style none
+
+// Banding weighs less than a fill (`:where` carries no weight of its own), so a
+// coloured cell keeps its colour on an even row.
+.markdown-body :where(.table-container:not(.rich-table)) tbody > tr:nth-child(2n) > td,
+.markdown-body :where(.table-container.is-banded) tbody > tr:nth-child(2n) > td
+  background-color var(--table-band)
+
+// ── nine places to sit ──────────────────────────────────────────
+$table-v = { t: top, m: middle, b: bottom }
+$table-h = { l: left, c: center, r: right }
+
+for $vk, $vv in $table-v
+  for $hk, $hv in $table-h
+    .markdown-body .table-scroll .ta-{$vk}{$hk}
+      vertical-align $vv
+      text-align $hv
+
+// A picture is a block and ignores `text-align`, so it is placed by its margins.
+for $vk in 't' 'm' 'b'
+  .markdown-body .table-scroll .ta-{$vk}l
+    img, .img-preloader, .img-sized
+      margin-left 0
+      margin-right auto
+
+  .markdown-body .table-scroll .ta-{$vk}r
+    img, .img-preloader, .img-sized
+      margin-left auto
+      margin-right 0
+
+// ── fills ────────────────────────────────────────────────────────
+for $tc in $table-colours
+  .markdown-body .table-scroll .bg-{$tc}
+    background-color unquote('color-mix(in oklab, var(--tc-' + $tc + ') var(--tf-mix), var(--background-color))')
+
+  .markdown-body .table-scroll .bg-{$tc}-solid
+    background-color unquote('var(--tc-' + $tc + ')')
+    color unquote('var(--tc-' + $tc + '-ink)')
+
+    a, strong, em, code, th, li, p
+      color inherit
+
+    a
+      text-decoration-color currentColor
+
+// ── too full for the column ─────────────────────────────────────
+// While a table scrolls, its CONTENT fades out at whichever edge has more
+// beyond it: a mask, so a coloured cell fades exactly as a white one does and
+// nothing is left showing under the frame. The widths are registered lengths so
+// the fade travels in and out rather than switching.
+@css {
+  @property --tfl { syntax: '<length>'; inherits: false; initial-value: 0px; }
+  @property --tfr { syntax: '<length>'; inherits: false; initial-value: 0px; }
+}
+
+.markdown-body .table-container.is-scroll > .table-scroll
+  -webkit-mask-image unquote('linear-gradient(to right, transparent 0, #000 var(--tfl), #000 calc(100% - var(--tfr)), transparent 100%)')
+  mask-image unquote('linear-gradient(to right, transparent 0, #000 var(--tfl), #000 calc(100% - var(--tfr)), transparent 100%)')
+  transition --tfl 0.25s ease, --tfr 0.25s ease
+
+.markdown-body .table-container.fade-l > .table-scroll
+  --tfl 44px
+
+.markdown-body .table-container.fade-r > .table-scroll
+  --tfr 44px
+
+// And the caret a display equation's hint wears, saying which way there is more.
+.markdown-body .table-hint
+  position absolute
+  top 0
+  bottom var(--table-sb, 0px)
+  z-index 4
+  display flex
+  align-items center
+  width 20px
+  color var(--third-text-color)
+  font-size 13px
+  pointer-events none
+  opacity 0
+  transition opacity 0.25s ease
+
+  &.is-left
+    left 4px
+    justify-content flex-start
+
+  &.is-right
+    right 4px
+    justify-content flex-end
+
+.markdown-body .table-container.fade-l > .table-hint.is-left,
+.markdown-body .table-container.fade-r > .table-hint.is-right
+  opacity 0.85
+
+@media (prefers-reduced-motion: reduce)
+  .markdown-body .table-hint,
+  .markdown-body .table-scroll th,
+  .markdown-body .table-scroll td
+    transition none

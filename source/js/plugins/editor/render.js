@@ -148,13 +148,14 @@ function renderList(b) {
   return `<${tag}>${items}</${tag}>`;
 }
 
+/** A markdown table, in the frame filters/table-handle.js publishes it in. */
 function renderTable(b) {
   const style = (i) => (b.align[i] ? ` style="text-align:${b.align[i]}"` : "");
   const head = b.header.map((cell, i) => `<th${style(i)}>${inlineToHTML(cell)}</th>`).join("");
   const body = b.rows
     .map((row) => `<tr>${row.map((cell, i) => `<td${style(i)}>${inlineToHTML(cell)}</td>`).join("")}</tr>`)
     .join("");
-  return `<div class="table-container"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="table-container" data-table><div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 
 /**
@@ -183,6 +184,8 @@ function renderComponent(b) {
         return api.folding(argv, b.body, renderMarkdown);
       case "tabs":
         return api.tabs(argv, b.body, renderMarkdown, {});
+      case "table":
+        return api.table(argv, b.body, renderMarkdown);
       case "btn":
         return api.btn(argv);
       default:

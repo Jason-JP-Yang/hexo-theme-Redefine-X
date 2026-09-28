@@ -33,6 +33,8 @@
 const fs = require("fs");
 const path = require("path");
 const yaml = require("js-yaml");
+const components = require("../../source/js/tools/components.js");
+const { measureFileSync } = require("../lib/image-dims");
 
 // Try to load exif-parser, if not available, auto-exif will be disabled
 let ExifParser = null;
@@ -95,24 +97,9 @@ const WHITE_BALANCE_KEYS = {
  * Parse arguments from tag
  */
 function parseArgs(args) {
-  let title = "";
-  let autoExif = true;
-
-  const argsStr = args.join(" ");
-
-  // Check for auto-exif parameter
-  const autoExifMatch = argsStr.match(/auto-exif\s*:\s*(true|false)/i);
-  if (autoExifMatch) {
-    autoExif = autoExifMatch[1].toLowerCase() === "true";
-  }
-
-  // Extract title (everything before auto-exif or the whole string)
-  const titlePart = argsStr.replace(/auto-exif\s*:\s*(true|false)/i, "").trim();
-  if (titlePart) {
-    title = titlePart;
-  }
-
-  return { title, autoExif };
+  // The editor's own reading of the same arguments, so `size:` and the title
+  // are told apart identically on both sides.
+  return components.exifArgs(args);
 }
 
 /**
@@ -551,7 +538,8 @@ function buildMergedInfo(autoExifData, customInfo, autoExifEnabled, t, locale) {
 /**
  * Generate HTML for image with EXIF info
  */
-function generateHTML(imageInfo, title, description, exifInfo, hexo) {
+function generateHTML(imageInfo, title, description, exifInfo, hexo, frame) {
+  const sized = frame ? ` img-sized" style="${frame}` : "";
   const theme = hexo.theme.config;
   const imageCaptionStyle = theme?.articles?.style?.image_caption || "block";
   const t = getTranslator(hexo);
@@ -586,11 +574,25 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
   const hasDescription = description && description.trim().length > 0;
   const hasExifData = Object.keys(exifInfo).length > 0;
 
-  if (!hasTitle && !hasDescription && !hasExifData) {
+  // A size alone is enough: the tag is also how a picture says how large it is.
+  if (!hasTitle && !hasDescription && !hasExifData && !frame) {
     throw new Error("[image-exif] At least one of title, description, or EXIF info is required.");
   }
 
   // Check for Simple Mode (No EXIF data, but has image info)
+  if (!hasExifData && !hasTitle && !hasDescription) {
+    // img-handle.js writes the figure number into the empty caption; with
+    // numbering off there is nothing to caption at all.
+    const style = theme?.articles?.style || {};
+    const numbered = style.image_caption !== false && style.image_figure_number === true;
+    return `
+<figure class="image-caption image-exif-simple-container${sized}">
+  <img src="${escapeHtmlAttr(imageInfo.path)}" alt="" class="image-exif-img" data-no-img-handle="true" />
+  ${numbered ? "<figcaption></figcaption>" : ""}
+</figure>
+`;
+  }
+
   if (!hasExifData && (hasTitle || hasDescription)) {
     let captionContent = "";
     
@@ -605,7 +607,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
     }
     
     return `
-<figure class="image-caption image-exif-simple-container">
+<figure class="image-caption image-exif-simple-container${sized}">
   <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" data-no-img-handle="true" />
   <figcaption>${captionContent}</figcaption>
 </figure>
@@ -734,7 +736,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
   // Build final HTML
   const html = isFloat
     ? `
-<figure class="image-exif-container ${layoutClass}" data-no-img-handle="true">
+<figure class="image-exif-container ${layoutClass}${sized}" data-no-img-handle="true">
   <div class="image-exif-image-wrapper">
     <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" />
     ${infoCardHtml}
@@ -742,7 +744,7 @@ function generateHTML(imageInfo, title, description, exifInfo, hexo) {
 </figure>
 `
     : `
-<figure class="image-exif-container ${layoutClass}" data-no-img-handle="true">
+<figure class="image-exif-container ${layoutClass}${sized}" data-no-img-handle="true">
   <div class="image-exif-image-wrapper">
     <img src="${escapeHtmlAttr(imageInfo.path)}" alt="${escapeHtmlAttr(description)}" class="image-exif-img" />
   </div>
@@ -788,7 +790,7 @@ function imageExifTag(args, content) {
 
   try {
     // Parse arguments
-    const { title, autoExif } = parseArgs(args);
+    const { title, autoExif, size } = parseArgs(args);
 
     // Validate content structure
     validateContent(content, hexoLog);
@@ -817,13 +819,21 @@ function imageExifTag(args, content) {
     // Merge EXIF info (custom has priority)
     const mergedInfo = buildMergedInfo(autoExifData, customInfo, autoExif, t, locale);
 
+    // The frame needs the picture's own proportions, which only the file has.
+    let frame = "";
+    if (size) {
+      const local = resolveLocalImagePath(imageInfo.path, hexo, this);
+      frame = components.imageFrame(size, local ? measureFileSync(local) : null);
+    }
+
     // Generate HTML
     const html = generateHTML(
       imageInfo,
       title,
       imageInfo.description,
       mergedInfo,
-      hexo
+      hexo,
+      frame
     );
 
     return html;

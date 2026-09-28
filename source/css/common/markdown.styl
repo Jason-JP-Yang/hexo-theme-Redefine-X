@@ -228,57 +228,53 @@
 
   
 
-  // `.table-container` is the wrapper both the editor's table block and its
-  // markdown previews emit. Naming `.ed-body > table` here matched nothing —
-  // the table is two levels below it — so an editable table had no borders, no
-  // header band and no zebra, and there was no way to see where a cell ended.
+  // A table the build did not frame — hand-written HTML with attributes of its
+  // own. It gets the same rules and band as a framed one, without the frame.
   & > table,
-  .tab-pane > table,
-  .table-container > table
-    border-spacing 0
-    border-collapse collapse
+  .tab-pane > table
     width 100%
-    overflow auto
-    margin-bottom 1.2rem
-    margin-top 1rem
-    box-shadow var(--redefine-box-shadow-flat)
-    border-radius $redefine-border-radius-medium
+    margin 1rem 0 1.2rem
+    border-collapse collapse
+    font-size 0.95em
+    line-height 1.6
 
-    thead
-      th
-        border-bottom 1px solid var(--shadow-color-1)
-        background-color var(--third-background-color) !important
+    th, td
+      padding 0.42em 0.78em
+      border 1px solid var(--table-rule)
 
-        &:first-child
-          border-top-left-radius $redefine-border-radius-medium
+    th
+      font-weight 600
+      background var(--table-head)
 
-        &:last-child
-          border-top-right-radius $redefine-border-radius-medium
+    tbody tr:nth-child(2n) > td
+      background var(--table-band)
 
-    tbody
-      tr
-        &:last-child
-          td
-            &:first-child
-              border-bottom-left-radius $redefine-border-radius-medium
+  // ─── pictures at a size of their own ───────────────────────────
+  // `{% exifimage size:N %}` draws its figure in a FRAME: `size × reference`
+  // wide and `size × max-height` tall, clipped to the column it is in and never
+  // wider than the picture's own pixels. The width half is absolute, so a wide
+  // picture made smaller narrows on a desktop and is untouched on a phone whose
+  // column is already narrower than the frame; the height half follows the
+  // viewport, so a tall picture — height-bound on every screen — shrinks on all
+  // of them alike. In a table cell the reference is the cell (see tables).
+  --img-ref $content-max-width
+  --img-max-h $usr-img-max-height
 
-            &:last-child
-              border-bottom-right-radius $redefine-border-radius-medium
+  .img-sized
+    width unquote('min(100%, var(--img-nat, 100%), calc(var(--img-size) * var(--img-ref)), calc(var(--img-size) * var(--img-max-h) * var(--img-ar, 100)))')
+    margin-left auto
+    margin-right auto
+    box-sizing border-box
 
-    td, th
-      padding 8px 16px
-      // border 1px solid var(--border-color)
-      border-left 1px solid var(--shadow-color-1)
+    .image-exif-img,
+    > img,
+    > .img-preloader
+      width 100%
+      max-height none
 
-      &:first-child
-        border-left none
-
-    tr
-      background-color var(--background-color)
-      // border 1px solid var(--fourth-text-color)
-
-    tr:nth-child(2n)
-      background-color var(--second-background-color)
+  .image-exif-container.img-sized
+    margin-left auto
+    margin-right auto
 
   mjx-container
     display inline

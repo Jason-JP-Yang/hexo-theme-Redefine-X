@@ -16,6 +16,12 @@ $image-exif-gap = 0.6rem
 // ===================================================================
 // 1. Base Styles (shared by all three modes)
 // ===================================================================
+// The simple figure is a tag's output, so no paragraph closes around it the
+// way one does around a plain picture (see the editor's image block) — that
+// paragraph's margin is the gap a plain picture has under it, given here.
+figure.image-exif-simple-container
+  margin-bottom 1rem
+
 .image-exif-container
   width 100%
   margin 1.25rem 0

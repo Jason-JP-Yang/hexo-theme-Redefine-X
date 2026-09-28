@@ -369,13 +369,43 @@
     return lines.join("\n");
   }
 
+  const EXIF_FLAGS = /(?:^|\s)(?:auto-exif\s*:\s*(?:true|false)|size\s*:\s*\d+(?:\.\d+)?)(?=\s|$)/gi;
+
   function exifArgs(args) {
     const joined = (args || []).join(" ");
     const auto = joined.match(/auto-exif\s*:\s*(true|false)/i);
+    const size = joined.match(/(?:^|\s)size\s*:\s*(\d+(?:\.\d+)?)(?=\s|$)/i);
     return {
-      title: joined.replace(/auto-exif\s*:\s*(true|false)/i, "").trim(),
+      title: joined.replace(EXIF_FLAGS, " ").replace(/\s+/g, " ").trim(),
       autoExif: auto ? auto[1].toLowerCase() === "true" : true,
+      size: size ? imageSize(size[1]) : 0,
     };
+  }
+
+  /**
+   * A picture's size, 10–100: the share of its FRAME it is drawn at. 100, or
+   * nothing, is the picture as every other one is drawn.
+   *
+   * The frame is `size × reference` wide and `size × max-height` tall, clipped
+   * to the column the picture is in (see `.img-sized` in image-exif.styl). The
+   * width half is absolute — the article's widest column — so shrinking a wide
+   * picture narrows it on a desktop and leaves a phone, whose column is already
+   * narrower than the frame, exactly as it was. The height half is a share of
+   * the viewport, so a tall picture, which is height-bound everywhere, shrinks
+   * on every screen alike. Inside a table cell the reference is the cell.
+   */
+  function imageSize(raw) {
+    const n = Math.round(Number(raw));
+    return Number.isFinite(n) && n >= 10 && n < 100 ? n : 0;
+  }
+
+  /** The frame's inline custom properties, from the picture's own pixels. */
+  function imageFrame(size, dims) {
+    const out = [`--img-size:${size / 100}`];
+    if (dims && dims.width > 0 && dims.height > 0) {
+      out.push(`--img-ar:${(dims.width / dims.height).toFixed(5)}`, `--img-nat:${Math.round(dims.width)}px`);
+    }
+    return out.join(";");
   }
 
   /**
@@ -388,12 +418,13 @@
    *   media          markup to stand in for the `<img>` (the lazy preloader)
    */
   function exifImage(args, content, render, options) {
-    const { title } = exifArgs(args);
+    const { title, size } = exifArgs(args);
     const { description, path, info } = parseExifBody(content);
     const opts = options || {};
     const labels = opts.labels || {};
     const src = opts.resolve ? opts.resolve(path) : path;
     const n = Number(opts.figure) || 0;
+    const sized = size ? ` img-sized" style="${imageFrame(size, opts.dims)}` : "";
 
     // `false` written into a field is how the build is told to leave it out.
     const shown = {};
@@ -405,15 +436,21 @@
     const numbered = (text) => (n ? `<strong>Figure ${n}.</strong> ` : "") + text;
 
     if (!hasInfo) {
+      // Nothing to say but its number is said the way img-handle.js says it for
+      // a plain picture — no bold, no full stop — and nothing at all is no caption.
       const caption = title
         ? `<strong class="image-exif-title">${numbered(escapeText(title))}</strong>` +
           (description ? "<br>" + escapeText(description) : "")
-        : numbered(escapeText(description));
+        : description
+          ? numbered(escapeText(description))
+          : n
+            ? `Figure ${n}`
+            : "";
       const media = opts.media || `<img src="${escapeText(src)}" alt="${alt}" class="image-exif-img" data-no-img-handle="true" />`;
       return `
-<figure class="image-caption image-exif-simple-container">
+<figure class="image-caption image-exif-simple-container${sized}">
   ${media}
-  <figcaption>${caption}</figcaption>
+  ${caption ? `<figcaption>${caption}</figcaption>` : ""}
 </figure>`;
     }
 
@@ -455,13 +492,446 @@
     const layout = opts.float ? "image-exif-float" : "image-exif-block";
 
     return `
-<figure class="image-exif-container ${layout}" data-no-img-handle="true">
+<figure class="image-exif-container ${layout}${sized}" data-no-img-handle="true">
   <div class="image-exif-image-wrapper">
     ${media}
     ${opts.float ? card : ""}
   </div>
   ${opts.float ? "" : card}
 </figure>`;
+  }
+
+  /* ─── table ────────────────────────────────────────────────────────────── */
+
+  /**
+   * `{% table %}` — the table a markdown table cannot be.
+   *
+   *   {% table head:1 band:1 cols:a,30,a size:80 %}
+   *   <!-- row -->
+   *   <!-- cell span:2x1 align:mc bg:blue border:thick,,thin/red, -->
+   *   Any markdown: paragraphs, a list, a picture.
+   *   <!-- cell -->
+   *   …
+   *   {% endtable %}
+   *
+   * Arguments: `head` header rows, `hcol:1` a header column, `band:1` banded
+   * rows, `size` the table's width on the same frame a picture's size uses (a
+   * share of the widest column, clipped to the column it is in) or `fit` for the
+   * width of its content, and `cols` one entry per GRID column — `a` for a width
+   * the content decides, a number for a fixed share of the table in percent.
+   *
+   * A cell: `span:COLSxROWS`, `align:` vertical t/m/b then horizontal l/c/r,
+   * `bg:` a box colour, soft or `-solid`, and `border:` top,right,bottom,left,
+   * each a line (thin medium thick dashed dotted double none) with an optional
+   * `/colour`; empty is the table's own rule.
+   *
+   * Cells need not line up in columns. A cell resized on its own moves only its
+   * own edge, which is written as a finer grid and wider spans in the rows it did
+   * not touch — so what is published is still a plain `colgroup` and `colspan`
+   * table, and the browser lays it out.
+   */
+  const TABLE_ALIGNS = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
+  const TABLE_LINES = {
+    thin: [1, "solid"],
+    medium: [2, "solid"],
+    thick: [3, "solid"],
+    dashed: [1, "dashed"],
+    dotted: [2, "dotted"],
+    double: [3, "double"],
+    none: [0, "hidden"],
+  };
+  const TABLE_SIDES = ["top", "right", "bottom", "left"];
+  const TABLE_MARK = /^\s*<!--\s*(row|cell)(?:\s+([^>]*?))?\s*-->\s*$/;
+
+  function tableLine(raw) {
+    const [style, colour] = String(raw || "").trim().toLowerCase().split("/");
+    if (!TABLE_LINES[style]) return "";
+    if (!colour || style === "none") return style;
+    return colour === "accent" || BOX_COLOR_SET.has(colour) ? style + "/" + colour : style;
+  }
+
+  function tableFill(raw) {
+    const m = String(raw || "").trim().toLowerCase().match(/^([a-z]+)(-solid)?$/);
+    return m && BOX_COLOR_SET.has(m[1]) ? m[1] + (m[2] || "") : "";
+  }
+
+  function tableCell(fields) {
+    return Object.assign(
+      { cs: 1, rs: 1, align: "", bg: "", border: ["", "", "", ""], body: "" },
+      fields || {}
+    );
+  }
+
+  function clampInt(raw, lo, hi) {
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : lo;
+  }
+
+  function tableCellAttrs(text) {
+    const cell = tableCell();
+    for (const token of String(text || "").trim().split(/\s+/)) {
+      const at = token.indexOf(":");
+      if (at < 1) continue;
+      const key = token.slice(0, at).toLowerCase();
+      const value = token.slice(at + 1);
+      if (key === "span") {
+        const m = value.match(/^(\d+)x(\d+)$/i);
+        if (m) {
+          cell.cs = clampInt(m[1], 1, 500);
+          cell.rs = clampInt(m[2], 1, 5000);
+        }
+      } else if (key === "align") {
+        if (TABLE_ALIGNS.includes(value.toLowerCase())) cell.align = value.toLowerCase();
+      } else if (key === "bg") {
+        cell.bg = tableFill(value);
+      } else if (key === "border") {
+        const sides = value.split(",");
+        cell.border = [0, 1, 2, 3].map((i) => tableLine(sides[i]));
+      }
+    }
+    return cell;
+  }
+
+  function tableArgs(args) {
+    const out = { size: 0, head: 0, hcol: 0, band: false, cols: [] };
+    const tokens = (Array.isArray(args) ? args.join(" ") : String(args || "")).trim().split(/\s+/);
+    for (const token of tokens) {
+      const at = token.indexOf(":");
+      if (at < 1) continue;
+      const key = token.slice(0, at).toLowerCase();
+      const value = token.slice(at + 1).toLowerCase();
+      if (key === "size") out.size = value === "fit" ? "fit" : imageSize(value);
+      else if (key === "head") out.head = clampInt(value, 0, 50);
+      else if (key === "hcol") out.hcol = clampInt(value, 0, 1);
+      else if (key === "band") out.band = value === "1" || value === "true";
+      else if (key === "cols") {
+        out.cols = value.split(",").map((v) => {
+          const n = parseFloat(v);
+          return Number.isFinite(n) && n > 0 ? Math.min(100, n) : null;
+        });
+      }
+    }
+    return out;
+  }
+
+  /** The body's rows and cells, as written; `tableNormalize` makes them a grid. */
+  function tableRows(content) {
+    const lines = String(content == null ? "" : content).replace(/\r\n/g, "\n").split("\n");
+    const rows = [];
+    let row = null;
+    let cell = null;
+    let buf = [];
+
+    const flush = () => {
+      if (cell) {
+        while (buf.length && !buf[0].trim()) buf.shift();
+        while (buf.length && !buf[buf.length - 1].trim()) buf.pop();
+        cell.body = buf.join("\n");
+      }
+      buf = [];
+    };
+
+    for (const line of lines) {
+      const m = line.match(TABLE_MARK);
+      if (!m) {
+        if (cell) buf.push(line);
+        continue;
+      }
+      flush();
+      if (m[1] === "row") {
+        row = { cells: [] };
+        rows.push(row);
+        cell = null;
+      } else {
+        if (!row) {
+          row = { cells: [] };
+          rows.push(row);
+        }
+        cell = tableCellAttrs(m[2]);
+        row.cells.push(cell);
+      }
+    }
+    flush();
+    return rows;
+  }
+
+  /**
+   * Rows and spans, placed the way an HTML table places them.
+   *
+   * A span running into a slot somebody already owns, or off the last row, is
+   * clipped; a hole is filled with an empty cell. Afterwards every slot has
+   * exactly one owner and every owner is a rectangle, so `slots` IS the table
+   * and every edit can be made on it and read back with `tableFromSlots`.
+   */
+  function tableNormalize(model) {
+    const rows = model.rows && model.rows.length ? model.rows : [{ cells: [tableCell()] }];
+    const slots = rows.map(() => []);
+
+    rows.forEach((row, r) => {
+      let c = 0;
+      for (const cell of row.cells) {
+        while (slots[r][c]) c += 1;
+        let cs = Math.max(1, cell.cs | 0 || 1);
+        let rs = Math.max(1, Math.min(cell.rs | 0 || 1, rows.length - r));
+        for (let x = 1; x < cs; x++) {
+          if (slots[r][c + x]) {
+            cs = x;
+            break;
+          }
+        }
+        for (let y = 1; y < rs; y++) {
+          let free = true;
+          for (let x = 0; x < cs; x++) if (slots[r + y][c + x]) free = false;
+          if (!free) {
+            rs = y;
+            break;
+          }
+        }
+        for (let y = 0; y < rs; y++) for (let x = 0; x < cs; x++) slots[r + y][c + x] = cell;
+        c += cs;
+      }
+    });
+
+    const width = Math.max(1, (model.cols || []).length, ...slots.map((line) => line.length));
+    for (const line of slots) {
+      for (let c = 0; c < width; c++) if (!line[c]) line[c] = tableCell();
+    }
+    return tableFromSlots(model, slots);
+  }
+
+  /**
+   * The slot matrix back into rows of anchored cells, spans read off the
+   * rectangle each cell covers. `model`'s own settings are kept; `cols` is
+   * padded or cut to the grid.
+   */
+  function tableFromSlots(model, slots) {
+    const width = slots.length ? slots[0].length : 0;
+    const seen = new Set();
+    const rows = slots.map(() => ({ cells: [] }));
+
+    for (let r = 0; r < slots.length; r++) {
+      for (let c = 0; c < width; c++) {
+        const cell = slots[r][c];
+        if (seen.has(cell)) continue;
+        seen.add(cell);
+        let cs = 1;
+        while (c + cs < width && slots[r][c + cs] === cell) cs += 1;
+        let rs = 1;
+        while (r + rs < slots.length && slots[r + rs][c] === cell) rs += 1;
+        Object.assign(cell, { r, c, cs, rs });
+        if (!Array.isArray(cell.border)) cell.border = ["", "", "", ""];
+        rows[r].cells.push(cell);
+      }
+    }
+
+    const cols = (model.cols || []).slice(0, width);
+    while (cols.length < width) cols.push(null);
+
+    return {
+      size: model.size || 0,
+      head: Math.min(model.head | 0, slots.length),
+      hcol: model.hcol ? 1 : 0,
+      band: !!model.band,
+      cols,
+      rows,
+      slots,
+    };
+  }
+
+  function tableModel(args, content) {
+    return tableNormalize(Object.assign(tableArgs(args), { rows: tableRows(content) }));
+  }
+
+  const shareText = (w) => String(Math.round(w * 10) / 10);
+
+  function tableArgsText(model) {
+    const out = [];
+    if (model.size === "fit") out.push("size:fit");
+    else if (imageSize(model.size)) out.push("size:" + imageSize(model.size));
+    if (model.head) out.push("head:" + model.head);
+    if (model.hcol) out.push("hcol:1");
+    if (model.band) out.push("band:1");
+    if (model.cols.some((w) => w != null)) {
+      out.push("cols:" + model.cols.map((w) => (w == null ? "a" : shareText(w))).join(","));
+    }
+    return out.join(" ");
+  }
+
+  function tableBodyText(model) {
+    const lines = [];
+    for (const row of model.rows) {
+      lines.push("<!-- row -->");
+      for (const cell of row.cells) {
+        const attrs = [];
+        if (cell.cs > 1 || cell.rs > 1) attrs.push(`span:${cell.cs}x${cell.rs}`);
+        if (cell.align) attrs.push("align:" + cell.align);
+        if (cell.bg) attrs.push("bg:" + cell.bg);
+        if (cell.border.some(Boolean)) attrs.push("border:" + cell.border.join(","));
+        lines.push("<!-- cell" + (attrs.length ? " " + attrs.join(" ") : "") + " -->");
+        if (cell.body) lines.push(cell.body);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  function lineColour(colour) {
+    if (!colour) return "var(--table-rule-strong)";
+    return colour === "accent" ? "var(--primary-color)" : `var(--tc-${colour})`;
+  }
+
+  /** One line as a CSS border value; `hidden` wins every collapsed conflict. */
+  function lineCSS(token) {
+    if (!token) return "";
+    const [style, colour] = token.split("/");
+    const [width, kind] = TABLE_LINES[style];
+    if (kind === "hidden") return "hidden";
+    return `${width}px ${kind} ${lineColour(colour)}`;
+  }
+
+  /** The cells across one side of `cell`, each once. */
+  function tableFacing(model, cell, side) {
+    const { slots } = model;
+    const out = new Set();
+    if (side === 0 && cell.r > 0) for (let x = 0; x < cell.cs; x++) out.add(slots[cell.r - 1][cell.c + x]);
+    if (side === 2 && cell.r + cell.rs < slots.length) for (let x = 0; x < cell.cs; x++) out.add(slots[cell.r + cell.rs][cell.c + x]);
+    if (side === 3 && cell.c > 0) for (let y = 0; y < cell.rs; y++) out.add(slots[cell.r + y][cell.c - 1]);
+    if (side === 1 && cell.c + cell.cs < model.cols.length) for (let y = 0; y < cell.rs; y++) out.add(slots[cell.r + y][cell.c + cell.cs]);
+    return Array.from(out);
+  }
+
+  /**
+   * Which outer sides the FRAME draws in a colour of its own: a side whose every
+   * cell asks for the same line. Anything less uniform is drawn by the cells,
+   * inside the frame's default rule.
+   */
+  function tableFrame(model) {
+    const frame = ["", "", "", ""];
+    const H = model.slots.length;
+    const W = model.cols.length;
+    const along = [
+      (cell) => cell.r === 0,
+      (cell) => cell.c + cell.cs >= W,
+      (cell) => cell.r + cell.rs >= H,
+      (cell) => cell.c === 0,
+    ];
+    const cells = model.rows.flatMap((row) => row.cells);
+    for (let side = 0; side < 4; side++) {
+      const edge = cells.filter(along[side]);
+      const first = edge.length ? edge[0].border[side] : "";
+      if (first && edge.every((cell) => cell.border[side] === first)) frame[side] = first;
+    }
+    return frame;
+  }
+
+  /** The container's classes and inline custom properties. */
+  function tableShell(model) {
+    const cls = ["table-container", "rich-table"];
+    const style = [];
+    if (model.band) cls.push("is-banded");
+    if (model.size === "fit") cls.push("is-fit");
+    else if (imageSize(model.size)) {
+      cls.push("is-sized");
+      style.push(`--table-size:${imageSize(model.size) / 100}`);
+    }
+    const frame = tableFrame(model);
+    frame.forEach((token, side) => {
+      if (!token) return;
+      const css = lineCSS(token);
+      style.push(`--tf-${"trbl"[side]}:${css === "hidden" ? "0 none" : css}`);
+    });
+    return { cls, style, frame };
+  }
+
+  /**
+   * One cell's element, class list and inline borders — shared by the build's
+   * HTML and the editor's DOM so the two cannot describe a cell differently.
+   *
+   * Borders collapse, and a collapsed conflict between two lines of the same
+   * width goes to the STYLE that ranks higher — so a dotted line set on one cell
+   * would lose to its neighbour's plain default rule. A side left at the default
+   * therefore stands down (`none`) wherever a cell across it has set a line.
+   */
+  function tableCellView(model, cell, frame) {
+    const H = model.slots.length;
+    const W = model.cols.length;
+    const header = cell.r < model.head || (model.hcol && cell.c === 0);
+    const cls = [];
+    if (cell.align) cls.push("ta-" + cell.align);
+    if (cell.bg) cls.push("bg-" + cell.bg);
+    const edges = [cell.r === 0, cell.c + cell.cs >= W, cell.r + cell.rs >= H, cell.c === 0];
+    edges.forEach((on, side) => on && cls.push("e-" + "trbl"[side]));
+
+    const style = [];
+    for (let side = 0; side < 4; side++) {
+      const own = cell.border[side];
+      const prop = "border-" + TABLE_SIDES[side];
+      if (edges[side]) {
+        if (own && !(frame && frame[side])) style.push(`${prop}:${lineCSS(own)}`);
+        continue;
+      }
+      if (own) style.push(`${prop}:${lineCSS(own)}`);
+      else if (tableFacing(model, cell, side).some((other) => other.border[(side + 2) % 4])) {
+        style.push(`${prop}-style:none`);
+      }
+    }
+
+    return {
+      tag: header ? "th" : "td",
+      colspan: cell.cs,
+      rowspan: cell.rs,
+      scope: header ? (cell.r < model.head ? "col" : "row") : "",
+      cls,
+      style: style.join(";"),
+    };
+  }
+
+  /** A heading in a cell is set like one without joining the contents. */
+  function cellHTML(html) {
+    return String(html == null ? "" : html)
+      .replace(/<(h[1-6])(\s[^>]*)?>/g, (_, tag) => `<p class='${tag}'>`)
+      .replace(/<\/h[1-6]>/g, "</p>");
+  }
+
+  /**
+   * The table's HTML. `args` may be the tag's own argument list or a model the
+   * caller already holds; `options.cell(cell)` replaces a cell's contents.
+   */
+  function table(args, content, render, options) {
+    const md = render || identity;
+    const opts = options || {};
+    const model = args && args.slots ? args : tableModel(args, content);
+    const shell = tableShell(model);
+
+    const cols = model.cols
+      .map((w) => (w == null ? "<col>" : `<col style="width:${shareText(w)}%">`))
+      .join("");
+
+    let head = "";
+    let body = "";
+    model.rows.forEach((row, r) => {
+      const cells = row.cells
+        .map((cell) => {
+          const v = tableCellView(model, cell, shell.frame);
+          const attrs =
+            (v.cls.length ? ` class="${v.cls.join(" ")}"` : "") +
+            (v.colspan > 1 ? ` colspan="${v.colspan}"` : "") +
+            (v.rowspan > 1 ? ` rowspan="${v.rowspan}"` : "") +
+            (v.scope ? ` scope="${v.scope}"` : "") +
+            (v.style ? ` style="${v.style}"` : "");
+          const inner = opts.cell ? opts.cell(cell) : cellHTML(md(cell.body));
+          return `<${v.tag}${attrs}>${inner}</${v.tag}>`;
+        })
+        .join("");
+      if (r < model.head) head += `<tr>${cells}</tr>`;
+      else body += `<tr>${cells}</tr>`;
+    });
+
+    return (
+      `<div class="${shell.cls.join(" ")}" data-table${shell.style.length ? ` style="${shell.style.join(";")}"` : ""}>` +
+      `<div class="table-scroll"><table><colgroup>${cols}</colgroup>` +
+      (head ? `<thead>${head}</thead>` : "") +
+      `<tbody>${body}</tbody></table></div></div>`
+    );
   }
 
   /* ─── the editor's view of all this ────────────────────────────────────── */
@@ -526,6 +996,11 @@
         { key: "autoExif", type: "toggle" },
       ],
     },
+    table: {
+      tags: ["table"],
+      ends: true,
+      body: "cells",
+    },
     btn: {
       tags: ["btn", "button"],
       ends: false,
@@ -559,6 +1034,21 @@
     exifArgs,
     parseExifBody,
     buildExifBody,
+    imageSize,
+    imageFrame,
+    table,
+    tableModel,
+    tableNormalize,
+    tableFromSlots,
+    tableArgsText,
+    tableBodyText,
+    tableShell,
+    tableCellView,
+    tableCell,
+    tableLine,
+    cellHTML,
+    TABLE_ALIGNS,
+    TABLE_LINES,
     EXIF_LABELS,
     splitArgs,
     splitIcon,

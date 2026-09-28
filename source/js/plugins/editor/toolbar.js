@@ -148,6 +148,16 @@ function control(item, t) {
   if (item.kind === "swatch") {
     return `<button type="button" class="ed-swatch"${data}${state} title="${label}"><span class="ed-swatch-dot ${escapeHTML(item.cls || "")}"></span></button>`;
   }
+  // Where in a cell its content sits: a three-by-three of dots with that one lit.
+  if (item.kind === "grid9") {
+    const at = "tmb".indexOf(String(item.arg)[0]) * 3 + "lcr".indexOf(String(item.arg)[1]);
+    const dots = Array.from({ length: 9 }, (_, i) => `<i${i === at ? ' class="is-at"' : ""}></i>`).join("");
+    return `<button type="button" class="ed-tool ed-grid9"${data}${state} title="${label}"><span>${dots}</span></button>`;
+  }
+  // A line, drawn in the style it applies.
+  if (item.kind === "line") {
+    return `<button type="button" class="ed-tool ed-line-tool"${data}${state} title="${label}"><span class="ed-line-sample" data-line="${escapeHTML(String(item.arg))}"></span></button>`;
+  }
   const text = item.wide ? `<span>${label}</span>` : "";
   return `<button type="button" class="ed-tool${item.wide ? " is-wide" : ""}"${data}${state} title="${label}">
     <i class="${escapeHTML(iconClass(item.icon))}" aria-hidden="true"></i>${text}</button>`;
@@ -379,7 +389,11 @@ export function createToolbar(ctx) {
     if (raw) return [source, { kind: "sep" }, ...common];
 
     const head = [...rows, ...(own.length ? [{ kind: "sep" }, ...own] : [])];
-    return [...head, { kind: "sep" }, source, ...common];
+    // A block in a table cell: the way back to the cell, first.
+    const cell = view.box && view.box.cell
+      ? [{ kind: "btn", act: "cell", icon: "fa-table-cells", label: "Select cell", tt: "t_cell", wide: true }, { kind: "sep" }]
+      : [];
+    return [...cell, ...head, { kind: "sep" }, source, ...common];
   }
 
   function insertItems() {

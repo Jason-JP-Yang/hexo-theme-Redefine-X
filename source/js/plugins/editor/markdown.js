@@ -197,6 +197,7 @@ const PAIRED_TAGS = new Set([
   "tabs", "subtabs", "subsubtabs",
   "errorbook", "error-book", "ebook",
   "exifimage",
+  "table",
 ]);
 
 const VOID_TAGS = new Set(["btn", "button"]);
@@ -377,7 +378,7 @@ export function parseBlocks(body) {
       // address there had it overwritten with its own markdown line, so the
       // canvas asked the server for `/![](/images/x.jpeg)` and a save re-emitted
       // that inside a second set of brackets.
-      push(block("image", { alt: m[1], url: linkPath(m[2]), title: m[3] || "" }), i, i + 1);
+      push(block("image", { alt: m[1], url: linkPath(m[2]), title: m[3] || "", plain: true }), i, i + 1);
       i += 1;
       continue;
     }
@@ -444,11 +445,12 @@ export function parseBlocks(body) {
 }
 
 function parseTable(rows) {
+  // `\|` is a pipe IN a cell, not the end of one.
   const cells = (row) => {
     let line = row.trim();
     if (line.startsWith("|")) line = line.slice(1);
-    if (line.endsWith("|")) line = line.slice(0, -1);
-    return line.split("|").map((c) => c.trim());
+    if (line.endsWith("|") && !line.endsWith("\\|")) line = line.slice(0, -1);
+    return line.split(/(?<!\\)\|/).map((c) => c.trim());
   };
 
   const header = cells(rows[0]);
@@ -535,7 +537,9 @@ const EXIF_KEYS = [
 function emitImage(b) {
   const info = b.exif || {};
   const written = EXIF_KEYS.filter((k) => info[k]);
-  if (!b.exifTitle && !written.length) {
+  // A size is only said by the tag, so a sized picture is always written as one.
+  const size = b.size >= 10 && b.size < 100 ? Math.round(b.size) : 0;
+  if (!b.exifTitle && !written.length && !size) {
     // Plain markdown, where a quoted third argument IS the hover title.
     return "![" + (b.alt || "") + "](" + linkDest(b.url) + (b.title ? ' "' + b.title + '"' : "") + ")";
   }
@@ -546,7 +550,9 @@ function emitImage(b) {
   // a field that looked harmless. The tag has no hover text; the caption title
   // and the description are what it carries, and they are written above.
   const line = "![" + (b.alt || "") + "](" + linkDest(b.url) + ")";
-  const args = [b.exifTitle || "", b.autoExif === false ? "auto-exif:false" : ""].filter(Boolean).join(" ");
+  const args = [b.exifTitle || "", b.autoExif === false ? "auto-exif:false" : "", size ? "size:" + size : ""]
+    .filter(Boolean)
+    .join(" ");
   const body = written.length
     ? [line, "<!-- exif-info"].concat(written.map((k) => k + ": " + info[k]), ["-->"]).join("\n")
     : line;
@@ -555,6 +561,7 @@ function emitImage(b) {
 
 function imageFromExif(args, body) {
   const auto = args.match(/auto-exif\s*:\s*(true|false)/i);
+  const size = args.match(/(?:^|\s)size\s*:\s*(\d+(?:\.\d+)?)(?=\s|$)/i);
   // `[^)]+?`, not `\S+?`: the tag reads its path up to the `)`, spaces and all
   // (scripts/modules/image-exif.js), and an editor that could not see what the
   // published page shows would lose it on the first save.
@@ -573,8 +580,12 @@ function imageFromExif(args, body) {
     url: image ? linkPath(image[2]) : "",
     alt: image ? image[1] : "",
     title: image && image[3] ? image[3] : "",
-    exifTitle: args.replace(/auto-exif\s*:\s*(true|false)/i, "").trim(),
+    exifTitle: args
+      .replace(/(?:^|\s)(?:auto-exif\s*:\s*(?:true|false)|size\s*:\s*\d+(?:\.\d+)?)(?=\s|$)/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
     autoExif: auto ? auto[1].toLowerCase() === "true" : true,
+    size: size ? Math.round(Number(size[1])) : 0,
     exif: info,
   });
 }

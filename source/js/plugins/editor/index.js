@@ -525,6 +525,11 @@ async function activate(host) {
     onConvert: (key) => convertTo(key),
     onSource: (on) => toggleSource(on),
     onAct: (act, arg) => {
+      // A block in a table cell, handing back to the cell it is in.
+      if (act === "cell") {
+        const cell = state.focused && state.focused.box && state.focused.box.cell;
+        return void (cell && cell.select());
+      }
       if (act === "move") return void moveFocused(Number(arg));
       if (act === "duplicate") return void duplicateFocused();
       if (act === "delete") return void (state.focused && deleteBlock(state.focused.block.id, "prev"));
@@ -643,6 +648,9 @@ function touchy() {
 /** Is this the editor's own field — a block, the title, a front-matter row? */
 function editing(el) {
   if (!el || el === document.body) return false;
+  // A table's selected cells listen through a field that opens no keyboard;
+  // treating it as typing hid the bars and scrolled the page for nothing.
+  if (el.classList && el.classList.contains("ed-tkeys")) return false;
   return !!(
     (state.canvas && state.canvas.contains(el)) ||
     (state.titleHost && state.titleHost.contains(el)) ||
@@ -1149,9 +1157,21 @@ function blockCtx(box) {
       if (view && view.block && view.block.type === "heading") refreshTOC();
     },
     onFocus: (view) => {
-      const moved = state.focused !== view;
+      const was = state.focused;
+      const moved = was !== view;
       state.focused = view;
-      for (const other of allViews()) other.el.dataset.on = other === view ? "1" : "0";
+      // Only what changes is written: a table of a thousand cells is a thousand
+      // views, and rewriting every one of their attributes on each click is a
+      // style pass over all of them.
+      for (const other of allViews()) {
+        const want = other === view ? "1" : "0";
+        if (other.el.dataset.on !== want) other.el.dataset.on = want;
+      }
+      // A table lets go of its selection when something outside it is chosen,
+      // and is told when a block inside one of its cells is taken up or put down.
+      if (moved && was && was.defocus) was.defocus(view);
+      if (moved && was && was.box && was.box.cell) was.box.cell.blur(was, view);
+      if (view && view.box && view.box.cell) view.box.cell.focus(view);
       // The Block tab is about THIS block, so it is repainted the moment the
       // caret lands in another one.
       if (moved && ui && ui.toolbar) ui.toolbar.sync();
@@ -1163,6 +1183,10 @@ function blockCtx(box) {
         depth: home.depth + 1,
         write: opts.write,
         onEmpty: opts.onEmpty,
+        // A table cell: arrow keys off its ends carry on into the next cell
+        // rather than stopping.
+        cell: opts.cell || null,
+        edge: opts.edge || null,
       });
       // Carried on the box so the component that opened it can hand it to
       // `morphHeight`, which otherwise measures a pane whose blocks have not
@@ -1195,6 +1219,7 @@ function blockCtx(box) {
         const view = at.box.views[i];
         if (view.focus) return void view.focus(delta > 0 ? "start" : "end");
       }
+      if (at.box.edge) at.box.edge(delta);
     },
     onSlash: (view) => ui.slash.open(view),
     onPasteMarkdown: (id, text) => pasteMarkdown(id, text),
@@ -1216,6 +1241,8 @@ function blockCtx(box) {
     resolveAsset: (src) => resolveAsset(src, state.pending),
     bindImage: (img, src) => bindImage(img, src, state.pending),
     buildPreloader: (src, alt) => buildPreloader(src, alt, state.pending),
+    imageDims: (src) => naturalSize(src, state.pending),
+    notice: (kind, text) => notice(kind, text),
     shapeMedia,
     exifLabels: () => (strings && strings.image_exif) || {},
     settleFigure,
@@ -1400,57 +1427,18 @@ function figureIndex(id) {
  * markdown can express but nobody can read, so a nested box refuses to take a
  * block that would open a third.
  */
-/**
- * The button at the END of a box.
- *
- * Every block's gutter `+` inserts ABOVE it, which leaves exactly one place in
- * a box that no button can reach: after the last block. Inside a tab pane, a
- * large note or a folding that is the only place there is when the component
- * holds one line — and at the foot of the article it is where writing actually
- * continues. So each box grows a tail of its own, and it is also where the drop
- * indicator goes when a dragged block is heading for the end (see `paintDrop`).
- */
-function makeTail(box) {
-  // A ROW holding the button, not a button spanning the row. The drop indicator
-  // has to be as wide as the gap it stands for, and the button has to be the
-  // same 26px square as every other `+` in the editor — one element cannot be
-  // both, and a full-width button is also a full-width hover target for a
-  // control that occupies one corner of it.
-  const tail = document.createElement("div");
-  tail.className = "ed-tail";
-  tail.contentEditable = "false";
-
-  const add = document.createElement("button");
-  add.type = "button";
-  // The gutter's own class, deliberately: this is the same button in the one
-  // place a gutter cannot reach, and it should not be a second design of it.
-  add.className = "ed-gutter-btn ed-tail-add";
-  add.tabIndex = -1;
-  add.title = t("insert_end", "Add a block at the end");
-  add.innerHTML = `<i class="fa-solid fa-plus" aria-hidden="true"></i>`;
-  add.addEventListener("mousedown", (e) => e.preventDefault());
-  add.addEventListener("click", (e) => {
-    e.preventDefault();
-    insertBlock(makeBlock("paragraph"), null, true, box);
-  });
-
-  tail.appendChild(add);
-  return tail;
-}
-
 let boxSeq = 0;
 
 function createBox(blocks, el, opts) {
   const box = Object.assign({ blocks, views: [], el, depth: 0, write: null, onEmpty: null }, opts || {});
   box.uid = ++boxSeq;
-  box.tail = makeTail(box);
-  el.appendChild(box.tail);
   state.boxes.add(box);
   return box;
 }
 
+/** A box being discarded, and every view in it with whatever it subscribed to. */
 function dropBox(box) {
-  if (box.tail) box.tail.remove();
+  for (const view of box.views) releaseView(view);
   state.boxes.delete(box);
 }
 
@@ -1539,8 +1527,7 @@ function mountBlock(block, box) {
   const home = box || state.root;
   const view = createView(block, blockCtx(home));
   view.box = home;
-  // Before the tail, which is the last thing in every box.
-  home.el.insertBefore(view.el, home.tail || null);
+  home.el.appendChild(view.el);
   home.views.push(view);
   return view;
 }
@@ -1692,7 +1679,7 @@ function fillBox(box, markdown) {
     box.views.push(view);
   }
 
-  let anchor = box.tail || null;
+  let anchor = null;
   for (let i = views.length - 1; i >= 0; i--) {
     const el = views[i].el;
     if (el.parentNode !== box.el || el.nextSibling !== anchor) box.el.insertBefore(el, anchor);
@@ -1732,7 +1719,7 @@ function insertBlock(block, anchorId, focus, box, where) {
   view.box = home;
 
   const next = home.views[index];
-  const anchor = next ? next.el : home.tail || null;
+  const anchor = next ? next.el : null;
   // Read while the box is still the box it was. `:first-child` and
   // `:last-of-type` move to the new block the instant it is in the tree, and the
   // margin they take off whichever block used to hold them is space that would
@@ -1952,7 +1939,7 @@ async function insertItem(key, host) {
   // One level of nesting. A note inside a note is expressible and unreadable.
   const box = (target && target.box) || state.root;
   if (spec.nests && box.depth >= 1) {
-    return void notice("warn", t("no_deeper", "A note, folding or tab group cannot go inside another one."));
+    return void notice("warn", t("no_deeper", "A note, folding, tab group or table cannot go inside another one."));
   }
 
   // A picture is the one insert that cannot start empty: an image block with no
@@ -1976,7 +1963,17 @@ async function insertItem(key, host) {
 const BLOCK_SEEDS = {
   paragraph: { type: "paragraph", fields: { text: "" } },
   image: { type: "image", fields: { url: "", alt: "" } },
-  table: { type: "table" },
+  // A new table is a `{% table %}`: three columns the content sizes, a header
+  // row, banded — the look a markdown table has, with everything after it.
+  table: {
+    type: "component",
+    nests: true,
+    fields: {
+      name: "table",
+      args: "head:1 band:1",
+      body: Array.from({ length: 3 }, () => "<!-- row -->\n<!-- cell -->\n<!-- cell -->\n<!-- cell -->").join("\n"),
+    },
+  },
   code: { type: "code", fields: { lang: "", code: "" } },
   math: { type: "math", fields: { tex: "" } },
   mermaid: { type: "mermaid", fields: { code: "graph TD\n  A --> B" } },
@@ -2160,15 +2157,25 @@ function dropSlots() {
     // A box drawn inside the block being carried is going with it.
     if (carried && box.el !== state.canvas && carried.contains(box.el)) continue;
 
+    // A table cell is one of several boxes side by side, so it is only a place
+    // to land while the pointer is over it.
+    let x0 = -Infinity;
+    let x1 = Infinity;
+    if (box.cell) {
+      const rect = box.el.getBoundingClientRect();
+      x0 = rect.left;
+      x1 = rect.right;
+    }
+
     const live = box.views.filter((view) => view.el !== carried);
     if (!live.length) {
       const rect = box.el.getBoundingClientRect();
-      out.push({ box, index: 0, y: rect.top + 2, depth: box.depth });
+      out.push({ box, index: 0, y: rect.top + 2, depth: box.depth, x0, x1 });
       continue;
     }
     for (const view of live) {
       const rect = view.el.getBoundingClientRect();
-      out.push({ box, index: box.views.indexOf(view), y: rect.top, depth: box.depth });
+      out.push({ box, index: box.views.indexOf(view), y: rect.top, depth: box.depth, x0, x1 });
     }
     const last = live[live.length - 1];
     out.push({
@@ -2176,15 +2183,18 @@ function dropSlots() {
       index: box.views.indexOf(last) + 1,
       y: last.el.getBoundingClientRect().bottom,
       depth: box.depth,
+      x0,
+      x1,
     });
   }
   return out;
 }
 
 /** The slot whose line is nearest the pointer; ties go to the deeper box. */
-function dropTargetAt(y) {
+function dropTargetAt(y, x) {
   let best = null;
   for (const slot of dropSlots()) {
+    if (x != null && (x < slot.x0 || x > slot.x1)) continue;
     const gap = Math.abs(slot.y - y);
     if (!best || gap < best.gap - 0.5 || (gap < best.gap + 0.5 && slot.depth > best.slot.depth)) {
       best = { gap, slot };
@@ -2202,26 +2212,23 @@ function dropTargetAt(y) {
  * being recreated, not redrawn.
  *
  * A slot is drawn ABOVE the block that would follow it, and the LAST slot in a
- * box is drawn on that box's `+` — which is the thing actually standing in that
- * gap, and which the block would land immediately before. One line per place,
- * so what is on screen and what will happen are the same count.
+ * box UNDER the block it would follow. One line per place, so what is on screen
+ * and what will happen are the same count.
  */
 function paintDrop(target) {
-  const tail = target && target.index >= target.box.views.length ? target.box : null;
-  const anchor = target && !tail ? target.box.views[target.index] : null;
+  const end = !!target && target.index >= target.box.views.length;
+  const anchor = target && !end ? target.box.views[target.index] : null;
+  // The end of a box has no block after it, so the line goes UNDER the last
+  // block that is staying — the one the carried block will land beneath.
+  const last = end ? target.box.views.filter((view) => view.block.id !== state.dragId).pop() || null : null;
 
-  const key = tail ? "tail:" + tail.uid : anchor ? anchor.block.id : "";
+  const key = anchor ? anchor.block.id : last ? "end:" + last.block.id : "";
   if (key === state.dropAt) return;
   state.dropAt = key;
 
   for (const view of allViews()) {
-    const want = anchor === view ? "before" : "";
+    const want = anchor === view ? "before" : last === view ? "after" : "";
     if (view.el.dataset.drop !== want) view.el.dataset.drop = want;
-  }
-  for (const box of state.boxes) {
-    if (!box.tail) continue;
-    const want = box === tail ? "1" : "";
-    if (box.tail.dataset.drop !== want) box.tail.dataset.drop = want;
   }
 }
 
@@ -2234,7 +2241,7 @@ function onDocDragOver(e) {
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   startEdgeScroll(e.clientY);
-  paintDrop(dropTargetAt(e.clientY));
+  paintDrop(dropTargetAt(e.clientY, e.clientX));
 }
 
 async function onDocDrop(e) {
@@ -2243,7 +2250,7 @@ async function onDocDrop(e) {
   e.preventDefault();
   stopEdgeScroll();
 
-  const target = dropTargetAt(e.clientY);
+  const target = dropTargetAt(e.clientY, e.clientX);
   paintDrop(null);
   if (!target) return;
 
@@ -2264,10 +2271,7 @@ async function onDocDrop(e) {
   // on after, so the block being carried is safely somewhere else first.
   const emptying = leaving !== arriving && leaving.views.length === 1 && leaving.onEmpty;
 
-  // The tails travel too: a block leaving a note shortens it, and a `+` that
-  // teleports to its new place while everything around it slides is the one
-  // thing on screen that did not move like the rest.
-  await flip(Array.from(state.canvas.querySelectorAll(".ed-block, .ed-tail")), () => {
+  await flip(Array.from(state.canvas.querySelectorAll(".ed-block")), () => {
     leaving.views.splice(held.index, 1);
     const [block] = leaving.blocks.splice(held.index, 1);
 
@@ -2282,7 +2286,7 @@ async function onDocDrop(e) {
 
     const before = arriving.views[index + 1];
     if (before) before.el.before(held.view.el);
-    else arriving.el.insertBefore(held.view.el, arriving.tail || null);
+    else arriving.el.appendChild(held.view.el);
   });
 
   // Order is the one thing a moved block cannot carry in `src`: its trailing
@@ -2323,10 +2327,12 @@ async function onCanvasDrop(e) {
     return;
   }
   e.preventDefault();
+  // Dropped on a table cell, a picture goes into that cell.
+  const cell = cellBoxAt(e.target);
   for (const file of files) {
     if (!file.type.startsWith("image/")) continue;
     const asset = await stageImage(file);
-    if (asset) insertBlock(makeBlock("image", { url: asset.site, alt: "" }), null, false);
+    if (asset) insertBlock(makeBlock("image", { url: asset.site, alt: "" }), null, false, cell || undefined);
   }
 }
 
@@ -2379,7 +2385,20 @@ function applyStagedMoves() {
     const after = swap(before);
     if (after === before) continue;
     const parsed = parseBlocks(after)[0];
-    if (parsed) Object.assign(block, parsed, { id: block.id, after: block.after, dirty: true });
+    if (!parsed) continue;
+    Object.assign(block, parsed, { id: block.id, after: block.after, dirty: true });
+    // A note, a tab group or a table holds its text in boxes of its own as
+    // well. Left alone, the next read wrote the OLD addresses back out of them
+    // over the ones just committed — after the build had moved the pictures.
+    const at = locate(block.id);
+    if (at && at.view.nests && at.view.patch) {
+      state.painting = true;
+      try {
+        at.view.patch(Object.assign({}, block));
+      } finally {
+        state.painting = false;
+      }
+    }
   }
 
   const front = swap(state.doc.front);
@@ -2737,7 +2756,7 @@ function changedLeaf() {
 const STEP_MS = 380;
 
 function canvasNodes() {
-  return state.canvas ? Array.from(state.canvas.querySelectorAll(".ed-block, .ed-tail")) : [];
+  return state.canvas ? Array.from(state.canvas.querySelectorAll(".ed-block")) : [];
 }
 
 /**
@@ -3157,7 +3176,7 @@ async function reconcile(wanted, quick, before, anchor) {
     // because everything downstream reads `state.doc.blocks`.
     state.doc.blocks = box.blocks;
 
-    let anchor = box.tail || null;
+    let anchor = null;
     for (let i = box.views.length - 1; i >= 0; i--) {
       const el = box.views[i].el;
       if (el.parentNode !== box.el || el.nextSibling !== anchor) box.el.insertBefore(el, anchor);
@@ -3728,10 +3747,23 @@ async function onCanvasPaste(e) {
   for (const item of items) {
     if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
     e.preventDefault();
+    // A selected table cell takes the picture into itself.
+    const cell = state.focused && state.focused.pasteBox ? state.focused.pasteBox() : null;
     const asset = await stageImage(item.getAsFile());
-    if (asset) insertBlock(makeBlock("image", { url: asset.site, alt: "" }), state.focused ? state.focused.block.id : null, false);
+    if (!asset) return;
+    const block = makeBlock("image", { url: asset.site, alt: "" });
+    if (cell) insertBlock(block, null, false, cell);
+    else insertBlock(block, state.focused ? state.focused.block.id : null, false);
     return;
   }
+}
+
+/** The box a table cell under this element holds, if it is one. */
+function cellBoxAt(el) {
+  const td = el && el.closest && el.closest(".ed-cell");
+  if (!td) return null;
+  for (const box of state.boxes) if (box.el === td) return box;
+  return null;
 }
 
 /** The caret left the article: no block is being edited, so nothing is shown. */
@@ -3744,8 +3776,10 @@ function onFocusIn(e) {
   if (state.canvas.contains(e.target) || ui.toolbar.el.contains(e.target)) return;
   if (e.target.closest && e.target.closest(".ed-ask, .ed-slash, .ed-picker-mask")) return;
 
+  const was = state.focused;
   for (const view of allViews()) view.el.dataset.on = "0";
   state.focused = null;
+  if (was && was.box && was.box.cell) was.box.cell.blur(was, null);
   ui.toolbar.reset();
 }
 

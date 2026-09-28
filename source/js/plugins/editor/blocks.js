@@ -28,6 +28,7 @@ import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
 import { anchorMarks, isBlankText } from "./inline.js";
 import { crossFade, morphHeight, setDragImage } from "./motion.js";
+import { isTableBlock, mountTableView } from "./table.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
 const SOURCE_TYPES = new Set(["code", "mermaid", "math", "raw"]);
@@ -82,7 +83,7 @@ export function createView(block, ctx) {
   if (RICH_TYPES.has(block.type)) mountRich(view);
   else if (SOURCE_TYPES.has(block.type)) mountSource(view);
   else if (block.type === "image") mountImage(view);
-  else if (block.type === "table") mountTable(view);
+  else if (isTableBlock(block)) mountTableView(view, { absorb });
   else if (block.type === "component") mountComponent(view);
   else mountRule(view);
 
@@ -91,10 +92,13 @@ export function createView(block, ctx) {
   // only reading of it — and inserting below meant the block you pressed on
   // stayed put while a line appeared under it, which is the one place you were
   // not looking. The gap after the LAST block has its own button; see `ed-tail`.
-  el.querySelector(".ed-add").addEventListener("click", (e) => {
-    e.preventDefault();
-    ctx.onInsertBefore(block.id);
-  });
+  const add = el.querySelector(".ed-add");
+  if (add) {
+    add.addEventListener("click", (e) => {
+      e.preventDefault();
+      ctx.onInsertBefore(block.id);
+    });
+  }
 
   // A press anywhere in the block is a press ON the block. Without this an
   // image or a button — neither of which holds a caret — never became the
@@ -174,6 +178,7 @@ function wireRaw(view, raw) {
 
 function wireDrag(view) {
   const handle = view.el.querySelector(".ed-handle");
+  if (!handle) return;
   handle.addEventListener("dragstart", (e) => {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", view.block.id);
@@ -768,6 +773,9 @@ function mountImage(view) {
   wrap.className = "ed-figure";
 
   const hasExif = () => !!block.exifTitle || Object.keys(block.exif || {}).some((k) => block.exif[k]);
+  const sizeOf = () => (block.size >= 10 && block.size < 100 ? Math.round(block.size) : 0);
+  // A size is only said by `{% exifimage %}`, so a sized picture is drawn as one.
+  const tagged = () => hasExif() || !!sizeOf();
 
   let address = null;
   let figure = -1;
@@ -782,8 +790,22 @@ function mountImage(view) {
     return node;
   };
 
-  const paint = () => {
-    const exif = hasExif();
+  const grip = document.createElement("button");
+  grip.type = "button";
+  grip.className = "ed-img-grip";
+  grip.contentEditable = "false";
+  grip.tabIndex = -1;
+  grip.title = ctx.t("img_resize", "Drag to resize");
+  grip.innerHTML = `<i class="fa-solid fa-arrow-down-right" aria-hidden="true"></i>`;
+
+  const badge = document.createElement("div");
+  badge.className = "ed-img-badge";
+  badge.contentEditable = "false";
+
+  // `live` is a size the grip is holding: the picture is drawn in its frame for
+  // the length of the drag even when the block has no size yet.
+  const paint = (live) => {
+    const exif = tagged() || !!live;
     const node = media();
     node.remove();
     ctx.shapeMedia(node, exif);
@@ -793,26 +815,75 @@ function mountImage(view) {
     figure = numbered ? ctx.figureIndex(block.id) : 0;
     const api = window.RedefineComponents;
     const slot = `<i data-ed-media=""></i>`;
+    const size = live || sizeOf();
 
     if (exif && api && api.exifImage) {
       wrap.innerHTML = api.exifImage(
-        [block.exifTitle || ""],
+        [block.exifTitle || "", size ? "size:" + size : ""],
         api.buildExifBody({ description: block.alt, path: block.url, info: block.exif || {} }),
         null,
-        { float, labels: ctx.exifLabels(), figure, media: slot }
+        { float, labels: ctx.exifLabels(), figure, media: slot, dims: ctx.imageDims(block.url) }
       );
     } else if (captioned && (block.alt || numbered)) {
+      // The shape the PUBLISHED page ends up with, empty paragraphs and all:
+      // marked writes `<p><img></p>`, img-handle.js puts a figure inside that
+      // paragraph, and the HTML parser — which will not nest a figure in a p —
+      // closes it before the figure and opens an empty one after it. That empty
+      // paragraph's margin is the whole of the gap under a published picture;
+      // without it the next block sat flush against the image.
       const text = escapeHTML(block.alt || "");
       const caption = numbered ? (block.alt ? `<strong>Figure ${figure}.</strong> ${text}` : `Figure ${figure}`) : text;
-      wrap.innerHTML = `<figure class="image-caption">${slot}<figcaption>${caption}</figcaption></figure>`;
+      wrap.innerHTML = `<p></p><figure class="image-caption">${slot}<figcaption>${caption}</figcaption></figure><p></p>`;
     } else {
-      wrap.innerHTML = `<p>${slot}</p>`;
+      // Likewise a bare picture, whose preloader is a div the parser will not
+      // leave inside its paragraph.
+      wrap.innerHTML = `<p></p>${slot}<p></p>`;
     }
 
     wrap.querySelector("[data-ed-media]").replaceWith(node);
+    wrap.append(grip, badge);
+    placeGrip();
     ctx.observeImages();
     ctx.settleFigure();
   };
+
+  /** The grip sits on the picture's own bottom-right corner, not the figure's. */
+  function placeGrip() {
+    const node = wrap.querySelector(".img-preloader, img");
+    if (!node || !wrap.isConnected) return;
+    const box = wrap.getBoundingClientRect();
+    const at = node.getBoundingClientRect();
+    grip.style.left = at.right - box.left + "px";
+    grip.style.top = at.bottom - box.top + "px";
+  }
+
+  const settle = new ResizeObserver(() => placeGrip());
+  settle.observe(wrap);
+  const onLoaded = (e) => {
+    if (e.detail && e.detail.img && wrap.contains(e.detail.img)) placeGrip();
+  };
+  window.addEventListener("redefine:image-loaded", onLoaded);
+  view.release = () => {
+    settle.disconnect();
+    window.removeEventListener("redefine:image-loaded", onLoaded);
+  };
+
+  wireResize(view, wrap, grip, badge, { paint, sizeOf, placeGrip, setSize });
+
+  /**
+   * One size, from the grip or the toolbar. A plain picture that gains a size is
+   * written as `{% exifimage %}` from then on, and must not start reading its
+   * camera data at build time merely because it changed shape.
+   */
+  function setSize(next) {
+    const size = next >= 10 && next < 100 ? Math.round(next) : 0;
+    if (size === sizeOf()) return void paint();
+    if (size && block.plain && !hasExif()) block.autoExif = false;
+    block.size = size;
+    view.touch();
+    paint();
+    ctx.onOptionsChanged();
+  }
 
   view.body.appendChild(wrap);
   paint();
@@ -835,13 +906,43 @@ function mountImage(view) {
     return true;
   };
 
-  view.options = () => [
+  view.options = (open) => [
     { kind: "btn", act: "folder", icon: "fa-folder-open", label: "Open folder", tt: "open_folder", wide: true },
     { kind: "btn", act: "props", icon: "fa-sliders", label: "Properties", tt: "properties", wide: true, on: hasExif() },
+    {
+      kind: "btn",
+      act: "sub",
+      arg: "size",
+      icon: "fa-up-right-and-down-left-from-center",
+      label: sizeOf() ? sizeOf() + "%" : "Size",
+      tt: sizeOf() ? "" : "img_size",
+      wide: true,
+      on: !!sizeOf(),
+      open: open === "size",
+    },
     { kind: "btn", act: "view", icon: "fa-expand", label: "Open viewer", tt: "open_viewer" },
   ];
 
-  view.act = async (act) => {
+  view.subOptions = (key) =>
+    key !== "size"
+      ? []
+      : [
+          { kind: "label", label: "Size", tt: "img_size" },
+          ...[25, 33, 50, 67, 75].map((n) => ({
+            kind: "btn",
+            act: "size",
+            arg: String(n),
+            icon: "fa-image",
+            label: n + "%",
+            tt: "",
+            wide: true,
+            on: sizeOf() === n,
+          })),
+          { kind: "btn", act: "size", arg: "100", icon: "fa-expand", label: "Full size", tt: "img_full", wide: true, on: !sizeOf() },
+        ];
+
+  view.act = async (act, arg) => {
+    if (act === "size") return void setSize(Number(arg));
     if (act === "props") return void ctx.imageProps(view);
     if (act === "view") return void ctx.openViewer(wrap.querySelector(".img-preloader, img"));
     if (act !== "folder") return;
@@ -856,128 +957,138 @@ function mountImage(view) {
   };
 }
 
-/* ─── table ────────────────────────────────────────────────────────────────── */
+/**
+ * The grip on a picture's corner.
+ *
+ * What it sets is the picture's SIZE — the share of its frame, see `imageSize`
+ * in tools/components.js — never a width in pixels. The width under the pointer
+ * is inverted through the frame into the size that draws the picture that wide
+ * HERE, and the badge says what that one number becomes on a desktop and on a
+ * phone, because that is the whole point of it being one number.
+ *
+ * A centred picture grows from both sides, so a pointer that moves one pixel
+ * moves the edge under it one pixel. Pulling down reads through the picture's
+ * proportions, so a tall picture can be sized by its height.
+ */
+const SIZE_SNAPS = [25, 33, 50, 67, 75];
+const PHONE_COLUMN = 345;
+const PHONE_VIEW = 760;
+const DESK_VIEW = 900;
 
-function mountTable(view) {
-  const { block, ctx } = view;
-  const wrap = document.createElement("div");
-  wrap.className = "ed-table-block";
-  view.body.appendChild(wrap);
+function wireResize(view, wrap, grip, badge, api) {
+  const { ctx } = view;
 
-  const paint = () => {
-    const style = (i) => (block.align[i] ? ` style="text-align:${block.align[i]}"` : "");
-    const head = block.header
-      .map((cell, i) => `<th${style(i)} contenteditable="true" data-col="${i}">${inlineToHTML(cell)}</th>`)
-      .join("");
-    const body = block.rows
-      .map(
-        (row, r) =>
-          `<tr>${row
-            .map((cell, i) => `<td${style(i)} contenteditable="true" data-row="${r}" data-col="${i}">${inlineToHTML(cell)}</td>`)
-            .join("")}</tr>`
-      )
-      .join("");
-
-    wrap.innerHTML = `<div class="table-container"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  // The frame's two references, as the page resolves them wherever this
+  // picture is: 1000px and 80svh in the article, the cell in a table.
+  const probe = (css) => {
+    const el = document.createElement("div");
+    el.style.cssText = "position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;" + css;
+    wrap.appendChild(el);
+    const box = el.getBoundingClientRect();
+    el.remove();
+    return box;
   };
 
-  const readCells = () => {
-    for (const th of wrap.querySelectorAll("th")) {
-      block.header[Number(th.dataset.col)] = htmlToInline(th);
+  const dimsOf = () => {
+    const node = wrap.querySelector(".img-preloader, img");
+    let w = node ? Number(node.dataset.width || node.getAttribute("width")) || node.naturalWidth || 0 : 0;
+    let h = node ? Number(node.dataset.height || node.getAttribute("height")) || node.naturalHeight || 0 : 0;
+    if (!(w && h)) {
+      const d = ctx.imageDims(view.block.url);
+      if (d) {
+        w = d.width;
+        h = d.height;
+      }
     }
-    for (const td of wrap.querySelectorAll("td")) {
-      block.rows[Number(td.dataset.row)][Number(td.dataset.col)] = htmlToInline(td);
-    }
+    return w && h ? { w, h } : null;
   };
 
-  const rebuild = async (mutate) => {
-    readCells();
-    await morphHeight(wrap, () => {
-      mutate();
-      paint();
-    });
-    view.touch();
-  };
-
-  let activeCol = 0;
-  let activeRow = -1;
-
-  wrap.addEventListener("input", (e) => {
-    if (e.target.matches("th, td")) view.touch();
-  });
-
-  wrap.addEventListener("focusin", (e) => {
-    if (e.target.matches("th, td")) {
-      activeCol = Number(e.target.dataset.col) || 0;
-      activeRow = e.target.dataset.row == null ? -1 : Number(e.target.dataset.row);
-      view.editable = e.target;
-    }
-    ctx.onFocus(view);
-    ctx.onOptionsChanged();
-  });
-
-  wrap.addEventListener("keydown", (e) => {
-    if (e.key !== "Tab" || !e.target.matches("th, td")) return;
-    const cells = Array.from(wrap.querySelectorAll("th, td"));
-    const index = cells.indexOf(e.target);
-    const next = cells[index + (e.shiftKey ? -1 : 1)];
-    if (!next) return;
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
     e.preventDefault();
-    caret.focusEnd(next);
+    e.stopPropagation();
+    ctx.onFocus(view);
+
+    const dims = dimsOf();
+    if (!dims) return;
+    const was = api.sizeOf();
+    // Into the framed markup first — a plain picture has no frame to size.
+    if (!was) api.paint(99);
+    const frame = wrap.querySelector(".img-sized");
+    if (!frame) return;
+
+    const inCell = !!wrap.closest("td, th");
+    const ref = probe("width:var(--img-ref);height:var(--img-max-h)");
+    const R = ref.width;
+    const H = ref.height;
+    const a = dims.w / dims.h;
+    const K = Math.max(1, Math.min(R, H * a));
+    const cap = Math.min(wrap.clientWidth, dims.w);
+    const w0 = frame.getBoundingClientRect().width;
+    const style = getComputedStyle(frame);
+    const centred = Math.abs(parseFloat(style.marginLeft) - parseFloat(style.marginRight)) < 2;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let size = was || 100;
+
+    const across = (column, viewport) =>
+      Math.round(Math.min(column, dims.w, (size / 100) * Math.min(R, (H / window.innerHeight) * viewport * a)));
+
+    const show = () => {
+      const head = size >= 100 ? ctx.t("img_full", "Full size") : size + "%";
+      let foot;
+      if (inCell) {
+        foot = escapeHTML(ctx.t("img_of_cell", "of the cell"));
+      } else {
+        const desk = across(R, DESK_VIEW);
+        const phone = across(PHONE_COLUMN, PHONE_VIEW);
+        const full = phone >= Math.min(PHONE_COLUMN, dims.w) - 1;
+        foot =
+          `<span><i class="fa-solid fa-desktop" aria-hidden="true"></i>${desk}px</span>` +
+          `<span><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i>${full ? escapeHTML(ctx.t("img_full_width", "full width")) : phone + "px"}</span>`;
+      }
+      badge.innerHTML = `<strong>${escapeHTML(head)}</strong><small>${foot}</small>`;
+      badge.style.left = grip.style.left;
+      badge.style.top = grip.style.top;
+    };
+
+    const move = (ev) => {
+      const dx = (ev.clientX - x0) * (centred ? 2 : 1);
+      const dy = (ev.clientY - y0) * a;
+      const width = w0 + (Math.abs(dx) >= Math.abs(dy) ? dx : dy);
+      let next = width >= cap - 0.5 ? 100 : Math.round((100 * Math.max(0, width)) / K);
+      next = Math.max(10, Math.min(100, next));
+      const snap = SIZE_SNAPS.find((s) => Math.abs(s - next) <= 1.5 && (s * K) / 100 < cap);
+      if (snap) next = snap;
+      if (next >= 99) next = 100;
+      if (next === size) return;
+      size = next;
+      frame.style.setProperty("--img-size", String(size / 100));
+      api.placeGrip();
+      show();
+    };
+
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      wrap.classList.remove("is-resizing");
+      api.setSize(size >= 100 ? 0 : size);
+    };
+
+    wrap.classList.add("is-resizing");
+    try {
+      grip.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* the move and up still arrive while the pointer is over the grip */
+    }
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+    api.placeGrip();
+    show();
   });
-
-  paint();
-  view.read = () => {
-    if (view.touched) readCells();
-  };
-  view.focus = () => caret.focusEnd(wrap.querySelector("th"));
-  view.isEmpty = () => false;
-
-  // Rows and columns act at the CELL the caret is in, not at the end of the
-  // table: "add a row" after the third row is what the author means when the
-  // caret is in the third row.
-  view.options = () => [
-    { kind: "btn", act: "row+", icon: "fa-arrow-down", label: "Row below", tt: "row_add", wide: true },
-    { kind: "btn", act: "row-", icon: "fa-trash", label: "Remove row", tt: "row_del", wide: true, disabled: activeRow < 0 || block.rows.length <= 1 },
-    { kind: "btn", act: "col+", icon: "fa-arrow-right", label: "Column after", tt: "col_add", wide: true },
-    { kind: "btn", act: "col-", icon: "fa-trash", label: "Remove column", tt: "col_del", wide: true, disabled: block.header.length <= 1 },
-    { kind: "sep" },
-    { kind: "btn", act: "align", arg: "", icon: "fa-align-justify", label: "Default alignment", tt: "align_default", on: !block.align[activeCol] },
-    { kind: "btn", act: "align", arg: "left", icon: "fa-align-left", label: "Align left", tt: "align_left", on: block.align[activeCol] === "left" },
-    { kind: "btn", act: "align", arg: "center", icon: "fa-align-center", label: "Align centre", tt: "align_center", on: block.align[activeCol] === "center" },
-    { kind: "btn", act: "align", arg: "right", icon: "fa-align-right", label: "Align right", tt: "align_right", on: block.align[activeCol] === "right" },
-  ];
-
-  view.act = (act, arg) => {
-    const at = activeRow < 0 ? block.rows.length - 1 : activeRow;
-
-    if (act === "align") return void rebuild(() => (block.align[activeCol] = arg));
-    if (act === "row+") return void rebuild(() => block.rows.splice(at + 1, 0, block.header.map(() => "")));
-    if (act === "row-") {
-      return void rebuild(() => {
-        if (block.rows.length > 1 && activeRow >= 0) block.rows.splice(activeRow, 1);
-      });
-    }
-    if (act === "col+") {
-      return void rebuild(() => {
-        block.header.splice(activeCol + 1, 0, "");
-        block.align.splice(activeCol + 1, 0, "");
-        block.rows.forEach((row) => row.splice(activeCol + 1, 0, ""));
-      });
-    }
-    if (act === "col-") {
-      return void rebuild(() => {
-        if (block.header.length <= 1) return;
-        block.header.splice(activeCol, 1);
-        block.align.splice(activeCol, 1);
-        block.rows.forEach((row) => row.splice(activeCol, 1));
-        activeCol = Math.max(0, activeCol - 1);
-      });
-    }
-  };
 }
-
-/* ─── component ────────────────────────────────────────────────────────────── */
 
 /* ─── component ────────────────────────────────────────────────────────────── */
 
@@ -1705,7 +1816,7 @@ export function makeBlock(type, fields) {
     code: { lang: "", code: "", fence: "```" },
     mermaid: { code: "graph TD\n  A --> B" },
     math: { tex: "" },
-    image: { alt: "", url: "", title: "", exifTitle: "", autoExif: true, exif: {} },
+    image: { alt: "", url: "", title: "", exifTitle: "", autoExif: true, size: 0, plain: true, exif: {} },
     hr: {},
     raw: { text: "" },
     table: {

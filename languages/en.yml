@@ -955,7 +955,7 @@ editor:
   exif_note: With this on, the build reads the camera data out of the picture file, so those values appear on the published page and not here. Any field filled in below replaces the one read from the file.
   chrome_min: Hide the bars
   chrome_max: Show the bars
-  no_deeper: A note, folding or tab group cannot go inside another one.
+  no_deeper: A note, folding, tab group or table cannot go inside another one.
   sheet_hint: Leave everything empty for a plain picture.
   g_caption: Caption
   g_camera: Camera
@@ -987,6 +987,76 @@ editor:
   pick_one_only: One picture at a time
   pick_unused: Nowhere - nothing uses it yet
   pick_into: Uploads go to
+  img_resize: Drag to resize
+  img_size: Size
+  img_full: Full size
+  img_of_cell: of the cell
+  img_full_width: full width
+  t_cells: Table cells
+  t_cell: Select cell
+  t_sel_row: Select row
+  t_sel_col: Select column
+  t_sel_all: Select table
+  t_insert: Insert
+  t_delete: Delete
+  t_merge: Merge cells
+  t_unmerge: Unmerge
+  t_align: Alignment
+  t_fill: Fill
+  t_border: Borders
+  t_width: Widths
+  t_row_above: Row above
+  t_row_below: Row below
+  t_col_left: Column left
+  t_col_right: Column right
+  t_del_rows: Delete rows
+  t_del_cols: Delete columns
+  t_clear: Clear contents
+  t_copy: Copy
+  t_cut: Cut
+  t_paste: Paste
+  t_a_tl: Top left
+  t_a_tc: Top centre
+  t_a_tr: Top right
+  t_a_ml: Middle left
+  t_a_mc: Centre
+  t_a_mr: Middle right
+  t_a_bl: Bottom left
+  t_a_bc: Bottom centre
+  t_a_br: Bottom right
+  t_no_fill: No fill
+  t_soft: Soft
+  t_solid: Solid
+  t_b_all: All borders
+  t_b_out: Outside borders
+  t_b_in: Inside borders
+  t_b_top: Top border
+  t_b_bottom: Bottom border
+  t_b_left: Left border
+  t_b_right: Right border
+  t_b_thick: Thick outside border
+  t_b_none: No border
+  t_b_clear: Reset borders
+  t_line: Line
+  t_l_thin: Thin
+  t_l_medium: Medium
+  t_l_thick: Thick
+  t_l_dashed: Dashed
+  t_l_dotted: Dotted
+  t_l_double: Double
+  t_colour: Colour
+  t_ink_default: Default
+  t_ink_accent: Accent
+  t_columns: Columns
+  t_auto: Fit to content
+  t_fixed: Fixed ratio
+  t_even: Distribute evenly
+  t_full: Full width
+  t_fit: Fit content
+  t_head_row: Header row
+  t_head_col: Header column
+  t_band: Banded rows
+  t_merged_refuse: Part of a merged cell cannot move on its own - unmerge it first.
   pick_unused_preview: Not published because nothing uses it, so there is nothing to preview. Use it and save, and the build publishes it.
   file_too_large: "{name} is over 100 MB - GitHub takes no single file that large."
   edit_album: Edit this album

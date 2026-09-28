@@ -39,6 +39,11 @@ hexo.extend.filter.register('after_post_render', function (data) {
                     }
                     // Case 3: Simple container with only figcaption (Simple mode with only description)
                     else if (part.includes('image-exif-simple-container')) {
+                        // An empty caption is a sized picture with nothing to say:
+                        // numbered the way a plain one without alt text is.
+                        if (/<figcaption>\s*<\/figcaption>/.test(part)) {
+                            return part.replace(/<figcaption>\s*<\/figcaption>/, `<figcaption>Figure ${figureIndex}</figcaption>`);
+                        }
                         return part.replace(
                             /(<figcaption>)/,
                             `$1<strong>Figure ${figureIndex}.</strong> `

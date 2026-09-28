@@ -955,7 +955,7 @@ editor:
   exif_note: 开启后，站点构建时会从图片文件中读取相机数据，这些数值只出现在发布后的页面上，不会显示在编辑器里。下方手动填写的字段会覆盖从文件读取的值。
   chrome_min: 隐藏顶栏
   chrome_max: 显示顶栏
-  no_deeper: 提示框、折叠块与标签组不能再嵌套一层。
+  no_deeper: 提示框、折叠块、标签组与表格不能再嵌套一层。
   sheet_hint: 全部留空即为普通图片。
   g_caption: 图注
   g_camera: 机身
@@ -987,6 +987,76 @@ editor:
   pick_one_only: 一次只能使用一张图片
   pick_unused: 未发布（尚无引用）
   pick_into: 上传到
+  img_resize: 拖动调整大小
+  img_size: 大小
+  img_full: 原始大小
+  img_of_cell: 单元格宽度
+  img_full_width: 全宽
+  t_cells: 表格单元格
+  t_cell: 选中单元格
+  t_sel_row: 选择整行
+  t_sel_col: 选择整列
+  t_sel_all: 选择整个表格
+  t_insert: 插入
+  t_delete: 删除
+  t_merge: 合并单元格
+  t_unmerge: 取消合并
+  t_align: 对齐
+  t_fill: 填充
+  t_border: 边框
+  t_width: 宽度
+  t_row_above: 在上方插入行
+  t_row_below: 在下方插入行
+  t_col_left: 在左侧插入列
+  t_col_right: 在右侧插入列
+  t_del_rows: 删除行
+  t_del_cols: 删除列
+  t_clear: 清除内容
+  t_copy: 复制
+  t_cut: 剪切
+  t_paste: 粘贴
+  t_a_tl: 顶端左对齐
+  t_a_tc: 顶端居中
+  t_a_tr: 顶端右对齐
+  t_a_ml: 垂直居中左对齐
+  t_a_mc: 水平垂直居中
+  t_a_mr: 垂直居中右对齐
+  t_a_bl: 底端左对齐
+  t_a_bc: 底端居中
+  t_a_br: 底端右对齐
+  t_no_fill: 无填充
+  t_soft: 浅色
+  t_solid: 深色
+  t_b_all: 所有框线
+  t_b_out: 外侧框线
+  t_b_in: 内部框线
+  t_b_top: 上框线
+  t_b_bottom: 下框线
+  t_b_left: 左框线
+  t_b_right: 右框线
+  t_b_thick: 粗外侧框线
+  t_b_none: 无框线
+  t_b_clear: 恢复默认框线
+  t_line: 线型
+  t_l_thin: 细线
+  t_l_medium: 中等
+  t_l_thick: 粗线
+  t_l_dashed: 虚线
+  t_l_dotted: 点线
+  t_l_double: 双线
+  t_colour: 颜色
+  t_ink_default: 默认
+  t_ink_accent: 主题色
+  t_columns: 列
+  t_auto: 按内容自动
+  t_fixed: 固定比例
+  t_even: 平均分布
+  t_full: 全宽
+  t_fit: 适应内容
+  t_head_row: 标题行
+  t_head_col: 标题列
+  t_band: 镶边行
+  t_merged_refuse: 合并单元格的一部分不能单独移动，请先取消合并。
   pick_unused_preview: 这张图片尚未被任何地方引用，因此没有发布，无法预览。使用并保存后，构建会将其发布。
   file_too_large: "{name} 超过 100 MB，GitHub 不接受这么大的单个文件。"
   edit_album: 编辑这个相册

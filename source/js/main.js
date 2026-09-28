@@ -20,6 +20,7 @@ import initFrameFit from "./tools/frameFit.js";
 import initFreshness from "./tools/freshness.js";
 import initPullRefresh from "./tools/pullRefresh.js";
 import initMathJaxScroll from "./plugins/mathjax-scroll.js";
+import initTableFit from "./layouts/tableFit.js";
 import initInstantNotes from "./plugins/instantNotes.js";
 import initVault from "./plugins/vault.js";
 import { initNotoAnim } from "./plugins/noto-anim.js";
@@ -128,6 +129,9 @@ export const main = {
     initHomePagination();
 
     initMathJaxScroll();
+
+    // A table too full for its column scrolls instead of being crushed.
+    initTableFit();
 
     // Noto animated emoji: wire post-content emoji spans for viewport-scoped
     // animation (static Noto text until visible; see plugins/noto-anim.js).

@@ -1180,48 +1180,6 @@ html[data-ed-compose="1"] .article-content-container.is-editing
   &[data-drop="after"]::after
     bottom -4px
 
-// ─── the gap after the last block ───────────────────────────
-// Every block's gutter `+` inserts ABOVE it, which leaves exactly one place in
-// a box no button can reach: the end. So each box — the article, a tab pane, a
-// large note, a folding — ends with one of these. It is also where the drop
-// indicator goes when a dragged block is heading for that gap, which is why the
-// line is drawn ON it rather than under the block before it: the `+` IS the
-// gap, and the block lands immediately above it.
-//
-// A row the width of the box, holding one 26px square at its left. The square
-// is `.ed-gutter-btn` — the very button every block's gutter carries — because
-// this is that button standing in the one gap a gutter cannot reach, and a
-// second design of it would say it did something else. Always there: it is the
-// end of the document, and the end of a document is where writing continues.
-.ed-tail
-  position relative
-  display flex
-  align-items center
-  justify-content flex-start
-  width 100%
-  margin 8px 0 0
-  padding 0
-
-  &[data-drop="1"]::before
-    content ""
-    position absolute
-    left 0
-    right 0
-    top -5px
-    height 3px
-    border-radius 3px
-    background var(--primary-color)
-    box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
-    animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
-
-  &[data-drop="1"] .ed-tail-add
-    border-color var(--primary-color)
-    background var(--primary-color)
-    color $ed-on-primary
-
-.ed-nest > .ed-tail
-  margin-top 6px
-
 // The snapshot the browser drags. Clipped to the block's own border box, so the
 // gutter — which is positioned OUTSIDE that box — is not in the picture and the
 // grab point lands where it was measured. Off-screen but rendered:
@@ -1253,6 +1211,29 @@ html[data-ed-compose="1"] .article-content-container.is-editing
   opacity 1
   transform none
 
+// A gutter that floats ABOVE its block instead of beside it or in the flow — over
+// the bottom of whatever is above, for the one block being edited, and taking
+// no room at all, so every block stands exactly where it will be published.
+// A phone uses it for every block (there is no margin to ride in), and so does
+// every box inside a component and every table cell, at any width.
+ed-float-gutter()
+  position absolute
+  top auto
+  right auto
+  bottom 100%
+  left 0
+  z-index 6
+  flex-direction row
+  margin 0 0 6px
+  opacity 0
+  pointer-events none
+  transform translateY(4px)
+
+ed-float-gutter-on()
+  opacity 1
+  pointer-events auto
+  transform none
+
 // The gutter rides in the article's own left padding, never in the measure:
 // pushing the text across would mean the line breaks you are editing are not
 // the line breaks you will publish.
@@ -1271,11 +1252,18 @@ html[data-ed-compose="1"] .article-content-container.is-editing
   transition opacity $ed-fade, transform $ed-morph
 
   +redefine-tablet()
-    position static
-    flex-direction row
-    margin 0 0 5px
-    opacity 1
-    transform none
+    ed-float-gutter()
+
+@media (max-width $media-max-width)
+  .ed-block[data-on="1"] > .ed-gutter,
+  .ed-block.is-dragging > .ed-gutter
+    ed-float-gutter-on()
+
+  // Only the block being edited: a phone has no hover, and a tablet's pointer
+  // passing over a paragraph is not a request to cover the one above it.
+  .ed-block:hover:not([data-on="1"]):not(.is-dragging) > .ed-gutter
+    opacity 0
+    pointer-events none
 
 // A control you cannot find is a control you do not have. These sit on the
 // article's own surface with the site's flat elevation ring under them, rather
@@ -1409,14 +1397,6 @@ html[data-ed-compose="1"] .article-content-container.is-editing
   min-width 5em
   min-height 2.6em
 
-.ed-table-block th:empty,
-.ed-table-block td:empty
-  min-width 4em
-
-  &::before
-    content ""
-    display inline-block
-    min-height 1.2em
 // ─── source blocks ──────────────────────────────────────────
 .ed-source-block
   position relative
@@ -1438,28 +1418,28 @@ html[data-ed-compose="1"] .article-content-container.is-editing
 // ─── a canvas inside a component ────────────────────────────
 // A large note, a folding and a tab pane hold real blocks, so what is inside
 // one has to look like what is outside one — same measure, same spacing, its
-// own gutter. The gutter goes INSIDE here rather than out in the article's
-// padding, because there is no padding to ride in this far in.
+// own gutter. There is no padding to ride in this far in, so the gutter floats
+// above the block being edited (see `ed-float-gutter`).
 .ed-nest
   min-height 2.2em
 
   > .ed-block > .ed-gutter
-    position static
-    flex-direction row
-    margin 0 0 4px
-    opacity 0
-    transform none
+    ed-float-gutter()
 
-  > .ed-block:hover > .ed-gutter,
-  > .ed-block[data-on="1"] > .ed-gutter
-    opacity 1
+  > .ed-block:hover:not([data-on="1"]):not(.is-dragging) > .ed-gutter
+    opacity 0
+    pointer-events none
+
+  > .ed-block[data-on="1"] > .ed-gutter,
+  > .ed-block.is-dragging > .ed-gutter
+    ed-float-gutter-on()
 
   > .ed-block:first-child:not(.ed-shed) .ed-body > *,
   > .ed-block.ed-shed:first-child + .ed-block .ed-body > *
     margin-top 0
 
-  // `:last-of-type`, not `:last-child`: every box now ends with its own `+`
-  // button, so the last BLOCK is no longer the last child of anything.
+  // `:last-of-type`, not `:last-child`: a block mid-way through leaving is
+  // still a child, and the rule has to move to the one that inherits it.
   > .ed-block:last-of-type:not(.ed-shed) .ed-body > *,
   > .ed-block:has(+ .ed-block.ed-shed:last-of-type) .ed-body > *
     margin-bottom 0
@@ -2342,35 +2322,466 @@ $ed-pop-h = 620px
   border-bottom 1px dotted var(--fourth-text-color)
 
 // ─── table ──────────────────────────────────────────────────
-// The table draws its own frame — markdown.styl gives `.table-container > table`
-// the header band, the radius and the zebra the published one has. A second
-// frame here would box it twice, so this wrapper only holds the margin.
+// The table on the canvas IS the published one — _modules/table.styl draws it.
+// What is here is what the editor lays over it, in two layers that take no
+// room: the selection INSIDE the frame, travelling with the cells, and the
+// grips, the edge handles and the floating gutter OUTSIDE it, where the frame's
+// clipping cannot cut them off. The cells hold boxes of blocks, as invisible as
+// every other block wrapper.
+//
+// The block's vertical margin is the wrapper's, not the table's: a height
+// animation pins the wrapper with overflow clipped, and a child's margin that
+// collapsed through it a moment ago would then be counted inside it — the band
+// of empty space that appeared above a table while it changed shape.
 .ed-table-block
-  margin 1.2rem 0
+  position relative
+  margin 1rem 0 1.2rem
 
-  table
-    margin 0
+.markdown-body .ed-table-block > .table-container
+  margin-top 0
+  margin-bottom 0
 
-  // Zebra and a rule between columns is enough to read a table that has content
-  // in it. An EMPTY one being filled in has neither, and a grid of invisible
-  // cells is not editable — so every cell gets the rule the columns already use,
-  // in the colour they already use, while the caret is in this block's article.
-  th, td
-    outline none
-    border-bottom 1px solid var(--shadow-color-1)
+.ed-table-block
+  .table-scroll
+    &[data-cursor="resize"],
+    &[data-cursor="resize"] *
+      cursor col-resize !important
 
-  tbody tr:last-child td
-    border-bottom none
+    &[data-cursor="move"],
+    &[data-cursor="move"] *
+      cursor move !important
 
-  th:focus,
-  td:focus
-    box-shadow inset 0 0 0 2px var(--primary-color)
+    &[data-cursor="copy"],
+    &[data-cursor="copy"] *
+      cursor copy !important
 
-// Wide tables scroll inside the block instead of pushing the article sideways.
-.table-container
-  max-width 100%
-  overflow-x auto
-  ed-scroll()
+    // The spreadsheet's cross where a press selects the cell; over words and
+    // pictures the ordinary pointer, because a press there edits them.
+    &[data-cursor="cell"],
+    &[data-cursor="cell"] *
+      cursor cell !important
+
+  .ed-cell > .ed-block:first-child:not(.ed-shed) .ed-body > *
+    margin-top 0
+
+  .ed-cell > .ed-block:last-of-type:not(.ed-shed) .ed-body > *
+    margin-bottom 0
+
+  // Every empty cell saying "press / for a block" is a table full of noise.
+  .ed-cell:not(.is-editing) .ed-rich:empty::before
+    content none
+
+  // A cell's block floats its gutter like any nested block's — but from the
+  // layer outside the frame (`.ed-tfloat`), so the one left in the cell is
+  // never shown.
+  .ed-cell > .ed-block > .ed-gutter
+    ed-float-gutter()
+    opacity 0 !important
+    pointer-events none !important
+
+  &.is-refused .table-scroll
+    animation ed-refuse 0.32s cubic-bezier(0.36, 0.07, 0.19, 0.97)
+
+@keyframes ed-refuse
+  20%, 60%
+    transform translateX(-3px)
+  40%, 80%
+    transform translateX(3px)
+
+// The table block's own gutter steps further out, clear of the row grips that
+// straddle the table's left edge; on a phone it floats higher, clear of the
+// column grips straddling its top.
+.ed-block.is-table > .ed-gutter
+  margin-right 16px
+
+  +redefine-tablet()
+    margin 0 0 14px
+
+// ── inside the frame: the selection ─────────────────────────────
+// In the scroller's CONTENT, so it travels with the cells when the frame
+// scrolls sideways, and exactly the table's size with its overflow clipped, so
+// nothing drawn here can widen what the frame scrolls. Every piece is placed
+// by a transform, which is what lets it glide from cell to cell.
+.ed-tsel
+  position absolute
+  left 0
+  top 0
+  width 0
+  height 0
+  z-index 3
+  overflow hidden
+  pointer-events none
+
+  > div
+    position absolute
+    left 0
+    top 0
+    box-sizing border-box
+
+.ed-tsel-range
+  border 1px solid unquote('color-mix(in oklab, var(--primary-color) 55%, transparent)')
+  border-radius 2px
+  transition transform 0.14s cubic-bezier(0.32, 0.72, 0, 1), width 0.14s cubic-bezier(0.32, 0.72, 0, 1), height 0.14s cubic-bezier(0.32, 0.72, 0, 1)
+
+  &.is-many
+    background unquote('color-mix(in oklab, var(--primary-color) 9%, transparent)')
+
+.ed-tsel-active
+  border-radius 2px
+  box-shadow inset 0 0 0 2px var(--primary-color)
+  opacity 0
+  transition transform 0.14s cubic-bezier(0.32, 0.72, 0, 1), width 0.14s cubic-bezier(0.32, 0.72, 0, 1), height 0.14s cubic-bezier(0.32, 0.72, 0, 1), opacity $ed-fade, box-shadow $ed-fade
+
+.ed-tsel.is-on .ed-tsel-active
+  opacity 1
+
+// Editing a block inside: the cell is only named, faintly — the block being
+// edited carries its own focus and its own gutter.
+.ed-tsel.is-editing .ed-tsel-active
+  box-shadow inset 0 0 0 1.5px unquote('color-mix(in oklab, var(--primary-color) 55%, transparent)')
+
+.ed-tsel.is-editing .ed-tsel-range
+  opacity 0
+
+// The line an edge is dragged along: faint under the pointer, solid in hand,
+// dashed when it moves only the selected cells' rows.
+.ed-tsel-guide
+  width 2px
+  border-radius 1px
+  background var(--primary-color)
+  opacity 0
+  transition opacity $ed-fade
+
+  &.is-hover
+    opacity 0.45
+
+  &.is-live
+    opacity 1
+    box-shadow 0 0 0 3px unquote('color-mix(in oklab, var(--primary-color) 18%, transparent)')
+
+  &.is-cells
+    background repeating-linear-gradient(to bottom, var(--primary-color) 0 6px, transparent 6px 10px)
+
+.ed-tsel-ghost
+  border 2px dashed var(--primary-color)
+  border-radius 3px
+  background unquote('color-mix(in oklab, var(--primary-color) 7%, transparent)')
+  opacity 0
+  transition opacity $ed-fade
+
+  &.is-on
+    opacity 1
+
+  &[data-copy="1"]
+    border-style dotted
+
+  &.is-lift
+    border-style solid
+    border-width 1px
+    background unquote('color-mix(in oklab, var(--primary-color) 12%, transparent)')
+    box-shadow 0 8px 24px -8px rgba(0, 0, 0, 0.3)
+
+.ed-tsel-drop
+  border-radius 3px
+  background var(--primary-color)
+  box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
+  opacity 0
+
+  &.is-on
+    opacity 1
+
+// ── outside the frame: grips, handles, the lifted gutter ────────
+// Placed in the block's own coordinates by layout JS; the frame's scrolling is
+// followed there, not by the frame.
+.ed-tfloat
+  position absolute
+  left 0
+  top 0
+  width 0
+  height 0
+  z-index 8
+
+  > div,
+  > button
+    position absolute
+    left 0
+    top 0
+    box-sizing border-box
+
+    &[hidden]
+      display none
+
+// The spreadsheet's headers: one square each, all the same size, in the
+// gutter's own vocabulary — the editor's buttons, not a second design. A
+// column's straddles the top of the frame, a row's the left, and the whole
+// table's sits off the corner, so the three never meet.
+.ed-tgrip
+  display grid
+  place-items center
+  width 18px
+  height 18px
+  margin -9px 0 0 -9px
+  padding 0
+  border 1px solid var(--border-color)
+  border-radius 6px
+  background var(--background-color)
+  box-shadow var(--redefine-box-shadow-flat)
+  color var(--second-text-color)
+  font-size 9px
+  line-height 1
+  pointer-events auto
+  cursor grab
+  touch-action none
+  opacity 0
+  transition opacity $ed-fade, background $ed-fade, color $ed-fade, border-color $ed-fade
+
+  // A finger's worth of target around the square that is seen.
+  &::before
+    content ""
+    position absolute
+    inset -7px
+
+  &.is-all
+    margin -22px 0 0 -22px
+    cursor pointer
+
+  &:hover,
+  &[data-on="1"]
+    border-color var(--primary-color)
+    background var(--primary-color)
+    color $ed-on-primary
+
+.ed-table-block:hover .ed-tgrip,
+.ed-table-block.has-sel .ed-tgrip,
+.ed-tgrip[data-on="1"]
+  opacity 1
+
+// The corner that extends the selection — a finger's Shift.
+.ed-tsel-fill
+  width 11px
+  height 11px
+  margin -6px 0 0 -6px
+  border 2px solid var(--background-color)
+  border-radius 3px
+  background var(--primary-color)
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.25)
+  pointer-events auto
+  cursor crosshair
+  touch-action none
+
+  &::before
+    content ""
+    position absolute
+    inset -9px
+
+// A finger cannot find a one-pixel line, so while cells are selected each side
+// of the selection carries a handle that drags that edge — the selected cells'
+// own edge, or the whole column's when whole columns are selected.
+.ed-tedge
+  display none
+  width 8px
+  height 26px
+  margin -13px 0 0 -4px
+  border 2px solid var(--background-color)
+  border-radius 4px
+  background var(--primary-color)
+  box-shadow 0 1px 4px rgba(0, 0, 0, 0.25)
+  pointer-events auto
+  cursor col-resize
+  touch-action none
+
+  &::before
+    content ""
+    position absolute
+    inset -10px -12px
+
+@media (pointer: coarse)
+  .ed-tedge
+    display block
+
+  .ed-tfloat > .ed-tedge[hidden]
+    display none
+
+// The gutter of the block being edited in a cell, lifted out of the frame.
+.ed-tfloat > .ed-gutter.is-lifted
+  position absolute
+  top 0
+  right auto
+  bottom auto
+  left 0
+  z-index 2
+  display flex
+  flex-direction row
+  gap 3px
+  margin 0
+  opacity 1
+  pointer-events auto
+  transition opacity $ed-fade
+
+// The keys a selected cell listens with — focusable, never seen.
+.ed-tkeys
+  position absolute
+  left 0
+  top 0
+  width 1px
+  height 1px
+  padding 0
+  border 0
+  opacity 0
+  resize none
+  overflow hidden
+  pointer-events none
+  caret-color transparent
+
+// What an edge is set to, beside the pointer while it moves.
+.ed-tbadge,
+.ed-img-badge
+  position absolute
+  left 0
+  top 0
+  z-index 6
+  padding 4px 9px
+  border 1px solid var(--border-color)
+  border-radius 8px
+  background var(--background-color)
+  box-shadow var(--redefine-box-shadow)
+  color var(--second-text-color)
+  font-size 0.72rem
+  font-weight 600
+  font-variant-numeric tabular-nums
+  white-space nowrap
+  pointer-events none
+  opacity 0
+  transition opacity $ed-fade
+
+.ed-tbadge.is-on
+  opacity 1
+
+// ── the grip on a picture's corner ──────────────────────────────
+.ed-figure
+  position relative
+
+  .img-sized
+    transition width $ed-morph
+
+  &.is-resizing .img-sized
+    transition none
+
+.ed-img-grip
+  position absolute
+  left 0
+  top 0
+  z-index 4
+  display grid
+  place-items center
+  width 24px
+  height 24px
+  margin -16px 0 0 -16px
+  padding 0
+  border 2px solid var(--background-color)
+  border-radius 50%
+  background var(--primary-color)
+  box-shadow 0 3px 10px -2px rgba(0, 0, 0, 0.35)
+  color $ed-on-primary
+  font-size 0.62rem
+  cursor nwse-resize
+  touch-action none
+  opacity 0
+  transform scale(0.55)
+  transition opacity $ed-fade, transform $ed-morph
+
+.ed-block[data-type="image"]:hover .ed-img-grip,
+.ed-block[data-type="image"][data-on="1"] .ed-img-grip,
+.ed-figure.is-resizing .ed-img-grip
+  opacity 1
+  transform none
+
+.ed-img-badge
+  margin 14px 0 0 0
+  transform translateX(-100%)
+  text-align right
+
+  strong
+    display block
+    color var(--first-text-color)
+    font-size 0.8rem
+
+  small
+    display flex
+    gap 10px
+    margin-top 2px
+    color var(--third-text-color)
+    font-size 0.68rem
+    font-weight 500
+
+    i
+      margin-right 4px
+
+.ed-figure.is-resizing .ed-img-badge
+  opacity 1
+
+// ── toolbar pieces the table brings ─────────────────────────────
+.ed-grid9 span
+  display grid
+  grid-template-columns repeat(3, 4px)
+  gap 2px
+
+  i
+    width 4px
+    height 4px
+    border-radius 1px
+    background currentColor
+    opacity 0.28
+
+    &.is-at
+      opacity 1
+
+.ed-line-sample
+  display block
+  width 18px
+  height 0
+  border-top 2px solid currentColor
+
+  &[data-line="thin"]
+    border-top 1px solid currentColor
+
+  &[data-line="thick"]
+    border-top 3px solid currentColor
+
+  &[data-line="dashed"]
+    border-top 2px dashed currentColor
+
+  &[data-line="dotted"]
+    border-top 2px dotted currentColor
+
+  &[data-line="double"]
+    border-top 4px double currentColor
+
+.ed-fill-dot
+  box-shadow inset 0 0 0 1px var(--border-color)
+
+for $tc in $table-colours
+  .ed-fill-dot.bg-{$tc}
+    background unquote('color-mix(in oklab, var(--tc-' + $tc + ') var(--tf-mix), var(--background-color))')
+
+  .ed-fill-dot.bg-{$tc}-solid
+    background unquote('var(--tc-' + $tc + ')')
+
+  .ed-ink-dot.ink-{$tc}
+    background unquote('var(--tc-' + $tc + ')')
+
+.ed-ink-dot
+  &.is-default
+    background var(--third-text-color)
+
+  &.is-accent
+    background var(--primary-color)
+
+@media (prefers-reduced-motion: reduce)
+  .ed-tsel-range,
+  .ed-tsel-active,
+  .ed-figure .img-sized
+    transition none
 
 // ─── components ─────────────────────────────────────────────
 // Nothing is drawn ON a component any more. Its colour, its icon, its title and

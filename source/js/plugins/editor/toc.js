@@ -39,6 +39,9 @@ function config() {
 function headings(canvas) {
   const out = [];
   for (const el of canvas.querySelectorAll('.ed-block[data-type="heading"]')) {
+    // A heading in a table cell is published as a paragraph set like one, and
+    // the published contents never list it.
+    if (el.closest(".ed-cell")) continue;
     const node = el.querySelector("h1, h2, h3, h4, h5, h6");
     if (!node) continue;
     const text = node.textContent.replace(/​/g, "").trim();

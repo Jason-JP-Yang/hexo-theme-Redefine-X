@@ -65,4 +65,22 @@ function measureFile(absPath) {
   return cache.get(key);
 }
 
-module.exports = { measureFile, measureBuffer };
+/**
+ * The header read only, synchronously — for a tag, which cannot wait. A file
+ * the header cannot describe answers null, and the caller lays out without it.
+ */
+const headerCache = new Map();
+
+function measureFileSync(absPath) {
+  try {
+    const stat = fs.statSync(absPath);
+    if (!stat.isFile() || !stat.size) return null;
+    const key = `${absPath}|${stat.size}|${stat.mtimeMs}`;
+    if (!headerCache.has(key)) headerCache.set(key, fromHeader(fs.readFileSync(absPath)));
+    return headerCache.get(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+module.exports = { measureFile, measureBuffer, measureFileSync };
