@@ -27,7 +27,7 @@ import { renderBlock, renderMarkdown, renderMermaid, typesetMath } from "./rende
 import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
 import { anchorMarks, isBlankText } from "./inline.js";
-import { crossFade, morphHeight, setDragImage } from "./motion.js";
+import { crossFade, floatBadge, morphHeight, setDragImage } from "./motion.js";
 import { isTableBlock, mountTableView } from "./table.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
@@ -798,10 +798,6 @@ function mountImage(view) {
   grip.title = ctx.t("img_resize", "Drag to resize");
   grip.innerHTML = `<i class="fa-solid fa-arrow-down-right" aria-hidden="true"></i>`;
 
-  const badge = document.createElement("div");
-  badge.className = "ed-img-badge";
-  badge.contentEditable = "false";
-
   // `live` is a size the grip is holding: the picture is drawn in its frame for
   // the length of the drag even when the block has no size yet.
   const paint = (live) => {
@@ -841,7 +837,7 @@ function mountImage(view) {
     }
 
     wrap.querySelector("[data-ed-media]").replaceWith(node);
-    wrap.append(grip, badge);
+    wrap.append(grip);
     placeGrip();
     ctx.observeImages();
     ctx.settleFigure();
@@ -868,7 +864,7 @@ function mountImage(view) {
     window.removeEventListener("redefine:image-loaded", onLoaded);
   };
 
-  wireResize(view, wrap, grip, badge, { paint, sizeOf, placeGrip, setSize });
+  wireResize(view, wrap, grip, { paint, sizeOf, placeGrip, setSize });
 
   /**
    * One size, from the grip or the toolbar. A plain picture that gains a size is
@@ -975,8 +971,9 @@ const PHONE_COLUMN = 345;
 const PHONE_VIEW = 760;
 const DESK_VIEW = 900;
 
-function wireResize(view, wrap, grip, badge, api) {
+function wireResize(view, wrap, grip, api) {
   const { ctx } = view;
+  const badge = floatBadge("is-img");
 
   // The frame's two references, as the page resolves them wherever this
   // picture is: 1000px and 80svh in the article, the cell in a table.
@@ -1047,9 +1044,10 @@ function wireResize(view, wrap, grip, badge, api) {
           `<span><i class="fa-solid fa-desktop" aria-hidden="true"></i>${desk}px</span>` +
           `<span><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i>${full ? escapeHTML(ctx.t("img_full_width", "full width")) : phone + "px"}</span>`;
       }
-      badge.innerHTML = `<strong>${escapeHTML(head)}</strong><small>${foot}</small>`;
-      badge.style.left = grip.style.left;
-      badge.style.top = grip.style.top;
+      // Under the picture's corner, right-aligned to it.
+      const node = wrap.querySelector(".img-preloader, img");
+      const at = (node || grip).getBoundingClientRect();
+      badge.show(`<strong>${escapeHTML(head)}</strong><small>${foot}</small>`, at.right, at.bottom + 14, true);
     };
 
     const move = (ev) => {
@@ -1073,6 +1071,7 @@ function wireResize(view, wrap, grip, badge, api) {
       grip.removeEventListener("pointerup", up);
       grip.removeEventListener("pointercancel", up);
       wrap.classList.remove("is-resizing");
+      badge.hide();
       api.setSize(size >= 100 ? 0 : size);
     };
 

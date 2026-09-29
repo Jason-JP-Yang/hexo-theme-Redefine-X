@@ -32,17 +32,18 @@
  * ── Nothing here takes room on the article ──────────────────────────────────
  *
  * The table on the canvas is the published table: same container, same frame,
- * same cells, laid out by the same layouts/tableFit.js. What the editor adds is
- * two layers that take no room: the selection, inside the frame, travelling
- * with the cells; and the grips and the floating gutter, outside it, where the
- * frame's clipping cannot cut them off.
+ * same cells, laid out by the same layouts/tableFit.js — the scroller holds the
+ * table and nothing else, so nothing the editor draws can make it scroll. What
+ * the editor adds is one layer beside it that takes no room: the selection,
+ * clipped to the frame and following its scroll but drawn OVER the frame, then
+ * the grips, the handles and the floating gutter over that.
  */
 
 import { escapeHTML, parseBlocks } from "./markdown.js";
 import { renderMarkdown } from "./render.js";
 import { richToMarkdown, sanitizePaste } from "./rich.js";
 import * as caret from "./caret.js";
-import { contentChanged, morphHeight } from "./motion.js";
+import { contentChanged, floatBadge, morphHeight } from "./motion.js";
 import initTableFit, { fitTables } from "../../layouts/tableFit.js";
 
 const MIN_COL = 28;     // px — the narrowest a column may be dragged
@@ -324,7 +325,11 @@ export function mountTableView(view, helpers) {
     <div class="table-container rich-table" data-table>
       <div class="table-scroll">
         <table><colgroup></colgroup><thead></thead><tbody></tbody></table>
-        <div class="ed-tsel" aria-hidden="true">
+      </div>
+    </div>
+    <div class="ed-tfloat">
+      <div class="ed-tsel" aria-hidden="true">
+        <div class="ed-tsel-track">
           <div class="ed-tsel-ranges"></div>
           <div class="ed-tsel-active"></div>
           <div class="ed-tsel-guide"></div>
@@ -332,8 +337,6 @@ export function mountTableView(view, helpers) {
           <div class="ed-tsel-drop"></div>
         </div>
       </div>
-    </div>
-    <div class="ed-tfloat">
       <button type="button" class="ed-tgrip is-col" tabindex="-1"><i class="fa-solid fa-grip-dots" aria-hidden="true"></i></button>
       <button type="button" class="ed-tgrip is-row" tabindex="-1"><i class="fa-solid fa-grip-dots-vertical" aria-hidden="true"></i></button>
       <button type="button" class="ed-tgrip is-all" tabindex="-1"><i class="fa-solid fa-table-cells" aria-hidden="true"></i></button>
@@ -341,8 +344,7 @@ export function mountTableView(view, helpers) {
       <div class="ed-tedge is-l"></div>
       <div class="ed-tedge is-r"></div>
     </div>
-    <textarea class="ed-tkeys" readonly inputmode="none" tabindex="-1" aria-label="${escapeHTML(t("t_cells", "Table cells"))}"></textarea>
-    <div class="ed-tbadge" aria-hidden="true"></div>`;
+    <textarea class="ed-tkeys" readonly inputmode="none" tabindex="-1" aria-label="${escapeHTML(t("t_cells", "Table cells"))}"></textarea>`;
   view.body.appendChild(wrap);
   view.el.classList.add("is-table");
 
@@ -352,10 +354,11 @@ export function mountTableView(view, helpers) {
   const colgroup = table.querySelector("colgroup");
   const thead = table.querySelector("thead");
   const tbody = table.querySelector("tbody");
-  const overlay = scroll.querySelector(".ed-tsel");
+  const floatEl = wrap.querySelector(".ed-tfloat");
+  const overlay = floatEl.querySelector(".ed-tsel");
+  const trackEl = overlay.querySelector(".ed-tsel-track");
   const rangesEl = overlay.querySelector(".ed-tsel-ranges");
   const activeEl = overlay.querySelector(".ed-tsel-active");
-  const floatEl = wrap.querySelector(".ed-tfloat");
   const fillEl = floatEl.querySelector(".ed-tsel-fill");
   const edgeL = floatEl.querySelector(".ed-tedge.is-l");
   const edgeR = floatEl.querySelector(".ed-tedge.is-r");
@@ -366,7 +369,7 @@ export function mountTableView(view, helpers) {
   const rowGrip = floatEl.querySelector(".ed-tgrip.is-row");
   const allGrip = floatEl.querySelector(".ed-tgrip.is-all");
   const keys = wrap.querySelector(".ed-tkeys");
-  const badge = wrap.querySelector(".ed-tbadge");
+  const badge = floatBadge();
 
   colGrip.title = t("t_sel_col", "Select column");
   rowGrip.title = t("t_sel_row", "Select row");
@@ -569,8 +572,8 @@ export function mountTableView(view, helpers) {
   /* ─── geometry ─────────────────────────────────────────────────────────── */
 
   /**
-   * Where every grid line is, in the overlay's own coordinates — which are the
-   * scroller's content, so they hold while it scrolls. Read off the cells: in a
+   * Where every grid line is, in the scroller's content coordinates — the
+   * selection track's too — so they hold while it scrolls. Read off the cells: in a
    * collapsed table two neighbours meet on the middle of the line between them.
    */
   // The lines are read once per layout, not per pointer move: a table of a
@@ -770,12 +773,7 @@ export function mountTableView(view, helpers) {
   function draw() {
     if (!wrap.isConnected) return;
     const geo = geometry();
-    const size = { w: table.offsetWidth, h: table.offsetHeight };
-    // Exactly the table, and clipped: nothing the overlay draws — a ring on an
-    // edge cell, a guide on the last line — may widen what the frame scrolls,
-    // which is what left a strip of nothing to the right of the last column.
-    overlay.style.width = size.w + "px";
-    overlay.style.height = size.h + "px";
+    placeLayer();
     const sel = T.sel;
     overlay.classList.toggle("is-on", !!sel);
     overlay.classList.toggle("is-editing", T.mode === "edit");
@@ -792,13 +790,45 @@ export function mountTableView(view, helpers) {
     const kids = sel.ranges.map((range, i) => {
       const el = rangesEl.children[i] || document.createElement("div");
       el.className = "ed-tsel-range" + (i === sel.ranges.length - 1 ? " is-main" : "") + (many ? " is-many" : "");
-      place(el, rectOf(range, geo));
+      ring(el, rectOf(range, geo), geo);
       return el;
     });
     rangesEl.replaceChildren(...kids);
-    place(activeEl, rectOf(cellRange(activeCell()), geo));
+    ring(activeEl, rectOf(cellRange(activeCell()), geo), geo);
     placeGrips(geo);
     placeLifted();
+  }
+
+  /**
+   * The selection layer over the frame's viewport, its track under the frame's
+   * scroll. Over the frame, not in it: in the scroller the ring on an edge cell
+   * sat under the frame's line, was cut by its rounded corner and faded with
+   * its mask, and anything it drew past the table widened what the frame
+   * scrolls.
+   */
+  function placeLayer() {
+    const box = wrap.getBoundingClientRect();
+    const frame = scroll.getBoundingClientRect();
+    overlay.style.transform = `translate(${frame.left - box.left + scroll.clientLeft}px, ${frame.top - box.top + scroll.clientTop}px)`;
+    overlay.style.width = scroll.clientWidth + "px";
+    overlay.style.height = scroll.clientHeight + "px";
+    overlay.classList.toggle("has-bar", scroll.offsetHeight - scroll.clientHeight > 1);
+    trackEl.style.transform = `translate(${-scroll.scrollLeft}px, ${-scroll.scrollTop}px)`;
+  }
+
+  let radius = -1;
+
+  /** A ring on the table's corner takes the frame's rounding there. */
+  function ring(el, rect, geo) {
+    if (radius < 0) radius = parseFloat(getComputedStyle(container).borderTopLeftRadius) || 0;
+    const bar = overlay.classList.contains("has-bar");
+    const lf = rect.x <= geo.xs[0] + 1;
+    const rt = rect.x + rect.w >= geo.xs[geo.W] - 1;
+    const tp = rect.y <= geo.ys[0] + 1;
+    const bt = !bar && rect.y + rect.h >= geo.ys[geo.H] - 1;
+    const at = (v, h) => (v && h ? radius : 2) + "px";
+    place(el, rect);
+    el.style.borderRadius = `${at(tp, lf)} ${at(tp, rt)} ${at(bt, rt)} ${at(bt, lf)}`;
   }
 
   function cellIsWhole(range) {
@@ -814,11 +844,18 @@ export function mountTableView(view, helpers) {
   /* ─── grips ────────────────────────────────────────────────────────────── */
 
   // The spreadsheet's headers, where they are reached for: one grip for the
-  // column under the pointer, straddling the top of the frame, one for its row,
-  // straddling the left, and the whole table's off the corner — never on top
-  // of one another, whatever the first row and column measure. They live
-  // outside the frame, which would otherwise cut them in half.
+  // column under the pointer (or the active cell's), straddling the top of the
+  // frame, one for its row, straddling the left, and the whole table's inside
+  // the top-left corner. Where a row's or a column's would overlap the corner
+  // one, one of them steps aside for the moment: the corner's, unless the
+  // pointer is IN the corner — otherwise it could never be reached past the
+  // first row's grip. The hover lasts until the pointer leaves the block, not
+  // the frame, so a grip half outside the frame can be reached at all.
+  const GRIP = 18;
+  const CORNER = 5;
+  const CLEAR = 4;
   let hoverSlot = null;
+  let inCorner = false;
 
   function placeGrips(geo) {
     const g = geo || geometry();
@@ -831,10 +868,15 @@ export function mountTableView(view, helpers) {
     const top = frame.top - box.top;
     const main = mainRange();
 
-    const col = hoverSlot ? hoverSlot.c : main && main.kind === "cols" ? main.c0 : null;
-    const row = hoverSlot ? hoverSlot.r : main && main.kind === "rows" ? main.r0 : null;
+    let col = null;
+    let row = null;
+    if (hoverSlot) ({ r: row, c: col } = hoverSlot);
+    else if (main && main.kind === "cols") col = main.c0;
+    else if (main && main.kind === "rows") row = main.r0;
+    else if (main && !main.kind) ({ r: row, c: col } = T.sel.active);
 
     const cx = col == null ? 0 : (g.xs[col] + g.xs[col + 1]) / 2 + dx;
+    const cy = row == null ? 0 : (g.ys[row] + g.ys[row + 1]) / 2 + dy;
     colGrip.hidden = col == null || cx < left + 8 || cx > right - 8;
     if (!colGrip.hidden) {
       colGrip.style.transform = `translate(${cx}px, ${top}px)`;
@@ -843,12 +885,19 @@ export function mountTableView(view, helpers) {
     }
     rowGrip.hidden = row == null;
     if (row != null) {
-      rowGrip.style.transform = `translate(${left}px, ${(g.ys[row] + g.ys[row + 1]) / 2 + dy}px)`;
+      rowGrip.style.transform = `translate(${left}px, ${cy}px)`;
       rowGrip.dataset.at = row;
       rowGrip.dataset.on = main && main.kind === "rows" && row >= main.r0 && row <= main.r1 ? "1" : "0";
     }
-    allGrip.style.transform = `translate(${left}px, ${top}px)`;
+    allGrip.style.transform = `translate(${left + CORNER}px, ${top + CORNER}px)`;
     allGrip.dataset.on = main && main.kind === "all" ? "1" : "0";
+
+    const reach = CORNER + GRIP + CLEAR + GRIP / 2;
+    const colClash = !colGrip.hidden && cx < left + reach;
+    const rowClash = !rowGrip.hidden && cy < top + reach;
+    allGrip.classList.toggle("is-away", !inCorner && (colClash || rowClash));
+    colGrip.classList.toggle("is-away", inCorner && colClash);
+    rowGrip.classList.toggle("is-away", inCorner && rowClash);
 
     // The corner that extends the selection, and — for a finger, which cannot
     // find a one-pixel line — a handle on each side of it that drags that edge.
@@ -1617,21 +1666,8 @@ export function mountTableView(view, helpers) {
     return inside && !core;
   }
 
-  function showBadge(text, x, y) {
-    badge.textContent = text;
-    badge.style.transform = `translate(${x}px, ${y}px)`;
-    badge.classList.add("is-on");
-  }
-
-  function hideBadge() {
-    badge.classList.remove("is-on");
-  }
-
-  /** The badge sits in the block, the pointer is in the page: one frame between. */
-  function badgeAt(e, text) {
-    const box = wrap.getBoundingClientRect();
-    showBadge(text, e.clientX - box.left + 12, e.clientY - box.top - 30);
-  }
+  const hideBadge = () => badge.hide();
+  const badgeAt = (e, text) => badge.show(escapeHTML(text), e.clientX + 12, e.clientY - 30);
 
   /* ─── pointer ──────────────────────────────────────────────────────────── */
 
@@ -1794,20 +1830,28 @@ export function mountTableView(view, helpers) {
       if (T.editing !== cell && !onContent(e, cell)) cursor = "cell";
     }
     if (scroll.dataset.cursor !== cursor) scroll.dataset.cursor = cursor;
-    if (slot && (!hoverSlot || hoverSlot.r !== slot.r || hoverSlot.c !== slot.c)) {
-      hoverSlot = slot;
+    const frame = scroll.getBoundingClientRect();
+    const corner = e.clientX - frame.left < CORNER + GRIP + CLEAR && e.clientY - frame.top < CORNER + GRIP + CLEAR;
+    if (corner !== inCorner || (slot && (!hoverSlot || hoverSlot.r !== slot.r || hoverSlot.c !== slot.c))) {
+      inCorner = corner;
+      if (slot) hoverSlot = slot;
       placeGrips(geo);
     }
     if (line) {
       guideEl.classList.add("is-hover");
-      place(guideEl, { x: geo.xs[line.k] - 1, y: geo.ys[0], w: 2, h: geo.ys[geo.H] - geo.ys[0] });
+      // The last line's guide stays inside the frame, which clips it.
+      place(guideEl, { x: geo.xs[line.k] - (line.k === geo.W ? 2 : 1), y: geo.ys[0], w: 2, h: geo.ys[geo.H] - geo.ys[0] });
     } else guideEl.classList.remove("is-hover");
   }
 
   function onLeave() {
-    hoverSlot = null;
     scroll.dataset.cursor = "";
     guideEl.classList.remove("is-hover");
+  }
+
+  function onLeaveBlock() {
+    hoverSlot = null;
+    inCorner = false;
     placeGrips();
   }
 
@@ -2120,9 +2164,11 @@ export function mountTableView(view, helpers) {
   scroll.addEventListener("dblclick", onDblClick, true);
   scroll.addEventListener("pointermove", onHover);
   scroll.addEventListener("pointerleave", onLeave);
+  wrap.addEventListener("pointerleave", onLeaveBlock);
   scroll.addEventListener(
     "scroll",
     () => {
+      placeLayer();
       placeGrips();
       placeLifted();
     },
@@ -2281,6 +2327,7 @@ export function mountTableView(view, helpers) {
     drawSoon();
   });
   watcher.observe(table);
+  watcher.observe(scroll);
   const onImage = (e) => {
     if (!e.detail || !e.detail.img || !table.contains(e.detail.img)) return;
     stale();
@@ -2640,6 +2687,7 @@ export function mountTableView(view, helpers) {
     window.removeEventListener("redefine:image-loaded", onImage);
     watcher.disconnect();
     clearTimeout(fitTimer);
+    badge.hide();
   };
 
   paint();

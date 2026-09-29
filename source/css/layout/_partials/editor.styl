@@ -2397,22 +2397,31 @@ $ed-pop-h = 620px
   +redefine-tablet()
     margin 0 0 14px
 
-// ── inside the frame: the selection ─────────────────────────────
-// In the scroller's CONTENT, so it travels with the cells when the frame
-// scrolls sideways, and exactly the table's size with its overflow clipped, so
-// nothing drawn here can widen what the frame scrolls. Every piece is placed
-// by a transform, which is what lets it glide from cell to cell.
+// ── over the frame: the selection ───────────────────────────────
+// The first thing in the layer outside the frame (`.ed-tfloat`), laid over the
+// frame's viewport and clipped to it, corners and all; its track follows the
+// frame's scroll. Over the frame's line, the scrollbar and the fade, so a ring
+// on an edge cell is whole — and under the grips, which come after it. Every
+// piece is placed by a transform, which is what lets it glide from cell to cell.
 .ed-tsel
+  overflow hidden
+  border-radius $redefine-border-radius-small
+  pointer-events none
+
+  // A scrollbar under the table: the corners there are the frame's, not the
+  // cells'.
+  &.has-bar
+    border-bottom-left-radius 0
+    border-bottom-right-radius 0
+
+.ed-tsel-track
   position absolute
   left 0
   top 0
   width 0
   height 0
-  z-index 3
-  overflow hidden
-  pointer-events none
 
-  > div
+  div
     position absolute
     left 0
     top 0
@@ -2421,7 +2430,7 @@ $ed-pop-h = 620px
 .ed-tsel-range
   border 1px solid unquote('color-mix(in oklab, var(--primary-color) 55%, transparent)')
   border-radius 2px
-  transition transform 0.14s cubic-bezier(0.32, 0.72, 0, 1), width 0.14s cubic-bezier(0.32, 0.72, 0, 1), height 0.14s cubic-bezier(0.32, 0.72, 0, 1)
+  transition transform 0.14s cubic-bezier(0.32, 0.72, 0, 1), width 0.14s cubic-bezier(0.32, 0.72, 0, 1), height 0.14s cubic-bezier(0.32, 0.72, 0, 1), border-radius 0.14s ease
 
   &.is-many
     background unquote('color-mix(in oklab, var(--primary-color) 9%, transparent)')
@@ -2430,7 +2439,7 @@ $ed-pop-h = 620px
   border-radius 2px
   box-shadow inset 0 0 0 2px var(--primary-color)
   opacity 0
-  transition transform 0.14s cubic-bezier(0.32, 0.72, 0, 1), width 0.14s cubic-bezier(0.32, 0.72, 0, 1), height 0.14s cubic-bezier(0.32, 0.72, 0, 1), opacity $ed-fade, box-shadow $ed-fade
+  transition transform 0.14s cubic-bezier(0.32, 0.72, 0, 1), width 0.14s cubic-bezier(0.32, 0.72, 0, 1), height 0.14s cubic-bezier(0.32, 0.72, 0, 1), border-radius 0.14s ease, opacity $ed-fade, box-shadow $ed-fade
 
 .ed-tsel.is-on .ed-tsel-active
   opacity 1
@@ -2490,9 +2499,9 @@ $ed-pop-h = 620px
   &.is-on
     opacity 1
 
-// ── outside the frame: grips, handles, the lifted gutter ────────
+// ── outside the frame: selection, grips, handles, lifted gutter ─
 // Placed in the block's own coordinates by layout JS; the frame's scrolling is
-// followed there, not by the frame.
+// followed there, not by the frame. Above the frame's line (z-index 3).
 .ed-tfloat
   position absolute
   left 0
@@ -2514,7 +2523,8 @@ $ed-pop-h = 620px
 // The spreadsheet's headers: one square each, all the same size, in the
 // gutter's own vocabulary — the editor's buttons, not a second design. A
 // column's straddles the top of the frame, a row's the left, and the whole
-// table's sits off the corner, so the three never meet.
+// table's sits inside the top-left corner; where two would overlap, one steps
+// aside (`is-away`, see placeGrips).
 .ed-tgrip
   display grid
   place-items center
@@ -2542,7 +2552,7 @@ $ed-pop-h = 620px
     inset -7px
 
   &.is-all
-    margin -22px 0 0 -22px
+    margin 0
     cursor pointer
 
   &:hover,
@@ -2555,6 +2565,10 @@ $ed-pop-h = 620px
 .ed-table-block.has-sel .ed-tgrip,
 .ed-tgrip[data-on="1"]
   opacity 1
+
+.ed-tfloat > .ed-tgrip.is-away
+  opacity 0
+  pointer-events none
 
 // The corner that extends the selection — a finger's Shift.
 .ed-tsel-fill
@@ -2633,13 +2647,17 @@ $ed-pop-h = 620px
   pointer-events none
   caret-color transparent
 
-// What an edge is set to, beside the pointer while it moves.
-.ed-tbadge,
-.ed-img-badge
-  position absolute
+// What a drag is setting — an edge, a picture's size — beside it while it
+// moves. In the top layer (a popover) or fixed on the body, above everything:
+// inside a cell or a note it was clipped and covered. See motion.js floatBadge.
+.ed-badge
+  position fixed
+  inset auto
   left 0
   top 0
-  z-index 6
+  z-index 2147483000
+  margin 0
+  overflow visible
   padding 4px 9px
   border 1px solid var(--border-color)
   border-radius 8px
@@ -2654,8 +2672,33 @@ $ed-pop-h = 620px
   opacity 0
   transition opacity $ed-fade
 
-.ed-tbadge.is-on
-  opacity 1
+  &.is-on
+    opacity 1
+
+  // A picture's reads right-aligned under its corner: the size, then what it
+  // becomes on a desktop and on a phone.
+  &.is-img
+    text-align right
+
+    strong
+      display block
+      color var(--first-text-color)
+      font-size 0.8rem
+
+    small
+      display flex
+      gap 10px
+      margin-top 2px
+      color var(--third-text-color)
+      font-size 0.68rem
+      font-weight 500
+
+      i
+        margin-right 4px
+
+@css {
+  @starting-style { .ed-badge.is-on { opacity: 0; } }
+}
 
 // ── the grip on a picture's corner ──────────────────────────────
 .ed-figure
@@ -2695,30 +2738,6 @@ $ed-pop-h = 620px
 .ed-figure.is-resizing .ed-img-grip
   opacity 1
   transform none
-
-.ed-img-badge
-  margin 14px 0 0 0
-  transform translateX(-100%)
-  text-align right
-
-  strong
-    display block
-    color var(--first-text-color)
-    font-size 0.8rem
-
-  small
-    display flex
-    gap 10px
-    margin-top 2px
-    color var(--third-text-color)
-    font-size 0.68rem
-    font-weight 500
-
-    i
-      margin-right 4px
-
-.ed-figure.is-resizing .ed-img-badge
-  opacity 1
 
 // ── toolbar pieces the table brings ─────────────────────────────
 .ed-grid9 span

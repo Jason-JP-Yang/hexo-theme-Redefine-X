@@ -620,6 +620,45 @@ export function pop(el) {
 }
 
 /**
+ * The bubble that reads out what a drag is setting — a picture's size, a
+ * column's width. A picture in a table cell or a note is inside boxes that clip
+ * and stack, and a bubble placed among them was cut off or covered; this one is
+ * in the top layer (a manual popover), or fixed on the body where there is no
+ * top layer, and is placed in viewport coordinates. `(x, y)` is its top-left
+ * corner, or its top-right with `right`; it is kept on screen either way.
+ */
+export function floatBadge(cls) {
+  const el = document.createElement("div");
+  el.className = "ed-badge" + (cls ? " " + cls : "");
+  el.setAttribute("aria-hidden", "true");
+  const layered = typeof el.showPopover === "function";
+  if (layered) el.popover = "manual";
+  let timer = 0;
+  return {
+    show(html, x, y, right) {
+      clearTimeout(timer);
+      if (!el.isConnected) document.body.appendChild(el);
+      if (layered && !el.matches(":popover-open")) el.showPopover();
+      el.innerHTML = html;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const left = Math.max(8, Math.min(right ? x - w : x, window.innerWidth - w - 8));
+      const top = Math.max(8, Math.min(y, window.innerHeight - h - 8));
+      el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+      el.classList.add("is-on");
+    },
+    hide() {
+      el.classList.remove("is-on");
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (layered && el.matches(":popover-open")) el.hidePopover();
+        el.remove();
+      }, 200);
+    },
+  };
+}
+
+/**
  * The drag image, given something the browser can measure.
  *
  * `setDragImage(el, dx, dy)` snapshots the whole of `el`'s paint, and a block

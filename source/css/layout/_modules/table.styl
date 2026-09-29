@@ -6,8 +6,9 @@
 //
 //   .table-container   does not scroll: the surface, and the FRAME drawn over
 //                      everything (::after), so nothing inside can cover it
-//     .table-scroll    scrolls, on the site's thin scrollbar, and fades its
-//                      content at an edge with more beyond (layouts/tableFit.js)
+//     .table-scroll    scrolls only when too full, on the site's thin scrollbar,
+//                      fading its content at an edge with more beyond
+//                      (layouts/tableFit.js)
 //       table          collapsed borders, so every join is resolved per edge
 //
 // The frame draws the outside, so no cell ever does unless it asks for a line
@@ -76,11 +77,12 @@ $table-radius = $redefine-border-radius-small
     > .table-scroll > table
       width auto
 
+// Only a table that has to scroll (`is-scroll`, below) can be dragged sideways:
+// one that fits would still have given a finger a pixel of slack and a rubber
+// band of empty space.
 .markdown-body .table-scroll
   position relative
-  overflow-x auto
-  overflow-y hidden
-  overscroll-behavior-x contain
+  overflow hidden
   border-radius $table-radius
   scrollbar-width thin
   scrollbar-color var(--scrollbar-color) transparent
@@ -251,6 +253,8 @@ for $tc in $table-colours
 }
 
 .markdown-body .table-container.is-scroll > .table-scroll
+  overflow-x auto
+  overscroll-behavior-x contain
   -webkit-mask-image unquote('linear-gradient(to right, transparent 0, #000 var(--tfl), #000 calc(100% - var(--tfr)), transparent 100%)')
   mask-image unquote('linear-gradient(to right, transparent 0, #000 var(--tfl), #000 calc(100% - var(--tfr)), transparent 100%)')
   transition --tfl 0.25s ease, --tfr 0.25s ease

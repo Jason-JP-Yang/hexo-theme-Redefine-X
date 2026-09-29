@@ -36,12 +36,14 @@
 
 const COMFORT = 7;
 const SEVERE = 3;
+const SETTLE = 300; // ms after the last resize event
 const TABLE = ".table-container[data-table]";
 
 let observer = null;
 let wired = false;
 const queue = new Set();
 let frame = 0;
+let settle = 0;
 
 function parts(box) {
   const scroll = box.querySelector(":scope > .table-scroll");
@@ -93,8 +95,12 @@ function run() {
     job.C = job.scroll.clientWidth;
     if (!job.C) continue;
     job.T = job.table.offsetWidth;
+    // Cells are read on screen, for their fractions of a pixel; a transformed
+    // ancestor (an entrance animation, a zoomed preview) scales that, and every
+    // width here is compared with layout ones.
+    job.k = (job.T && job.table.getBoundingClientRect().width / job.T) || 1;
     job.cells = Array.from(job.table.querySelectorAll(":scope > * > tr > *"));
-    job.a = job.cells.map((cell) => cell.getBoundingClientRect().width);
+    job.a = job.cells.map((cell) => cell.getBoundingClientRect().width / job.k);
     const em = parseFloat(getComputedStyle(job.table).fontSize) || 16;
     job.K = COMFORT * em;
     job.S = SEVERE * em;
@@ -113,7 +119,7 @@ function run() {
   // Write, then read: what every cell wanted.
   for (const job of measured) job.table.style.width = "max-content";
   for (const job of measured) {
-    job.M = job.cells.map((cell) => cell.getBoundingClientRect().width);
+    job.M = job.cells.map((cell) => cell.getBoundingClientRect().width / job.k);
     job.Tmax = job.table.offsetWidth;
   }
 
@@ -211,6 +217,20 @@ export default function initTableFit(root) {
       const img = e.detail && e.detail.img;
       schedule(img && img.closest && img.closest(TABLE));
     });
+    // And every table once more when the window has settled, from scratch, as
+    // a reload would. The column's observer answers the first frame of a
+    // resize, but the page is still moving then — the article eases to its new
+    // width, pictures and equations in cells re-lay themselves out on their own
+    // resize handlers — and a table measured mid-way kept a decision made for
+    // content that had since changed: scrolling, and still crushed.
+    window.addEventListener(
+      "resize",
+      () => {
+        clearTimeout(settle);
+        settle = setTimeout(() => fitTables(document.querySelectorAll(TABLE)), SETTLE);
+      },
+      { passive: true }
+    );
   }
   if (!root && observer) observer.disconnect();
   for (const box of (root || document).querySelectorAll(TABLE)) {
