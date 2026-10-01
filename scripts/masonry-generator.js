@@ -505,6 +505,7 @@ hexo.extend.generator.register('masonry_pages', function(locals) {
                 data: {
                     type: 'masonry',
                     title: item['page-title'] || item.name,
+                    description: item.description || '',
                     // Who worked on the album besides the site author. The album
                     // editor writes it as one comma-separated scalar, because
                     // masonry.yml's writer only emits scalars; the helper that

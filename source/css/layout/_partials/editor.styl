@@ -3307,12 +3307,15 @@ html.blog-editing .page-template-container
   position relative
   min-height 32vh
 
-// One column while the album is empty, so the placeholder is centred on the
-// whole measure instead of sitting in a quarter of it.
-.ed-album-host #masonry-container.ed-album-blank
-  column-count 1
+// The editor's FLIP is the only motion a tile makes while it is being edited;
+// the gallery's own re-pack transition would be a second, slower one under it.
+html.blog-editing .ed-album-host #masonry-container.is-settled > .masonry-item
+  transition none
 
+// Across every column, so the placeholder is centred on the whole measure
+// instead of sitting in one track of the grid.
 .ed-album-empty
+  grid-column s('1 / -1')
   display flex
   flex-direction column
   align-items center
@@ -3387,27 +3390,35 @@ html.blog-editing .page-template-container
   &.is-on
     opacity 1
 
-// Where a dropped photograph would land — the article's own insertion line, on
-// the edge it would go in at. In the column's own gap, so it never covers a
-// picture and never moves one.
+// Where a dropped photograph would land — the article's insertion line, stood
+// upright: the album reads left to right, so "before" is the tile's left edge.
+// Centred in the gap between columns, so it never covers a picture.
 .ed-tile[data-drop="before"]::before,
 .ed-tile[data-drop="after"]::after
   content ""
   position absolute
-  left 0
-  right 0
+  top 0
+  bottom 0
   z-index 4
-  height 3px
+  width 3px
   border-radius 3px
   background var(--primary-color)
   box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
-  animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+  animation ed-drop-in-y 0.18s cubic-bezier(0.32, 0.72, 0, 1)
 
 .ed-tile[data-drop="before"]::before
-  top -6px
+  left unquote('calc(var(--masonry-gap, 10px) / -2 - 1.5px)')
 
 .ed-tile[data-drop="after"]::after
-  bottom -6px
+  right unquote('calc(var(--masonry-gap, 10px) / -2 - 1.5px)')
+
+@keyframes ed-drop-in-y
+  from
+    opacity 0
+    transform scaleY(0.82)
+  to
+    opacity 1
+    transform none
 
 #masonry-container.is-dragging .ed-tile
   cursor grabbing
@@ -3418,30 +3429,68 @@ html.blog-editing .page-template-container
 // took width would make the layout being edited a different layout from the one
 // being published. So they float over the picture's top-left corner instead.
 //
-// Every property the article's tablet rule sets is set again, because that rule
-// makes the gutter STATIC — which here would push the picture down a row.
+// Every property `ed-float-gutter()` sets is set again: at tablet width and
+// below the article's gutter floats ABOVE its block (`bottom: 100%`, no pointer
+// events), and the half of that left standing pinned this rail to a zero-height
+// box whose buttons could not be pressed.
 .ed-tile-rail
   position absolute
   top 8px
   left 8px
   right auto
+  bottom auto
   z-index 3
   margin 0
   flex-direction column
   opacity 0
+  pointer-events none
   transform translateX(-4px)
   transition opacity $ed-fade, transform $ed-morph
 
 // Picked. This is the only way to reach the gutter on a touch screen, and it is
 // also what keeps it up while the property sheet is being used.
-.ed-tile[data-on="1"] > .ed-tile-rail
+.ed-tile[data-on="1"] > .ed-tile-rail,
+.ed-tile.is-dragging > .ed-tile-rail
   opacity 1
+  pointer-events auto
   transform none
 
 @media (hover: hover)
   .ed-tile:hover > .ed-tile-rail
     opacity 1
+    pointer-events auto
     transform none
+
+// A finger on the handle carries the photograph (masonry.js `touchDrag`)
+// instead of scrolling the page.
+.ed-tile .ed-handle
+  touch-action none
+
+.ed-tile.is-dragging .ed-handle
+  border-color var(--primary-color)
+  background var(--primary-color)
+  color $ed-on-primary
+
+// The photograph under a finger, lifted. Never a target — the drop is read from
+// the point under it. A picture that has not arrived yet is its skeleton.
+.ed-tile-ghost
+  position fixed
+  left 0
+  top 0
+  z-index $z-index-9
+  overflow hidden
+  pointer-events none
+  opacity 0.92
+  border-radius $redefine-border-radius-medium
+  background var(--second-background-color)
+  box-shadow var(--redefine-box-shadow-hover)
+  will-change transform
+
+  img
+    display block
+    width 100%
+    height 100%
+    object-fit cover
 
 // No hover to reveal it, so it appears when the photograph is picked — and it
 // lies ALONG THE TOP of the picture rather than down its left edge, which is
@@ -3521,6 +3570,70 @@ html.blog-editing .page-template-container
   padding 12px 10px
   font-size 0.72rem
   text-align center
+
+// A field the save refuses to go without (album card: a thumbnail, while the
+// category's cards show one).
+.ed-f.is-required > .ed-f-label::after
+  content "*"
+  color var(--box-red-text)
+
+// ─── the order categories are listed in ─────────────────────
+// The article's own handle and the gutter's square buttons, one row per
+// category; the album's own category carries the card's "held" tag.
+.ed-order
+  display flex
+  flex-direction column
+  gap 4px
+  margin 0
+  padding 0
+  list-style none
+
+.ed-order-row
+  position relative
+  display flex
+  align-items center
+  gap 8px
+  padding 4px 6px
+  border 1px solid transparent
+  border-radius 9px
+  background var(--background-color)
+  font-size 0.78rem
+  color var(--second-text-color)
+
+  &.is-here
+    border-color var(--border-color)
+
+  &.is-dragging
+    opacity 0.45
+
+  .ed-gutter-btn[disabled]
+    opacity 0.35
+    pointer-events none
+
+  &[data-drop="before"]::before,
+  &[data-drop="after"]::after
+    content ""
+    position absolute
+    left 0
+    right 0
+    height 3px
+    border-radius 3px
+    background var(--primary-color)
+    box-shadow 0 0 0 3px var(--second-background-color), 0 0 12px -1px var(--primary-color)
+    animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+
+  &[data-drop="before"]::before
+    top -4px
+
+  &[data-drop="after"]::after
+    bottom -4px
+
+.ed-order-name
+  flex 1 1 auto
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
 
 // Existing or new, said before it is committed rather than found out after.
 .ed-f-tag

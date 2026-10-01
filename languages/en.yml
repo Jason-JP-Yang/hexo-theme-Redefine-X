@@ -926,6 +926,8 @@ editor:
   src_hint: Every marker this block is written with.
   move_up: Move up
   move_down: Move down
+  move_earlier: Move earlier
+  move_later: Move later
   duplicate: Duplicate
   address: Address
   plain: Plain text
@@ -1065,6 +1067,8 @@ editor:
   editing_draft_album: You are editing the draft that stands in front of this album.
   recover_album: There is a copy of this album that was never committed.
   need_album_title: Give the album a name before saving it.
+  need_thumbnail: This category's cards show a thumbnail, so the album needs one before it can be saved.
+  need_thumbnails: "Showing thumbnails needs one on every album in this category first: {names}"
   album_gone: This album is no longer in masonry.yml - it may have been renamed or withdrawn.
   conflict_album: masonry.yml changed in the repository. Your work is safe here - reload to see what landed, then re-apply.
   build_failed_album: The build failed. The album is committed; nothing published has changed.
@@ -1072,6 +1076,7 @@ editor:
   publish_album_draft: Publish this draft over the album it replaces?
   discard_album: This album has changes that are not committed yet.
   album_empty: No photographs yet.
+  album_description: Add a description
   add_image: Add a picture
   insert_before_image: Add a picture here
   g_album: Album
@@ -1085,6 +1090,8 @@ editor:
   f_page_title: Page title
   f_link: Link
   f_category: Category
+  f_category_order: Category order
+  cat_this_album: This album
   f_has_thumbnail: Cards show a thumbnail
   f_auto_exif: Read EXIF at build time
 analytics:

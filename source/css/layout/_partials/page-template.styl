@@ -35,28 +35,40 @@ $friend-link-item-border-radius = 9px
       cursor zoom-in
 
 
-  // Masonry layout using CSS columns
-  // Preloaders have correct aspect ratios from lazyload-handle.js
-  // Layout is stable from page load - no waiting for images
+  // Row-major masonry (plugins/masonry.js places every tile in the shortest
+  // column). Before that pass it is a plain grid in the same order and widths,
+  // so packing only closes the gaps under short tiles.
   #masonry-container
-    column-count 2
-    column-gap 10px
-    opacity 1
-    
-    @media screen and (min-width: 768px)
-      column-count 3
-    
-    @media screen and (min-width: 1200px)
-      column-count 4
+    --masonry-cols 2
+    --masonry-gap 10px
+    display grid
+    grid-template-columns repeat(var(--masonry-cols), minmax(0, 1fr))
+    gap var(--masonry-gap)
+    align-items start
 
-    &.masonry-ready
-      opacity 1
+    @media screen and (min-width: 768px)
+      --masonry-cols 3
+
+    @media screen and (min-width: 1200px)
+      --masonry-cols 4
+
+    &.masonry-packed
+      display block
+      position relative
+
+      > .masonry-item
+        position absolute
+
+    // Re-packs after the first one travel; the first lands in place.
+    &.is-settled > .masonry-item
+      transition left 0.38s cubic-bezier(0.32, 0.72, 0, 1), top 0.38s cubic-bezier(0.32, 0.72, 0, 1)
+
+      @media (prefers-reduced-motion: reduce)
+        transition none
 
     .masonry-item
-      break-inside avoid
-      margin-bottom 10px
-      display inline-block
-      width 100%
+      display block
+      margin 0
       box-sizing border-box
 
       &:hover

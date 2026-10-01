@@ -607,6 +607,44 @@ export function pruneEmptyCategories(doc) {
 }
 
 /**
+ * Put the categories in `order` (category nodes) into the slots categories hold
+ * now. Anything else in the top-level sequence keeps its slot, and so do the
+ * blank lines after each slot, so the file keeps its shape whichever category
+ * ends up last. A category `order` does not name keeps its relative place after
+ * the named ones.
+ */
+export function setCategoryOrder(doc, order) {
+  const slots = [];
+  doc.nodes.forEach((node, i) => {
+    if (node.kind === "category") slots.push(i);
+  });
+  const now = slots.map((i) => doc.nodes[i]);
+  const named = order.filter((node, i) => now.includes(node) && order.indexOf(node) === i);
+  const nodes = named.concat(now.filter((node) => !named.includes(node)));
+  // A category's closing blank lines sit on its last album's tail (see
+  // `parseItem`), so that is where they are taken from and put back.
+  const last = (node) => node.items[node.items.length - 1];
+  const trails = now.map((node) => (last(node) ? last(node).tail : "") + (node.tail || ""));
+  slots.forEach((slot, k) => {
+    const node = nodes[k];
+    if (last(node)) {
+      last(node).tail = trails[k];
+      node.tail = "";
+    } else node.tail = trails[k];
+    doc.nodes[slot] = node;
+  });
+}
+
+/** Move one category, both indices counted among categories only. */
+export function moveCategory(doc, from, to) {
+  const list = categories(doc);
+  if (from === to || !list[from] || !list[to]) return false;
+  list.splice(to, 0, list.splice(from, 1)[0]);
+  setCategoryOrder(doc, list);
+  return true;
+}
+
+/**
  * Put an album into a category's list.
  *
  * The lead is the category's own, so an album written by this editor is indented

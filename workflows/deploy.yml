@@ -75,6 +75,8 @@
 #                        Metadata read. NOT Workflows
 #   DEPLOY_KEY           private half of a deploy key with write access
 #   UMAMI_TOKEN          optional; brings source/_data/analytics.json up to date
+#   GISCUS_AUTHOR_PAT    optional; reconciles the albums' reactions discussions
+#                        (fine-grained PAT on the giscus repo: Discussions read/write)
 
 name: Build and deploy
 run-name: >-
@@ -386,6 +388,7 @@ jobs:
         working-directory: src
         env:
           UMAMI_TOKEN: ${{ secrets.UMAMI_TOKEN }}
+          GISCUS_AUTHOR_PAT: ${{ secrets.GISCUS_AUTHOR_PAT }}
           FORCE_COLOR: "1"
         run: |
           set -o pipefail

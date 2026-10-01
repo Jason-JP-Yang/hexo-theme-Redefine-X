@@ -1029,6 +1029,7 @@ hexo.extend.generator.register("redefine_vault", async function (locals) {
         page: {
           type: "masonry",
           title: entry.title,
+          description: item.description || "",
           contributor: item.contributor || "",
           images,
           content: "",

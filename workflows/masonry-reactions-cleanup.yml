@@ -28,7 +28,9 @@ jobs:
               return m ? m[1].trim() : null;
             }
 
+            // One mutation a second, as GitHub asks of mutative requests.
             async function del(id) {
+              await new Promise((r) => setTimeout(r, 1000));
               await github.graphql(
                 `mutation($i:DeleteDiscussionCommentInput!) {
                   deleteDiscussionComment(input:$i) { clientMutationId }
@@ -62,18 +64,19 @@ jobs:
               cur = r.search.pageInfo.endCursor;
             }
 
-            // For each discussion: delete orphans (no parseable ID) and duplicates
+            // Per discussion: delete comments with no photo marker, and of
+            // several for one photo keep the one with the most hearts.
             for (const disc of discs) {
-              const seen = new Set();
+              const all = [];
               let cc = null;
               while (true) {
                 const r = await github.graphql(
                   `query($o:String!, $n:String!, $num:Int!, $c:String) {
                     repository(owner:$o, name:$n) {
                       discussion(number:$num) {
-                        comments(first:100, after:$c) {
+                        comments(first:50, after:$c) {
                           pageInfo { hasNextPage endCursor }
-                          nodes { id body }
+                          nodes { id body reactions(content:HEART) { totalCount } }
                         }
                       }
                     }
@@ -81,17 +84,20 @@ jobs:
                   { o: owner, n: name, num: disc.number, c: cc }
                 );
                 const comments = r.repository.discussion.comments;
-                for (const c of comments.nodes) {
-                  const imgId = parseImageId(c.body);
-                  if (!imgId || seen.has(imgId)) {
-                    await del(c.id);
-                  } else {
-                    seen.add(imgId);
-                  }
-                }
+                all.push(...comments.nodes);
                 if (!comments.pageInfo.hasNextPage) break;
                 cc = comments.pageInfo.endCursor;
               }
+
+              const keep = new Map();
+              for (const c of all) {
+                const imgId = parseImageId(c.body);
+                if (!imgId) continue;
+                const best = keep.get(imgId);
+                if (!best || c.reactions.totalCount > best.reactions.totalCount) keep.set(imgId, c);
+              }
+              const kept = new Set(Array.from(keep.values()).map((c) => c.id));
+              for (const c of all) if (!kept.has(c.id)) await del(c.id);
             }
 
             core.info(`Done. Deleted ${deleted} comments.`);

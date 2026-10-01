@@ -179,7 +179,7 @@ function index(text, yaml) {
     }
   }
 
-  return { lines, albums, byCategory };
+  return { lines, cats, albums, byCategory };
 }
 
 // U+2028, U+2029 and U+00A0 from their code points: a literal one in a source
@@ -229,6 +229,9 @@ function unquote(value) {
  * A rename is recognised by what it carries, not by intent: an after-category
  * whose album set is exactly the set of a category that has gone is a rename,
  * so only the header moves and the albums are not re-permissioned one by one.
+ *
+ * The incoming file's category ORDER is applied last, to the categories it
+ * names; one the sender was never shown keeps its slot.
  *
  * @returns {{text: string, touched: string[], categories: number}}
  * @throws when the incoming file changes an album the receipt did not name.
@@ -391,24 +394,69 @@ export function merge(yaml, oldText, newText, allowed, admin) {
     }
   }
 
-  if (!edits.length && !pending.size) return { text: oldText, touched, categories };
+  let text = oldText;
+  if (edits.length || pending.size) {
+    // Applied from the bottom up, so an earlier edit's offsets stay valid.
+    edits.sort((a, b) => b.start - a.start || b.end - a.end);
+    const out = before.lines.slice();
+    for (const edit of edits) out.splice(edit.start, edit.end - edit.start, ...edit.lines);
 
-  // Applied from the bottom up, so an earlier edit's offsets stay valid.
-  edits.sort((a, b) => b.start - a.start || b.end - a.end);
-  let out = before.lines.slice();
-  for (const edit of edits) out.splice(edit.start, edit.end - edit.start, ...edit.lines);
-
-  if (pending.size) {
-    for (const lines of pending.values()) {
+    if (pending.size) {
+      for (const lines of pending.values()) {
+        if (out.length && out[out.length - 1] !== "") out.push("");
+        out.push(...lines);
+      }
+      // The blank tail the original file closed on is no longer last once a
+      // category has been appended; put one back so the file keeps its shape.
       if (out.length && out[out.length - 1] !== "") out.push("");
-      out.push(...lines);
     }
-    // The blank tail the original file closed on is no longer last once a
-    // category has been appended; put one back so the file keeps its shape.
-    if (out.length && out[out.length - 1] !== "") out.push("");
+    text = pruneEmptyCategories(yaml, out.join(eol));
   }
 
-  return { text: pruneEmptyCategories(yaml, out.join(eol)), touched, categories };
+  const ordered = reorderCategories(yaml, text, Array.from(after.byCategory.keys()));
+  if (ordered !== text) {
+    changedCategory();
+    text = ordered;
+  }
+  return { text, touched, categories };
+}
+
+/**
+ * Put the named categories into `order`, in the slots named categories occupy.
+ *
+ * Each top-level entry is a run of lines up to the next one; its trailing blank
+ * lines stay with the slot rather than travelling, so the last category never
+ * carries the file's closing newline into the middle. A category `order` does
+ * not name — one the sender could not see — and any other entry keep their
+ * place.
+ */
+function reorderCategories(yaml, text, order) {
+  let doc;
+  try {
+    doc = index(text, yaml);
+  } catch {
+    return text;
+  }
+  const rank = new Map(order.map((name, i) => [name, i]));
+  const blocks = doc.cats.filter((cat) => cat.name && rank.has(cat.name) && doc.byCategory.get(cat.name) === cat);
+  const sorted = blocks.slice().sort((a, b) => rank.get(a.name) - rank.get(b.name));
+  if (sorted.every((cat, i) => cat === blocks[i])) return text;
+
+  const { lines } = doc;
+  const split = (cat) => {
+    let cut = cat.end;
+    while (cut > cat.start + 1 && !lines[cut - 1].trim()) cut -= 1;
+    return { body: lines.slice(cat.start, cut), tail: lines.slice(cut, cat.end) };
+  };
+  const swap = new Map(blocks.map((cat, i) => [cat, sorted[i]]));
+
+  const out = lines.slice(0, doc.cats.length ? doc.cats[0].start : lines.length);
+  for (const cat of doc.cats) {
+    const here = split(cat);
+    const moved = swap.get(cat);
+    out.push(...(moved ? split(moved).body : here.body), ...here.tail);
+  }
+  return out.join(eolOf(text));
 }
 
 /**

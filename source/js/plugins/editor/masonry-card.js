@@ -26,6 +26,7 @@
 
 import { escapeHTML } from "./markdown.js";
 import { rowArea, rowAsset, rowText, rowToggle } from "./frontmatter.js";
+import { flip, setDragImage } from "./motion.js";
 import {
   albumTitle,
   categories,
@@ -100,8 +101,37 @@ function rowCombo(value, label, t) {
 }
 
 /**
+ * The order the collection page lists categories in, as rows that can be
+ * dragged by the article's own handle or stepped with two arrows. The category
+ * this album is in is marked, so the list also says where the album will appear.
+ */
+function rowOrder(model, t) {
+  const list = categories(model.doc);
+  if (list.length < 2) return "";
+  const drag = escapeHTML(t("drag", "Drag to reorder"));
+  const up = escapeHTML(t("move_up", "Move up"));
+  const down = escapeHTML(t("move_down", "Move down"));
+  const rows = list
+    .map((node, i) => {
+      const here = node === model.cat;
+      return `<li class="ed-order-row${here ? " is-here" : ""}" data-id="${escapeHTML(node.id)}">
+        <button type="button" class="ed-gutter-btn ed-handle ed-order-grip" draggable="true" tabindex="-1" title="${drag}"><i class="fa-solid fa-grip-vertical" aria-hidden="true"></i></button>
+        <span class="ed-order-name">${escapeHTML(String(categoryFields(node).links_category || ""))}</span>
+        ${here ? `<span class="ed-f-tag" data-kind="held">${escapeHTML(t("cat_this_album", "This album"))}</span>` : ""}
+        <button type="button" class="ed-gutter-btn" data-order-move="-1" title="${up}"${i === 0 ? " disabled" : ""}><i class="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
+        <button type="button" class="ed-gutter-btn" data-order-move="1" title="${down}"${i === list.length - 1 ? " disabled" : ""}><i class="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
+      </li>`;
+    })
+    .join("");
+  return `<div class="ed-f is-wide ed-f-order" data-key="category_order">
+    <span class="ed-f-label">${escapeHTML(t("f_category_order", "Category order"))}</span>
+    <ol class="ed-order">${rows}</ol>
+  </div>`;
+}
+
+/**
  * @param {object} model  { doc, item, cat } — the nodes this card edits in place
- * @param {object} ctx    { t, onChange, onCategory, pickImage, bindImage }
+ * @param {object} ctx    { t, onChange, onCategory, onOrder, pickImage, bindImage }
  */
 export function createAlbumCard(model, ctx) {
   const el = document.createElement("section");
@@ -143,6 +173,7 @@ export function createAlbumCard(model, ctx) {
       if (group.id === "cat") {
         rows += rowCombo(here, escapeHTML(t("f_category", "Category")), t);
         rows += CATEGORY_FIELDS.map((f) => renderRow(f, cat)).join("");
+        rows += rowOrder(model, t);
       } else {
         rows = ALBUM_FIELDS.filter((f) => f.group === group.id)
           .map((f) => renderRow(f, fields))
@@ -179,7 +210,39 @@ export function createAlbumCard(model, ctx) {
 
     for (const node of el.querySelectorAll("[data-thumb]")) paintThumb(node);
     paintTag();
+    paintRequired();
     resync();
+  }
+
+  /** A category whose cards show thumbnails cannot take an album without one. */
+  function paintRequired() {
+    const row = el.querySelector('.ed-f[data-key="thumbnail"]');
+    if (row) row.classList.toggle("is-required", isTrue(categoryFields(model.cat).has_thumbnail));
+  }
+
+  /**
+   * The order rows, moved rather than redrawn, so a step travels. A category
+   * added or removed since the last paint redraws the card instead.
+   */
+  function paintOrder(animate) {
+    const list = el.querySelector(".ed-order");
+    const nodes = categories(model.doc);
+    const rows = list ? Array.from(list.children) : [];
+    const byId = new Map(rows.map((li) => [li.dataset.id, li]));
+    if (!list || rows.length !== nodes.length || nodes.some((node) => !byId.has(node.id))) return void paint();
+    const mutate = () =>
+      nodes.forEach((node, i) => {
+        const li = byId.get(node.id);
+        li.querySelector('[data-order-move="-1"]').disabled = i === 0;
+        li.querySelector('[data-order-move="1"]').disabled = i === nodes.length - 1;
+        list.appendChild(li);
+      });
+    if (animate) flip(rows, mutate);
+    else mutate();
+  }
+
+  function orderIndex(li) {
+    return Array.prototype.indexOf.call(li.parentNode.children, li);
   }
 
   function paintThumb(node) {
@@ -372,7 +435,15 @@ export function createAlbumCard(model, ctx) {
       const on = !toggle.classList.contains("is-on");
       toggle.classList.toggle("is-on", on);
       toggle.setAttribute("aria-checked", on ? "true" : "false");
-      return void writeToggle(field, on, key === "has_thumbnail" ? "cat" : "album");
+      writeToggle(field, on, key === "has_thumbnail" ? "cat" : "album");
+      return void paintRequired();
+    }
+
+    const step = e.target.closest("[data-order-move]");
+    if (step) {
+      e.preventDefault();
+      const at = orderIndex(step.closest(".ed-order-row"));
+      return void ctx.onOrder(at, at + Number(step.dataset.orderMove));
     }
 
     const pick = e.target.closest("[data-pick]");
@@ -385,6 +456,59 @@ export function createAlbumCard(model, ctx) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
+  /* ─── dragging a category row ────────────────────────────────────────── */
+
+  let carried = null;
+
+  function dropRow(e) {
+    const li = e.target.closest && e.target.closest(".ed-order-row");
+    if (!li || li === carried) return null;
+    const rect = li.getBoundingClientRect();
+    return { li, side: e.clientY > (rect.top + rect.bottom) / 2 ? "after" : "before" };
+  }
+
+  function clearDrop() {
+    for (const li of el.querySelectorAll(".ed-order-row[data-drop]")) delete li.dataset.drop;
+  }
+
+  el.addEventListener("dragstart", (e) => {
+    const grip = e.target.closest && e.target.closest(".ed-order-grip");
+    if (!grip) return;
+    carried = grip.closest(".ed-order-row");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", carried.dataset.id);
+    setDragImage(e, carried);
+    carried.classList.add("is-dragging");
+  });
+
+  el.addEventListener("dragover", (e) => {
+    if (!carried) return;
+    e.preventDefault();
+    const at = dropRow(e);
+    const want = at ? at.li.dataset.id + at.side : "";
+    const now = el.querySelector(".ed-order-row[data-drop]");
+    if ((now ? now.dataset.id + now.dataset.drop : "") === want) return;
+    clearDrop();
+    if (at) at.li.dataset.drop = at.side;
+  });
+
+  el.addEventListener("drop", (e) => {
+    if (!carried) return;
+    e.preventDefault();
+    const at = dropRow(e);
+    const from = orderIndex(carried);
+    if (!at) return;
+    let to = orderIndex(at.li) + (at.side === "after" ? 1 : 0);
+    if (from < to) to -= 1;
+    ctx.onOrder(from, to);
+  });
+
+  el.addEventListener("dragend", () => {
+    if (carried) carried.classList.remove("is-dragging");
+    carried = null;
+    clearDrop();
+  });
+
   /** One field, written from outside — the album's name is shown twice. */
   function set(key, value) {
     const input = el.querySelector(`input[data-key="${CSS.escape(key)}"], textarea[data-key="${CSS.escape(key)}"]`);
@@ -392,5 +516,5 @@ export function createAlbumCard(model, ctx) {
   }
 
   paint();
-  return { el, paint, set, resync };
+  return { el, paint, paintOrder, paintRequired, set, resync };
 }

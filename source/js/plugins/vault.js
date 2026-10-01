@@ -1550,8 +1550,8 @@ function albumList(root, group) {
 
   const list = document.createElement("ul");
   list.className = group.thumbs
-    ? "grid mb-6 w-full gap-4 grid-cols-2"
-    : "grid mb-6 w-full gap-4 grid-cols-2 sm:grid-cols-3";
+    ? "grid mb-6 w-full gap-4 grid-cols-1 sm:grid-cols-2"
+    : "grid mb-6 w-full gap-4 grid-cols-1 sm:grid-cols-3";
   list.setAttribute("data-masonry-category", group.name);
   list.setAttribute("data-masonry-thumbs", String(group.thumbs));
   list.setAttribute(INSERTED, "1");

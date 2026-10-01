@@ -169,28 +169,56 @@ hexo.extend.filter.register(
  *
  * Gated on the command, not on a separate entry point: this creates, edits and
  * deletes comments in a real repository, and `hexo server` re-runs its filters
- * on every keystroke that touches a file. It is also a no-op without
- * GISCUS_AUTHOR_PAT in `.env`, which is what makes it free on a runner.
+ * on every keystroke that touches a file. Here and on the runner alike, wherever
+ * GISCUS_AUTHOR_PAT is set (`.env`, or the workflow's secret).
+ *
+ * Started before the render and awaited after it: nothing published depends on
+ * it, so its requests run beside the encoding and rendering instead of ahead of
+ * them. Read at priority 15, before the vault filter masks the encrypted albums
+ * whose discussions it has to take down.
  */
+let reactions = null;
+
 hexo.extend.filter.register(
   "before_generate",
-  async function () {
+  function () {
     if (command(this) !== "generate" || watching(this)) return;
 
     const { sync } = require("../masonry-reactions");
     const data = this.locals.get("data") || {};
-    try {
-      await sync({
-        theme: this.theme.config,
-        config: this.config,
-        masonry: Array.isArray(data.masonry) ? data.masonry : null,
-        log: this.log,
-      });
-    } catch (err) {
+    reactions = sync({
+      theme: this.theme.config,
+      config: this.config,
+      masonry: Array.isArray(data.masonry) ? data.masonry : null,
+      sourceDir: this.source_dir,
+      log: this.log,
+    }).catch((err) => {
       // Never fatal. The album pages are published either way; what is out of
       // date is a discussion thread nobody has opened yet.
       this.log.warn(`[masonry-reactions] ${err.message}`);
-    }
+    });
   },
   15
 );
+
+// Said out loud while the build waits, so a long first reconcile (every comment
+// rewritten once, one write a second) never reads as a hang.
+const HEARTBEAT_MS = 15000;
+
+hexo.extend.filter.register("after_generate", async function () {
+  if (!reactions) return;
+  const pending = reactions;
+  reactions = null;
+
+  const { progress } = require("../masonry-reactions");
+  if (!progress()) return void (await pending);
+  this.log.info(`[masonry-reactions] Render finished; waiting for the reactions sync (${progress()})...`);
+  const beat = setInterval(() => {
+    if (progress()) this.log.info(`[masonry-reactions] Still working: ${progress()}`);
+  }, HEARTBEAT_MS);
+  try {
+    await pending;
+  } finally {
+    clearInterval(beat);
+  }
+});

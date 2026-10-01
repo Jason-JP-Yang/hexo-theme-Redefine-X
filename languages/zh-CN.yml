@@ -926,6 +926,8 @@ editor:
   src_hint: 该块完整的原文，包含全部标记。
   move_up: 上移
   move_down: 下移
+  move_earlier: 前移
+  move_later: 后移
   duplicate: 复制
   address: 地址
   plain: 纯文本
@@ -1065,6 +1067,8 @@ editor:
   editing_draft_album: 你正在编辑挡在这个相册前面的草稿。
   recover_album: 本地有一份从未提交过的相册副本。
   need_album_title: 保存前请先给相册起个名字。
+  need_thumbnail: 这个分类的卡片会显示预览图，保存前请先给相册设置预览图。
+  need_thumbnails: "开启预览图前，这个分类里的每个相册都需要先有预览图：{names}"
   album_gone: masonry.yml 里已经没有这个相册了，它可能被改名或撤下了。
   conflict_album: 仓库里的 masonry.yml 变了。你的改动仍在这里——刷新看看落地的版本，再重新应用。
   build_failed_album: 构建失败。相册已提交，已发布的内容没有变化。
@@ -1072,6 +1076,7 @@ editor:
   publish_album_draft: 用这份草稿覆盖它所替代的相册？
   discard_album: 这个相册有尚未提交的改动。
   album_empty: 还没有照片
+  album_description: 添加描述
   add_image: 添加图片
   insert_before_image: 在这里插入图片
   g_album: 相册
@@ -1085,6 +1090,8 @@ editor:
   f_page_title: 页面标题
   f_link: 链接
   f_category: 分类
+  f_category_order: 分类顺序
+  cat_this_album: 本相册
   f_has_thumbnail: 卡片显示预览图
   f_auto_exif: 构建时读取 EXIF
 analytics:

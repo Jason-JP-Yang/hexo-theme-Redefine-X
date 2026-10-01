@@ -32,6 +32,9 @@ function getContainerClass(image) {
 <h1 class="page-title-header">
 	<%- getPageTitle(page) %>
 </h1>
+<% if (page.description) { %>
+<div class="page-title-description"><%= page.description %></div>
+<% } %>
 
 <%# An album has an author and collaborators exactly as an article does, so it
 	says so in the same row, with the same classes and the same stylesheet. The

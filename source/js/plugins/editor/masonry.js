@@ -60,10 +60,12 @@ import {
   makeCategory,
   makeImage,
   makeItem,
+  moveCategory,
   parseItemBlock,
   parseMasonry,
   pruneEmptyCategories,
   readKeys,
+  setCategoryOrder,
   setImageField,
   setItemField,
 } from "./masonry-yaml.js";
@@ -128,7 +130,7 @@ import {
   toolbarIn,
 } from "./motion.js";
 import { createRail } from "./rail.js";
-import { checkMasonryOverflow } from "../masonry.js";
+import { checkMasonryOverflow, layoutMasonry } from "../masonry.js";
 
 const DATA = "source/_data/masonry.yml";
 const AUTOSTASH_MS = 4000;
@@ -191,6 +193,18 @@ function blank() {
     host: null,
     container: null,
     titleHost: null,
+    descHost: null,
+    // The heading and the line under it as the page printed them, put back on
+    // close; `descMade` when the line was the editor's own.
+    titleWas: "",
+    descWas: "",
+    descMade: false,
+    wired: null,
+    // Category order and thumbnail switch as the file had them, so a save
+    // reorders only when the author did and checks other albums only when the
+    // switch was turned on here.
+    openedOrder: "",
+    thumbsWere: new Set(),
     snapshot: [],
     put: [],
     doc: null,
@@ -411,28 +425,97 @@ function titleKey() {
   return itemFields(state.item)["page-title"] ? "page-title" : "name";
 }
 
-/** Wired once. Repainting it is `syncTitle`, which touches only the text. */
+/**
+ * One line of plain text, edited in place: Enter finishes it, a paste arrives
+ * as text, and an emptied line is truly empty so its placeholder shows.
+ */
+function editLine(el, placeholder, onInput) {
+  const signal = state.wired.signal;
+  el.classList.add("ed-title");
+  el.setAttribute("contenteditable", "true");
+  el.setAttribute("spellcheck", "false");
+  el.dataset.placeholder = placeholder;
+  el.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      el.blur();
+    },
+    { signal }
+  );
+  el.addEventListener(
+    "paste",
+    (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData ? e.clipboardData.getData("text/plain") : "").replace(/\s+/g, " ");
+      document.execCommand("insertText", false, text);
+    },
+    { signal }
+  );
+  el.addEventListener(
+    "input",
+    () => {
+      if (!el.textContent) el.innerHTML = "";
+      onInput(el.textContent.trim());
+    },
+    { signal }
+  );
+}
+
+function unwireLine(el) {
+  if (!el) return;
+  el.removeAttribute("contenteditable");
+  el.removeAttribute("spellcheck");
+  el.classList.remove("ed-title");
+  delete el.dataset.placeholder;
+}
+
+/**
+ * The heading, and the album's description on the line under it — created
+ * when the album has none yet, so there is a place to type one.
+ */
 function wireTitle() {
   if (!state.titleHost) return;
-  state.titleHost.classList.add("ed-title");
-  state.titleHost.setAttribute("contenteditable", "true");
-  state.titleHost.setAttribute("spellcheck", "false");
-  state.titleHost.dataset.placeholder = t("untitled", "Untitled");
+  state.wired = new AbortController();
+  state.titleWas = state.titleHost.textContent;
+
+  let desc = state.titleHost.nextElementSibling;
+  if (!desc || !desc.classList.contains("page-title-description")) {
+    desc = document.createElement("div");
+    desc.className = "page-title-description";
+    state.titleHost.after(desc);
+    state.descMade = true;
+  }
+  state.descHost = desc;
+  state.descWas = desc.textContent;
   syncTitle();
 
-  state.titleHost.addEventListener("input", () => {
+  editLine(state.titleHost, t("untitled", "Untitled"), (value) => {
     const key = titleKey();
-    const value = state.titleHost.textContent.trim();
     setItemField(state.item, key, value || null);
     if (ui.card) ui.card.set(key, value);
     markDirty("text", "title");
     ui.path.textContent = pathLabel();
   });
+  editLine(desc, t("album_description", "Add a description"), (value) => {
+    setItemField(state.item, "description", value || null);
+    if (ui.card) ui.card.set("description", value);
+    markDirty("text", "description");
+  });
 }
 
+/** Repaint the heading and the description, never under a caret. */
 function syncTitle() {
-  if (!state.titleHost || state.titleHost === document.activeElement) return;
-  state.titleHost.textContent = albumTitle(itemFields(state.item));
+  if (!state.item) return;
+  const fields = itemFields(state.item);
+  const lines = [
+    [state.titleHost, albumTitle(fields)],
+    [state.descHost, fields.description || ""],
+  ];
+  for (const [el, text] of lines) {
+    if (el && el !== document.activeElement && el.textContent !== text) el.textContent = text;
+  }
 }
 
 /* ─── the canvas ───────────────────────────────────────────────────────────── */
@@ -652,9 +735,6 @@ function syncTiles() {
   const empty = container.querySelector(":scope > .ed-album-empty");
   if (rows.length && empty) empty.remove();
   if (!rows.length && !empty) container.appendChild(buildEmpty());
-  // One column while there is nothing in it, so the placeholder has the whole
-  // measure to be centred on.
-  container.classList.toggle("ed-album-blank", !rows.length);
 
   settleGallery();
   followRing();
@@ -853,14 +933,15 @@ function observeImages() {
 }
 
 /**
- * The gallery's own compact-overlay measuring pass, for tiles it never saw.
+ * The gallery's own packing and compact-overlay passes, for tiles it never saw.
  *
- * The pass itself, not `initMasonry` — that one also registers a `resize`
- * listener, and calling it after every edit left one listener per keystroke.
+ * Synchronous: a FLIP measures the tiles straight after the mutation, so they
+ * have to be standing in their new columns by then.
  */
 function settleGallery() {
   if (!state.container) return;
   try {
+    layoutMasonry(state.container);
     checkMasonryOverflow(state.container);
   } catch (err) {
     /* one dead subsystem must not take the album down with it */
@@ -908,8 +989,9 @@ function toolbarItems() {
     },
     { kind: "btn", act: "view", icon: "fa-expand", label: "Open viewer", tt: "open_viewer", disabled: off },
     { kind: "sep" },
-    { kind: "btn", act: "move", arg: "-1", icon: "fa-arrow-up", label: "Move up", tt: "move_up", disabled: off },
-    { kind: "btn", act: "move", arg: "1", icon: "fa-arrow-down", label: "Move down", tt: "move_down", disabled: off },
+    // Earlier and later in the album, which now reads left to right.
+    { kind: "btn", act: "move", arg: "-1", icon: "fa-arrow-left", label: "Move earlier", tt: "move_earlier", disabled: off },
+    { kind: "btn", act: "move", arg: "1", icon: "fa-arrow-right", label: "Move later", tt: "move_later", disabled: off },
     { kind: "btn", act: "duplicate", icon: "fa-clone", label: "Duplicate", tt: "duplicate", disabled: off },
     { kind: "btn", act: "delete", icon: "fa-trash", label: "Remove", tt: "remove_block", disabled: off },
     // Last, and to the right of Remove: adding is the one thing here that does
@@ -1296,6 +1378,13 @@ function applyStagedMoves() {
 const LIMIT = 200;
 const RUN_MS = 1500;
 const LIVE = new Set(["text", "front", "props"]);
+// The album keys edited on the page itself rather than in the card.
+const LINES = new Set(["name", "page-title", "description"]);
+
+/** A category order as one comparable string. */
+function orderKey(order) {
+  return (order || []).map((node) => node.id).join(UNIT);
+}
 
 /** A photograph's keys, read back from a snapshot's copy of its text. */
 function rowFields(row) {
@@ -1381,9 +1470,10 @@ function decide(from, to, cause) {
   const moved = movedId(from.imgs, to.imgs);
   if (moved) return { kind: "image", id: moved, how: "move" };
 
+  if (orderKey(from.order) !== orderKey(to.order)) return { kind: "front", key: "category_order" };
   if (from.pre !== to.pre) {
     const key = frontField(from, to);
-    return key === "name" || key === "page-title" ? { kind: "title", key } : { kind: "front", key };
+    return LINES.has(key) ? { kind: "title", key } : { kind: "front", key };
   }
   if (from.cat !== to.cat) return { kind: "front", key: "links_category" };
 
@@ -1424,6 +1514,7 @@ const history = (() => {
       imgs: item.images.map((n) => ({ id: n.id, lead: n.lead, body: n.body, tail: n.tail, eol: n.eol })),
       cat: state.cat ? state.cat.pre : "",
       catName: state.cat ? state.cat.openedName : "",
+      order: categories(state.doc),
       pending: state.pending.slice(),
       moves: (state.stage ? state.stage.moves : []).map((m) => ({ from: m.from, to: m.to, noted: !!m.noted })),
       folders: state.stage ? Array.from(state.stage.folders) : [],
@@ -1440,6 +1531,7 @@ const history = (() => {
       snap.imgs.map((r) => r.id + UNIT + r.lead + UNIT + r.body + UNIT + r.tail).join(UNIT),
       snap.cat,
       snap.catName,
+      orderKey(snap.order),
       snap.pending.map((a) => a.path).join(","),
       snap.moves.map((m) => `${m.from}>${m.to}`).join(","),
       snap.folders.join(","),
@@ -1459,6 +1551,7 @@ const history = (() => {
     item.images = snap.imgs.map((r) => ({ id: r.id, lead: r.lead, body: r.body, tail: r.tail, eol: r.eol }));
 
     if (state.cat) state.cat.pre = snap.cat;
+    setCategoryOrder(state.doc, snap.order);
     state.pending = snap.pending.slice();
     if (state.stage) {
       state.stage.moves.length = 0;
@@ -1484,6 +1577,7 @@ const history = (() => {
     const anchor = (target.id ? tileOf(target.id) : null) || steadyTile();
     const wasPre = state.item.pre;
     const wasCat = state.cat ? state.cat.pre : "";
+    const wasOrder = orderKey(categories(state.doc));
     restore(snap);
     if (quick) await anchored(anchor, () => syncTiles());
     else await flipTiles(() => syncTiles(), anchor);
@@ -1494,6 +1588,7 @@ const history = (() => {
     // markup, and rebuilding it under a field being typed into takes the caret
     // out of that field.
     if (wasPre !== state.item.pre || wasCat !== (state.cat ? state.cat.pre : "")) repaintCard();
+    else if (wasOrder !== orderKey(categories(state.doc))) ui.card.paintOrder(!quick);
     syncHeader();
     observeImages();
     contentChanged();
@@ -1722,7 +1817,7 @@ const KEY_NAME = /^[A-Za-z_][\w-]*$/;
 
 /** The one element an album-level step is about, as it stands right now. */
 function fieldNode(target) {
-  if (target.kind === "title") return state.titleHost;
+  if (target.kind === "title") return target.key === "description" ? state.descHost : state.titleHost;
   if (target.kind !== "front" || !ui || !ui.card) return null;
   const row = KEY_NAME.test(target.key || "") ? ui.card.el.querySelector(`[data-key="${target.key}"]`) : null;
   return row || ui.card.el;
@@ -1916,6 +2011,7 @@ async function activate(container) {
     t,
     onChange: onCardChange,
     onCategory: setCategory,
+    onOrder: reorderCategory,
     pickImage: () => pickImage(""),
     bindImage: (img, src) => bindImage(img, src, state.pending),
   });
@@ -2036,6 +2132,12 @@ async function restoreAlbum(doc, grant, title, draft) {
   return restoreFromSlice(doc, raw);
 }
 
+/** What the file says as it stands now, for the next save to compare against. */
+function noteOpened() {
+  state.openedOrder = categoryKeys(state.doc).join(UNIT);
+  state.thumbsWere = new Set(categories(state.doc).filter((node) => isTrue(categoryFields(node).has_thumbnail)));
+}
+
 /**
  * Find this album in the file, or start a new one.
  *
@@ -2060,6 +2162,7 @@ async function openAlbum(container) {
     state.cat = first || appendCategory(state.doc, makeCategory(state.doc.eol, t("cat_first", "Albums"), true));
     state.item = makeItem(state.cat.itemLead, state.doc.eol, { name: "", description: "" });
     state.opened = { title: "", draft: true, category: state.cat.openedName };
+    noteOpened();
     await loadVaultIndex();
     await offerRecovery();
     return true;
@@ -2120,6 +2223,7 @@ async function openAlbum(container) {
   else setVaultAssets(null, null, null);
 
   if (onDraft) notice("info", t("editing_draft_album", "You are editing the draft that stands in front of this album."));
+  noteOpened();
 
   await loadVaultIndex();
   await offerRecovery();
@@ -2173,10 +2277,8 @@ async function offerRecovery() {
 
 function onCardChange(scope, key, value) {
   if (key === "vault") state.vaultChoice = value;
-  if (key === "name" || key === "page-title") {
-    if (state.titleHost && state.titleHost !== document.activeElement) {
-      state.titleHost.textContent = albumTitle(itemFields(state.item));
-    }
+  if (LINES.has(key)) {
+    syncTitle();
     ui.path.textContent = pathLabel();
   }
   markDirty(scope === "category" ? "front" : "text", `${scope}:${key}`);
@@ -2208,6 +2310,48 @@ function setCategory(name) {
 
   repaintCard();
   markDirty("front", "category");
+}
+
+/** Move one category in the collection's order (indices among categories). */
+function reorderCategory(from, to) {
+  if (!moveCategory(state.doc, from, to)) return;
+  markDirty("order", "category_order");
+  if (ui && ui.card) ui.card.paintOrder(true);
+}
+
+/** Each category under the name the committed file knows it by. */
+function categoryKeys(doc) {
+  return categories(doc).map((node) => node.openedName || String(categoryFields(node).links_category || ""));
+}
+
+/**
+ * A category whose cards show a thumbnail takes no album without one. When the
+ * switch was turned on here, the albums already in it are checked too: each of
+ * them would publish a card with a broken picture.
+ */
+function missingThumbnails() {
+  if (!isTrue(categoryFields(state.cat).has_thumbnail)) return null;
+  const bare = (node) => !String(itemFields(node).thumbnail || "").trim();
+  const others = state.thumbsWere.has(state.cat)
+    ? []
+    : state.cat.items.filter((node) => node !== state.item && bare(node)).map((node) => albumTitle(itemFields(node)));
+  return bare(state.item) || others.length ? { mine: bare(state.item), others } : null;
+}
+
+async function refuseThumbnail(missing) {
+  notice(
+    "error",
+    missing.mine
+      ? t("need_thumbnail", "This category's cards show a thumbnail, so the album needs one before it can be saved.")
+      : t("need_thumbnails", "Showing thumbnails needs one on every album in this category first: {names}").replace(
+          "{names}",
+          missing.others.join(", ")
+        )
+  );
+  const row = ui && ui.card && ui.card.el.querySelector(`[data-key="${missing.mine ? "thumbnail" : "has_thumbnail"}"]`);
+  if (!row) return;
+  await travelTo(row);
+  spotElement(row, "field");
 }
 
 /* ─── save ─────────────────────────────────────────────────────────────────── */
@@ -2388,6 +2532,13 @@ async function buildCommit(mode) {
     message = `Draft album: ${title}`;
   }
 
+  // The collection's order, only when the author changed it here: imposing the
+  // order this session opened with would undo anyone else's reordering since.
+  const keys = categoryKeys(state.doc);
+  if (keys.join(UNIT) !== state.openedOrder) {
+    setCategoryOrder(fresh, keys.map((name) => findCategory(fresh, name)).filter(Boolean));
+  }
+
   // Last, over the whole file: an album that moved out of its category, or a
   // publish that wrote back over a copy in another one, can leave a category
   // with nothing in it — and `list:` with nothing under it is YAML null, which
@@ -2449,6 +2600,8 @@ async function albumOwners({ title, publishing, forked }) {
 
 async function doSave(mode) {
   if (!state.item || state.saving) return;
+  const missing = missingThumbnails();
+  if (missing) return void refuseThumbnail(missing);
 
   state.saving = true;
   syncHeader();
@@ -2488,6 +2641,7 @@ async function doSave(mode) {
 
       state.cat.openedName = categoryFields(state.cat).links_category || state.cat.openedName;
       state.opened = { title: plan.title, draft: !plan.published, category: state.cat.openedName };
+      noteOpened();
     }
 
     syncHeader();
@@ -2674,12 +2828,12 @@ async function teardown(restore) {
     if (ui.bar) await exit(ui.bar).then(() => ui.bar.remove());
   }
 
-  if (state.titleHost) {
-    state.titleHost.removeAttribute("contenteditable");
-    state.titleHost.removeAttribute("spellcheck");
-    state.titleHost.classList.remove("ed-title");
-    delete state.titleHost.dataset.placeholder;
-  }
+  if (state.wired) state.wired.abort();
+  unwireLine(state.titleHost);
+  unwireLine(state.descHost);
+  if (state.descHost && (restore ? state.descMade : !state.descHost.textContent.trim())) state.descHost.remove();
+  else if (restore && state.descHost) state.descHost.textContent = state.descWas;
+  if (restore && state.titleHost) state.titleHost.textContent = state.titleWas;
 
   if (restore && state.container) {
     state.container.innerHTML = "";
@@ -2756,6 +2910,7 @@ function wire() {
   state.container.addEventListener("dblclick", onCanvasDouble);
   state.container.addEventListener("dragstart", onDragStart);
   state.container.addEventListener("dragend", onDragEnd);
+  state.container.addEventListener("pointerdown", onHandlePointer);
   document.addEventListener("keydown", onKey, true);
   document.addEventListener("click", onNavAway, true);
   window.addEventListener("beforeunload", onLeave);
@@ -2774,7 +2929,9 @@ function unwire() {
     state.container.removeEventListener("dblclick", onCanvasDouble);
     state.container.removeEventListener("dragstart", onDragStart);
     state.container.removeEventListener("dragend", onDragEnd);
+    state.container.removeEventListener("pointerdown", onHandlePointer);
   }
+  endTouch();
   dragOff();
   document.removeEventListener("keydown", onKey, true);
   document.removeEventListener("click", onNavAway, true);
@@ -2816,6 +2973,9 @@ function onCanvasDouble(e) {
  * here that is `draggable`.
  */
 function onDragStart(e) {
+  // A finger already carries it (`onHandlePointer`); a long press must not
+  // start a second, native drag on top.
+  if (touch) return void e.preventDefault();
   const handle = e.target.closest && e.target.closest(".ed-handle");
   const tile = handle && handle.closest(".ed-tile");
   if (!tile) return;
@@ -2847,11 +3007,11 @@ function dragOff() {
 /**
  * Where a dropped photograph would land, as a POSITION IN THE LIST.
  *
- * The nearest tile to the pointer, and then which half of it the pointer is in
- * — a masonry column is a column, so "above this one" and "below it" are the
- * only two answers a tile can give, and a line drawn on its edge says exactly
- * which. Distance is measured to the RECTANGLE rather than to its centre, so a
- * pointer inside a tall tile always chooses that tile.
+ * The nearest tile to the pointer, and then which half of it the pointer is in.
+ * The album reads left to right, so the halves are left and right: "before this
+ * one" and "after it", drawn as an upright line on that edge. Distance is
+ * measured to the RECTANGLE rather than to its centre, so a pointer inside a
+ * tall tile always chooses that tile.
  */
 function dropAt(x, y) {
   let best = null;
@@ -2864,7 +3024,7 @@ function dropAt(x, y) {
     if (!best || gap < best.gap) best = { gap, el, rect };
   }
   if (!best) return null;
-  return { el: best.el, side: y > (best.rect.top + best.rect.bottom) / 2 ? "after" : "before" };
+  return { el: best.el, side: x > (best.rect.left + best.rect.right) / 2 ? "after" : "before" };
 }
 
 /**
@@ -2902,8 +3062,11 @@ async function onDocDrop(e) {
 
   const target = dropAt(e.clientX, e.clientY);
   onDragEnd();
-  if (!target) return;
+  await dropOn(dragId, target);
+}
 
+async function dropOn(dragId, target) {
+  if (!target || !state.on) return;
   const from = indexOf(dragId);
   const to = indexOf(target.el.dataset.id);
   if (from < 0 || to < 0) return;
@@ -2924,6 +3087,83 @@ function onDragEnd() {
     el.classList.remove("is-dragging");
     el.dataset.drop = "";
   }
+}
+
+/**
+ * A finger on the handle.
+ *
+ * HTML5 drag-and-drop does not start from a touch on most phones, so a touch
+ * carries the tile itself: a lifted copy of the picture follows the finger, the
+ * same insertion line says where it would land, and holding near an edge
+ * scrolls the page exactly as a mouse drag does.
+ */
+let touch = null;
+
+function onHandlePointer(e) {
+  if (e.pointerType === "mouse" || !e.isPrimary || touch || state.dragId) return;
+  const handle = e.target.closest && e.target.closest(".ed-tile .ed-handle");
+  const tile = handle && handle.closest(".ed-tile");
+  if (!tile) return;
+  e.preventDefault();
+
+  const box = tile.getBoundingClientRect();
+  const ghost = document.createElement("div");
+  ghost.className = "ed-tile-ghost";
+  ghost.style.width = box.width + "px";
+  ghost.style.height = box.height + "px";
+  const img = tile.querySelector("img");
+  if (img && img.complete && img.currentSrc) ghost.innerHTML = `<img alt="" src="${escapeHTML(img.currentSrc)}">`;
+  document.body.appendChild(ghost);
+
+  touch = { id: e.pointerId, handle, ghost, dx: e.clientX - box.left, dy: e.clientY - box.top };
+  moveGhost(e.clientX, e.clientY);
+  state.dragId = tile.dataset.id;
+  state.container.classList.add("is-dragging");
+  tile.classList.add("is-dragging");
+  try {
+    handle.setPointerCapture(e.pointerId);
+  } catch (err) {
+    /* capture is a nicety: the moves still reach the handle while it is under the finger */
+  }
+  handle.addEventListener("pointermove", onTouchMove);
+  handle.addEventListener("pointerup", onTouchEnd);
+  handle.addEventListener("pointercancel", onTouchEnd);
+}
+
+function moveGhost(x, y) {
+  touch.ghost.style.transform = `translate(${x - touch.dx}px, ${y - touch.dy}px) scale(1.03)`;
+}
+
+function onTouchMove(e) {
+  if (!touch || e.pointerId !== touch.id) return;
+  moveGhost(e.clientX, e.clientY);
+  if (!edge) edge = createEdgeScroll(null);
+  edge.track(e.clientY);
+  paintDrop(dropAt(e.clientX, e.clientY));
+}
+
+function endTouch() {
+  if (!touch) return;
+  const { handle, ghost, id } = touch;
+  touch = null;
+  handle.removeEventListener("pointermove", onTouchMove);
+  handle.removeEventListener("pointerup", onTouchEnd);
+  handle.removeEventListener("pointercancel", onTouchEnd);
+  try {
+    handle.releasePointerCapture(id);
+  } catch (err) {
+    /* already released with the pointer */
+  }
+  ghost.remove();
+}
+
+async function onTouchEnd(e) {
+  if (!touch || e.pointerId !== touch.id) return;
+  const dragId = state.dragId;
+  const target = e.type === "pointerup" ? dropAt(e.clientX, e.clientY) : null;
+  endTouch();
+  onDragEnd();
+  await dropOn(dragId, target);
 }
 
 /* ─── keys and leaving ─────────────────────────────────────────────────────── */
@@ -2971,8 +3211,10 @@ function onKey(e) {
   else history.undo();
 }
 
+/** The heading or the description line has the caret. */
 function isTitle() {
-  return !!(state.titleHost && document.activeElement === state.titleHost);
+  const node = document.activeElement;
+  return !!node && (node === state.titleHost || node === state.descHost);
 }
 
 function onLeave(e) {
