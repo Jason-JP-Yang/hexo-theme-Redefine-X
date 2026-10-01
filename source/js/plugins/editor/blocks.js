@@ -29,6 +29,7 @@ import * as caret from "./caret.js";
 import { anchorMarks, isBlankText } from "./inline.js";
 import { crossFade, floatBadge, morphHeight, setDragImage } from "./motion.js";
 import { isTableBlock, mountTableView } from "./table.js";
+import { fitCaptions } from "../../layouts/captionFit.js";
 
 const RICH_TYPES = new Set(["paragraph", "heading", "quote", "list"]);
 const SOURCE_TYPES = new Set(["code", "mermaid", "math", "raw"]);
@@ -847,6 +848,9 @@ function mountImage(view) {
     placeGrip();
     ctx.observeImages();
     ctx.settleFigure();
+    // Bubble or line under the picture, as the page decides it — and again on
+    // every size the grip or the toolbar gives it, through the figure's watch.
+    fitCaptions(wrap.querySelectorAll("figure.image-caption"));
   };
 
   /** The grip sits on the picture's own bottom-right corner, not the figure's. */

@@ -23,6 +23,7 @@
  */
 
 import { EASE, pop, reduced } from "./motion.js";
+import { closable, showRow } from "./chrome.js";
 import { siteRoot } from "../../tools/vaultCrypto.js";
 
 const STAGES = [
@@ -139,7 +140,6 @@ export function createRail(host, { repo, t, onDone, onFail }) {
     return t(`r_${key}_${state}`, words[STATES.indexOf(state)]);
   };
 
-  host.hidden = false;
   host.innerHTML =
     STAGES.map(
       ([key, icon]) =>
@@ -149,7 +149,8 @@ export function createRail(host, { repo, t, onDone, onFail }) {
         `<span class="ed-stage-label">${escapeHTML(label(key, "wait"))}</span></span>`
     ).join("") +
     `<a class="ed-stage-link" target="_blank" rel="noopener" hidden>${escapeHTML(t("view_run", "View run"))}</a>`;
-  pop(host);
+  closable(host, t("dismiss", "Dismiss"));
+  if (!showRow(host, true)) pop(host);
 
   const link = host.querySelector(".ed-stage-link");
   const stages = STAGES.map(([key]) => {

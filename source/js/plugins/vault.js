@@ -11,6 +11,7 @@ import imageViewer from "../tools/imageViewer.js";
 import initCopyCode from "../tools/codeBlock.js";
 import initMathJaxScroll from "../plugins/mathjax-scroll.js";
 import initTableFit from "../layouts/tableFit.js";
+import initCaptionFit from "../layouts/captionFit.js";
 import { initNotoAnim } from "../plugins/noto-anim.js";
 import { invalidateMetrics, requestScrollPass } from "../tools/scrollScheduler.js";
 import { Picker, rosterLookup } from "../tools/chipPicker.js";
@@ -496,6 +497,7 @@ function rehydrate(root) {
   step(() => theme.articles?.toc?.enable === true && initTOC());
   step(() => initMathJaxScroll());
   step(() => initTableFit(root));
+  step(() => initCaptionFit(root));
   step(() => initNotoAnim());
   step(() => window.MathJax?.typesetPromise && window.MathJax.typesetPromise([root]));
   step(() => window.dispatchEvent(new CustomEvent("redefine:content-injected", { detail: { root } })));

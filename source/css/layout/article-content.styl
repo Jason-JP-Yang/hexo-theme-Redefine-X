@@ -318,9 +318,11 @@ $gap = 30px
       .img-preloader
         margin-bottom 0
 
+      // On the PICTURE, which a sized picture no longer fills the figure with:
+      // centred on it and no wider than most of it (layouts/captionFit.js).
       figcaption
         position absolute
-        left 50%
+        left var(--cap-x, 50%)
         bottom 10px
         transform translateX(-50%)
         text-align center
@@ -329,7 +331,7 @@ $gap = 30px
         background-color var(--background-color-transparent)
         padding 5px 10px
         opacity 0
-        max-width 80%
+        max-width var(--cap-max, 80%)
         backdrop-filter blur(10px)
         -webkit-backdrop-filter blur(10px)
         border-radius $redefine-border-radius-small

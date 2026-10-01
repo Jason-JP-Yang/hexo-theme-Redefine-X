@@ -47,6 +47,8 @@ import { getTOC, refreshTOC as measureTOC } from "../../layouts/toc.js";
 import { createFrontCard } from "./frontmatter.js";
 import {
   PERCH_AT,
+  closable,
+  showRow,
   hideVersionChrome,
   navigate,
   releaseDocbar as dropDocbar,
@@ -684,16 +686,32 @@ function composeScroll() {
   if (at.top >= top + 8 && at.bottom <= foot - 8) return;
 
   const band = Math.max(140, foot - top);
-  const most = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-  const want = window.scrollY + at.top - top - band * KB_BAND;
-  scrollTween(Math.min(most, Math.max(0, Math.round(want))), KB_TRAVEL);
+  const room = parseFloat(document.documentElement.style.getPropertyValue("--ed-room")) || 0;
+  const most = Math.max(0, document.documentElement.scrollHeight - window.innerHeight - room);
+  const want = Math.max(0, Math.round(window.scrollY + at.top - top - band * KB_BAND));
+  // Only as much room as the line lacks, and only now: a whole screen of it,
+  // reserved for as long as a field had the focus, was a band of blank between
+  // the post and the footer on every phone — with no keyboard there at all
+  // whenever it was put away without leaving the field.
+  setRoom(want - most);
+  scrollTween(want, KB_TRAVEL);
+}
+
+/** Room under the article for the line being typed to rise into. */
+function setRoom(px) {
+  const root = document.documentElement.style;
+  if (px > 0) root.setProperty("--ed-room", Math.ceil(px) + "px");
+  else root.removeProperty("--ed-room");
 }
 
 function setCompose(on) {
   if (!!state.composing === !!on) return;
   state.composing = !!on;
   if (on) document.documentElement.dataset.edCompose = "1";
-  else delete document.documentElement.dataset.edCompose;
+  else {
+    delete document.documentElement.dataset.edCompose;
+    setRoom(0);
+  }
   syncChrome();
 }
 
@@ -792,7 +810,6 @@ function watchViewport() {
   const publish = () => {
     const root = document.documentElement.style;
     root.setProperty("--ed-vv-top", Math.round(vv ? vv.offsetTop : 0) + "px");
-    root.setProperty("--ed-vv-h", Math.round(vv ? vv.height : window.innerHeight) + "px");
   };
 
   // The keyboard arriving or changing height is the only thing that changes what
@@ -831,7 +848,6 @@ function watchViewport() {
     setViewport(false);
     const root = document.documentElement.style;
     root.removeProperty("--ed-vv-top");
-    root.removeProperty("--ed-vv-h");
   };
 }
 
@@ -1093,15 +1109,14 @@ function syncHeader() {
 
 function notice(kind, text) {
   if (!ui) return;
-  if (!text) {
-    ui.notice.hidden = true;
-    return;
-  }
+  if (!text) return void showRow(ui.notice, false);
   const icon = kind === "error" ? "fa-circle-exclamation" : kind === "warn" ? "fa-triangle-exclamation" : "fa-circle-info";
-  ui.notice.hidden = false;
   ui.notice.dataset.kind = kind;
   ui.notice.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHTML(text)}</span>`;
-  pop(ui.notice);
+  closable(ui.notice, t("dismiss", "Dismiss"));
+  // A notice already showing says its new words with a pop; one arriving opens
+  // the bar for itself.
+  if (!showRow(ui.notice, true)) pop(ui.notice);
 }
 
 const COVER_KEYS = ["cover", "banner", "thumbnail"];
@@ -2190,6 +2205,21 @@ function dropSlots() {
   return out;
 }
 
+/** The focus and the caret as they are, to be put back once `el` has moved. */
+function holdFocus(el) {
+  const sel = window.getSelection();
+  const marks = sel && sel.rangeCount && el.contains(sel.anchorNode) ? [sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset] : null;
+  return () => {
+    if (!el.isConnected || document.activeElement === el) return;
+    el.focus({ preventScroll: true });
+    try {
+      if (marks) window.getSelection().setBaseAndExtent(...marks);
+    } catch (err) {
+      /* the caret's text was rewritten in the move; the focus is what matters */
+    }
+  };
+}
+
 /** The slot whose line is nearest the pointer; ties go to the deeper box. */
 function dropTargetAt(y, x) {
   let best = null;
@@ -2270,6 +2300,12 @@ async function onDocDrop(e) {
   // A note left with nothing in it is not a note. Noted before the move, acted
   // on after, so the block being carried is safely somewhere else first.
   const emptying = leaving !== arriving && leaving.views.length === 1 && leaving.onEmpty;
+  // Moving an element takes its focus away. On a phone that ended typing
+  // mid-drop — the room reserved under the article went with it and the page
+  // fell back to the top — so whatever in the block had the focus, and the
+  // caret in it, are given back where it lands, in the same tick.
+  const live = document.activeElement;
+  const refocus = live && held.view.el.contains(live) ? holdFocus(live) : null;
 
   await flip(Array.from(state.canvas.querySelectorAll(".ed-block")), () => {
     leaving.views.splice(held.index, 1);
@@ -2287,6 +2323,7 @@ async function onDocDrop(e) {
     const before = arriving.views[index + 1];
     if (before) before.el.before(held.view.el);
     else arriving.el.appendChild(held.view.el);
+    if (refocus) refocus();
   });
 
   // Order is the one thing a moved block cannot carry in `src`: its trailing

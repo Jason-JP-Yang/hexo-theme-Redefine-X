@@ -768,6 +768,7 @@ editor:
   draft: Draft
   encrypted: Encrypted
   opening: Opening
+  dismiss: Dismiss
   saving: Saving
   saved: Saved
   saved_clean: Everything is committed

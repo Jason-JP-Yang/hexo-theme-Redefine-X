@@ -702,6 +702,36 @@ textarea.ed-f-input
     background var(--box-red-bg)
     color var(--box-red-text)
 
+  > span
+    flex 1 1 auto
+    min-width 0
+
+// The way to put a row of the bar away — a notice, the publish rail — at its
+// end, in the row's own ink. See `closable` in plugins/editor/chrome.js.
+.ed-row-close
+  display grid
+  place-items center
+  flex 0 0 auto
+  width 22px
+  height 22px
+  margin -2px -4px -2px auto
+  padding 0
+  border 0
+  border-radius 6px
+  background transparent
+  color inherit
+  font-size 0.78rem
+  opacity 0.65
+  cursor pointer
+  transition opacity $ed-fade, background $ed-fade
+
+  &:hover
+    opacity 1
+    background unquote('color-mix(in oklab, currentColor 12%, transparent)')
+
+.ed-stage-link:not([hidden]) + .ed-row-close
+  margin-left 0
+
 // ─── publish progress ───────────────────────────────────────
 .ed-progress
   display flex
@@ -871,10 +901,11 @@ html[data-ed-chrome="min"] .ed-toolbar[data-perch="hide"]
 // Room to scroll INTO. A short post cannot put its last paragraph at the top of
 // the band, so the browser answers the keyboard by over-scrolling and leaving a
 // screen of blank under it. The room is reserved deliberately instead — below
-// everything, where nothing visible moves when it appears and nothing is left
-// behind when it goes.
+// everything, and only as much as the line being typed lacks (`--ed-room`, set
+// by plugins/editor/index.js `composeScroll`), so nothing is left between the
+// post and the footer when no line needs it.
 html[data-ed-compose="1"] .article-content-container.is-editing
-  padding-bottom var(--ed-vv-h, 60vh)
+  padding-bottom var(--ed-room, 0px)
 
 // `position: relative` is what the outgoing row is placed against while it
 // slides away; see `snapshot` in plugins/editor/toolbar.js.
@@ -1325,10 +1356,19 @@ ed-float-gutter-on()
 .ed-block[data-type="image"]
   border-radius $redefine-border-radius-medium
 
+// The width eases too: a size picked from the toolbar moves the picture's frame
+// (which is the picture's own, or its card wrapper's), and under the grip that
+// is switched off so the picture follows the pointer.
 .ed-block[data-type="image"] .ed-figure img,
-.ed-block[data-type="image"] .ed-figure .img-preloader
+.ed-block[data-type="image"] .ed-figure .img-preloader,
+.ed-block[data-type="image"] .ed-figure .image-exif-image-wrapper
   outline 2px solid transparent
   outline-offset 2px
+  transition outline-color $ed-fade, width $ed-morph
+
+.ed-block[data-type="image"] .ed-figure.is-resizing img,
+.ed-block[data-type="image"] .ed-figure.is-resizing .img-preloader,
+.ed-block[data-type="image"] .ed-figure.is-resizing .image-exif-image-wrapper
   transition outline-color $ed-fade
 
 .ed-block[data-type="image"]:hover .ed-figure img,
@@ -2719,12 +2759,6 @@ $ed-pop-h = 620px
 .ed-figure
   position relative
 
-  .img-sized
-    transition width $ed-morph
-
-  &.is-resizing .img-sized
-    transition none
-
 .ed-img-grip
   position absolute
   left 0
@@ -2814,7 +2848,9 @@ for $tc in $table-colours
 @media (prefers-reduced-motion: reduce)
   .ed-tsel-range,
   .ed-tsel-active,
-  .ed-figure .img-sized
+  .ed-block[data-type="image"] .ed-figure img,
+  .ed-block[data-type="image"] .ed-figure .img-preloader,
+  .ed-block[data-type="image"] .ed-figure .image-exif-image-wrapper
     transition none
 
 // ─── components ─────────────────────────────────────────────
@@ -3324,15 +3360,32 @@ html.blog-editing .page-template-container
   &:hover .img-preloader
     outline-color var(--shadow-color-1)
 
+  // Picked, the ring is the page's (`.ed-tile-ring`): the gallery's columns clip
+  // what a photograph paints past their edges, its own outline included.
   &[data-on="1"] img,
   &[data-on="1"] .img-preloader
-    outline-width 2.5px
-    outline-color var(--primary-color)
+    outline-color transparent
 
   // The one being carried. It stays legible: you are aiming it at a gap, and a
   // ghost you cannot read is a gap you cannot aim at.
   &.is-dragging
     opacity 0.45
+
+// The picked photograph's ring, in the page's coordinates (plugins/editor/
+// masonry.js `placeRing`): over every column, under the editor's own chrome.
+.ed-tile-ring
+  position absolute
+  left 0
+  top 0
+  z-index $z-index-1
+  outline 2.5px solid var(--primary-color)
+  outline-offset 2px
+  pointer-events none
+  opacity 0
+  transition opacity $ed-fade
+
+  &.is-on
+    opacity 1
 
 // Where a dropped photograph would land — the article's own insertion line, on
 // the edge it would go in at. In the column's own gap, so it never covers a

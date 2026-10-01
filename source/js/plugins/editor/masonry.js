@@ -81,6 +81,8 @@ import {
 } from "./picker.js";
 import {
   PERCH_AT,
+  closable,
+  showRow,
   hideVersionChrome,
   navigate,
   releaseDocbar,
@@ -372,16 +374,13 @@ function syncHeader() {
 
 function notice(kind, text) {
   if (!ui) return;
-  if (!text) {
-    ui.notice.hidden = true;
-    return;
-  }
+  if (!text) return void showRow(ui.notice, false);
   const icon =
     kind === "error" ? "fa-circle-exclamation" : kind === "warn" ? "fa-triangle-exclamation" : "fa-circle-info";
-  ui.notice.hidden = false;
   ui.notice.dataset.kind = kind;
   ui.notice.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHTML(text)}</span>`;
-  pop(ui.notice);
+  closable(ui.notice, t("dismiss", "Dismiss"));
+  if (!showRow(ui.notice, true)) pop(ui.notice);
 }
 
 /** Minimise, for the width where a soft keyboard would otherwise take the bars. */
@@ -658,6 +657,7 @@ function syncTiles() {
   container.classList.toggle("ed-album-blank", !rows.length);
 
   settleGallery();
+  followRing();
 }
 
 /**
@@ -780,7 +780,64 @@ function select(id) {
   if (state.selected === id) return;
   state.selected = id || "";
   for (const tile of tiles()) tile.dataset.on = tile.dataset.id === state.selected ? "1" : "0";
+  followRing();
   if (ui && ui.toolbar) ui.toolbar.sync();
+}
+
+/* ─── the ring on the picked photograph ────────────────────────────────────── */
+
+// Drawn from the page, not by the photograph's own outline: the gallery is CSS
+// columns, and a column clips whatever its content paints past its edges, so
+// the ring on every photograph at the top of a column or down the gallery's
+// sides was cut away. Placed in the page's own coordinates, scrolling carries
+// it for nothing; whatever moves a tile — the columns re-flowing, a FLIP, a
+// picture arriving, the window — sets it following until it holds still.
+const RING_STILL = 10; // frames without a move before it stops following
+const ring = { el: null, raf: 0, still: 0, at: "", watch: null };
+
+function followRing() {
+  ring.still = 0;
+  if (!ring.raf) ring.raf = requestAnimationFrame(placeRing);
+}
+
+function placeRing() {
+  ring.raf = 0;
+  const tile = state.on && state.selected ? tileOf(state.selected) : null;
+  const node = tile && tile.querySelector("img, .img-preloader");
+  if (!node) {
+    if (ring.el) ring.el.classList.remove("is-on");
+    ring.at = "";
+    return;
+  }
+  if (!ring.el) {
+    ring.el = document.createElement("div");
+    ring.el.className = "ed-tile-ring";
+    ring.el.setAttribute("aria-hidden", "true");
+  }
+  if (!ring.el.isConnected) document.body.appendChild(ring.el);
+  const body = document.body;
+  const page = body.getBoundingClientRect();
+  const r = node.getBoundingClientRect();
+  const x = r.left - page.left + body.scrollLeft;
+  const y = r.top - page.top + body.scrollTop;
+  const at = [x, y, r.width, r.height].map((v) => v.toFixed(1)).join();
+  if (at !== ring.at) {
+    ring.at = at;
+    ring.still = 0;
+    ring.el.style.transform = `translate(${x}px, ${y}px)`;
+    ring.el.style.width = r.width + "px";
+    ring.el.style.height = r.height + "px";
+    ring.el.style.borderRadius = getComputedStyle(node).borderRadius;
+  } else ring.still++;
+  ring.el.classList.add("is-on");
+  if (ring.still < RING_STILL) ring.raf = requestAnimationFrame(placeRing);
+}
+
+function dropRing() {
+  if (ring.raf) cancelAnimationFrame(ring.raf);
+  if (ring.watch) ring.watch.disconnect();
+  if (ring.el) ring.el.remove();
+  Object.assign(ring, { raf: 0, still: 0, at: "", watch: null });
 }
 
 let observePass = 0;
@@ -1763,6 +1820,8 @@ async function activate(container) {
 
   state.host = host;
   state.container = container;
+  ring.watch = new ResizeObserver(followRing);
+  ring.watch.observe(container);
   state.titleHost = host.querySelector(".page-title-header");
   state.snapshot = Array.from(container.childNodes);
   state.stage = createStage();
@@ -2600,6 +2659,7 @@ async function teardown(restore) {
 
   clearTimeout(state.stashTimer);
   if (ui && ui.progress && ui.progress._rail) ui.progress._rail.stop();
+  dropRing();
   unwire();
   closeDialogs();
   spotClear();

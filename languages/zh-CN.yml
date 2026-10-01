@@ -768,6 +768,7 @@ editor:
   draft: 草稿
   encrypted: 已加密
   opening: 正在打开
+  dismiss: 关闭提示
   saving: 正在保存
   saved: 已保存
   saved_clean: 全部改动已提交

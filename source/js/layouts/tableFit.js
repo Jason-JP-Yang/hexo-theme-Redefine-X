@@ -81,6 +81,11 @@ function run() {
   queue.clear();
   if (!jobs.length) return;
 
+  // Where each scroller stands. Taken back to its natural width, a table that
+  // fits for a moment has nowhere to scroll, the browser puts it back at the
+  // start, and a re-fit after every edit threw the author back to column one.
+  for (const job of jobs) job.left = job.scroll.scrollLeft;
+
   // Write: back to the natural layout.
   for (const job of jobs) {
     job.table.style.width = "";
@@ -163,6 +168,7 @@ function run() {
   }
   for (const job of jobs) {
     job.box.style.setProperty("--table-sb", Math.max(0, job.sb) + "px");
+    if (job.left && job.box.classList.contains("is-scroll")) job.scroll.scrollLeft = job.left;
     hints(job);
   }
 }

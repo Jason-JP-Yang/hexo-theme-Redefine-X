@@ -1888,11 +1888,18 @@ export function mountTableView(view, helpers) {
     const tableW = geo.xs[W] - geo.xs[0];
 
     // The table's own right edge is the LAST column's, as in any table editor:
-    // dragging it in narrows that column and the table with it, every other
-    // column keeping its width. The table's width then goes on the frame a
-    // picture's size uses — a share of the widest column — so a table made
-    // narrower on a desktop is still the full column on a phone.
+    // every other column keeps its width and the table follows. What that sets
+    // depends on the table:
+    //
+    //  · one that fits its column has a width of its own, so the edge sets it —
+    //    on the frame a picture's size uses, a share of the widest column, so a
+    //    table made narrower on a desktop is still the full column on a phone;
+    //  · one that scrolls is as wide as its content needs, so the edge sets the
+    //    last column's share, and the table grows or narrows under the pointer
+    //    (pushing the frame along at its side) and then takes the width that
+    //    share needs.
     if (k === W) {
+      const scrolls = container.classList.contains("is-scroll");
       const column = container.parentElement.getBoundingClientRect().width;
       const reference = parseFloat(getComputedStyle(container).getPropertyValue("--img-ref")) || 1000;
       const widths = geo.xs.slice(1).map((x, i) => x - geo.xs[i]);
@@ -1902,25 +1909,42 @@ export function mountTableView(view, helpers) {
       const sizeOf = (total) => (total >= column - 2 ? 0 : Math.max(10, Math.min(99, Math.round((100 * total) / reference))));
       let total = tableW;
       let moved = false;
+      guideEl.classList.remove("is-hover");
+      guideEl.classList.add("is-live");
       track(
         e,
         (ev) => {
           const g = geometry();
-          total = Math.max(before + MIN_COL, Math.min(column, point(ev, g).x - g.xs[0]));
+          const x = point(ev, g).x - g.xs[0];
+          total = Math.max(before + MIN_COL, scrolls ? x : Math.min(column, x));
           if (Math.abs(total - tableW) > 0.5) moved = true;
-          const size = sizeOf(total);
-          container.classList.toggle("is-sized", !!size);
-          container.classList.remove("is-fit");
-          container.style.setProperty("--table-size", String(size ? total / reference : 1));
-          shares(total).forEach((w, i) => (colEls[i].style.width = w.toFixed(3) + "%"));
+          const share = shares(total);
+          if (scrolls) {
+            table.style.width = total + "px";
+            table.style.minWidth = total + "px";
+            badgeAt(ev, `${Math.round(share[W - 1])}%`);
+          } else {
+            const size = sizeOf(total);
+            container.classList.toggle("is-sized", !!size);
+            container.classList.remove("is-fit");
+            container.style.setProperty("--table-size", String(size ? total / reference : 1));
+            badgeAt(ev, size ? size + "%" : t("t_full", "Full width"));
+          }
+          share.forEach((w, i) => (colEls[i].style.width = w.toFixed(3) + "%"));
           stale();
-          badgeAt(ev, size ? size + "%" : t("t_full", "Full width"));
+          // The edge's own line, travelling with it — inside the frame, which
+          // clips anything at its very side.
+          place(guideEl, { x: g.xs[0] + total - 2, y: g.ys[0], w: 2, h: g.ys[g.H] - g.ys[0] });
           drawSoon();
         },
         (ev, cancelled) => {
+          guideEl.classList.remove("is-live");
           hideBadge();
-          if (cancelled || !moved) return void paint();
-          T.model.size = sizeOf(total);
+          if (cancelled || !moved) {
+            paint();
+            return void refit();
+          }
+          if (!scrolls) T.model.size = sizeOf(total);
           T.model.cols = shares(total);
           restructure(() => {});
         }

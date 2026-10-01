@@ -24,6 +24,7 @@
  */
 
 import { onScroll } from "../../tools/scrollScheduler.js";
+import { EASE, MORPH_MS, reduced } from "./motion.js";
 
 /**
  * Leave, the way the rest of the site leaves.
@@ -53,6 +54,8 @@ export function watchDocbar(bar) {
   let last = "";
 
   const measure = () => {
+    // A row folding in or out has already published where the bar will end.
+    if (bar.__settling) return;
     // Sticky means its top stops at the pin line and goes no further, so being
     // at the line IS being pinned. One pixel of slack for fractional layout.
     const style = getComputedStyle(bar);
@@ -74,6 +77,7 @@ export function watchDocbar(bar) {
   };
 
   measure();
+  bar.__measure = measure;
   const ro = new ResizeObserver(measure);
   ro.observe(bar);
   // The notice, the progress rail and the tag row are children that appear and
@@ -100,6 +104,92 @@ export function releaseDocbar(watcher) {
   root.removeProperty("--ed-docbar-h");
   root.removeProperty("--ed-docbar-x");
   root.removeProperty("--ed-docbar-w");
+}
+
+/**
+ * A close button at the end of a row of the document bar — a notice, the
+ * publish rail. Closing only puts the row away: the next thing it has to say
+ * brings it back.
+ */
+export function closable(row, label) {
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "ed-row-close";
+  close.title = label;
+  close.setAttribute("aria-label", label);
+  close.innerHTML = `<i class="fa-solid fa-xmark" aria-hidden="true"></i>`;
+  close.addEventListener("click", () => showRow(row, false));
+  row.appendChild(close);
+}
+
+/**
+ * Show or put away a row of the document bar AS the bar's own height changing.
+ *
+ * The row unfolds or folds — height, padding, the gap above it, its opacity —
+ * so the bar opens or closes over it in one motion instead of jumping. The
+ * toolbar hanging under a pinned bar is told where the bar will END, once, up
+ * front: its `top` transition is the same 280ms curve, so it travels with the
+ * fold. Fed a new height every frame instead, it restarted that transition
+ * every frame and trailed behind the bar. A fold taken over mid-way starts
+ * from wherever the row stands.
+ *
+ * Returns whether it moved anything — false for a row already where it was
+ * asked to be.
+ */
+export function showRow(row, show) {
+  const bar = row.closest(".ed-docbar");
+  const running = row.__fold;
+  if (!running && row.hidden === !show) return false;
+  if (!bar || !bar.isConnected || reduced()) {
+    if (running) running.cancel();
+    row.__fold = null;
+    row.hidden = !show;
+    if (bar) bar.__settling = false;
+    return false;
+  }
+
+  const frame = (style, height) => ({
+    height: height + "px",
+    paddingTop: style.paddingTop,
+    paddingBottom: style.paddingBottom,
+    marginTop: style.marginTop,
+    opacity: style.opacity,
+  });
+  let from = null;
+  if (running) {
+    const now = getComputedStyle(row);
+    from = frame(now, row.getBoundingClientRect().height);
+    running.cancel();
+  }
+
+  row.hidden = false;
+  const style = getComputedStyle(row);
+  const full = row.offsetHeight;
+  const gap = parseFloat(getComputedStyle(bar).rowGap) || 0;
+  const open = frame(style, full);
+  const shut = { height: "0px", paddingTop: "0px", paddingBottom: "0px", marginTop: -gap + "px", opacity: 0 };
+
+  const root = document.documentElement.style;
+  if ((parseFloat(root.getPropertyValue("--ed-docbar-h")) || 0) > 0) {
+    const end = bar.offsetHeight - (show ? 0 : full + gap);
+    root.setProperty("--ed-docbar-h", `${Math.round(end)}px`);
+  }
+  bar.__settling = true;
+  row.style.overflow = "hidden";
+
+  const run = row.animate([from || (show ? shut : open), show ? open : shut], { duration: MORPH_MS, easing: EASE });
+  row.__fold = run;
+  run.finished
+    .then(() => {
+      if (row.__fold !== run) return;
+      row.__fold = null;
+      row.style.overflow = "";
+      bar.__settling = false;
+      if (!show) row.hidden = true;
+      if (bar.__measure) bar.__measure();
+    })
+    .catch(() => {});
+  return true;
 }
 
 /**
