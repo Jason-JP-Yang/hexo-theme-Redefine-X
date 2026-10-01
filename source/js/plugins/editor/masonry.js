@@ -130,7 +130,7 @@ import {
   toolbarIn,
 } from "./motion.js";
 import { createRail } from "./rail.js";
-import { checkMasonryOverflow, layoutMasonry } from "../masonry.js";
+import { checkMasonryOverflow, layoutMasonry, masonryColumns, masonryOrder, masonryPack } from "../masonry.js";
 
 const DATA = "source/_data/masonry.yml";
 const AUTOSTASH_MS = 4000;
@@ -230,6 +230,8 @@ function blank() {
     barSize: null,
     dragId: "",
     dropAt: "",
+    // The carried photograph's columns and reachable slots, once per drag.
+    plan: null,
   };
 }
 
@@ -588,7 +590,7 @@ function buildTile(node) {
   rail.className = "ed-gutter ed-tile-rail";
   rail.innerHTML = `
     <button type="button" class="ed-gutter-btn ed-add" title="${escapeHTML(
-      t("insert_before_image", "Add a picture here")
+      t("insert_below_image", "Add a picture below")
     )}" tabindex="-1"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
     <button type="button" class="ed-gutter-btn ed-handle" title="${escapeHTML(
       t("drag", "Drag to reorder")
@@ -966,6 +968,7 @@ function openViewer(tile) {
 function toolbarItems() {
   const node = selectedNode();
   const off = !node;
+  const place = (node && columnPlace(tileOf(node.id))) || { at: 0, col: [] };
   // Icons only. The row carries the two steps, the minimise button and eight
   // controls, and it has to be ONE row at a phone's width — three of these
   // wearing their labels is two rows everywhere below a desktop.
@@ -989,9 +992,9 @@ function toolbarItems() {
     },
     { kind: "btn", act: "view", icon: "fa-expand", label: "Open viewer", tt: "open_viewer", disabled: off },
     { kind: "sep" },
-    // Earlier and later in the album, which now reads left to right.
-    { kind: "btn", act: "move", arg: "-1", icon: "fa-arrow-left", label: "Move earlier", tt: "move_earlier", disabled: off },
-    { kind: "btn", act: "move", arg: "1", icon: "fa-arrow-right", label: "Move later", tt: "move_later", disabled: off },
+    // Up and down the photograph's own column, as a block moves in the article.
+    { kind: "btn", act: "move", arg: "-1", icon: "fa-arrow-up", label: "Move up", tt: "move_up", disabled: off || place.at === 0 },
+    { kind: "btn", act: "move", arg: "1", icon: "fa-arrow-down", label: "Move down", tt: "move_down", disabled: off || place.at >= place.col.length - 1 },
     { kind: "btn", act: "duplicate", icon: "fa-clone", label: "Duplicate", tt: "duplicate", disabled: off },
     { kind: "btn", act: "delete", icon: "fa-trash", label: "Remove", tt: "remove_block", disabled: off },
     // Last, and to the right of Remove: adding is the one thing here that does
@@ -1025,10 +1028,8 @@ async function act(action, arg) {
     // ones it does.
     const clone = makeImage(node.lead, node.eol, "");
     clone.body = node.body;
-    insertImage(clone, indexOf(node.id) + 1);
     state.selected = clone.id;
-    markDirty("images", clone.id);
-    await paintCanvas(true, tileOf(node.id));
+    await insertBelow(tileOf(node.id), [clone]);
     if (ui.toolbar) ui.toolbar.sync();
     return;
   }
@@ -1050,32 +1051,9 @@ async function act(action, arg) {
   }
 
   if (action === "move") {
-    const delta = Number(arg) || 0;
-    const at = indexOf(node.id);
-    return void (await moveImage(at, at + delta));
+    await moveInColumn(node, Number(arg) || 0);
+    if (ui.toolbar) ui.toolbar.sync();
   }
-}
-
-/**
- * Put the photograph at `from` in at `to`, and let everything travel.
- *
- * The tails stay with their POSITIONS, not with the nodes: the blank line after
- * the last photograph closes the list, and carrying it along with a photograph
- * being moved up would open a gap in the middle of it.
- */
-async function moveImage(from, to) {
-  const list = images();
-  if (from < 0 || from >= list.length) return;
-  const index = Math.max(0, Math.min(to, list.length - 1));
-  if (index === from) return;
-
-  const node = list[from];
-  const tails = list.map((n) => n.tail);
-  list.splice(index, 0, list.splice(from, 1)[0]);
-  list.forEach((n, i) => (n.tail = tails[i]));
-
-  markDirty("images", node.id);
-  await paintCanvas(true, tileOf(node.id));
 }
 
 /**
@@ -1095,27 +1073,119 @@ function insertImage(node, at) {
 }
 
 /**
- * @param {number} [at]  where it goes. A `+` on a tile says "in front of this
- *                       one"; the toolbar's button says "after the one picked",
- *                       which is where the eye already is.
+ * @param {Element} [below]  the tile whose `+` was pressed: the new photographs
+ *   go directly under it in its column. The toolbar's button puts them under
+ *   the one picked, and with nothing picked they go at the end.
  */
-async function addImage(at) {
-  const anchor = at == null ? null : tileOf((images()[at] || {}).id);
+async function addImage(below) {
   const picked = await pickImage("", false, true);
   if (!picked || !picked.length || !state.on) return;
-  // In the order they were picked, one after another from the same place, and
-  // recorded as the one step the author took.
-  let index = at == null ? (state.selected ? indexOf(state.selected) + 1 : images().length) : at;
-  let node = null;
-  for (const one of picked) {
-    node = makeImage(state.item.imageLead, state.item.eol, storedLike(one.site));
-    insertImage(node, index++);
-  }
-  state.selected = node.id;
-  markDirty("images", node.id);
-  await paintCanvas(true, anchor && anchor.isConnected ? anchor : undefined);
+  const anchor = (below && below.isConnected ? below : null) || tileOf(state.selected);
+  // In the order they were picked, one under another, and recorded as the one
+  // step the author took.
+  const nodes = picked.map((one) => makeImage(state.item.imageLead, state.item.eol, storedLike(one.site)));
+  state.selected = nodes[nodes.length - 1].id;
+  await insertBelow(anchor, nodes);
   if (ui && ui.toolbar) ui.toolbar.sync();
 }
+
+/* ─── order is the columns' ────────────────────────────────────────────────── */
+
+/**
+ * The album reads left to right, packed shortest column first, so moving one
+ * photograph by ONE position in the list re-packs every photograph after it —
+ * the gallery reshuffles. Edits are therefore made on the COLUMNS, the way the
+ * article is edited in its one column: a photograph goes into a column above or
+ * below another, the rest of that column moves along, the column it left closes
+ * up, and the album is then given the order that packs back into exactly that
+ * (`masonryOrder`). Only where a column now ends above the next photograph of
+ * another does the packing move that one over to even the foot out.
+ */
+
+/** The columns as they stand, as arrays of tiles top to bottom. */
+function columnsNow() {
+  return masonryColumns(state.container, null).map((col) => col.tiles);
+}
+
+/** Where `tile` stands: its column and its place in it. */
+function columnPlace(tile) {
+  const columns = columnsNow();
+  for (const col of columns) {
+    const at = col.indexOf(tile);
+    if (at >= 0) return { columns, col, at };
+  }
+  return null;
+}
+
+/**
+ * The album in `next` order. The blank lines stay with their POSITIONS, not
+ * with the nodes, and the one closing the list stays at its end: carried along
+ * with a photograph it would open a gap in the middle of the list.
+ */
+function setOrder(next) {
+  const list = images();
+  const tails = list.map((node) => node.tail);
+  const closer = tails.length ? tails.pop() : "";
+  list.splice(0, list.length, ...next);
+  list.forEach((node, i) => (node.tail = i < tails.length ? tails[i] : ""));
+  if (list.length) list[list.length - 1].tail = closer;
+}
+
+/**
+ * Give the album the order `columns` pack back into, as one step about the
+ * photograph `focus`, and let everything travel. `extra(entry)` is the height of
+ * an entry that is not a tile yet (a photograph being added); `keep` holds the
+ * entries packing must leave where they were put; `hold` is what the page is
+ * held still by.
+ */
+async function settleColumns(columns, focus, { extra, hold, keep } = {}) {
+  const byId = new Map(images().map((node) => [node.id, node]));
+  const order = masonryOrder(
+    state.container,
+    columns,
+    (entry) => (entry.nodeType === 1 ? entry.offsetHeight : extra(entry)),
+    keep
+  ).map((entry) => (entry.nodeType === 1 ? byId.get(entry.dataset.id) : entry));
+  const list = images();
+  if (order.length === list.length && order.every((node, i) => node === list[i])) return false;
+  setOrder(order);
+  markDirty("images", focus);
+  await paintCanvas(true, hold || tileOf(focus) || undefined);
+  return true;
+}
+
+/** Up or down its own column — the article's Move up and Move down. */
+async function moveInColumn(node, delta) {
+  const place = columnPlace(tileOf(node.id));
+  if (!place) return;
+  const to = place.at + delta;
+  if (to < 0 || to >= place.col.length) return;
+  const tile = place.col.splice(place.at, 1)[0];
+  place.col.splice(to, 0, tile);
+  await settleColumns(place.columns, node.id, { keep: new Set([tile]) });
+}
+
+/**
+ * New photographs straight under `anchor` in its column — the place the drag's
+ * line under it means. Without an anchor they go at the end.
+ */
+async function insertBelow(anchor, nodes) {
+  const place = anchor ? columnPlace(anchor) : null;
+  if (!place) {
+    for (const node of nodes) insertImage(node);
+    markDirty("images", nodes[nodes.length - 1].id);
+    return void (await paintCanvas(true));
+  }
+  place.col.splice(place.at + 1, 0, ...nodes);
+  // A photograph not drawn yet stands as tall as its picture will be at this
+  // column's width — the manifest knows; a square until it does.
+  const height = (node) => {
+    const size = naturalSize(siteOf(imageFields(node).image), state.pending);
+    return anchor.offsetWidth * (size && size.width ? size.height / size.width : 1);
+  };
+  await settleColumns(place.columns, nodes[nodes.length - 1].id, { extra: height, hold: anchor, keep: new Set(nodes) });
+}
+
 
 /* ─── the property sheet ───────────────────────────────────────────────────── */
 
@@ -2910,7 +2980,6 @@ function wire() {
   state.container.addEventListener("dblclick", onCanvasDouble);
   state.container.addEventListener("dragstart", onDragStart);
   state.container.addEventListener("dragend", onDragEnd);
-  state.container.addEventListener("pointerdown", onHandlePointer);
   document.addEventListener("keydown", onKey, true);
   document.addEventListener("click", onNavAway, true);
   window.addEventListener("beforeunload", onLeave);
@@ -2929,9 +2998,7 @@ function unwire() {
     state.container.removeEventListener("dblclick", onCanvasDouble);
     state.container.removeEventListener("dragstart", onDragStart);
     state.container.removeEventListener("dragend", onDragEnd);
-    state.container.removeEventListener("pointerdown", onHandlePointer);
   }
-  endTouch();
   dragOff();
   document.removeEventListener("keydown", onKey, true);
   document.removeEventListener("click", onNavAway, true);
@@ -2947,7 +3014,7 @@ function onCanvasClick(e) {
   if (add) {
     e.preventDefault();
     const tile = add.closest(".ed-tile");
-    return void addImage(indexOf(tile.dataset.id));
+    return void addImage(tile);
   }
   if (e.target.closest(".ed-tile .ed-handle")) return;
   const tile = e.target.closest(".ed-tile");
@@ -2973,9 +3040,6 @@ function onCanvasDouble(e) {
  * here that is `draggable`.
  */
 function onDragStart(e) {
-  // A finger already carries it (`onHandlePointer`); a long press must not
-  // start a second, native drag on top.
-  if (touch) return void e.preventDefault();
   const handle = e.target.closest && e.target.closest(".ed-handle");
   const tile = handle && handle.closest(".ed-tile");
   if (!tile) return;
@@ -3005,26 +3069,75 @@ function dragOff() {
 }
 
 /**
- * Where a dropped photograph would land, as a POSITION IN THE LIST.
+ * Every place a photograph could land, as a POSITION IN A COLUMN.
  *
- * The nearest tile to the pointer, and then which half of it the pointer is in.
- * The album reads left to right, so the halves are left and right: "before this
- * one" and "after it", drawn as an upright line on that edge. Distance is
- * measured to the RECTANGLE rather than to its centre, so a pointer inside a
- * tall tile always chooses that tile.
+ * The post editor's `dropSlots`, with each column a box: a slot above every
+ * photograph and one under the last, the carried one left out, each with the Y
+ * of the line that would be drawn for it. A column is a place to land only
+ * while the pointer is over it — as a table cell is in the article — out to the
+ * middle of the gap on either side.
+ *
+ * One thing the article never has to ask: whether the place can be had. The
+ * album is packed shortest column first, and the foot of a column taller than
+ * the others is a place packing never puts a photograph — so each slot is
+ * tried once per drag (`lands`) and only the ones that hold are offered.
  */
-function dropAt(x, y) {
+function dropPlan(carried) {
+  if (state.plan && state.plan.carried === carried) return state.plan;
+  const columns = masonryColumns(state.container, carried);
+  const sizes = new Map(tiles().map((el) => [el, el.offsetHeight]));
+  const height = (el) => sizes.get(el) || 0;
+  const ok = columns.map((col, c) => {
+    const flags = [];
+    for (let i = 0; i <= col.tiles.length; i++) flags.push(lands(columns, c, i, carried, height));
+    return flags;
+  });
+  return (state.plan = { carried, columns, ok });
+}
+
+/** Whether a photograph put in column `c` at `index` stays exactly there once packed. */
+function lands(columns, c, index, carried, height) {
+  const next = columns.map((col) => col.tiles.slice());
+  next[c].splice(index, 0, carried);
+  const order = masonryOrder(state.container, next, height, new Set([carried]));
+  const cols = masonryPack(state.container, order, height);
+  const at = order.indexOf(carried);
+  if (cols[at] !== c) return false;
+  const above = index > 0 ? next[c][index - 1] : null;
+  for (let i = at - 1; i >= 0; i--) if (cols[i] === c) return order[i] === above;
+  return above === null;
+}
+
+function dropSlots(carried) {
+  const plan = dropPlan(carried);
+  const out = [];
+  plan.columns.forEach((col, c) => {
+    const live = col.tiles;
+    const at = (i, y) => plan.ok[c][i] && out.push({ c, index: i, y, x0: col.x0, x1: col.x1 });
+    if (!live.length) return void at(0, state.container.getBoundingClientRect().top + 2);
+    live.forEach((el, i) => at(i, el.getBoundingClientRect().top));
+    at(live.length, live[live.length - 1].getBoundingClientRect().bottom);
+  });
+  return { plan, slots: out };
+}
+
+/** The slot whose line is nearest the pointer, in the column under it. */
+function dropTargetAt(y, x) {
+  const carried = tileOf(state.dragId);
+  if (!carried) return null;
+  const { plan, slots } = dropSlots(carried);
+  if (!slots.length) return null;
+  // Beside the gallery is still aiming at its outermost column.
+  const first = plan.columns[0];
+  const last = plan.columns[plan.columns.length - 1];
+  const px = Math.max(first.x0 + 1, Math.min(x, last.x1 - 1));
   let best = null;
-  for (const el of tiles()) {
-    if (el.dataset.id === state.dragId) continue;
-    const rect = el.getBoundingClientRect();
-    const dx = Math.max(rect.left - x, 0, x - rect.right);
-    const dy = Math.max(rect.top - y, 0, y - rect.bottom);
-    const gap = Math.hypot(dx, dy);
-    if (!best || gap < best.gap) best = { gap, el, rect };
+  for (const slot of slots) {
+    if (px < slot.x0 || px > slot.x1) continue;
+    const gap = Math.abs(slot.y - y);
+    if (!best || gap < best.gap) best = { gap, slot };
   }
-  if (!best) return null;
-  return { el: best.el, side: x > (best.rect.left + best.rect.right) / 2 ? "after" : "before" };
+  return best ? Object.assign({ columns: plan.columns, carried }, best.slot) : null;
 }
 
 /**
@@ -3033,13 +3146,20 @@ function dropAt(x, y) {
  * Clearing every tile's `data-drop` on each `dragover` tore the pseudo-element
  * down and built it again several times a second, which restarted its entrance
  * animation each time — the flicker was the indicator being recreated.
+ *
+ * As in the article: a slot is drawn ABOVE the photograph that would follow it,
+ * and a column's last slot UNDER its last photograph.
  */
 function paintDrop(target) {
-  const key = target ? target.el.dataset.id + ":" + target.side : "";
+  const list = target ? target.columns[target.c].tiles : [];
+  const anchor = target && target.index < list.length ? list[target.index] : null;
+  const last = target && !anchor ? list[list.length - 1] || null : null;
+
+  const key = anchor ? anchor.dataset.id : last ? "end:" + last.dataset.id : "";
   if (key === state.dropAt) return;
   state.dropAt = key;
   for (const el of tiles()) {
-    const want = target && el === target.el ? target.side : "";
+    const want = anchor === el ? "before" : last === el ? "after" : "";
     if (el.dataset.drop !== want) el.dataset.drop = want;
   }
 }
@@ -3052,34 +3172,26 @@ function onDocDragOver(e) {
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   if (!edge) edge = createEdgeScroll(null);
   edge.track(e.clientY);
-  paintDrop(dropAt(e.clientX, e.clientY));
+  paintDrop(dropTargetAt(e.clientY, e.clientX));
 }
 
 async function onDocDrop(e) {
-  const dragId = state.dragId;
-  if (!dragId) return;
+  if (!state.dragId) return;
   e.preventDefault();
 
-  const target = dropAt(e.clientX, e.clientY);
+  const target = dropTargetAt(e.clientY, e.clientX);
   onDragEnd();
-  await dropOn(dragId, target);
-}
+  if (!target) return;
 
-async function dropOn(dragId, target) {
-  if (!target || !state.on) return;
-  const from = indexOf(dragId);
-  const to = indexOf(target.el.dataset.id);
-  if (from < 0 || to < 0) return;
-  // The slot counts the photograph being carried while it is still in the list,
-  // so taking it out of an earlier position shifts every later one down.
-  let at = to + (target.side === "after" ? 1 : 0);
-  if (from < at) at -= 1;
-  await moveImage(from, at);
+  const columns = target.columns.map((col) => col.tiles.slice());
+  columns[target.c].splice(target.index, 0, target.carried);
+  await settleColumns(columns, target.carried.dataset.id, { keep: new Set([target.carried]) });
 }
 
 function onDragEnd() {
   state.dragId = "";
   state.dropAt = "";
+  state.plan = null;
   dragOff();
   if (!state.container) return;
   state.container.classList.remove("is-dragging");
@@ -3087,83 +3199,6 @@ function onDragEnd() {
     el.classList.remove("is-dragging");
     el.dataset.drop = "";
   }
-}
-
-/**
- * A finger on the handle.
- *
- * HTML5 drag-and-drop does not start from a touch on most phones, so a touch
- * carries the tile itself: a lifted copy of the picture follows the finger, the
- * same insertion line says where it would land, and holding near an edge
- * scrolls the page exactly as a mouse drag does.
- */
-let touch = null;
-
-function onHandlePointer(e) {
-  if (e.pointerType === "mouse" || !e.isPrimary || touch || state.dragId) return;
-  const handle = e.target.closest && e.target.closest(".ed-tile .ed-handle");
-  const tile = handle && handle.closest(".ed-tile");
-  if (!tile) return;
-  e.preventDefault();
-
-  const box = tile.getBoundingClientRect();
-  const ghost = document.createElement("div");
-  ghost.className = "ed-tile-ghost";
-  ghost.style.width = box.width + "px";
-  ghost.style.height = box.height + "px";
-  const img = tile.querySelector("img");
-  if (img && img.complete && img.currentSrc) ghost.innerHTML = `<img alt="" src="${escapeHTML(img.currentSrc)}">`;
-  document.body.appendChild(ghost);
-
-  touch = { id: e.pointerId, handle, ghost, dx: e.clientX - box.left, dy: e.clientY - box.top };
-  moveGhost(e.clientX, e.clientY);
-  state.dragId = tile.dataset.id;
-  state.container.classList.add("is-dragging");
-  tile.classList.add("is-dragging");
-  try {
-    handle.setPointerCapture(e.pointerId);
-  } catch (err) {
-    /* capture is a nicety: the moves still reach the handle while it is under the finger */
-  }
-  handle.addEventListener("pointermove", onTouchMove);
-  handle.addEventListener("pointerup", onTouchEnd);
-  handle.addEventListener("pointercancel", onTouchEnd);
-}
-
-function moveGhost(x, y) {
-  touch.ghost.style.transform = `translate(${x - touch.dx}px, ${y - touch.dy}px) scale(1.03)`;
-}
-
-function onTouchMove(e) {
-  if (!touch || e.pointerId !== touch.id) return;
-  moveGhost(e.clientX, e.clientY);
-  if (!edge) edge = createEdgeScroll(null);
-  edge.track(e.clientY);
-  paintDrop(dropAt(e.clientX, e.clientY));
-}
-
-function endTouch() {
-  if (!touch) return;
-  const { handle, ghost, id } = touch;
-  touch = null;
-  handle.removeEventListener("pointermove", onTouchMove);
-  handle.removeEventListener("pointerup", onTouchEnd);
-  handle.removeEventListener("pointercancel", onTouchEnd);
-  try {
-    handle.releasePointerCapture(id);
-  } catch (err) {
-    /* already released with the pointer */
-  }
-  ghost.remove();
-}
-
-async function onTouchEnd(e) {
-  if (!touch || e.pointerId !== touch.id) return;
-  const dragId = state.dragId;
-  const target = e.type === "pointerup" ? dropAt(e.clientX, e.clientY) : null;
-  endTouch();
-  onDragEnd();
-  await dropOn(dragId, target);
 }
 
 /* ─── keys and leaving ─────────────────────────────────────────────────────── */

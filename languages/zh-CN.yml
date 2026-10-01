@@ -926,8 +926,6 @@ editor:
   src_hint: 该块完整的原文，包含全部标记。
   move_up: 上移
   move_down: 下移
-  move_earlier: 前移
-  move_later: 后移
   duplicate: 复制
   address: 地址
   plain: 纯文本
@@ -1078,7 +1076,7 @@ editor:
   album_empty: 还没有照片
   album_description: 添加描述
   add_image: 添加图片
-  insert_before_image: 在这里插入图片
+  insert_below_image: 在下方插入图片
   g_album: 相册
   g_cat: 分类
   cat_first: 相册

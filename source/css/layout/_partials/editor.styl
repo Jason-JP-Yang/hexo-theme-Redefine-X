@@ -3390,35 +3390,27 @@ html.blog-editing .ed-album-host #masonry-container.is-settled > .masonry-item
   &.is-on
     opacity 1
 
-// Where a dropped photograph would land — the article's insertion line, stood
-// upright: the album reads left to right, so "before" is the tile's left edge.
-// Centred in the gap between columns, so it never covers a picture.
+// Where a dropped photograph would land — the article's own insertion line, on
+// the edge it would go in at. In the column's own gap, so it never covers a
+// picture and never moves one.
 .ed-tile[data-drop="before"]::before,
 .ed-tile[data-drop="after"]::after
   content ""
   position absolute
-  top 0
-  bottom 0
+  left 0
+  right 0
   z-index 4
-  width 3px
+  height 3px
   border-radius 3px
   background var(--primary-color)
   box-shadow 0 0 0 3px var(--background-color), 0 0 12px -1px var(--primary-color)
-  animation ed-drop-in-y 0.18s cubic-bezier(0.32, 0.72, 0, 1)
+  animation ed-drop-in 0.18s cubic-bezier(0.32, 0.72, 0, 1)
 
 .ed-tile[data-drop="before"]::before
-  left unquote('calc(var(--masonry-gap, 10px) / -2 - 1.5px)')
+  top -6px
 
 .ed-tile[data-drop="after"]::after
-  right unquote('calc(var(--masonry-gap, 10px) / -2 - 1.5px)')
-
-@keyframes ed-drop-in-y
-  from
-    opacity 0
-    transform scaleY(0.82)
-  to
-    opacity 1
-    transform none
+  bottom -6px
 
 #masonry-container.is-dragging .ed-tile
   cursor grabbing
@@ -3460,37 +3452,6 @@ html.blog-editing .ed-album-host #masonry-container.is-settled > .masonry-item
     opacity 1
     pointer-events auto
     transform none
-
-// A finger on the handle carries the photograph (masonry.js `touchDrag`)
-// instead of scrolling the page.
-.ed-tile .ed-handle
-  touch-action none
-
-.ed-tile.is-dragging .ed-handle
-  border-color var(--primary-color)
-  background var(--primary-color)
-  color $ed-on-primary
-
-// The photograph under a finger, lifted. Never a target — the drop is read from
-// the point under it. A picture that has not arrived yet is its skeleton.
-.ed-tile-ghost
-  position fixed
-  left 0
-  top 0
-  z-index $z-index-9
-  overflow hidden
-  pointer-events none
-  opacity 0.92
-  border-radius $redefine-border-radius-medium
-  background var(--second-background-color)
-  box-shadow var(--redefine-box-shadow-hover)
-  will-change transform
-
-  img
-    display block
-    width 100%
-    height 100%
-    object-fit cover
 
 // No hover to reveal it, so it appears when the photograph is picked — and it
 // lies ALONG THE TOP of the picture rather than down its left edge, which is

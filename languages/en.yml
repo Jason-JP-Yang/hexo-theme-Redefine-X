@@ -926,8 +926,6 @@ editor:
   src_hint: Every marker this block is written with.
   move_up: Move up
   move_down: Move down
-  move_earlier: Move earlier
-  move_later: Move later
   duplicate: Duplicate
   address: Address
   plain: Plain text
@@ -1078,7 +1076,7 @@ editor:
   album_empty: No photographs yet.
   album_description: Add a description
   add_image: Add a picture
-  insert_before_image: Add a picture here
+  insert_below_image: Add a picture below
   g_album: Album
   g_cat: Category
   cat_first: Albums
