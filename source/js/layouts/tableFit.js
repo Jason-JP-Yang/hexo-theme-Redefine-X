@@ -223,14 +223,14 @@ export default function initTableFit(root) {
     // width, pictures and equations in cells re-lay themselves out on their own
     // resize handlers — and a table measured mid-way kept a decision made for
     // content that had since changed: scrolling, and still crushed.
-    window.addEventListener(
-      "resize",
-      () => {
-        clearTimeout(settle);
-        settle = setTimeout(() => fitTables(document.querySelectorAll(TABLE)), SETTLE);
-      },
-      { passive: true }
-    );
+    const refitAll = (delay) => {
+      clearTimeout(settle);
+      settle = setTimeout(() => fitTables(document.querySelectorAll(TABLE)), delay);
+    };
+    window.addEventListener("resize", () => refitAll(SETTLE), { passive: true });
+    // Likewise when the site's fonts arrive: a table measured in the fallback
+    // font kept that font's widths.
+    if (document.fonts) document.fonts.addEventListener("loadingdone", () => refitAll(60));
   }
   if (!root && observer) observer.disconnect();
   for (const box of (root || document).querySelectorAll(TABLE)) {

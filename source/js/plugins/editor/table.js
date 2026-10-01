@@ -335,6 +335,7 @@ export function mountTableView(view, helpers) {
           <div class="ed-tsel-guide"></div>
           <div class="ed-tsel-ghost"></div>
           <div class="ed-tsel-drop"></div>
+          <div class="ed-tsel-pic"></div>
         </div>
       </div>
       <button type="button" class="ed-tgrip is-col" tabindex="-1"><i class="fa-solid fa-grip-dots" aria-hidden="true"></i></button>
@@ -365,6 +366,7 @@ export function mountTableView(view, helpers) {
   const guideEl = overlay.querySelector(".ed-tsel-guide");
   const ghostEl = overlay.querySelector(".ed-tsel-ghost");
   const dropEl = overlay.querySelector(".ed-tsel-drop");
+  const picEl = overlay.querySelector(".ed-tsel-pic");
   const colGrip = floatEl.querySelector(".ed-tgrip.is-col");
   const rowGrip = floatEl.querySelector(".ed-tgrip.is-row");
   const allGrip = floatEl.querySelector(".ed-tgrip.is-all");
@@ -924,17 +926,25 @@ export function mountTableView(view, helpers) {
   // A block in a cell floats its gutter above itself like a block in any other
   // box — but a cell is inside the frame, and the frame clips. So the gutter is
   // lifted out into the layer beside the grips while its block is being
-  // edited, placed over the block from there, and handed back after.
+  // edited, placed over the block from there, and handed back after. A
+  // picture's ring goes the same way, into the selection layer: its own
+  // outline, in the scroller, was cut at the frame's edge and faded under its
+  // mask wherever the picture neared the side of a scrolling table.
   let lifted = null;
+  const picWatch = new ResizeObserver(() => placeLifted());
 
   function lift(inner) {
     if (lifted && lifted.view === inner) return void placeLifted();
     drop();
     const gutter = inner.el.querySelector(":scope > .ed-gutter");
     if (!gutter) return;
-    lifted = { view: inner, gutter };
+    lifted = { view: inner, gutter, pic: inner.block.type === "image" };
     gutter.classList.add("is-lifted");
     floatEl.appendChild(gutter);
+    if (lifted.pic) {
+      inner.el.classList.add("is-ringed");
+      picWatch.observe(inner.el);
+    }
     placeLifted();
   }
 
@@ -946,10 +956,24 @@ export function mountTableView(view, helpers) {
     gutter.style.transform = "";
     gutter.style.visibility = "";
     inner.el.insertBefore(gutter, inner.el.firstChild);
+    inner.el.classList.remove("is-ringed");
+    picWatch.disconnect();
+    picEl.classList.remove("is-on");
+  }
+
+  function placePic() {
+    const node = lifted.view.el.querySelector(".ed-figure .img-preloader, .ed-figure img");
+    picEl.classList.toggle("is-on", !!node);
+    if (!node) return;
+    const geo = geometry();
+    const at = node.getBoundingClientRect();
+    place(picEl, { x: at.left - geo.ox, y: at.top - geo.oy, w: at.width, h: at.height });
+    picEl.style.borderRadius = getComputedStyle(node).borderRadius;
   }
 
   function placeLifted() {
     if (!lifted) return;
+    if (lifted.pic) placePic();
     const { view: inner, gutter } = lifted;
     const box = wrap.getBoundingClientRect();
     const frame = scroll.getBoundingClientRect();
@@ -2686,6 +2710,7 @@ export function mountTableView(view, helpers) {
     document.removeEventListener("focusin", onFocusIn, true);
     window.removeEventListener("redefine:image-loaded", onImage);
     watcher.disconnect();
+    picWatch.disconnect();
     clearTimeout(fitTimer);
     badge.hide();
   };

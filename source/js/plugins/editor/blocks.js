@@ -762,6 +762,8 @@ function mountSource(view) {
  * The picture node itself survives every repaint of what surrounds it, so a
  * caption becoming a card never requests the picture again.
  */
+const FRAME_VARS = ["--img-size", "--img-ar", "--img-nat"];
+
 function mountImage(view) {
   const { block, ctx } = view;
   const style = (window.theme && window.theme.articles && window.theme.articles.style) || {};
@@ -798,12 +800,16 @@ function mountImage(view) {
   grip.title = ctx.t("img_resize", "Drag to resize");
   grip.innerHTML = `<i class="fa-solid fa-arrow-down-right" aria-hidden="true"></i>`;
 
-  // `live` is a size the grip is holding: the picture is drawn in its frame for
-  // the length of the drag even when the block has no size yet.
-  const paint = (live) => {
-    const exif = tagged() || !!live;
+  const paint = () => {
+    const exif = tagged();
     const node = media();
+    // A picture already on the canvas is only MOVED into the new markup: its
+    // load fade must not play again, which is what flashed it on every repaint.
+    if (node.isConnected && node.tagName === "IMG") node.style.animation = "none";
     node.remove();
+    // A bare picture held its own frame during a drag; the markup has one now.
+    node.classList.remove("img-sized");
+    for (const prop of FRAME_VARS) node.style.removeProperty(prop);
     ctx.shapeMedia(node, exif);
     if (node.tagName === "IMG") node.alt = block.alt || "";
     else node.dataset.alt = block.alt || "";
@@ -811,7 +817,7 @@ function mountImage(view) {
     figure = numbered ? ctx.figureIndex(block.id) : 0;
     const api = window.RedefineComponents;
     const slot = `<i data-ed-media=""></i>`;
-    const size = live || sizeOf();
+    const size = sizeOf();
 
     if (exif && api && api.exifImage) {
       wrap.innerHTML = api.exifImage(
@@ -864,21 +870,52 @@ function mountImage(view) {
     window.removeEventListener("redefine:image-loaded", onLoaded);
   };
 
-  wireResize(view, wrap, grip, { paint, sizeOf, placeGrip, setSize });
+  /**
+   * Where the frame goes: the figure the build marks `img-sized` — or, on a
+   * plain picture, the figure it already has, or the picture itself — so a size
+   * can be shown on the markup as it stands.
+   */
+  const frameHost = () => wrap.querySelector("figure") || wrap.querySelector(".img-preloader, img");
+
+  /** The frame as the build writes it for this size, on the markup there is. */
+  function reframe() {
+    const host = frameHost();
+    if (!host) return;
+    const size = sizeOf();
+    if (size) {
+      host.classList.add("img-sized");
+      host.setAttribute("style", window.RedefineComponents.imageFrame(size, ctx.imageDims(block.url)));
+    } else {
+      host.classList.remove("img-sized");
+      for (const prop of FRAME_VARS) host.style.removeProperty(prop);
+      if (!host.getAttribute("style")) host.removeAttribute("style");
+    }
+    placeGrip();
+    ctx.settleFigure();
+  }
+
+  wireResize(view, wrap, grip, { frameHost, sizeOf, placeGrip, setSize });
 
   /**
    * One size, from the grip or the toolbar. A plain picture that gains a size is
    * written as `{% exifimage %}` from then on, and must not start reading its
    * camera data at build time merely because it changed shape.
+   *
+   * Only a picture that changes SPELLING — plain to the tag or back — is drawn
+   * again; every other size is the same markup with another frame, restyled
+   * where it stands, so the picture never flashes and the card is not rebuilt.
    */
   function setSize(next) {
     const size = next >= 10 && next < 100 ? Math.round(next) : 0;
-    if (size === sizeOf()) return void paint();
-    if (size && block.plain && !hasExif()) block.autoExif = false;
-    block.size = size;
-    view.touch();
-    paint();
-    ctx.onOptionsChanged();
+    const spelling = tagged();
+    if (size !== sizeOf()) {
+      if (size && block.plain && !hasExif()) block.autoExif = false;
+      block.size = size;
+      view.touch();
+      ctx.onOptionsChanged();
+    }
+    if (tagged() === spelling) reframe();
+    else paint();
   }
 
   view.body.appendChild(wrap);
@@ -1007,26 +1044,39 @@ function wireResize(view, wrap, grip, api) {
     ctx.onFocus(view);
 
     const dims = dimsOf();
-    if (!dims) return;
+    const host = api.frameHost();
+    const node = wrap.querySelector(".img-preloader, img");
+    if (!dims || !host || !node) return;
     const was = api.sizeOf();
-    // Into the framed markup first — a plain picture has no frame to size.
-    if (!was) api.paint(99);
-    const frame = wrap.querySelector(".img-sized");
-    if (!frame) return;
 
-    const inCell = !!wrap.closest("td, th");
+    const cell = wrap.closest("td, th");
     const ref = probe("width:var(--img-ref);height:var(--img-max-h)");
     const R = ref.width;
     const H = ref.height;
     const a = dims.w / dims.h;
     const K = Math.max(1, Math.min(R, H * a));
-    const cap = Math.min(wrap.clientWidth, dims.w);
-    const w0 = frame.getBoundingClientRect().width;
-    const style = getComputedStyle(frame);
-    const centred = Math.abs(parseFloat(style.marginLeft) - parseFloat(style.marginRight)) < 2;
+    // As wide as the picture is at full size HERE: its column, its own pixels,
+    // and the height it may not exceed — a tall picture is full well before
+    // the column is.
+    const full = Math.min(wrap.clientWidth, dims.w, R, H * a);
+    const w0 = node.getBoundingClientRect().width;
+    // A frame sits centred, except in a cell aligned to one side.
+    const side = cell && /\bta-[tmb]([lr])\b/.exec(cell.className);
+    const centred = !side;
     const x0 = e.clientX;
     const y0 = e.clientY;
     let size = was || 100;
+
+    // The size is shown on the markup as it stands — the frame put on it, or
+    // taken off at full size — and written only on letting go, so nothing is
+    // drawn again mid-drag and a picture let go at full size is left exactly as
+    // it was.
+    host.style.setProperty("--img-ar", a.toFixed(5));
+    host.style.setProperty("--img-nat", Math.round(dims.w) + "px");
+    const preview = () => {
+      host.classList.toggle("img-sized", size < 100);
+      host.style.setProperty("--img-size", String(Math.min(100, size) / 100));
+    };
 
     const across = (column, viewport) =>
       Math.round(Math.min(column, dims.w, (size / 100) * Math.min(R, (H / window.innerHeight) * viewport * a)));
@@ -1034,7 +1084,7 @@ function wireResize(view, wrap, grip, api) {
     const show = () => {
       const head = size >= 100 ? ctx.t("img_full", "Full size") : size + "%";
       let foot;
-      if (inCell) {
+      if (cell) {
         foot = escapeHTML(ctx.t("img_of_cell", "of the cell"));
       } else {
         const desk = across(R, DESK_VIEW);
@@ -1045,8 +1095,7 @@ function wireResize(view, wrap, grip, api) {
           `<span><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i>${full ? escapeHTML(ctx.t("img_full_width", "full width")) : phone + "px"}</span>`;
       }
       // Under the picture's corner, right-aligned to it.
-      const node = wrap.querySelector(".img-preloader, img");
-      const at = (node || grip).getBoundingClientRect();
+      const at = node.getBoundingClientRect();
       badge.show(`<strong>${escapeHTML(head)}</strong><small>${foot}</small>`, at.right, at.bottom + 14, true);
     };
 
@@ -1054,14 +1103,14 @@ function wireResize(view, wrap, grip, api) {
       const dx = (ev.clientX - x0) * (centred ? 2 : 1);
       const dy = (ev.clientY - y0) * a;
       const width = w0 + (Math.abs(dx) >= Math.abs(dy) ? dx : dy);
-      let next = width >= cap - 0.5 ? 100 : Math.round((100 * Math.max(0, width)) / K);
+      let next = width >= full - 0.5 ? 100 : Math.round((100 * Math.max(0, width)) / K);
       next = Math.max(10, Math.min(100, next));
-      const snap = SIZE_SNAPS.find((s) => Math.abs(s - next) <= 1.5 && (s * K) / 100 < cap);
+      const snap = SIZE_SNAPS.find((s) => Math.abs(s - next) <= 1.5 && (s * K) / 100 < full);
       if (snap) next = snap;
       if (next >= 99) next = 100;
       if (next === size) return;
       size = next;
-      frame.style.setProperty("--img-size", String(size / 100));
+      preview();
       api.placeGrip();
       show();
     };

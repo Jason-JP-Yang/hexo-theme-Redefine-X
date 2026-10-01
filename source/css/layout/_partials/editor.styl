@@ -2490,6 +2490,21 @@ $ed-pop-h = 620px
     background unquote('color-mix(in oklab, var(--primary-color) 12%, transparent)')
     box-shadow 0 8px 24px -8px rgba(0, 0, 0, 0.3)
 
+// A picture being edited in a cell, ringed from here rather than by its own
+// outline (which the scroller cut and faded): the same ring, over the frame.
+.ed-tsel-pic
+  outline 2.5px solid var(--primary-color)
+  outline-offset 2px
+  opacity 0
+  transition opacity $ed-fade
+
+  &.is-on
+    opacity 1
+
+.ed-block.is-ringed[data-type="image"][data-on="1"] .ed-figure img,
+.ed-block.is-ringed[data-type="image"][data-on="1"] .ed-figure .img-preloader
+  outline-color transparent
+
 .ed-tsel-drop
   border-radius 3px
   background var(--primary-color)
