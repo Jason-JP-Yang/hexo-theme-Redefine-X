@@ -94,11 +94,13 @@ $default-mode = $temp-mode == 'dark' ? 'dark' : 'light'
   root-color($default-mode)
 }
 
-.light {
+// `data-scheme` is the same palette on one subtree: a switch restyles the page
+// (or its mirror) a subtree at a time.
+.light, [data-scheme="light"] {
   root-color('light')
 }
 
-.dark {
+.dark, [data-scheme="dark"] {
   root-color('dark')
 }
 
@@ -133,6 +135,12 @@ html.theme-switching, [data-tg] {
   inherits false
   initial-value -2px
 
+// How much of the new scheme shows outside the ring (the old one melting).
+@property --theme-m
+  syntax '<number>'
+  inherits false
+  initial-value 0
+
 // The old page is a snapshot laid over the live one; the script drives it and
 // the wave is a hole opening in it.
 html.theme-reveal::view-transition-old(root) {
@@ -158,5 +166,29 @@ html.theme-live {
   position: fixed
   inset: 0
   z-index: 2147483647
+  pointer-events: none
+}
+
+// The live copy of the page in the other scheme (tools/themeMirror.js). Inside
+// the ring it is opaque; outside, `--theme-m` of it shows over the real page.
+.theme-mirror {
+  position: fixed
+  inset: 0
+  z-index: 2147483647
+  pointer-events: none
+  visibility: hidden
+  contain: strict
+  mask-image: unquote('radial-gradient(circle at var(--theme-x) var(--theme-y), #000 var(--theme-r), rgb(0 0 0 / var(--theme-m)) calc(var(--theme-r) + 1.5px))')
+}
+
+.theme-mirror.is-shown {
+  visibility: visible
+}
+
+// Dims or lifts the real page under the mirror as the old scheme gives way.
+.theme-shade {
+  position: fixed
+  inset: 0
+  z-index: 2147483646
   pointer-events: none
 }

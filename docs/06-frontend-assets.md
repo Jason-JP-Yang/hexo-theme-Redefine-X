@@ -23,7 +23,8 @@ Shared helpers initialized first in `refresh()` (DOM utilities, event helpers, c
 ### `js/tools/` — UI tools
 | File | Responsibility |
 |------|----------------|
-| `lightDarkSwitch.js` | Light/dark toggle; one style pass, then the live page is uncovered from the button through a melting snapshot of the old scheme (View Transition capturing only the old state); a press mid-way reverses the motion; follows `prefers-color-scheme`; fires `redefine:color-scheme-change` (`detail.isDark`) inside the pass |
+| `lightDarkSwitch.js` | Light/dark toggle; a ring opens from the button with the new scheme inside while the real page outside stays live in the old one (`themeMirror.js`), then the page is switched under the covering copy a subtree per frame; until the copy is ready, a View Transition capturing only the old state; a press mid-way reverses the motion; follows `prefers-color-scheme`; fires `redefine:color-scheme-change` (`detail.isDark`) |
+| `themeMirror.js` | Live copy of `<body>` in a shadow root, kept in step (DOM, scroll, form values, hover/focus as classes, animations) and pre-styled in the opposite scheme; iframes/video/canvas show through holes; scheme-baked content (mermaid) registers on `window.redefineSchemeContent` |
 | `scrollTopBottom.js` | Scroll-to-top/bottom buttons |
 | `localSearch.js` | Local search modal (consumes `hexo-generator-searchdb` index) |
 | `codeBlock.js` | Code-block copy button + language label interactions |

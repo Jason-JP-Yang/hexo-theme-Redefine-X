@@ -119,6 +119,16 @@
 
   window.RedefineMermaid = { paint, serial };
 
+  // The colour-scheme mirror (tools/themeMirror.js) shows each diagram drawn
+  // for ITS scheme, not the page's.
+  (window.redefineSchemeContent ||= []).push({
+    selector: SELECTOR,
+    markup: (el, dark) => {
+      const d = el.dataset.mmdDone ? drawn.get(el)?.[dark ? "dark" : "light"] : null;
+      return d && !d.error ? d.svg : null;
+    },
+  });
+
   const repaint = () => paint(document);
 
   if (document.readyState === "loading") {

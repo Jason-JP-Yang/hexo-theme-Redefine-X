@@ -369,6 +369,17 @@ export async function typesetMath(host) {
 // drawing. Keyed by scheme + source; the oldest drop out.
 const mermaidDrawn = new Map();
 const MERMAID_KEEP = 48;
+// Which diagram each preview shows, for the colour-scheme mirror
+// (tools/themeMirror.js), which draws it in its own scheme.
+const mermaidHosts = new WeakMap();
+(window.redefineSchemeContent ||= []).push({
+  selector: ".ed-preview",
+  markup: (host, dark) => {
+    const code = mermaidHosts.get(host);
+    const out = code == null ? null : mermaidDrawn.get((dark ? "dark" : "light") + "\n" + code);
+    return out && !out.error ? out.svg : null;
+  },
+});
 
 function drawMermaid(code, scheme) {
   const key = scheme + "\n" + code;
@@ -423,6 +434,7 @@ export async function renderMermaid(host, code) {
     host.textContent = code;
     return;
   }
+  mermaidHosts.set(host, code);
   const scheme = document.documentElement.classList.contains("dark") ? "dark" : "light";
   const key = scheme + "\n" + code;
   if (mermaidDrawn.has(key)) placeMermaid(host, mermaidDrawn.get(key));
