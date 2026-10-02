@@ -87,3 +87,68 @@ $right-bottom-tools-border-radius = 12px
 
         +redefine-mobile()
           display none
+
+// THEME TOGGLE ==============================================================
+// Both glyphs share one cell and the scheme picks one, so the icon is right
+// from the first paint. A switch (`is-turning`, tools/lightDarkSwitch.js) spins
+// the old glyph out and the new one in, both counter-clockwise.
+.side-tools-container .tool-dark-light-toggle
+  display grid
+  place-items center
+
+  i
+    grid-row 1
+    grid-column 1
+
+  .theme-icon-sun
+    opacity 0
+    transform rotate(90deg) scale(0.4)
+
+  &.is-turning
+    .theme-icon-moon
+      animation theme-icon-in 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) 0.08s both
+
+    .theme-icon-sun
+      animation theme-icon-out 0.22s cubic-bezier(0.4, 0, 1, 1) both
+
+html.dark .side-tools-container .tool-dark-light-toggle
+  .theme-icon-moon
+    opacity 0
+    transform rotate(90deg) scale(0.4)
+
+  .theme-icon-sun
+    opacity 1
+    transform none
+
+  &.is-turning
+    .theme-icon-moon
+      animation theme-icon-out 0.22s cubic-bezier(0.4, 0, 1, 1) both
+
+    .theme-icon-sun
+      animation theme-icon-in 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) 0.08s both
+
+@media (prefers-reduced-motion: reduce)
+  .side-tools-container .tool-dark-light-toggle.is-turning i
+    animation none !important
+
+@keyframes theme-icon-in
+  0%
+    opacity 0
+    transform rotate(90deg) scale(0.4)
+
+  65%
+    opacity 1
+    transform rotate(-12deg) scale(1.08)
+
+  100%
+    opacity 1
+    transform none
+
+@keyframes theme-icon-out
+  0%
+    opacity 1
+    transform none
+
+  100%
+    opacity 0
+    transform rotate(-90deg) scale(0.4)

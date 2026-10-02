@@ -101,3 +101,28 @@ $default-mode = $temp-mode == 'dark' ? 'dark' : 'light'
 .dark {
   root-color('dark')
 }
+
+// ========================================================================================
+//                                  SWITCH ANIMATION
+// ========================================================================================
+// tools/lightDarkSwitch.js lands a scheme in one style change and reveals it over
+// snapshots. The global `*` colour transition must not run for that change: it
+// would animate every element separately, a recalc and full repaint per frame.
+html.theme-switching, html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after {
+  transition: none !important
+}
+
+// The wave and the shading are driven from the script, which knows the button.
+html.theme-reveal::view-transition-old(root), html.theme-reveal::view-transition-new(root) {
+  animation: none
+  mix-blend-mode: normal
+}
+
+html.theme-fade::view-transition-old(root), html.theme-fade::view-transition-new(root) {
+  animation-duration: 0.24s
+}
+
+// The live page under the snapshots stays clickable while they play.
+html.theme-reveal::view-transition, html.theme-fade::view-transition {
+  pointer-events: none
+}

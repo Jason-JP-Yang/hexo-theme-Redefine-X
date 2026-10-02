@@ -55,11 +55,13 @@
     const code = sourceOf(el);
     if (!code) return;
 
+    const redraw = !!el.dataset.mmdDone;
     const id = "mmd-" + Date.now().toString(36) + "-" + seq++;
     try {
       const { svg, bindFunctions } = await window.mermaid.render(id, code);
       el.innerHTML = svg;
       if (bindFunctions) bindFunctions(el);
+      if (redraw) el.animate?.([{ opacity: 0.15 }, { opacity: 1 }], { duration: 280, easing: "ease-out" });
       el.dataset.mmdDone = isDark() ? "dark" : "light";
       el.classList.remove("mermaid-error");
     } catch (err) {
@@ -110,6 +112,9 @@
   // `page:view`; plugins/vault.js announces it here instead.
   window.addEventListener("redefine:content-injected", repaint);
 
-  // Every diagram is redrawn, because the palette lives in the SVG.
-  window.addEventListener("redefine:color-scheme-change", () => paint(document, true));
+  // Every diagram is redrawn, because the palette lives in the SVG — after the
+  // switch's reveal, so the drawing never competes with it.
+  window.addEventListener("redefine:color-scheme-change", (e) => {
+    Promise.resolve(e.detail?.settled).then(() => paint(document, true));
+  });
 })();

@@ -23,7 +23,7 @@ Shared helpers initialized first in `refresh()` (DOM utilities, event helpers, c
 ### `js/tools/` — UI tools
 | File | Responsibility |
 |------|----------------|
-| `lightDarkSwitch.js` | Light/dark toggle; writes `styleStatus.isDark`; respects `prefers-color-scheme` |
+| `lightDarkSwitch.js` | Light/dark toggle; one style change revealed by a View Transition circle from the button; follows `prefers-color-scheme`; fires `redefine:color-scheme-change` (`detail.settled` resolves after the reveal) |
 | `scrollTopBottom.js` | Scroll-to-top/bottom buttons |
 | `localSearch.js` | Local search modal (consumes `hexo-generator-searchdb` index) |
 | `codeBlock.js` | Code-block copy button + language label interactions |

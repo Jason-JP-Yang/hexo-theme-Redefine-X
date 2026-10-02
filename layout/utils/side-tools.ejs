@@ -8,8 +8,10 @@
 			<i class="fa-regular fa-magnifying-glass-minus"></i>
 		</li>
 
-		<li class="right-bottom-tools tool-dark-light-toggle flex justify-center items-center" data-ux="tool" data-ux-name="theme">
-			<i class="fa-regular fa-moon"></i>
+		<%# Both glyphs, the scheme on <html> shows one (side-tools.styl). %>
+		<li class="right-bottom-tools tool-dark-light-toggle" data-ux="tool" data-ux-name="theme">
+			<i class="theme-icon-moon fa-regular fa-moon"></i>
+			<i class="theme-icon-sun fa-regular fa-brightness"></i>
 		</li>
 
 		<% if (theme.global.guide !== false) { %>

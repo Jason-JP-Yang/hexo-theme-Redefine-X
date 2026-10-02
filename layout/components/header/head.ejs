@@ -54,18 +54,11 @@
                 if (app) bar.content = bar.dataset[theme];
             }
             
-            // Initial application
+            // Initial application. Later changes, the system's included, go
+            // through tools/lightDarkSwitch.js, which animates them.
             const theme = getTheme();
             applyTheme(theme);
-            
-            // Listen for system preference changes
-            matchMedia("(prefers-color-scheme: dark)").addEventListener("change", ({ matches }) => {
-                // Only update if using system preference (no localStorage entry)
-                if (!localStorage.getItem(THEME_KEY)) {
-                    applyTheme(matches ? DARK : LIGHT);
-                }
-            });
-            
+
             // Set body classes ASAP (before DOMContentLoaded)
             (function() {
                 const addBodyClass = () => {

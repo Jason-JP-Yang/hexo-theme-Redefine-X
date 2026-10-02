@@ -18,7 +18,7 @@
                 'data-strict': '<%= theme.comment.config.giscus.strict || '0' %>',
                 'data-reactions-enabled': '<%= theme.comment.config.giscus.reactions_enabled || '1' %>',
                 'data-emit-metadata': '<%= theme.comment.config.giscus.emit_metadata || '1' %>',
-                'data-theme': 'preferred_color_scheme',
+                'data-theme': document.documentElement.classList.contains('dark') ? 'dark' : 'light',
                 'data-lang': '<%= theme.comment.config.giscus.lang || 'en' %>',
                 'data-input-position': '<%= theme.comment.config.giscus.input_position || 'bottom' %>',
                 'data-loading': '<%= theme.comment.config.giscus.loading || 'lazy' %>',
