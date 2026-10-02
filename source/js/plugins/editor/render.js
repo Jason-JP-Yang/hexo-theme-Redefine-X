@@ -364,34 +364,72 @@ export async function typesetMath(host) {
   }
 }
 
-/** Mermaid is already vendored for the site; the editor reuses that global. */
+// A diagram's palette is written into its SVG, so each one is drawn under both
+// schemes — the other while idle — and a light/dark switch swaps instead of
+// drawing. Keyed by scheme + source; the oldest drop out.
+const mermaidDrawn = new Map();
+const MERMAID_KEEP = 48;
+
+function drawMermaid(code, scheme) {
+  const key = scheme + "\n" + code;
+  if (mermaidDrawn.has(key)) return Promise.resolve(mermaidDrawn.get(key));
+  // The site's queue (plugins/mermaid.js): one parser, one global configuration.
+  const serial = window.RedefineMermaid?.serial || ((job) => job());
+  return serial(async () => {
+    if (mermaidDrawn.has(key)) return mermaidDrawn.get(key);
+    const id = "ed-mmd-" + Math.random().toString(36).slice(2, 9);
+    let out;
+    try {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        // Mermaid's own error report is a full-width SVG it appends to the BODY
+        // and never takes away, so a diagram in mid-sentence printed "Syntax
+        // error in text" across the foot of the article. The message belongs in
+        // the block being edited and nowhere else.
+        suppressErrorRendering: true,
+        theme: scheme === "dark" ? "dark" : "default",
+      });
+      out = { svg: (await window.mermaid.render(id, code)).svg };
+    } catch (err) {
+      out = { error: String((err && err.message) || err) };
+    } finally {
+      // Older mermaid ignores suppressErrorRendering and leaves the sandbox
+      // behind regardless, so whatever it parked is removed.
+      for (const stray of document.querySelectorAll("#" + id + ", #d" + id)) stray.remove();
+    }
+    mermaidDrawn.set(key, out);
+    if (mermaidDrawn.size > MERMAID_KEEP) mermaidDrawn.delete(mermaidDrawn.keys().next().value);
+    return out;
+  });
+}
+
+function placeMermaid(host, out) {
+  if (out.error) {
+    host.textContent = out.error;
+    host.classList.add("ed-mermaid-error");
+  } else {
+    host.innerHTML = out.svg;
+    host.classList.remove("ed-mermaid-error");
+  }
+}
+
+/**
+ * Mermaid is already vendored for the site; the editor reuses that global.
+ * Synchronous when the drawing is cached, so a light/dark switch can swap it
+ * inside its own style pass.
+ */
 export async function renderMermaid(host, code) {
   if (!window.mermaid) {
     host.textContent = code;
     return;
   }
-  const id = "ed-mmd-" + Math.random().toString(36).slice(2, 9);
-  try {
-    window.mermaid.initialize({
-      startOnLoad: false,
-      // Mermaid's own error report is a full-width SVG it appends to the BODY
-      // and never takes away, so a diagram in mid-sentence printed "Syntax
-      // error in text" across the foot of the article. The message belongs in
-      // the block being edited and nowhere else.
-      suppressErrorRendering: true,
-      theme: document.documentElement.classList.contains("dark") ? "dark" : "default",
-    });
-    const { svg } = await window.mermaid.render(id, code);
-    host.innerHTML = svg;
-    host.classList.remove("ed-mermaid-error");
-  } catch (err) {
-    host.textContent = String((err && err.message) || err);
-    host.classList.add("ed-mermaid-error");
-  } finally {
-    // Older mermaid ignores suppressErrorRendering and leaves the sandbox
-    // behind regardless, so whatever it parked outside the block is removed.
-    for (const stray of document.querySelectorAll("#" + id + ", #d" + id)) {
-      if (!host.contains(stray)) stray.remove();
-    }
+  const scheme = document.documentElement.classList.contains("dark") ? "dark" : "light";
+  const key = scheme + "\n" + code;
+  if (mermaidDrawn.has(key)) placeMermaid(host, mermaidDrawn.get(key));
+  else placeMermaid(host, await drawMermaid(code, scheme));
+  const other = scheme === "dark" ? "light" : "dark";
+  if (!mermaidDrawn.has(other + "\n" + code)) {
+    const later = () => drawMermaid(code, other);
+    window.requestIdleCallback ? requestIdleCallback(later, { timeout: 2000 }) : setTimeout(later, 300);
   }
 }

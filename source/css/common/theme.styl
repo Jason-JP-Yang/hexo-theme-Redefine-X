@@ -105,24 +105,58 @@ $default-mode = $temp-mode == 'dark' ? 'dark' : 'light'
 // ========================================================================================
 //                                  SWITCH ANIMATION
 // ========================================================================================
-// tools/lightDarkSwitch.js lands a scheme in one style change and reveals it over
-// snapshots. The global `*` colour transition must not run for that change: it
-// would animate every element separately, a recalc and full repaint per frame.
-html.theme-switching, html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after {
-  transition: none !important
+// tools/lightDarkSwitch.js lands a scheme in one style pass. No element may
+// start a colour transition in that pass — each would animate on its own, a
+// recalc and repaint per frame — so every colour transition reads `--tg` and
+// `--tgd` (animated.styl's mixins; scripts/filters/theme-switch-transitions.js
+// for the rest), which are 0 while a switch is on. Running transitions of any
+// kind are left alone. `data-tg` carries the same zero on bounded subtrees, so
+// it can be lifted from them a few at a time.
+html.theme-switching, [data-tg] {
+  --tg: 0s
+  --tgd: 0s
 }
 
-// The wave and the shading are driven from the script, which knows the button.
-html.theme-reveal::view-transition-old(root), html.theme-reveal::view-transition-new(root) {
+// Where the wave opens from, and how far. Registered so the circle interpolates.
+@property --theme-x
+  syntax '<length>'
+  inherits false
+  initial-value 0px
+
+@property --theme-y
+  syntax '<length>'
+  inherits false
+  initial-value 0px
+
+@property --theme-r
+  syntax '<length>'
+  inherits false
+  initial-value -2px
+
+// The old page is a snapshot laid over the live one; the script drives it and
+// the wave is a hole opening in it.
+html.theme-reveal::view-transition-old(root) {
   animation: none
   mix-blend-mode: normal
+  mask-image: unquote('radial-gradient(circle at var(--theme-x) var(--theme-y), transparent var(--theme-r), #000 calc(var(--theme-r) + 1.5px))')
 }
 
-html.theme-fade::view-transition-old(root), html.theme-fade::view-transition-new(root) {
-  animation-duration: 0.24s
+// The live page under the snapshot takes every pointer.
+html.theme-reveal::view-transition {
+  pointer-events: none
 }
 
-// The live page under the snapshots stays clickable while they play.
-html.theme-reveal::view-transition, html.theme-fade::view-transition {
+// Set inside the switch, so only the old state is captured: under the snapshot
+// is the real document, painted and hit-tested as usual. A captured root is
+// drawn by the transition's layers instead and takes no input.
+html.theme-live {
+  view-transition-name: none
+}
+
+// The new page's tone settling (lightDarkSwitch.js animates its backdrop).
+.theme-tone {
+  position: fixed
+  inset: 0
+  z-index: 2147483647
   pointer-events: none
 }

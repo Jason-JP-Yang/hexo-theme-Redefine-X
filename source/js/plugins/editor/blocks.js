@@ -733,9 +733,9 @@ function mountSource(view) {
   // The published page does this for its own diagrams in plugins/mermaid.js;
   // this is the editor's copy, for the ones on the canvas.
   if (block.type === "mermaid") {
-    const retheme = (e) => Promise.resolve(e.detail?.settled).then(() => {
+    const retheme = () => {
       if (wrap.dataset.mode !== "source") paint();
-    });
+    };
     window.addEventListener("redefine:color-scheme-change", retheme);
     view.release = () => window.removeEventListener("redefine:color-scheme-change", retheme);
   }

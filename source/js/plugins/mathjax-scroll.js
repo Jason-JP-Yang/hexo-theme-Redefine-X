@@ -51,6 +51,8 @@ let observerInstance = null;
 let pending = new Set();
 let pendingFrame = null;
 let bgCache = new Map();
+// Blocks within the observer's margin of the screen, as it last reported.
+const near = new Set();
 
 /* ---- Background resolution -------------------------------------- */
 
@@ -241,6 +243,8 @@ function observer() {
   observerInstance = new IntersectionObserver(
     (entries) => {
       for (let i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) near.add(entries[i].target);
+        else near.delete(entries[i].target);
         if (entries[i].isIntersecting) schedule(entries[i].target);
       }
     },
@@ -294,8 +298,13 @@ const initMathJaxScroll = () => {
     window.addEventListener('resize', () => {
       requestAnimationFrame(refreshVisible);
     }, { passive: true });
-    // Light/dark switch changes the resolved hint background.
-    window.addEventListener('redefine:color-scheme-change', refreshVisible);
+    // Light/dark switch changes the resolved hint background. It runs inside
+    // the switch's style pass, so it reads no geometry: the observer already
+    // knows which blocks are near the screen.
+    window.addEventListener('redefine:color-scheme-change', () => {
+      clearBgCache();
+      near.forEach((block) => { if (block.isConnected) schedule(block); else near.delete(block); });
+    });
   }
 };
 

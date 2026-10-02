@@ -133,6 +133,17 @@ export function preloadEmojiMart() {
   return loadEmojiMart().catch(() => {});
 }
 
+// An open picker follows a light/dark switch inside the switch's style pass:
+// the shadow root's attribute now, the picker's own state (which re-renders a
+// tick later) to match.
+window.addEventListener("redefine:color-scheme-change", (e) => {
+  const theme = e.detail.isDark ? "dark" : "light";
+  for (const picker of document.querySelectorAll("em-emoji-picker")) {
+    picker.shadowRoot?.querySelector("[data-theme]")?.setAttribute("data-theme", theme);
+    picker.update?.({ theme });
+  }
+});
+
 // Restyle the picker's shadow DOM to the blog. Document-level @font-face rules
 // apply inside shadow trees, so the Google-hosted "Noto Color Emoji" webfont is
 // available here too.
