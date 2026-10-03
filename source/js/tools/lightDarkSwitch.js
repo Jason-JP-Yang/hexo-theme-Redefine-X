@@ -1,38 +1,24 @@
 import { main } from "../main.js";
+import { onScroll } from "./scrollScheduler.js";
 import * as mirror from "./themeMirror.js";
+import * as giscus from "./giscusTwin.js";
 
 /**
  * Light/dark switch.
  *
- * The scheme is `dark`/`light` on <html> (theme.styl's custom properties) and
- * `dark-mode`/`light-mode` on <body>. head.ejs applies both before the first
- * paint and CSS picks the toggle's glyph, so a page view costs nothing here.
+ * The scheme is `dark`/`light` on <html> (theme.styl) and `dark-mode`/`light-mode`
+ * on <body>; head.ejs applies both before the first paint.
  *
- * A scheme lands in one style pass under `theme-switching`, which zeroes the
- * colour duration of the global `*` transition (`--tg`, animated.styl): no
- * element starts a colour transition — thousands of them froze heavy pages —
- * and every transition already running carries on untouched.
+ * A ring opens from the button with the new scheme inside, while outside the old
+ * one dims or lifts and melts away. Both sides are live: outside is the page,
+ * inside is tools/themeMirror.js, a copy kept in step and already styled in the
+ * other scheme. Once the ring covers the screen the page is switched under it a
+ * subtree per frame and the copy is put away. Pressed again mid-way, every
+ * animation runs backwards and the ring closes into the button.
  *
- * The motion: a circle opens from the button with the new scheme inside it,
- * while outside the old one dims or lifts and melts away.
- *
- * Normally both sides are LIVE. The page stays the real page in the old scheme
- * the whole way, and the new scheme inside the ring is tools/themeMirror.js — a
- * copy of the page kept in step with it and already styled in the other
- * scheme, so showing it costs no style pass at all. Once the ring covers the
- * screen the page itself is switched under it a subtree per frame, and the
- * copy is put away.
- *
- * Until the copy is ready (straight after a page loads) the same motion runs
- * as a view transition that captures only the OLD state: a snapshot over the
- * real document, which stays painted and hit-tested (`theme-live`; a captured
- * root takes no input). There, input anywhere makes the snapshot hurry off.
- *
- * A switch is one reversible motion. Pressed again mid-way, every animation
- * runs backwards and the ring closes into the button; pressed again, it opens.
- * A ring that closes all the way leaves the snapshot covering the page, the old
- * scheme is restored under it and only then is the transition taken down — a
- * held animation keeps it up until that moment.
+ * Dimming, lifting and the new page's tone are layers whose opacity animates on
+ * the compositor: black at opacity a is brightness 1 - a, and grey g under
+ * color-dodge divides by 1 - g, a brightness above 1.
  */
 
 const root = document.documentElement;
@@ -42,13 +28,19 @@ const FADE = 240;
 const WAVE = "cubic-bezier(.5, 0, .2, 1)";
 const MELT = "cubic-bezier(.4, 0, .7, .7)";
 const SHADE = "cubic-bezier(.2, .8, .2, 1)";
-// Time left once the reader does something else mid-switch.
-const HURRY = 160;
-const OLD = "::view-transition-old(root)";
-const INPUTS = ["pointerdown", "wheel", "touchstart", "keydown"];
-// Elements re-styled per slice when the colour hold is lifted, or the page is
-// switched under the copy.
+// Elements re-styled per frame when the page is switched under the copy, or per
+// idle slice when its colour transitions come back.
 const SLICE = 1500;
+const RING =
+  "radial-gradient(circle at var(--theme-x) var(--theme-y), #000 var(--theme-r), rgb(0 0 0 / var(--theme-m)) calc(var(--theme-r) + 1.5px))";
+const SOLID = "linear-gradient(#000 0 0)";
+const MASK = ["maskImage", "maskSize", "maskPosition", "maskRepeat", "maskComposite"];
+// How long the copy keeps covering the comments while their frame changes theme.
+const LAND = 400;
+
+// The old page's brightness at the end, and the new page's at the start.
+const shadeOf = (dark) => (dark ? 0.9 : 1.12);
+const toneOf = (dark) => (dark ? 1.12 : 0.95);
 
 const isDark = () => root.classList.contains("dark");
 const button = () => document.querySelector(".side-tools-container .tool-dark-light-toggle");
@@ -59,7 +51,6 @@ const whenIdle = (fn) =>
 
 let run = null; // the switch on screen
 let next = null; // a scheme asked for while one was ending
-let giscusTimer = 0;
 
 // Where the switch on screen is going, after any reversal.
 const heading = (r) => (r.dir > 0 ? r.to : !r.to);
@@ -77,34 +68,24 @@ function apply(dark) {
   } catch (e) {}
 }
 
+const announce = (dark) =>
+  window.dispatchEvent(new CustomEvent("redefine:color-scheme-change", { detail: { isDark: dark } }));
+
 /*
- * Colour transitions held off. `--tg`/`--tgd` are zeroed for the pass that lands
- * a scheme, and lifting them is a style pass over every element — a long task
- * right after the wave if done in one go. So the zero is carried by <html> AND by
- * bounded subtrees (`data-tg`): lifted from <html> first, only the thin spine
- * above the subtrees is re-styled (a subtree root whose own value is unchanged
- * stops the pass there), then the subtrees go a slice at a time while idle.
+ * Colour transitions held off. A scheme must land with `--tg`/`--tgd` at zero, or
+ * every element starts a colour transition of its own. The zero is carried by
+ * bounded subtrees (`data-tg`) and by <html>, and lifted from <html> first — only
+ * the thin spine above the subtrees is re-styled — then a slice of subtrees per
+ * idle callback.
  */
-let held = false;
 let chunks = [];
 let lifting = 0;
-
-function holdColour() {
-  if (held) return;
-  held = true;
-  lifting++;
-  for (const [el] of chunks) el.removeAttribute("data-tg");
-  chunks = mirror.partition(document.body);
-  for (const [el] of chunks) el.setAttribute("data-tg", "");
-  root.classList.add("theme-switching");
-}
 
 function releaseColour() {
   const token = ++lifting;
   const live = () => token === lifting && !run;
   whenIdle(() => {
     if (!live()) return;
-    held = false;
     root.classList.remove("theme-switching");
     let i = 0;
     const slice = () => {
@@ -120,28 +101,25 @@ function releaseColour() {
   });
 }
 
-const announce = (dark) =>
-  window.dispatchEvent(new CustomEvent("redefine:color-scheme-change", { detail: { isDark: dark } }));
-
-function land(dark) {
-  holdColour();
-  apply(dark);
-  announce(dark);
-}
-
 // The page switched while the copy covers it, a slice of subtrees per frame
 // (`data-scheme` carries the palette on each), then <html> and <body> last.
 async function flipUnderCover(dark) {
-  holdColour();
+  lifting++;
+  const old = chunks;
+  chunks = mirror.partition(document.body);
+  const now = new Set(chunks.map(([el]) => el));
+  for (const [el] of old) if (!now.has(el)) el.removeAttribute("data-tg");
   const mode = dark ? "dark" : "light";
   for (let i = 0; i < chunks.length; ) {
     await nextFrame();
     for (let budget = SLICE; i < chunks.length && budget > 0; i++) {
+      chunks[i][0].setAttribute("data-tg", "");
       chunks[i][0].setAttribute("data-scheme", mode);
       budget -= chunks[i][1];
     }
   }
   await nextFrame();
+  root.classList.add("theme-switching");
   apply(dark);
   announce(dark);
   await nextFrame();
@@ -229,175 +207,136 @@ function settleGlyphs() {
   }, () => {});
 }
 
-// Giscus re-themes in its own process, so it is told first; its frame only
-// listens once loaded.
-function giscus(tries = 0) {
-  clearTimeout(giscusTimer);
-  const frames = [...document.querySelectorAll("iframe.giscus-frame")];
-  if (!frames.length && !document.getElementById("giscus-container")) return;
-  if (!frames.length || frames.some((f) => f.classList.contains("giscus-frame--loading"))) {
-    if (tries < 30) giscusTimer = setTimeout(giscus, 500, tries + 1);
-    return;
-  }
-  for (const f of frames) postGiscus(f, wanted());
-}
+/* ─── layers and masks ────────────────────────────────────────────────────── */
 
-const giscusTheme = new WeakMap();
-function postGiscus(frame, dark) {
-  if (frame.classList.contains("giscus-frame--loading") || giscusTheme.get(frame) === dark) return;
-  giscusTheme.set(frame, dark);
-  frame.contentWindow?.postMessage({ giscus: { setConfig: { theme: dark ? "dark" : "light" } } }, "https://giscus.app");
-}
-
-// On the live path giscus shows through the copy, so it changes when the ring
-// reaches it rather than when the switch starts.
-function giscusRing(r, { x, y, radius }) {
-  const p = r.master.effect.getComputedTiming().progress ?? 0;
-  const reach = r.reduced ? (p >= 0.5 ? Infinity : -Infinity) : -2 + (radius + 2) * p;
-  for (const f of document.querySelectorAll("iframe.giscus-frame")) {
-    const b = f.getBoundingClientRect();
-    postGiscus(f, Math.hypot(b.left + b.width / 2 - x, b.top + b.height / 2 - y) <= reach ? r.to : !r.to);
-  }
-}
-
-// The new page's tone settling, drawn over the live document by a sheet that
-// lets every pointer through.
-const tone = document.createElement("div");
-tone.className = "theme-tone";
-const toneFrom = (dark) => (dark ? "brightness(1.12)" : "brightness(.95)");
-// The old scheme dimming or lifting, over the real page and under the copy.
+// Dims or lifts the real page under the copy as the old scheme gives way.
 const shade = document.createElement("div");
 shade.className = "theme-shade";
 
-function turn(r) {
-  r.dir = -r.dir;
-  for (const a of r.anims) {
-    a.reverse();
-    a.updatePlaybackRate(r.dir);
+// A layer that, at full opacity, brings what is under it to brightness `b`;
+// returns that opacity.
+function veil(el, b) {
+  const s = el.style;
+  if (b < 1) {
+    s.background = "#000";
+    s.mixBlendMode = "normal";
+    return 1 - b;
   }
-  turnGlyphs(heading(r), r.dir < 0);
-  if (r.kind !== "live") giscus();
+  const g = Math.round(255 * (1 - 1 / b));
+  s.background = `rgb(${g}, ${g}, ${g})`;
+  s.mixBlendMode = "color-dodge";
+  return 1;
 }
 
-// Any input but the toggle means the reader wants the page back now.
-function watchInput(r) {
-  const go = (e) => {
-    if (r.ended || e.target?.closest?.(".tool-dark-light-toggle")) return;
-    const m = r.master;
-    const left = r.dir > 0 ? m.effect.getComputedTiming().endTime - m.currentTime : m.currentTime;
-    if (left <= HURRY) return;
-    for (const a of r.anims) a.updatePlaybackRate((r.dir * left) / HURRY);
-  };
-  INPUTS.forEach((t) => addEventListener(t, go, { capture: true, passive: true }));
-  r.unwatch = () => INPUTS.forEach((t) => removeEventListener(t, go, true));
+const shape = ({ w, h, round }) =>
+  round
+    ? `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'%3E%3Crect width='100%25' height='100%25' rx='${round}'/%3E%3C/svg%3E")`
+    : SOLID;
+
+// A mask of `base` with rectangles cut out of it, or of the rectangles alone.
+function cut(el, base, list) {
+  const s = el.style;
+  const layers = base ? [{ base }, ...list] : list;
+  s.maskImage = layers.map((o) => o.base || shape(o)).join(", ");
+  s.maskSize = layers.map((o) => (o.base ? "100% 100%" : `${o.w}px ${o.h}px`)).join(", ");
+  s.maskPosition = layers.map((o) => (o.base ? "0 0" : `${o.x}px ${o.y}px`)).join(", ");
+  s.maskRepeat = "no-repeat";
+  s.maskComposite = layers.map((o, i) => (base && i === 0 ? "subtract" : "add")).join(", ");
 }
 
-function animate(r, { x, y, radius }) {
-  const add = (target, frames, duration, easing, pseudoElement) => {
-    const a = target.animate(frames, { duration, easing, pseudoElement, fill: "both" });
-    r.anims.push(a);
-    return a;
-  };
-  try {
-    r.hold = root.animate({ "--theme-hold": ["0", "1"] }, { duration: 1e7, pseudoElement: OLD });
-    if (r.reduced) {
-      r.master = add(root, { opacity: [1, 0] }, FADE, "ease", OLD);
-    } else {
-      r.master = add(
-        root,
-        { "--theme-x": [`${x}px`, `${x}px`], "--theme-y": [`${y}px`, `${y}px`], "--theme-r": ["-2px", `${radius}px`] },
-        DURATION,
-        WAVE,
-        OLD,
-      );
-      add(root, { opacity: [1, 0] }, DURATION, MELT, OLD);
-      add(root, { filter: ["none", r.to ? "brightness(.9)" : "brightness(1.12)"] }, DURATION, SHADE, OLD);
-      add(tone, { backdropFilter: [toneFrom(r.to), "brightness(1)"] }, DURATION, SHADE);
-    }
-  } catch (e) {
-    // No script-driven pseudo-element animation here: the snapshot just goes.
-    r.anims.forEach((a) => a.cancel());
-    r.anims = [];
-    return void end(r);
-  }
-  // Pressed again before the motion began: it starts already on its way back.
-  if (r.dir < 0) {
-    r.dir = 1;
-    turn(r);
-  }
-  r.master.finished.then(() => end(r), () => {});
-  watchInput(r);
+function uncut(el) {
+  for (const p of MASK) el.style[p] = "";
 }
+
+function centre(el, x, y) {
+  el.style.setProperty("--theme-x", `${x}px`);
+  el.style.setProperty("--theme-y", `${y}px`);
+}
+
+// The copy and the shade cover the document; the ring stays on the button
+// while the page scrolls under it.
+function measure(r, m) {
+  r.w = Math.max(root.scrollWidth, root.clientWidth);
+  r.h = Math.max(m ? m.docH : root.scrollHeight, root.clientHeight);
+  r.x = r.at.x + scrollX;
+  r.y = r.at.y + scrollY;
+}
+
+function place(r) {
+  for (const el of [r.host, shade]) {
+    el.style.width = `${r.w}px`;
+    el.style.height = `${r.h}px`;
+  }
+  centre(r.host, r.x, r.y);
+}
+
+/* ─── the switch ──────────────────────────────────────────────────────────── */
 
 function startLive(dark, btn) {
-  const r = { kind: "live", to: dark, dir: 1, anims: [], ended: false, reduced: reducedMotion() };
+  const r = { to: dark, dir: 1, anims: [], ended: false, reduced: reducedMotion(), at: origin(btn) };
   run = r;
-  const at = origin(btn);
-  const host = mirror.show();
-  shade.style.backdropFilter = "";
-  root.append(shade);
+  const list = mirror.holes();
+  const { host, tone } = mirror.show();
+  r.host = host;
+  measure(r, null);
+  place(r);
+  cut(host, RING, list);
+  r.unfollow = onScroll((m) => measure(r, m), () => place(r), "theme-switch");
   turnGlyphs(dark, false);
+
   const add = (target, frames, duration, easing) => {
-    const a = target.animate(frames, { duration, easing, fill: "both" });
-    r.anims.push(a);
-    return a;
+    r.anims.push(target.animate(frames, { duration, easing, fill: "both" }));
   };
   if (r.reduced) {
-    r.master = add(host, { "--theme-m": [0, 1] }, FADE, "ease");
+    host.style.setProperty("--theme-r", "-2px");
+    add(host, { "--theme-m": [0, 1] }, FADE, "ease");
   } else {
-    r.master = add(
-      host,
-      { "--theme-x": [`${at.x}px`, `${at.x}px`], "--theme-y": [`${at.y}px`, `${at.y}px`], "--theme-r": ["-2px", `${at.radius}px`] },
-      DURATION,
-      WAVE,
-    );
+    add(host, { "--theme-r": ["-2px", `${r.at.radius}px`] }, DURATION, WAVE);
     add(host, { "--theme-m": [0, 1] }, DURATION, MELT);
-    add(host, { filter: [toneFrom(dark), "brightness(1)"] }, DURATION, SHADE);
-    add(shade, { backdropFilter: ["brightness(1)", dark ? "brightness(.9)" : "brightness(1.12)"] }, DURATION, SHADE);
+    add(tone, { opacity: [veil(tone, toneOf(dark)), 0] }, DURATION, SHADE);
+    add(shade, { opacity: [0, veil(shade, shadeOf(dark))] }, DURATION, SHADE);
+    if (list.length) cut(shade, SOLID, list);
+    else uncut(shade);
+    root.append(shade);
   }
-  r.master.finished.then(() => end(r), () => {});
-  const tick = () => {
-    if (run !== r || r.ended) return;
-    giscusRing(r, at);
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
+  r.anims[0].finished.then(() => end(r), () => {});
 }
 
-async function endLive(r) {
-  // Ring all the way out: the copy covers the screen, and the page is switched
-  // under it. All the way back: the page never changed.
-  if (r.dir > 0) await flipUnderCover(r.to);
-  for (const f of document.querySelectorAll("iframe.giscus-frame")) postGiscus(f, isDark());
-  await nextFrame();
-  await nextFrame();
-  mirror.hide();
-  shade.remove();
-  r.anims.forEach((a) => a.cancel());
+// Resolves after `ms`, or as soon as another switch is asked for.
+function linger(ms) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const tick = () => (next !== null || performance.now() - started >= ms ? resolve() : requestAnimationFrame(tick));
+    requestAnimationFrame(tick);
+  });
 }
 
 async function end(r) {
   if (r.ended) return;
   r.ended = true;
-  r.unwatch?.();
-  if (r.kind === "live") {
-    await endLive(r);
-    return finish();
+  // Ring all the way out: the copy covers the screen, and the page is switched
+  // under it. All the way back: the page never changed.
+  const forward = r.dir > 0;
+  if (forward) await flipUnderCover(r.to);
+  await nextFrame();
+  await nextFrame();
+  if (forward) {
+    // The comments' frame changes theme in its own process: the copy keeps
+    // covering just them until it has.
+    const frames = giscus.landing(r.to);
+    if (frames.length) {
+      shade.remove();
+      cut(r.host, null, frames);
+      await linger(LAND);
+    }
   }
-  if (r.dir < 0) {
-    // The ring has closed and the snapshot covers the page again: the old scheme
-    // goes back under it before it is taken away.
-    land(!r.to);
-    await nextFrame();
-    await nextFrame();
-  }
-  tone.getAnimations().forEach((a) => a.cancel());
-  tone.remove();
-  r.vt?.skipTransition();
-  await r.vt?.finished.catch(() => {});
-  r.hold?.cancel();
+  r.unfollow();
+  mirror.hide();
+  uncut(r.host);
+  r.host.style.width = r.host.style.height = "";
+  r.host.style.removeProperty("--theme-r");
+  shade.remove();
   r.anims.forEach((a) => a.cancel());
-  root.classList.remove("theme-reveal", "theme-live");
   finish();
 }
 
@@ -412,47 +351,32 @@ function finish() {
   mirror.prepare();
 }
 
-function start(dark, btn) {
-  const visible = document.visibilityState === "visible";
-  if (visible && mirror.ready(dark)) return startLive(dark, btn);
-  if (!document.startViewTransition || !visible) {
-    land(dark);
-    turnGlyphs(dark, false);
-    settleGlyphs();
-    giscus();
-    releaseColour();
-    mirror.prepare();
-    return;
+function turn(r) {
+  r.dir = -r.dir;
+  for (const a of r.anims) {
+    a.reverse();
+    a.updatePlaybackRate(r.dir);
   }
+  turnGlyphs(heading(r), r.dir < 0);
+}
 
-  const r = { to: dark, dir: 1, anims: [], ended: false, reduced: reducedMotion() };
-  run = r;
-  giscus();
-  const at = origin(btn);
-  root.classList.add("theme-reveal");
-  try {
-    r.vt = document.startViewTransition(() => {
-      // Skipped before it began, and already taken back: nothing to land.
-      if (r.ended && r.dir < 0) return;
-      root.classList.add("theme-live");
-      if (!r.reduced) {
-        tone.style.backdropFilter = toneFrom(dark);
-        document.body.appendChild(tone);
-      }
-      land(dark);
-      turnGlyphs(heading(r), r.dir < 0);
-    });
-  } catch (e) {
-    land(dark);
-    run = null;
-    root.classList.remove("theme-reveal");
-    releaseColour();
-    mirror.prepare();
-    return;
-  }
-  r.vt.ready.then(() => animate(r, at), () => end(r));
-  // Taken down from outside (a hidden tab): the run ends with it.
-  r.vt.finished.then(() => end(r), () => end(r));
+// A tab nobody is looking at switches at once.
+function instant(dark) {
+  lifting++;
+  root.classList.add("theme-switching");
+  apply(dark);
+  announce(dark);
+  giscus.landing(dark);
+  turnGlyphs(dark, false);
+  settleGlyphs();
+  releaseColour();
+  mirror.prepare();
+}
+
+function start(dark, btn) {
+  if (document.visibilityState !== "visible") return instant(dark);
+  mirror.settle(dark);
+  startLive(dark, btn);
 }
 
 // The scheme the reader asks for — mid-switch that turns the motion around, or

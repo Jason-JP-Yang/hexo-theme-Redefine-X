@@ -107,19 +107,17 @@ $default-mode = $temp-mode == 'dark' ? 'dark' : 'light'
 // ========================================================================================
 //                                  SWITCH ANIMATION
 // ========================================================================================
-// tools/lightDarkSwitch.js lands a scheme in one style pass. No element may
-// start a colour transition in that pass — each would animate on its own, a
-// recalc and repaint per frame — so every colour transition reads `--tg` and
-// `--tgd` (animated.styl's mixins; scripts/filters/theme-switch-transitions.js
-// for the rest), which are 0 while a switch is on. Running transitions of any
-// kind are left alone. `data-tg` carries the same zero on bounded subtrees, so
-// it can be lifted from them a few at a time.
+// tools/lightDarkSwitch.js switches the page under a live copy of it. No element
+// may start a colour transition then, so every colour transition reads `--tg`
+// and `--tgd` (animated.styl's mixins; scripts/filters/theme-switch-transitions.js
+// for the rest), zeroed on <html> and on the subtrees being switched (`data-tg`).
 html.theme-switching, [data-tg] {
   --tg: 0s
   --tgd: 0s
 }
 
-// Where the wave opens from, and how far. Registered so the circle interpolates.
+// The ring's centre and radius, and how much of the new scheme shows outside it.
+// Registered so they interpolate, and so a change never inherits into the copy.
 @property --theme-x
   syntax '<length>'
   inherits false
@@ -135,60 +133,38 @@ html.theme-switching, [data-tg] {
   inherits false
   initial-value -2px
 
-// How much of the new scheme shows outside the ring (the old one melting).
 @property --theme-m
   syntax '<number>'
   inherits false
   initial-value 0
 
-// The old page is a snapshot laid over the live one; the script drives it and
-// the wave is a hole opening in it.
-html.theme-reveal::view-transition-old(root) {
-  animation: none
-  mix-blend-mode: normal
-  mask-image: unquote('radial-gradient(circle at var(--theme-x) var(--theme-y), transparent var(--theme-r), #000 calc(var(--theme-r) + 1.5px))')
-}
-
-// The live page under the snapshot takes every pointer.
-html.theme-reveal::view-transition {
-  pointer-events: none
-}
-
-// Set inside the switch, so only the old state is captured: under the snapshot
-// is the real document, painted and hit-tested as usual. A captured root is
-// drawn by the transition's layers instead and takes no input.
-html.theme-live {
-  view-transition-name: none
-}
-
-// The new page's tone settling (lightDarkSwitch.js animates its backdrop).
-.theme-tone {
-  position: fixed
-  inset: 0
-  z-index: 2147483647
-  pointer-events: none
-}
-
-// The live copy of the page in the other scheme (tools/themeMirror.js). Inside
-// the ring it is opaque; outside, `--theme-m` of it shows over the real page.
+// The live copy of the page in the other scheme (tools/themeMirror.js), at the
+// document origin so it scrolls with the page. Hidden by opacity, which nothing
+// inside can override; the page's held transitions do not reach it.
 .theme-mirror {
-  position: fixed
-  inset: 0
+  all: initial
+  display: block
+  position: absolute
+  left: 0
+  top: 0
   z-index: 2147483647
+  overflow: clip
   pointer-events: none
-  visibility: hidden
-  contain: strict
-  mask-image: unquote('radial-gradient(circle at var(--theme-x) var(--theme-y), #000 var(--theme-r), rgb(0 0 0 / var(--theme-m)) calc(var(--theme-r) + 1.5px))')
+  opacity: 0
+  --tg: initial
+  --tgd: initial
 }
 
 .theme-mirror.is-shown {
-  visibility: visible
+  opacity: 1
+  will-change: opacity
 }
 
-// Dims or lifts the real page under the mirror as the old scheme gives way.
+// Dims or lifts the real page under the copy as the old scheme gives way.
 .theme-shade {
-  position: fixed
-  inset: 0
+  position: absolute
+  left: 0
+  top: 0
   z-index: 2147483646
   pointer-events: none
 }

@@ -23,8 +23,9 @@ Shared helpers initialized first in `refresh()` (DOM utilities, event helpers, c
 ### `js/tools/` — UI tools
 | File | Responsibility |
 |------|----------------|
-| `lightDarkSwitch.js` | Light/dark toggle; a ring opens from the button with the new scheme inside while the real page outside stays live in the old one (`themeMirror.js`), then the page is switched under the covering copy a subtree per frame; until the copy is ready, a View Transition capturing only the old state; a press mid-way reverses the motion; follows `prefers-color-scheme`; fires `redefine:color-scheme-change` (`detail.isDark`) |
-| `themeMirror.js` | Live copy of `<body>` in a shadow root, kept in step (DOM, scroll, form values, hover/focus as classes, animations) and pre-styled in the opposite scheme; iframes/video/canvas show through holes; scheme-baked content (mermaid) registers on `window.redefineSchemeContent` |
+| `lightDarkSwitch.js` | Light/dark toggle; a ring opens from the button with the new scheme inside (`themeMirror.js`) while the real page outside stays live in the old one, then the page is switched under the covering copy a subtree per frame; dim/lift/tone are compositor-animated blend layers; media show through unchanged; a press mid-way reverses the motion; follows `prefers-color-scheme`; fires `redefine:color-scheme-change` (`detail.isDark`) |
+| `themeMirror.js` | Live copy of `<body>` (open component shadow roots included) in a shadow root at the document origin, so it scrolls natively; hidden at opacity 0 with style and layout kept current; kept in step (DOM, inner scroll, form values, hover/focus as classes, selection as a custom highlight, animations) and pre-styled in the opposite scheme; scheme-baked content (mermaid) registers on `window.redefineSchemeContent` |
+| `giscusTwin.js` | A second giscus frame in the other theme over the client's one, shown inside the ring; afterwards the two trade places, or the frame in use re-themes under the twin |
 | `scrollTopBottom.js` | Scroll-to-top/bottom buttons |
 | `localSearch.js` | Local search modal (consumes `hexo-generator-searchdb` index) |
 | `codeBlock.js` | Code-block copy button + language label interactions |
