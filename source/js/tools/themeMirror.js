@@ -9,27 +9,36 @@
  * custom elements rewritten onto stand-ins of the same specificity.
  *
  * Hidden, the host is at opacity 0, which nothing inside can override and no
- * engine paints, while style and layout stay current. Video, canvas and frames
- * are placeholders, and `holes()` says where their pictures show through; a
- * frame that can be loaded again in the other scheme registers `liveFrames()`.
+ * engine paints. Between switches it is also `content-visibility: hidden`: the
+ * engine leaves it alone (no style, layout, hit-testing or animation frames)
+ * except when this module forces a pass on it, a measured share at a time, so
+ * it is current without ever costing a frame of its own. Video, canvas and
+ * frames are placeholders, and `holes()` says where their pictures show
+ * through; a frame that can be loaded again in the other scheme registers
+ * `liveFrames()`.
  */
 
 import { onScroll, requestScrollPass } from "./scrollScheduler.js";
+import { inFrames, inSlices, resting } from "./frameSlices.js";
 
-const SKIP_ATTRS = new Set(["data-tg", "data-scheme"]);
+const SKIP_ATTRS = new Set(["data-tg"]);
 const ROOT_CLASS = /^(dark|light|theme-switching)$/;
 const BODY_CLASS = /^(dark-mode|light-mode)$/;
 const MEDIA = new Set(["iframe", "video", "canvas", "embed", "object", "audio"]);
 const OBSERVE = { subtree: true, childList: true, attributes: true, characterData: true };
-// Elements per subtree for sliced restyles, and per idle slice.
-const CHUNK = 600;
-const SLICE = 1500;
+// Elements per subtree for sliced restyles.
+const CHUNK = 200;
+// Copied in one idle callback; more is copied a share per frame.
+const IDLE_COPY = 60;
+// How long a hint that a switch is coming keeps the copy painted.
+const WARM = 4000;
+// A scheme pass waits for an idle period this long, the reader still this long.
+const QUIET_IDLE = 40;
+const QUIET_INPUT = 500;
 
 const real = document.documentElement;
 const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 800 }) : setTimeout(() => fn(null), 120));
 const nextIdle = () => new Promise((r) => idle(r));
-const timeLeft = (deadline, started) =>
-  deadline && !deadline.didTimeout ? deadline.timeRemaining() > 2 : performance.now() - started < 8;
 
 let host = null;
 let shadow = null;
@@ -41,13 +50,17 @@ let observer = null;
 let baseSheet = null;
 let ownSheet = null;
 let scheme = null; // the copy's: true = dark
-let flipToken = 0;
-let flipping = false;
-let flipTarget = null;
-let marked = [];
+let framesTheme = null; // the scheme its live frames were last sent
+let held = false; // its root holds colour transitions for one style pass
+let quietToken = 0;
+let restoring = 0;
 let sheetsReady = false;
 let sheetsToken = 0;
 let pumpQueued = false;
+let catching = false;
+let warmed = false;
+let warmTimer = 0;
+let cloned = 0;
 let live = false;
 let rootDirty = false;
 let scrollDirty = false;
@@ -59,6 +72,8 @@ const defined = new WeakSet(); // copies of defined custom elements
 const mirrorRoots = new WeakSet();
 const rewritten = new WeakSet();
 const copies = new WeakMap(); // a component's constructed sheet -> its copy
+const sheetCopies = new WeakMap(); // a document sheet -> its copy (null: unreadable)
+const marked = new Map(); // copy subtrees holding colour transitions -> size
 const pendingParents = new Set();
 const dirtyAttrs = new Map();
 const dirtyText = new Set();
@@ -153,38 +168,60 @@ function textOf(sheet) {
   }
 }
 
-// Copies of the document's own sheets (those in <body> are copied as elements).
-function* documentSheets() {
+// The document's own sheets (those in <body> are copied as elements).
+function documentSheets() {
+  const out = [];
   for (const source of document.styleSheets) {
     const owner = source.ownerNode;
-    if (source.disabled || !owner || document.body.contains(owner)) continue;
-    const text = textOf(source);
-    if (text != null) yield () => constructed(text, source.href, source.media && source.media.mediaText);
+    if (!source.disabled && owner && !document.body.contains(owner)) out.push(source);
   }
+  return out;
 }
 
-function adoptSheets(list) {
-  shadow.adoptedStyleSheets = [baseSheet, ...list, ownSheet];
+// Each sheet is copied once; a copy made before a custom element was met takes
+// its new name when adopted.
+function copyOf(source) {
+  let copy = sheetCopies.get(source);
+  if (copy === undefined) {
+    const text = textOf(source);
+    copy = text == null ? null : constructed(text, source.href, source.media && source.media.mediaText);
+    if (copy) copy.names = renamed.size;
+    sheetCopies.set(source, copy);
+  } else if (copy && copy.names !== renamed.size) {
+    rewriteRules(copy.cssRules, renamed, false);
+    copy.names = renamed.size;
+  }
+  return copy;
+}
+
+// Only a changed list is adopted again, so a sheet coming or going restyles
+// what its own rules match, not the whole copy.
+function adoptSheets() {
+  const next = [baseSheet, ...documentSheets().map(copyOf).filter(Boolean), ownSheet];
+  const now = shadow.adoptedStyleSheets;
+  if (next.length !== now.length || next.some((s, i) => s !== now[i])) shadow.adoptedStyleSheets = next;
   sheetsReady = true;
 }
 
 async function buildSheets() {
   const token = ++sheetsToken;
-  const known = renamed.size;
-  const out = [];
-  for (const make of documentSheets()) {
+  for (const source of documentSheets()) {
+    if (sheetCopies.has(source)) continue;
     await nextIdle();
     if (token !== sheetsToken) return;
-    out.push(make());
+    copyOf(source);
   }
-  // Custom elements met while these were being built.
-  if (renamed.size !== known) for (const sheet of out) rewriteRules(sheet.cssRules, renamed, false);
-  adoptSheets(out);
+  adoptSheets();
 }
 
 function buildSheetsNow() {
   ++sheetsToken;
-  adoptSheets([...documentSheets()].map((make) => make()));
+  adoptSheets();
+}
+
+function sheetsChanged() {
+  sheetsReady = false;
+  idle(() => buildSheets().then(schedule));
 }
 
 // A custom element seen for the first time: its copies are `m-<name>`, so every
@@ -196,6 +233,7 @@ function rename(name) {
   for (const sheet of sheets) {
     try {
       if (sheet) rewriteRules(sheet.cssRules, [name], false);
+      if (sheet && "names" in sheet) sheet.names = renamed.size;
     } catch (e) {}
   }
 }
@@ -260,7 +298,7 @@ function liveCopy(node) {
   const spec = frameSpecs.find((s) => node.matches(s.selector));
   if (!spec) return null;
   const m = withAttrs(document.createElement("iframe"), node);
-  m.src = spec.src(node, scheme);
+  m.src = spec.src(node, framesTheme ?? scheme);
   liveCopies.set(node, [m, spec]);
   spec.made?.(m);
   return m;
@@ -284,6 +322,7 @@ function cloneOf(node) {
   if (node.nodeType !== 1) {
     m = node.cloneNode(false);
   } else {
+    cloned++;
     const tag = node.localName;
     m = (tag === "iframe" && liveCopy(node)) || copyElement(node, tag);
     if (MEDIA.has(tag) && !liveCopies.has(node)) {
@@ -385,7 +424,8 @@ function sizeViewport() {
 function syncRoot() {
   copyAttrs(real, rootEl);
   const mode = themeName();
-  rootEl.className = ["m-r", mode, ...[...real.classList].filter((c) => !ROOT_CLASS.test(c))].join(" ");
+  const own = held ? ["m-r", mode, "theme-switching"] : ["m-r", mode];
+  rootEl.className = [...own, ...[...real.classList].filter((c) => !ROOT_CLASS.test(c))].join(" ");
   rootEl.style.cssText = real.style.cssText;
   rootEl.style.colorScheme = mode;
   canvas.className = `m-canvas ${mode}`;
@@ -424,31 +464,28 @@ function syncAttrs(el, names) {
   if (names.has("style") && sizes.has(m)) sizeTo(m, ...sizes.get(m));
   if (names.has("src") && liveCopies.has(el)) {
     const [copy, spec] = liveCopies.get(el);
-    copy.src = spec.src(el, scheme);
+    copy.src = spec.src(el, framesTheme ?? scheme);
   }
 }
 
-function pump(deadline, all) {
-  pumpQueued = false;
-  if (!host) return;
-  const started = performance.now();
-  const more = () => all || live || timeLeft(deadline, started);
+// Copies what is pending, at most `limit` new elements; true when nothing is left.
+function pump(limit) {
+  if (!host) return true;
+  const stop = cloned + limit;
   if (rootDirty) {
     rootDirty = false;
     syncRoot();
   }
   for (const el of pendingParents) {
-    if (!more()) break;
+    if (cloned >= stop) break;
     pendingParents.delete(el);
     reconcile(el);
   }
   for (const [el, names] of dirtyAttrs) {
-    if (!more()) break;
     dirtyAttrs.delete(el);
     syncAttrs(el, names);
   }
   for (const node of dirtyText) {
-    if (!more()) break;
     dirtyText.delete(node);
     const m = toMirror.get(node);
     if (m && m.data !== node.data) {
@@ -456,13 +493,40 @@ function pump(deadline, all) {
       if (m.parentNode && m.parentNode.localName === "style") rewriteSheet(m.parentNode.sheet);
     }
   }
-  if (pendingParents.size || dirtyAttrs.size || dirtyText.size) schedule();
+  return !pendingParents.size;
+}
+
+// Locked, the copy is styled and laid out only when a pass is forced on it:
+// right after each share of copying, so nothing waits for it to be shown.
+const forceStyle = () => getComputedStyle(bodyEl).color;
+const forceLayout = () => bodyEl.getBoundingClientRect();
+
+function relock() {
+  if (host) host.classList.toggle("is-locked", !(live || warmed));
 }
 
 function schedule() {
-  if (pumpQueued || live) return;
+  if (pumpQueued || live || catching || !sheetsReady || !host) return;
   pumpQueued = true;
-  idle(pump);
+  idle(() => {
+    pumpQueued = false;
+    if (live || catching) return;
+    const done = pump(IDLE_COPY);
+    forceLayout();
+    if (!done) catchUp();
+  });
+}
+
+// A page view's worth of new content is copied a share per frame.
+async function catchUp() {
+  catching = true;
+  await inFrames((allow) => {
+    const from = cloned;
+    const done = pump(allow);
+    forceLayout();
+    return [done, cloned - from + 1];
+  }, () => !live);
+  catching = false;
 }
 
 function observe(records) {
@@ -475,7 +539,7 @@ function observe(records) {
       names.add(r.attributeName);
     } else dirtyText.add(r.target);
   }
-  if (live) pump(null, true);
+  if (live) pump(Infinity);
   else schedule();
 }
 
@@ -689,6 +753,16 @@ Element.prototype.animate = function (keyframes, options) {
 const samePseudo = (a, b) => (a.effect.pseudoElement || null) === (b.effect.pseudoElement || null);
 const isCopy = (el) => mirrorRoots.has(el.getRootNode());
 
+// Same start on the same timeline: both run in step with nothing written per
+// frame, which would restart a compositor animation every time.
+function align(a, b) {
+  if (a.playState === "paused") {
+    b.pause();
+    b.currentTime = a.currentTime;
+  } else if (a.startTime !== null) b.startTime = a.startTime;
+  else b.currentTime = a.currentTime;
+}
+
 // Copies' CSS animations take the page's clocks; a transition the copy started
 // on its own (its last flip) is finished, so nothing fades inside the ring.
 function syncAnimations() {
@@ -702,22 +776,20 @@ function syncAnimations() {
     if (window.CSSAnimation && a instanceof CSSAnimation) {
       const b = m.getAnimations().find((x) => x instanceof CSSAnimation && x.animationName === a.animationName && samePseudo(a, x));
       if (b) {
-        b.currentTime = a.currentTime;
-        if (a.playState === "paused") b.pause();
+        align(a, b);
         matched.add(b);
       }
     } else if (window.CSSTransition && a instanceof CSSTransition) {
       const b = m.getAnimations().find((x) => x instanceof CSSTransition && x.transitionProperty === a.transitionProperty && samePseudo(a, x));
       if (b) {
-        b.currentTime = a.currentTime;
+        align(a, b);
         matched.add(b);
       }
     } else {
       try {
         const b = nativeAnimate.call(m, effect.getKeyframes(), { ...effect.getTiming(), pseudoElement: effect.pseudoElement || undefined });
-        b.currentTime = a.currentTime;
         b.playbackRate = a.playbackRate;
-        if (a.playState === "paused") b.pause();
+        align(a, b);
         pairs.push([a, b]);
       } catch (e) {}
     }
@@ -736,8 +808,9 @@ function syncPairs() {
       continue;
     }
     if (b.playbackRate !== a.playbackRate) b.playbackRate = a.playbackRate;
-    if (a.currentTime !== null && b.currentTime !== a.currentTime) b.currentTime = a.currentTime;
-    if (a.playState === "paused" && b.playState !== "paused") b.pause();
+    if (a.playState === "paused") {
+      if (b.playState !== "paused" || b.currentTime !== a.currentTime) align(a, b);
+    } else if (a.startTime !== null && b.startTime !== a.startTime) b.startTime = a.startTime;
   }
 }
 
@@ -760,62 +833,68 @@ function adoptScheme(dark) {
   syncRoot();
   syncBody();
   for (const m of themed) m.setAttribute("data-theme", themeName());
+}
+
+// The copy's frames change theme in their own time, so they are told first.
+function retheme(dark) {
+  if (framesTheme === dark) return;
+  framesTheme = dark;
   for (const [el, [copy, spec]] of liveCopies) {
     if (el.isConnected) spec.theme(copy, dark);
     else liveCopies.delete(el);
   }
-  swapAll();
 }
 
-function unmark() {
-  for (const el of marked) {
-    el.removeAttribute("data-scheme");
-    el.removeAttribute("data-tg");
-  }
-  marked = [];
-}
-
-// Restyled a subtree at a time while idle, transitions held, so no frame carries
-// the whole copy.
-async function setScheme(dark) {
-  const token = ++flipToken;
-  const current = () => token === flipToken;
-  flipping = true;
-  flipTarget = dark;
-  unmark();
-  const mode = dark ? "dark" : "light";
-  const chunks = partition(bodyEl);
-  for (let i = 0; i < chunks.length; ) {
-    await nextIdle();
-    if (!current()) return;
-    for (let budget = SLICE; i < chunks.length && budget > 0; i++) {
-      const el = chunks[i][0];
-      el.setAttribute("data-tg", "");
-      el.setAttribute("data-scheme", mode);
-      marked.push(el);
-      budget -= chunks[i][1];
-    }
-  }
-  await nextIdle();
-  if (!current()) return;
+/*
+ * The copy takes a scheme in one forced style pass: a palette change reaches
+ * every element through inherited colour anyway, so nothing smaller exists.
+ * Its root holds colour transitions for that pass, then hands the hold to
+ * bounded subtrees (the same value, so they are not restyled again), which let
+ * it go a share per frame.
+ */
+function flip(dark) {
+  quietToken++;
+  retheme(dark);
+  if (scheme === dark) return;
+  restoring++;
+  held = true;
   adoptScheme(dark);
-  while (marked.length) {
-    await nextIdle();
-    if (!current()) return;
-    for (let budget = SLICE; marked.length && budget > 0; budget -= CHUNK) {
-      const el = marked.pop();
-      el.removeAttribute("data-scheme");
-      el.removeAttribute("data-tg");
-    }
+  swapAll();
+  forceStyle();
+  for (const [el, size] of partition(bodyEl)) {
+    el.setAttribute("data-tg", "");
+    marked.set(el, size);
   }
-  if (current()) flipping = false;
+  held = false;
+  syncRoot();
+  forceLayout();
 }
 
-function flipNow(dark) {
-  ++flipToken;
-  flipping = false;
-  unmark();
-  if (scheme !== dark) adoptScheme(dark);
+function restore() {
+  const token = ++restoring;
+  inSlices(
+    [...marked],
+    (el) => {
+      el.removeAttribute("data-tg");
+      marked.delete(el);
+    },
+    forceStyle,
+    () => token === restoring && !live,
+  );
+}
+
+// The pass lands in an idle period long enough to hold it, with the reader
+// still; a hint that a switch is coming, or the switch itself, does not wait.
+function flipWhenQuiet(dark) {
+  const token = ++quietToken;
+  const wait = () =>
+    idle((deadline) => {
+      if (token !== quietToken || live) return;
+      if ((deadline && deadline.timeRemaining() < QUIET_IDLE) || resting() < QUIET_INPUT) return wait();
+      flip(dark);
+      restore();
+    });
+  wait();
 }
 
 /* ─── interface ───────────────────────────────────────────────────────────── */
@@ -828,7 +907,7 @@ function sheetOf(text) {
 
 function build() {
   host = document.createElement("div");
-  host.className = "theme-mirror";
+  host.className = "theme-mirror is-locked";
   host.inert = true;
   host.setAttribute("aria-hidden", "true");
   shadow = host.attachShadow({ mode: "open" });
@@ -844,6 +923,7 @@ function build() {
   rootEl.append(bodyEl);
   shadow.append(canvas, rootEl, tone);
   scheme = !real.classList.contains("dark");
+  framesTheme = scheme;
   toMirror.set(real, rootEl);
   toMirror.set(document.body, bodyEl);
   real.append(host);
@@ -852,7 +932,7 @@ function build() {
 
   const rootChanged = () => {
     rootDirty = true;
-    if (live) pump(null, true);
+    if (live) pump(Infinity);
     else schedule();
   };
   observer = new MutationObserver(observe);
@@ -865,16 +945,16 @@ function build() {
     for (const r of records) {
       const nodes = [...r.addedNodes, ...r.removedNodes];
       if (nodes.some(isSheet) || r.target.nodeName === "STYLE" || (r.type === "characterData" && r.target.parentNode?.nodeName === "STYLE")) {
-        sheetsReady = false;
-        return void idle(buildSheets);
+        return void sheetsChanged();
       }
     }
   }).observe(document.head, { childList: true, subtree: true, characterData: true });
+  // A linked sheet is only in `document.styleSheets` once it has loaded.
+  document.head.addEventListener("load", (e) => e.target.localName === "link" && sheetsChanged(), true);
   addEventListener("resize", rootChanged);
 
   pendingParents.add(document.body);
-  idle(buildSheets);
-  schedule();
+  buildSheets().then(schedule);
 }
 
 /** Builds the copy once, then keeps it in the scheme opposite the page's. */
@@ -882,21 +962,59 @@ export function prepare() {
   if (!host) return void idle(() => host || build());
   if (live) return;
   const want = !real.classList.contains("dark");
-  if (flipping ? flipTarget !== want : scheme !== want) setScheme(want);
+  if (scheme !== want) {
+    idle(() => live || retheme(want));
+    flipWhenQuiet(want);
+  } else if (marked.size) restore();
 }
 
 /** Whatever is still pending is done now, so the copy shows `dark` exactly. */
 export function settle(dark) {
   if (!host) build();
   if (!sheetsReady) buildSheetsNow();
-  pump(null, true);
-  if (flipping || scheme !== dark) flipNow(dark);
+  pump(Infinity);
+  flip(dark);
+}
+
+/**
+ * A switch may be coming (the pointer is on the button, or on the rail's
+ * opener): the copy takes the scheme now if it has not, and is painted at
+ * opacity 0, so the first frame of the ring has nothing left to draw.
+ */
+export function warm() {
+  if (live) return;
+  if (!host) build();
+  clearTimeout(warmTimer);
+  warmTimer = setTimeout(cool, WARM);
+  const want = !real.classList.contains("dark");
+  if (scheme !== want) {
+    pump(Infinity);
+    flip(want);
+    restore();
+  }
+  if (warmed) return;
+  warmed = true;
+  host.style.width = Math.max(real.scrollWidth, real.clientWidth) + "px";
+  host.style.height = Math.max(real.scrollHeight, real.clientHeight) + "px";
+  host.classList.add("is-warm");
+  relock();
+}
+
+function cool() {
+  if (!warmed || live) return;
+  warmed = false;
+  host.classList.remove("is-warm");
+  host.style.width = host.style.height = "";
+  relock();
 }
 
 /** Shows the copy (opacity 1, unmasked until the caller masks it). */
 export function show() {
   live = true;
-  pump(null, true);
+  quietToken++;
+  clearTimeout(warmTimer);
+  relock();
+  pump(Infinity);
   swapAll();
   for (const el of document.body.querySelectorAll("input, textarea, select")) {
     const m = toMirror.get(el);
@@ -919,12 +1037,15 @@ export function show() {
 
 export function hide() {
   live = false;
-  host.classList.remove("is-shown");
+  warmed = false;
+  clearTimeout(warmTimer);
+  host.classList.remove("is-shown", "is-warm");
   for (const [type, fn] of LISTEN) document.removeEventListener(type, fn, true);
   unsubscribe?.();
   unsubscribe = null;
   for (const [, b] of pairs) b.cancel();
   pairs.length = 0;
   if (window.CSS && CSS.highlights) CSS.highlights.delete("m-sel");
+  relock();
   schedule();
 }

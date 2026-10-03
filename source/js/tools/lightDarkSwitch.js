@@ -1,5 +1,6 @@
 import { main } from "../main.js";
 import { onScroll } from "./scrollScheduler.js";
+import { inSlices } from "./frameSlices.js";
 import * as mirror from "./themeMirror.js";
 import * as giscus from "./giscusTwin.js";
 
@@ -12,9 +13,9 @@ import * as giscus from "./giscusTwin.js";
  * A ring opens from the button with the new scheme inside, while outside the old
  * one dims or lifts and melts away. Both sides are live: outside is the page,
  * inside is tools/themeMirror.js, a copy kept in step and already styled in the
- * other scheme. Once the ring covers the screen the page is switched under it a
- * subtree per frame and the copy is put away. Pressed again mid-way, every
- * animation runs backwards and the ring closes into the button.
+ * other scheme. Once the ring covers the screen the page is switched under it
+ * and the copy is put away. Pressed again mid-way, every animation runs
+ * backwards and the ring closes into the button.
  *
  * Dimming, lifting and the new page's tone are layers whose opacity animates on
  * the compositor: black at opacity a is brightness 1 - a, and grey g under
@@ -28,9 +29,6 @@ const FADE = 240;
 const WAVE = "cubic-bezier(.5, 0, .2, 1)";
 const MELT = "cubic-bezier(.4, 0, .7, .7)";
 const SHADE = "cubic-bezier(.2, .8, .2, 1)";
-// Elements re-styled per frame when the page is switched under the copy, or per
-// idle slice when its colour transitions come back.
-const SLICE = 1500;
 const RING =
   "radial-gradient(circle at var(--theme-x) var(--theme-y), #000 var(--theme-r), rgb(0 0 0 / var(--theme-m)) calc(var(--theme-r) + 1.5px))";
 const SOLID = "linear-gradient(#000 0 0)";
@@ -46,8 +44,6 @@ const isDark = () => root.classList.contains("dark");
 const button = () => document.querySelector(".side-tools-container .tool-dark-light-toggle");
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
-const whenIdle = (fn) =>
-  window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 800 }) : setTimeout(fn, 200);
 
 let run = null; // the switch on screen
 let next = null; // a scheme asked for while one was ending
@@ -72,58 +68,41 @@ const announce = (dark) =>
   window.dispatchEvent(new CustomEvent("redefine:color-scheme-change", { detail: { isDark: dark } }));
 
 /*
- * Colour transitions held off. A scheme must land with `--tg`/`--tgd` at zero, or
- * every element starts a colour transition of its own. The zero is carried by
- * bounded subtrees (`data-tg`) and by <html>, and lifted from <html> first — only
- * the thin spine above the subtrees is re-styled — then a slice of subtrees per
- * idle callback.
+ * The page takes a scheme in one style pass. A palette change reaches every
+ * element through inherited colour anyway, so nothing smaller exists; the pass
+ * runs while the copy covers the screen. Every element has a colour transition
+ * (basic.styl), so <html> holds `--tg`/`--tgd` at zero for that pass, then hands
+ * the hold to bounded subtrees (`data-tg`, the same value, so they are not
+ * restyled again), which let it go a share per frame once the switch is over.
  */
-let chunks = [];
-let lifting = 0;
+const marks = new Map(); // subtrees holding their colour transitions -> size
+const forceStyle = () => getComputedStyle(document.body).color;
+let restoring = 0;
 
-function releaseColour() {
-  const token = ++lifting;
-  const live = () => token === lifting && !run;
-  whenIdle(() => {
-    if (!live()) return;
-    root.classList.remove("theme-switching");
-    let i = 0;
-    const slice = () => {
-      if (!live()) return;
-      for (let budget = SLICE; i < chunks.length && budget > 0; i++) {
-        chunks[i][0].removeAttribute("data-tg");
-        budget -= chunks[i][1];
-      }
-      if (i < chunks.length) whenIdle(slice);
-      else chunks = [];
-    };
-    whenIdle(slice);
-  });
-}
-
-// The page switched while the copy covers it, a slice of subtrees per frame
-// (`data-scheme` carries the palette on each), then <html> and <body> last.
-async function flipUnderCover(dark) {
-  lifting++;
-  const old = chunks;
-  chunks = mirror.partition(document.body);
-  const now = new Set(chunks.map(([el]) => el));
-  for (const [el] of old) if (!now.has(el)) el.removeAttribute("data-tg");
-  const mode = dark ? "dark" : "light";
-  for (let i = 0; i < chunks.length; ) {
-    await nextFrame();
-    for (let budget = SLICE; i < chunks.length && budget > 0; i++) {
-      chunks[i][0].setAttribute("data-tg", "");
-      chunks[i][0].setAttribute("data-scheme", mode);
-      budget -= chunks[i][1];
-    }
-  }
-  await nextFrame();
+function land(dark) {
+  restoring++;
   root.classList.add("theme-switching");
   apply(dark);
   announce(dark);
-  await nextFrame();
-  for (const [el] of chunks) el.removeAttribute("data-scheme");
+  forceStyle();
+  for (const [el, size] of mirror.partition(document.body)) {
+    el.setAttribute("data-tg", "");
+    marks.set(el, size);
+  }
+  root.classList.remove("theme-switching");
+}
+
+function restore() {
+  const token = ++restoring;
+  inSlices(
+    [...marks],
+    (el) => {
+      el.removeAttribute("data-tg");
+      marks.delete(el);
+    },
+    forceStyle,
+    () => token === restoring && !run,
+  );
 }
 
 // The wave starts at the button, or at its rail's corner when the button is
@@ -316,11 +295,9 @@ async function end(r) {
   r.ended = true;
   // Ring all the way out: the copy covers the screen, and the page is switched
   // under it. All the way back: the page never changed.
-  const forward = r.dir > 0;
-  if (forward) await flipUnderCover(r.to);
-  await nextFrame();
-  await nextFrame();
-  if (forward) {
+  if (r.dir > 0) {
+    land(r.to);
+    await nextFrame();
     // The comments' frame changes theme in its own process: the copy keeps
     // covering just them until it has.
     const frames = giscus.landing(r.to);
@@ -340,15 +317,20 @@ async function end(r) {
   finish();
 }
 
+// Glyphs settle, the copy goes over to the scheme the next switch would go to
+// once the reader is still, and the page's held transitions come back.
+function afterSwitch() {
+  settleGlyphs();
+  mirror.prepare();
+  restore();
+}
+
 function finish() {
   run = null;
   const asked = next;
   next = null;
   if (asked !== null && asked !== isDark()) return start(asked, button());
-  settleGlyphs();
-  releaseColour();
-  // The copy goes over to the scheme the next switch would go to.
-  mirror.prepare();
+  afterSwitch();
 }
 
 function turn(r) {
@@ -362,15 +344,10 @@ function turn(r) {
 
 // A tab nobody is looking at switches at once.
 function instant(dark) {
-  lifting++;
-  root.classList.add("theme-switching");
-  apply(dark);
-  announce(dark);
+  land(dark);
   giscus.landing(dark);
   turnGlyphs(dark, false);
-  settleGlyphs();
-  releaseColour();
-  mirror.prepare();
+  afterSwitch();
 }
 
 function start(dark, btn) {
@@ -393,20 +370,36 @@ function request(dark, btn) {
 const bound = new WeakSet();
 let systemBound = false;
 
+function bind(el, events) {
+  if (!el || bound.has(el)) return;
+  bound.add(el);
+  for (const [type, fn] of events) el.addEventListener(type, fn);
+}
+
 export default function initModeToggle() {
   main.getStyleStatus();
   main.styleStatus.isDark = isDark();
   if (!run) mirror.prepare();
 
-  // The rail is inside #swup, so every page view brings a new button.
+  // The rail is inside #swup, so every page view brings a new button. The
+  // pointer on it, or on the rail's opener, warms the copy for the press.
+  const warm = () => mirror.warm();
   const btn = button();
-  if (btn && !bound.has(btn)) {
-    bound.add(btn);
+  bind(btn, [
     // A press must not take the focus or selection: an editor would read that
     // as its block being left, and put its chrome away.
-    btn.addEventListener("pointerdown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => request(!wanted(), btn));
-  }
+    [
+      "pointerdown",
+      (e) => {
+        e.preventDefault();
+        warm();
+      },
+    ],
+    ["pointerenter", warm],
+    ["focus", warm],
+    ["click", () => request(!wanted(), btn)],
+  ]);
+  bind(document.querySelector(".side-tools-container .toggle-tools-list"), [["pointerdown", warm]]);
 
   // Once: matchMedia hands back a new list each call, and one listener per
   // navigation would switch once per page visited.
