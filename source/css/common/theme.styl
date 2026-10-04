@@ -115,33 +115,11 @@ html.theme-switching, [data-tg] {
   --tgd: 0s
 }
 
-// The ring's centre and radius, and how much of the new scheme shows outside it.
-// Registered so they interpolate, and so a change never inherits into the copy.
-@property --theme-x
-  syntax '<length>'
-  inherits false
-  initial-value 0px
-
-@property --theme-y
-  syntax '<length>'
-  inherits false
-  initial-value 0px
-
-@property --theme-r
-  syntax '<length>'
-  inherits false
-  initial-value -2px
-
-@property --theme-m
-  syntax '<number>'
-  inherits false
-  initial-value 0
-
 // The live copy of the page in the other scheme (tools/themeMirror.js), at the
 // document origin so it scrolls with the page. Hidden by opacity, which nothing
 // inside can override; between switches not rendered at all (`is-locked`), and
-// painted ahead of a press (`is-warm`). The page's held transitions do not
-// reach it.
+// painted ahead of a press (`is-warm`). It only changes scheme while hidden, so
+// its colour transitions are held for good.
 .theme-mirror {
   all: initial
   display: block
@@ -152,8 +130,8 @@ html.theme-switching, [data-tg] {
   overflow: clip
   pointer-events: none
   opacity: 0
-  --tg: initial
-  --tgd: initial
+  --tg: 0s
+  --tgd: 0s
 }
 
 .theme-mirror.is-locked {
@@ -169,8 +147,9 @@ html.theme-switching, [data-tg] {
   will-change: opacity
 }
 
-// Dims or lifts the real page under the copy as the old scheme gives way.
-.theme-shade {
+// The page's side of the ring: the shade dims or lifts the old scheme, the cover
+// (black melt and discs) takes it away as the copy brings the new one in.
+.theme-shade, .theme-cover {
   position: absolute
   left: 0
   top: 0

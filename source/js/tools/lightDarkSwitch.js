@@ -17,8 +17,14 @@ import * as giscus from "./giscusTwin.js";
  * and the copy is put away. Pressed again mid-way, every animation runs
  * backwards and the ring closes into the button.
  *
- * Dimming, lifting and the new page's tone are layers whose opacity animates on
- * the compositor: black at opacity a is brightness 1 - a, and grey g under
+ * The motion asks nothing of the main thread: every layer in it animates
+ * transform or opacity on the compositor. The ring is discs fixed to the
+ * viewport, so scrolling never moves it, grown by scaling; the melt is a full
+ * layer fading in. On the page both are black over the old scheme; in the copy
+ * the same shapes are white on black, multiplied into it, and the copy is added
+ * with plus-lighter — the screen is page·(1 - a) + copy·a, one cross-fade with
+ * the same coverage a on both sides. Dimming, lifting and the new page's tone
+ * are layers too: black at opacity a is brightness 1 - a, and grey g under
  * color-dodge divides by 1 - g, a brightness above 1.
  */
 
@@ -29,12 +35,19 @@ const FADE = 240;
 const WAVE = "cubic-bezier(.5, 0, .2, 1)";
 const MELT = "cubic-bezier(.4, 0, .7, .7)";
 const SHADE = "cubic-bezier(.2, .8, .2, 1)";
-const RING =
-  "radial-gradient(circle at var(--theme-x) var(--theme-y), #000 var(--theme-r), rgb(0 0 0 / var(--theme-m)) calc(var(--theme-r) + 1.5px))";
 const SOLID = "linear-gradient(#000 0 0)";
 const MASK = ["maskImage", "maskSize", "maskPosition", "maskRepeat", "maskComposite"];
+// The ring's 1.5px soft edge: discs this far beyond its radius, at this opacity.
+const EDGE = [
+  [0.375, 1],
+  [1.125, 0.5],
+];
 // How long the copy keeps covering the comments while their frame changes theme.
 const LAND = 400;
+// Elements per subtree that hands the page's held transitions back.
+const CHUNK = 200;
+// Without plus-lighter the two sides cannot be summed: switch at once.
+const SUMS = !!window.CSS?.supports?.("mix-blend-mode", "plus-lighter");
 
 // The old page's brightness at the end, and the new page's at the start.
 const shadeOf = (dark) => (dark ? 0.9 : 1.12);
@@ -44,6 +57,8 @@ const isDark = () => root.classList.contains("dark");
 const button = () => document.querySelector(".side-tools-container .tool-dark-light-toggle");
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+// The pointer still on the button: another switch may follow.
+const intent = () => !!button()?.matches(":hover");
 
 let run = null; // the switch on screen
 let next = null; // a scheme asked for while one was ending
@@ -67,6 +82,25 @@ function apply(dark) {
 const announce = (dark) =>
   window.dispatchEvent(new CustomEvent("redefine:color-scheme-change", { detail: { isDark: dark } }));
 
+/** Splits a tree into subtrees of at most CHUNK elements; returns [root, size]. */
+function partition(top) {
+  const out = [];
+  const sizes = new Map();
+  const count = (el) => {
+    let n = 1;
+    for (let c = el.firstElementChild; c; c = c.nextElementSibling) n += count(c);
+    sizes.set(el, n);
+    return n;
+  };
+  const pick = (el) => {
+    if (sizes.get(el) <= CHUNK) return void out.push([el, sizes.get(el)]);
+    for (let c = el.firstElementChild; c; c = c.nextElementSibling) pick(c);
+  };
+  count(top);
+  pick(top);
+  return out;
+}
+
 /*
  * The page takes a scheme in one style pass. A palette change reaches every
  * element through inherited colour anyway, so nothing smaller exists; the pass
@@ -85,7 +119,7 @@ function land(dark) {
   apply(dark);
   announce(dark);
   forceStyle();
-  for (const [el, size] of mirror.partition(document.body)) {
+  for (const [el, size] of partition(document.body)) {
     el.setAttribute("data-tg", "");
     marks.set(el, size);
   }
@@ -188,9 +222,35 @@ function settleGlyphs() {
 
 /* ─── layers and masks ────────────────────────────────────────────────────── */
 
+function div(css) {
+  const el = document.createElement("div");
+  el.style.cssText = css;
+  return el;
+}
+
+// A melt over everything and the ring's discs, in one colour. A disc is a
+// rounded clip over a solid layer of its own, which the compositor draws and
+// scales at any size without rasterising a pixel.
+function layers(box, colour) {
+  const melt = div(`position:absolute;inset:0;background:${colour};opacity:0`);
+  const discs = EDGE.map(([, alpha]) => {
+    const disc = div("position:fixed;border-radius:50%;overflow:hidden;transform:scale(0);will-change:transform");
+    disc.append(div(`width:100%;height:100%;background:${colour};opacity:${alpha};will-change:transform`));
+    return disc;
+  });
+  box.append(melt, ...discs);
+  return { melt, discs };
+}
+
 // Dims or lifts the real page under the copy as the old scheme gives way.
 const shade = document.createElement("div");
 shade.className = "theme-shade";
+
+// Takes the old scheme away exactly as the copy's reveal brings the new one in.
+const cover = document.createElement("div");
+cover.className = "theme-cover";
+const page = layers(cover, "#000");
+let copy = null; // the same layers in the copy's reveal, white
 
 // A layer that, at full opacity, brings what is under it to brightness `b`;
 // returns that opacity.
@@ -215,38 +275,56 @@ const shape = ({ w, h, round }) =>
 // A mask of `base` with rectangles cut out of it, or of the rectangles alone.
 function cut(el, base, list) {
   const s = el.style;
-  const layers = base ? [{ base }, ...list] : list;
-  s.maskImage = layers.map((o) => o.base || shape(o)).join(", ");
-  s.maskSize = layers.map((o) => (o.base ? "100% 100%" : `${o.w}px ${o.h}px`)).join(", ");
-  s.maskPosition = layers.map((o) => (o.base ? "0 0" : `${o.x}px ${o.y}px`)).join(", ");
+  const parts = base ? [{ base }, ...list] : list;
+  s.maskImage = parts.map((o) => o.base || shape(o)).join(", ");
+  s.maskSize = parts.map((o) => (o.base ? "100% 100%" : `${o.w}px ${o.h}px`)).join(", ");
+  s.maskPosition = parts.map((o) => (o.base ? "0 0" : `${o.x}px ${o.y}px`)).join(", ");
   s.maskRepeat = "no-repeat";
-  s.maskComposite = layers.map((o, i) => (base && i === 0 ? "subtract" : "add")).join(", ");
+  s.maskComposite = parts.map((o, i) => (base && i === 0 ? "subtract" : "add")).join(", ");
 }
 
 function uncut(el) {
   for (const p of MASK) el.style[p] = "";
 }
 
-function centre(el, x, y) {
-  el.style.setProperty("--theme-x", `${x}px`);
-  el.style.setProperty("--theme-y", `${y}px`);
+// Every disc centred on the button at its full radius; the animation scales it.
+function ring(discs, at) {
+  discs.forEach((disc, i) => {
+    const r = at.radius + EDGE[i][0];
+    const s = disc.style;
+    s.left = `${at.x - r}px`;
+    s.top = `${at.y - r}px`;
+    s.width = s.height = `${2 * r}px`;
+  });
 }
 
-// The copy and the shade cover the document; the ring stays on the button
-// while the page scrolls under it.
+// The ring's radius runs from -2px to `radius` along the wave; a disc's is
+// that plus its offset, and it shows nothing until the sum turns positive.
+// Linear between the keyframes, so the discs keep their distance exactly.
+function grow(radius, offset) {
+  const at = (2 - offset) / (radius + 2);
+  return [
+    { offset: 0, transform: "scale(0)" },
+    { offset: at, transform: "scale(0)" },
+    { offset: 1, transform: "scale(1)" },
+  ];
+}
+
+// The copy, the shade and the cover span the document; the ring is fixed to
+// the viewport and needs nothing as the page scrolls.
 function measure(r, m) {
   r.w = Math.max(root.scrollWidth, root.clientWidth);
   r.h = Math.max(m ? m.docH : root.scrollHeight, root.clientHeight);
-  r.x = r.at.x + scrollX;
-  r.y = r.at.y + scrollY;
 }
 
 function place(r) {
-  for (const el of [r.host, shade]) {
+  if (r.w === r.placedW && r.h === r.placedH) return;
+  r.placedW = r.w;
+  r.placedH = r.h;
+  for (const el of [r.host, shade, cover]) {
     el.style.width = `${r.w}px`;
     el.style.height = `${r.h}px`;
   }
-  centre(r.host, r.x, r.y);
 }
 
 /* ─── the switch ──────────────────────────────────────────────────────────── */
@@ -255,11 +333,16 @@ function startLive(dark, btn) {
   const r = { to: dark, dir: 1, anims: [], ended: false, reduced: reducedMotion(), at: origin(btn) };
   run = r;
   const list = mirror.holes();
-  const { host, tone } = mirror.show();
-  r.host = host;
+  const shown = mirror.show();
+  copy ||= layers(shown.reveal, "#fff");
+  r.host = shown.host;
   measure(r, null);
   place(r);
-  cut(host, RING, list);
+  // Media show through both sides unchanged, and nothing is drawn past the
+  // document's edge (the fixed discs would, on an overscroll).
+  cut(r.host, SOLID, list);
+  cut(cover, SOLID, list);
+  r.host.style.mixBlendMode = "plus-lighter";
   r.unfollow = onScroll((m) => measure(r, m), () => place(r), "theme-switch");
   turnGlyphs(dark, false);
 
@@ -267,17 +350,20 @@ function startLive(dark, btn) {
     r.anims.push(target.animate(frames, { duration, easing, fill: "both" }));
   };
   if (r.reduced) {
-    host.style.setProperty("--theme-r", "-2px");
-    add(host, { "--theme-m": [0, 1] }, FADE, "ease");
+    for (const side of [page, copy]) add(side.melt, { opacity: [0, 1] }, FADE, "ease");
   } else {
-    add(host, { "--theme-r": ["-2px", `${r.at.radius}px`] }, DURATION, WAVE);
-    add(host, { "--theme-m": [0, 1] }, DURATION, MELT);
-    add(tone, { opacity: [veil(tone, toneOf(dark)), 0] }, DURATION, SHADE);
+    for (const side of [page, copy]) {
+      ring(side.discs, r.at);
+      side.discs.forEach((disc, i) => add(disc, grow(r.at.radius, EDGE[i][0]), DURATION, WAVE));
+      add(side.melt, { opacity: [0, 1] }, DURATION, MELT);
+    }
+    add(shown.tone, { opacity: [veil(shown.tone, toneOf(dark)), 0] }, DURATION, SHADE);
     add(shade, { opacity: [0, veil(shade, shadeOf(dark))] }, DURATION, SHADE);
     if (list.length) cut(shade, SOLID, list);
     else uncut(shade);
     root.append(shade);
   }
+  root.append(cover);
   r.anims[0].finished.then(() => end(r), () => {});
 }
 
@@ -298,11 +384,13 @@ async function end(r) {
   if (r.dir > 0) {
     land(r.to);
     await nextFrame();
-    // The comments' frame changes theme in its own process: the copy keeps
-    // covering just them until it has.
+    // The comments' frame changes theme in its own process: the copy, laid
+    // plainly over the page, keeps covering just them until it has.
     const frames = giscus.landing(r.to);
     if (frames.length) {
       shade.remove();
+      cover.remove();
+      r.host.style.mixBlendMode = "";
       cut(r.host, null, frames);
       await linger(LAND);
     }
@@ -310,18 +398,19 @@ async function end(r) {
   r.unfollow();
   mirror.hide();
   uncut(r.host);
+  r.host.style.mixBlendMode = "";
   r.host.style.width = r.host.style.height = "";
-  r.host.style.removeProperty("--theme-r");
   shade.remove();
+  cover.remove();
   r.anims.forEach((a) => a.cancel());
   finish();
 }
 
 // Glyphs settle, the copy goes over to the scheme the next switch would go to
-// once the reader is still, and the page's held transitions come back.
+// as soon as the reader is still, and the page's held transitions come back.
 function afterSwitch() {
   settleGlyphs();
-  mirror.prepare();
+  mirror.prepare(intent);
   restore();
 }
 
@@ -351,7 +440,7 @@ function instant(dark) {
 }
 
 function start(dark, btn) {
-  if (document.visibilityState !== "visible") return instant(dark);
+  if (document.visibilityState !== "visible" || !SUMS) return instant(dark);
   mirror.settle(dark);
   startLive(dark, btn);
 }
@@ -379,7 +468,7 @@ function bind(el, events) {
 export default function initModeToggle() {
   main.getStyleStatus();
   main.styleStatus.isDark = isDark();
-  if (!run) mirror.prepare();
+  if (!run) mirror.prepare(intent);
 
   // The rail is inside #swup, so every page view brings a new button. The
   // pointer on it, or on the rail's opener, warms the copy for the press.

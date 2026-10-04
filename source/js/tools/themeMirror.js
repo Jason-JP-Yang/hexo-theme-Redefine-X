@@ -12,29 +12,28 @@
  * engine paints. Between switches it is also `content-visibility: hidden`: the
  * engine leaves it alone (no style, layout, hit-testing or animation frames)
  * except when this module forces a pass on it, a measured share at a time, so
- * it is current without ever costing a frame of its own. Video, canvas and
- * frames are placeholders, and `holes()` says where their pictures show
- * through; a frame that can be loaded again in the other scheme registers
- * `liveFrames()`.
+ * it is current without ever costing a frame of its own. It never runs a colour
+ * transition (theme.styl), as it only changes scheme while hidden. Video,
+ * canvas and frames are placeholders, and `holes()` says where their pictures
+ * show through; a frame that can be loaded again in the other scheme registers
+ * `liveFrames()`. Over everything sits the reveal, a black layer multiplied
+ * into the copy that the switch draws its ring on in white.
  */
 
 import { onScroll, requestScrollPass } from "./scrollScheduler.js";
-import { inFrames, inSlices, resting } from "./frameSlices.js";
+import { inFrames, resting } from "./frameSlices.js";
 
 const SKIP_ATTRS = new Set(["data-tg"]);
 const ROOT_CLASS = /^(dark|light|theme-switching)$/;
 const BODY_CLASS = /^(dark-mode|light-mode)$/;
 const MEDIA = new Set(["iframe", "video", "canvas", "embed", "object", "audio"]);
 const OBSERVE = { subtree: true, childList: true, attributes: true, characterData: true };
-// Elements per subtree for sliced restyles.
-const CHUNK = 200;
 // Copied in one idle callback; more is copied a share per frame.
 const IDLE_COPY = 60;
 // How long a hint that a switch is coming keeps the copy painted.
 const WARM = 4000;
-// A scheme pass waits for an idle period this long, the reader still this long.
-const QUIET_IDLE = 40;
-const QUIET_INPUT = 500;
+// A scheme pass waits for the reader to be still this long.
+const QUIET = 250;
 
 const real = document.documentElement;
 const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 800 }) : setTimeout(() => fn(null), 120));
@@ -46,14 +45,13 @@ let canvas = null;
 let rootEl = null;
 let bodyEl = null;
 let tone = null;
+let reveal = null;
 let observer = null;
 let baseSheet = null;
 let ownSheet = null;
 let scheme = null; // the copy's: true = dark
 let framesTheme = null; // the scheme its live frames were last sent
-let held = false; // its root holds colour transitions for one style pass
 let quietToken = 0;
-let restoring = 0;
 let sheetsReady = false;
 let sheetsToken = 0;
 let pumpQueued = false;
@@ -73,7 +71,6 @@ const mirrorRoots = new WeakSet();
 const rewritten = new WeakSet();
 const copies = new WeakMap(); // a component's constructed sheet -> its copy
 const sheetCopies = new WeakMap(); // a document sheet -> its copy (null: unreadable)
-const marked = new Map(); // copy subtrees holding colour transitions -> size
 const pendingParents = new Set();
 const dirtyAttrs = new Map();
 const dirtyText = new Set();
@@ -89,25 +86,6 @@ const pairs = [];
 const states = { hover: new Set(), active: new Set(), focus: new Set(), within: new Set(), visible: new Set() };
 const STATE_CLASS = { hover: "m-hover", active: "m-active", focus: "m-focus", within: "m-focus-within", visible: "m-focus-visible" };
 const lookups = (window.redefineSchemeContent ||= []);
-
-/** Splits a tree into subtrees of at most CHUNK elements; returns [root, size]. */
-export function partition(top) {
-  const out = [];
-  const sizes = new Map();
-  const count = (el) => {
-    let n = 1;
-    for (let c = el.firstElementChild; c; c = c.nextElementSibling) n += count(c);
-    sizes.set(el, n);
-    return n;
-  };
-  const pick = (el) => {
-    if (sizes.get(el) <= CHUNK) return void out.push([el, sizes.get(el)]);
-    for (let c = el.firstElementChild; c; c = c.nextElementSibling) pick(c);
-  };
-  count(top);
-  pick(top);
-  return out;
-}
 
 /* ─── stylesheets ─────────────────────────────────────────────────────────── */
 
@@ -250,6 +228,7 @@ m-root, m-body { overflow: visible !important; }
 * { pointer-events: none !important; }
 .m-canvas { position: absolute; inset: 0; z-index: -2147483647; background: var(--background-color); }
 .m-tone { position: fixed; inset: 0; z-index: 2147483647; opacity: 0; }
+.m-reveal { position: absolute; inset: 0; z-index: 2147483647; background: #000; mix-blend-mode: multiply; }
 `;
 
 /* ─── copying ─────────────────────────────────────────────────────────────── */
@@ -424,8 +403,7 @@ function sizeViewport() {
 function syncRoot() {
   copyAttrs(real, rootEl);
   const mode = themeName();
-  const own = held ? ["m-r", mode, "theme-switching"] : ["m-r", mode];
-  rootEl.className = [...own, ...[...real.classList].filter((c) => !ROOT_CLASS.test(c))].join(" ");
+  rootEl.className = ["m-r", mode, ...[...real.classList].filter((c) => !ROOT_CLASS.test(c))].join(" ");
   rootEl.style.cssText = real.style.cssText;
   rootEl.style.colorScheme = mode;
   canvas.className = `m-canvas ${mode}`;
@@ -764,34 +742,38 @@ function align(a, b) {
 }
 
 // Copies' CSS animations take the page's clocks; a transition the copy started
-// on its own (its last flip) is finished, so nothing fades inside the ring.
+// on its own is finished, so nothing fades inside the ring. Every list is read
+// before any clock is set: a set marks its element for an update, which the
+// next read would flush.
 function syncAnimations() {
-  const matched = new Set();
+  const found = [];
+  const lists = new Map();
   for (const a of document.getAnimations()) {
-    const effect = a.effect;
-    const el = effect && effect.target;
+    const el = a.effect && a.effect.target;
     if (!el || isCopy(el)) continue;
     const m = toMirror.get(el);
     if (!m || m.nodeType !== 1) continue;
+    found.push([a, m]);
+    if (!lists.has(m)) lists.set(m, m.getAnimations());
+  }
+  const matched = new Set();
+  for (const [a, m] of found) {
+    const effect = a.effect;
+    let b = null;
     if (window.CSSAnimation && a instanceof CSSAnimation) {
-      const b = m.getAnimations().find((x) => x instanceof CSSAnimation && x.animationName === a.animationName && samePseudo(a, x));
-      if (b) {
-        align(a, b);
-        matched.add(b);
-      }
+      b = lists.get(m).find((x) => x instanceof CSSAnimation && x.animationName === a.animationName && samePseudo(a, x));
     } else if (window.CSSTransition && a instanceof CSSTransition) {
-      const b = m.getAnimations().find((x) => x instanceof CSSTransition && x.transitionProperty === a.transitionProperty && samePseudo(a, x));
-      if (b) {
-        align(a, b);
-        matched.add(b);
-      }
+      b = lists.get(m).find((x) => x instanceof CSSTransition && x.transitionProperty === a.transitionProperty && samePseudo(a, x));
     } else {
       try {
-        const b = nativeAnimate.call(m, effect.getKeyframes(), { ...effect.getTiming(), pseudoElement: effect.pseudoElement || undefined });
+        b = nativeAnimate.call(m, effect.getKeyframes(), { ...effect.getTiming(), pseudoElement: effect.pseudoElement || undefined });
         b.playbackRate = a.playbackRate;
-        align(a, b);
         pairs.push([a, b]);
       } catch (e) {}
+    }
+    if (b) {
+      align(a, b);
+      matched.add(b);
     }
   }
   for (const b of shadow.getAnimations()) {
@@ -848,51 +830,30 @@ function retheme(dark) {
 /*
  * The copy takes a scheme in one forced style pass: a palette change reaches
  * every element through inherited colour anyway, so nothing smaller exists.
- * Its root holds colour transitions for that pass, then hands the hold to
- * bounded subtrees (the same value, so they are not restyled again), which let
- * it go a share per frame.
+ * It starts no colour transition, so nothing is left to let go afterwards.
  */
 function flip(dark) {
   quietToken++;
   retheme(dark);
   if (scheme === dark) return;
-  restoring++;
-  held = true;
   adoptScheme(dark);
   swapAll();
   forceStyle();
-  for (const [el, size] of partition(bodyEl)) {
-    el.setAttribute("data-tg", "");
-    marked.set(el, size);
-  }
-  held = false;
-  syncRoot();
   forceLayout();
 }
 
-function restore() {
-  const token = ++restoring;
-  inSlices(
-    [...marked],
-    (el) => {
-      el.removeAttribute("data-tg");
-      marked.delete(el);
-    },
-    forceStyle,
-    () => token === restoring && !live,
-  );
-}
-
-// The pass lands in an idle period long enough to hold it, with the reader
-// still; a hint that a switch is coming, or the switch itself, does not wait.
-function flipWhenQuiet(dark) {
+// After a switch the pass waits only for the reader to be still, then lands in
+// the next idle moment whatever else the page animates, so the switch after
+// finds the copy ready; with the pointer still on the button (`intent`) it is
+// painted too. A hint or the switch itself does not wait.
+function flipWhenQuiet(dark, intent) {
   const token = ++quietToken;
   const wait = () =>
-    idle((deadline) => {
+    idle(() => {
       if (token !== quietToken || live) return;
-      if ((deadline && deadline.timeRemaining() < QUIET_IDLE) || resting() < QUIET_INPUT) return wait();
+      if (resting() < QUIET) return wait();
       flip(dark);
-      restore();
+      if (intent?.()) warm();
     });
   wait();
 }
@@ -920,8 +881,10 @@ function build() {
   bodyEl = document.createElement("m-body");
   tone = document.createElement("div");
   tone.className = "m-tone";
+  reveal = document.createElement("div");
+  reveal.className = "m-reveal";
   rootEl.append(bodyEl);
-  shadow.append(canvas, rootEl, tone);
+  shadow.append(canvas, rootEl, tone, reveal);
   scheme = !real.classList.contains("dark");
   framesTheme = scheme;
   toMirror.set(real, rootEl);
@@ -958,14 +921,13 @@ function build() {
 }
 
 /** Builds the copy once, then keeps it in the scheme opposite the page's. */
-export function prepare() {
+export function prepare(intent) {
   if (!host) return void idle(() => host || build());
   if (live) return;
   const want = !real.classList.contains("dark");
-  if (scheme !== want) {
-    idle(() => live || retheme(want));
-    flipWhenQuiet(want);
-  } else if (marked.size) restore();
+  if (scheme === want) return;
+  idle(() => live || retheme(want));
+  flipWhenQuiet(want, intent);
 }
 
 /** Whatever is still pending is done now, so the copy shows `dark` exactly. */
@@ -990,7 +952,6 @@ export function warm() {
   if (scheme !== want) {
     pump(Infinity);
     flip(want);
-    restore();
   }
   if (warmed) return;
   warmed = true;
@@ -1008,7 +969,7 @@ function cool() {
   relock();
 }
 
-/** Shows the copy (opacity 1, unmasked until the caller masks it). */
+/** Shows the copy (opacity 1, unmasked until the caller masks it); its reveal is black until drawn on. */
 export function show() {
   live = true;
   quietToken++;
@@ -1032,7 +993,7 @@ export function show() {
   unsubscribe = onScroll(readScroll, writeScroll, "theme-mirror");
   host.classList.add("is-shown");
   requestAnimationFrame(frame);
-  return { host, tone };
+  return { host, tone, reveal };
 }
 
 export function hide() {
