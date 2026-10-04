@@ -1,0 +1,107 @@
+{
+  "reactions": {
+    "one": "{{count}} реакція",
+    "few": "{{count}} реакції",
+    "many": "{{count}} реакцій",
+    "other": "{{count}} реакцій"
+  },
+  "comment": "Коментар",
+  "comments": {
+    "one": "{{count}} коментар",
+    "few": "{{count}} коментарі",
+    "many": "{{count}} коментарів",
+    "other": "{{count}} коментарів"
+  },
+  "reply": "Відповідь",
+  "replies": {
+    "one": "{{count}} відповідь",
+    "few": "{{count}} відповіді",
+    "many": "{{count}}{{plus}} відповідей",
+    "other": "{{count}}{{plus}} відповідей"
+  },
+  "upvotes": {
+    "one": "{{count}} голос",
+    "few": "{{count}} голоси",
+    "many": "{{count}} голосів",
+    "other": "{{count}} голосів"
+  },
+  "hiddenItems": {
+    "one": "{{count}} елемент сховано",
+    "few": "{{count}} елементи сховано",
+    "many": "{{count}} елементів сховано",
+    "other": "{{count}} елементів сховано"
+  },
+  "genericError": "Виникла помилка: {{message}}",
+  "loadMore": "Завантажити ще",
+  "loading": "Завантаження",
+  "loadingComments": "Завантаження коментарів…",
+  "loadingPreview": "Завантаження попереднього перегляду…",
+  "poweredBy": "– powered by <a>giscus</a>",
+  "oldest": "Старіші",
+  "newest": "Новіші",
+  "showPreviousReplies": {
+    "one": "Показати {{count}} попередню відповідь",
+    "few": "Показати {{count}} попередні відповіді",
+    "many": "Показати {{count}} попередніх відповідей",
+    "other": "Показати {{count}} попередніх відповідей"
+  },
+  "seePreviousRepliesOnGitHub": {
+    "one": "Переглянути {{count}} попередню відповідь на GitHub",
+    "few": "Переглянути {{count}} попередні відповіді на GitHub",
+    "many": "Переглянути {{count}} попередніх відповідей на GitHub",
+    "other": "Переглянути {{count}} попередніх відповідей на GitHub"
+  },
+  "edited": "змінено",
+  "thisCommentWasDeleted": "Цей коментар видалено.",
+  "thisCommentWasMinimized": "Цей коментар мінімізовано.",
+  "thisCommentWasHidden": "Цей коментар сховано.",
+  "write": "Написати",
+  "preview": "Попередній перегляд",
+  "enableFixedWidth": "Увімкнути шрифт з фіксованою шириною (monospace) в редакторі",
+  "disableFixedWidth": "Вимкнути шрифт з фіксованою шириною (monospace) в редакторі",
+  "lastEditedAt": "Змінено востаннє {{date}}",
+  "writeAComment": "Написати коментар",
+  "signInToComment": "Увійти, щоб коментувати",
+  "stylingWithMarkdownIsSupported": "Ви можете використовувати стилізацію Markdown",
+  "signOut": "Вийти",
+  "cancel": "Скасувати",
+  "signInWithGitHub": "Увійти за допомогою GitHub",
+  "writeAReply": "Написати відповідь",
+
+  "upvote": "Голос",
+  "youMustBeSignedInToUpvote": "Ви маєте увійти, щоб голосувати.",
+  "addReactions": "Додати реакції",
+  "pleaseWait": "Зачекайте…",
+  "pickYourReaction": "Оберіть реакцію",
+  "addTheReaction": "Додати реакцію {{reaction}}",
+  "removeTheReaction": "Видалити реакцію {{reaction}}",
+  "signInToAddYourReaction": "<a>Увійти</a> щоб додати реакцію.",
+  "youMustBeSignedInToAddReactions": "Ви маєйте увійти, щоб додати реакцію.",
+  "peopleReactedWith": {
+    "one": "{{count}} людина відреагувала {{reaction}} {{emoji}}",
+    "few": "{{count}} людей відреагувало {{reaction}} {{emoji}}",
+    "many": "{{count}} людей відреагувало {{reaction}} {{emoji}}",
+    "other": "{{count}} людей відреагувало {{reaction}} {{emoji}}"
+  },
+  "emoji": "емодзі",
+  "nothingToPreview": "Немає нічого для перегляду",
+
+  "THUMBS_UP": "+1",
+  "THUMBS_DOWN": "-1",
+  "LAUGH": "Сміх",
+  "HOORAY": "Ура",
+  "CONFUSED": "Збентежений",
+  "HEART": "Сердце",
+  "ROCKET": "Ракета",
+  "EYES": "Очі",
+
+  "COLLABORATOR": "Учасник",
+  "CONTRIBUTOR": "Автор",
+  "FIRST_TIMER": "Перший",
+  "FIRST_TIME_CONTRIBUTOR": "Перший автор",
+  "MANNEQUIN": "Бот",
+  "MEMBER": "Учасник",
+  "NONE": "Невідомо",
+  "OWNER": "Власник",
+  "APP": "Застосунок"
+}

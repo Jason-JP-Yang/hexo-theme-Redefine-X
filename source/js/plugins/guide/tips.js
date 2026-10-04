@@ -375,7 +375,7 @@ function article(ctx) {
       prompt: "prompt_comments",
       target: () => q(".comments-container"),
       resolve: (box) => {
-        const frame = box.querySelector(".giscus-frame, iframe");
+        const frame = box.querySelector(".giscus, .giscus-frame, iframe");
         return frame && shown(frame) ? frame : box.querySelector(".comment-area-title") || box;
       },
       point: [0.5, 0.14],

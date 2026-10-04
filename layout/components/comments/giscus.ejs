@@ -4,6 +4,11 @@
         theme.comment.config.giscus.repo_id &&
         theme.comment.config.giscus.category_id
     ) { %>
+    <% if (backend_config().enable) { %>
+    <%# Rendered in the page (plugins/comments/giscus.js) through the Worker's
+        giscus proxy, so the light/dark copy mirrors it like any other content. %>
+    <div class="giscus" data-giscus="<%= giscus_widget() %>"></div>
+    <% } else { %>
     <div id="giscus-container"></div>
     <script <%= theme.global.single_page === true && 'data-swup-reload-script' %> defer>
         async function loadGiscus() {
@@ -31,6 +36,12 @@
             }
             document.getElementById('giscus-container').appendChild(giscusScript);
         }
+        // The frame follows the page's scheme (once, whatever Swup re-runs).
+        if (!window.__giscusScheme) {
+            window.__giscusScheme = true;
+            window.addEventListener('redefine:color-scheme-change', (e) =>
+                window.__giscus && window.__giscus.setConfig({ theme: e.detail.isDark ? 'dark' : 'light' }));
+        }
         if ('<%= theme.global.single_page %>') {
             let loadGiscusTimeout = setTimeout(() => {
                 loadGiscus();
@@ -40,4 +51,5 @@
             document.addEventListener('DOMContentLoaded', loadGiscus);
         }
     </script>
+    <% } %>
 <% } %>

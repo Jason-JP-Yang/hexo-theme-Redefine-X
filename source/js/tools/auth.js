@@ -5,6 +5,7 @@
  * the same login that powers comments and masonry likes. This component owns
  * ALL of that logic in ONE place so consumers don't duplicate it:
  *
+ *   • comments (plugins/comments) → uses getToken() to read and write GitHub.
  *   • masonry-reactions  → uses getToken() to like photos via GitHub GraphQL.
  *   • instant-notes admin → uses getSession()/getSessionToken() to write notes.
  *   • notifications       → uses getSessionToken() to follow the blog, register
@@ -32,6 +33,10 @@
   var GISCUS_PARAM = "giscus";
   var GISCUS_ORIGIN = "https://giscus.app";
   var SESSION_CACHE_KEY = "blog-auth-session"; // sessionStorage: {login,avatar,isAdmin,token,exp}
+  // sessionStorage: {session, token}. The exchange is a Worker request, and the
+  // giscus session it is keyed by already sits in localStorage, so keeping its
+  // answer for the tab exposes nothing new and saves one per page load.
+  var TOKEN_CACHE_KEY = "blog-auth-token";
   // localStorage, read by the inline script in head.ejs so the admin-only rows
   // in the sidebar are decided BEFORE the first paint rather than appearing a
   // round trip later. Same pattern as "blog-following".
@@ -39,6 +44,7 @@
 
   // ─── state ───────────────────────────────────────────────
   var tokenCache = null; // { session, token } — giscus session → GitHub token
+  var tokenPromise = null; // in-flight exchange, shared by every caller
   var cachedSession = null; // { login, avatar, isAdmin, token, exp }
   var sessionPromise = null; // in-flight getSession()
 
@@ -249,17 +255,31 @@
   }
 
   // ─── token exchange: giscus session → GitHub OAuth token ──
+  function storeToken(value) {
+    tokenCache = value;
+    try {
+      if (value) sessionStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify(value));
+      else sessionStorage.removeItem(TOKEN_CACHE_KEY);
+    } catch (e) {}
+  }
+
   function getToken() {
     var session = readGiscusSession();
     if (!session) {
-      tokenCache = null;
+      storeToken(null);
       return Promise.resolve(null);
+    }
+    if (!tokenCache) {
+      try {
+        tokenCache = JSON.parse(sessionStorage.getItem(TOKEN_CACHE_KEY) || "null");
+      } catch (e) {}
     }
     if (tokenCache && tokenCache.session === session && tokenCache.token) {
       return Promise.resolve(tokenCache.token);
     }
+    if (tokenPromise && tokenPromise.session === session) return tokenPromise;
     var base = getApiBase() || GISCUS_ORIGIN; // proxy required (GISCUS_ORIGIN is a last resort)
-    return fetch(base + "/api/oauth/token", {
+    var pending = fetch(base + "/api/oauth/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "session=" + encodeURIComponent(session),
@@ -270,12 +290,19 @@
       })
       .then(function (data) {
         var token = (data && data.token) || null;
-        tokenCache = token ? { session: session, token: token } : null;
+        storeToken(token ? { session: session, token: token } : null);
         return token;
       })
       .catch(function () {
         return null;
+      })
+      .then(function (token) {
+        if (tokenPromise === pending) tokenPromise = null;
+        return token;
       });
+    pending.session = session;
+    tokenPromise = pending;
+    return pending;
   }
 
   // ─── identity + admin check (Worker /api/auth/login) ──────
@@ -317,7 +344,7 @@
               try {
                 localStorage.removeItem(GISCUS_SESSION_KEY);
               } catch (e) {}
-              tokenCache = null;
+              storeToken(null);
               setTimeout(emit, 0);
               return null;
             }
@@ -384,7 +411,7 @@
     try {
       localStorage.removeItem(GISCUS_SESSION_KEY);
     } catch (e) {}
-    tokenCache = null;
+    storeToken(null);
     cachedSession = null;
     persist(null);
     emit();
@@ -398,7 +425,7 @@
 
   // ─── react to giscus session changes (login/out, other tabs/iframe) ──
   function handleSessionChange(loggedIn) {
-    tokenCache = null;
+    storeToken(null);
     cachedSession = null;
     persist(null);
     if (loggedIn) {

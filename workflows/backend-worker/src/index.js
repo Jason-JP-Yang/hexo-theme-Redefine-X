@@ -341,9 +341,9 @@ async function proxyToGiscus(c) {
   }
 
   // Forward giscus's body + content-type with OUR CORS headers (do not copy
-  // giscus.app's own CORS headers — they'd be scoped to giscus.app).
-  const body = await res.text();
-  return new Response(body, {
+  // giscus.app's own CORS headers — they'd be scoped to giscus.app). Streamed,
+  // never read: a whole thread passes through without costing CPU to decode.
+  return new Response(res.body, {
     status: res.status,
     headers: {
       ...corsHeaders,
@@ -358,6 +358,9 @@ app.options("/api/oauth/token", proxyToGiscus);
 app.get("/api/discussions", proxyToGiscus);
 app.get("/api/discussions/categories", proxyToGiscus);
 app.post("/api/oauth/token", proxyToGiscus);
+// The first comment or reaction on a page creates its discussion; giscus.app
+// does that with its app token after checking the reader's.
+app.post("/api/discussions", proxyToGiscus);
 
 // ─── PUBLIC API: GET recent notes (48h, max 5) ─────────────
 app.get("/api/notes", async (c) => {

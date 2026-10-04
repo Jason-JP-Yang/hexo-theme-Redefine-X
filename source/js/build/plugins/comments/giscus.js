@@ -1,0 +1,2 @@
+let t=null;function init(){t?t.then((t=>t.init())):document.querySelector(".giscus[data-giscus]")&&(t=import("./giscus-widget.js").then((t=>(t.init(),t))))}document.addEventListener("DOMContentLoaded",init);try{swup.hooks.on("page:view",init)}catch(t){}
+//# sourceMappingURL=giscus.js.map

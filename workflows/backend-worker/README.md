@@ -168,15 +168,22 @@ config is filled in. → `{ "key": "BAwX…" | null }`
 
 ### Giscus proxy
 
-Forwarded verbatim to `https://giscus.app` with this Worker's CORS headers.
-Nothing is stored and nothing is authenticated here — the giscus session in the
-request body *is* the credential.
+Forwarded verbatim to `https://giscus.app` with this Worker's CORS headers, the
+response body streamed through unread: one subrequest and well under a
+millisecond of CPU per call. Nothing is stored and nothing is authenticated here
+— the giscus session or token the request carries *is* the credential.
+
+The comments (`plugins/comments`) only come here for a reader who is NOT signed
+in: one `GET` for the newest 15 comments, a second only when the thread is
+longer, one more per "Load more". A signed-in reader reads and writes GitHub
+directly with their own token, so this Worker never sees them.
 
 | | |
 | --- | --- |
-| `GET /api/discussions` | comments, masonry like counts |
+| `GET /api/discussions` | comments for a signed-out reader, masonry like counts |
+| `POST /api/discussions` | the first comment or reaction on a page creates its discussion |
 | `GET /api/discussions/categories` | |
-| `POST /api/oauth/token` | giscus session → GitHub user token |
+| `POST /api/oauth/token` | giscus session → GitHub user token (once per tab) |
 
 ### Auth
 

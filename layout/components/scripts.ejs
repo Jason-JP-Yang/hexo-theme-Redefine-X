@@ -18,6 +18,10 @@
     what resolves the Worker base URL, including the localhost override. %>
 <% if (theme.comment && theme.comment.system === 'giscus') { %>
     <%- renderJS('tools/auth.js', { module: false }) %>
+    <%# The comments themselves, in the page; fetched only on a page that has them. %>
+    <% if (backend.enable) { %>
+        <%- renderJS('plugins/comments/giscus.js', { module: true }) %>
+    <% } %>
 <% } %>
 
 <% if (theme.navbar.search.enable) { %>

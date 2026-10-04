@@ -15,8 +15,7 @@
  * it is current without ever costing a frame of its own. It never runs a colour
  * transition (theme.styl), as it only changes scheme while hidden. Video,
  * canvas and frames are placeholders, and `holes()` says where their pictures
- * show through; a frame that can be loaded again in the other scheme registers
- * `liveFrames()`. Over everything sits the reveal, a black layer multiplied
+ * show through. Over everything sits the reveal, a black layer multiplied
  * into the copy that the switch draws its ring on in white.
  */
 
@@ -50,7 +49,6 @@ let observer = null;
 let baseSheet = null;
 let ownSheet = null;
 let scheme = null; // the copy's: true = dark
-let framesTheme = null; // the scheme its live frames were last sent
 let quietToken = 0;
 let sheetsReady = false;
 let sheetsToken = 0;
@@ -79,8 +77,6 @@ const scrollReads = [];
 const media = new Set(); // real media elements with a placeholder
 const sizes = new WeakMap(); // placeholder -> [width, height]
 const themed = new Set(); // copies inside components that carry `data-theme`
-const frameSpecs = [];
-const liveCopies = new Map(); // real frame -> [copy, spec]
 const renamed = new Set(["iframe"]);
 const pairs = [];
 const states = { hover: new Set(), active: new Set(), focus: new Set(), within: new Set(), visible: new Set() };
@@ -272,17 +268,6 @@ function withAttrs(m, node) {
   return m;
 }
 
-// A frame that can be loaded again, in the copy's scheme, is: a second frame.
-function liveCopy(node) {
-  const spec = frameSpecs.find((s) => node.matches(s.selector));
-  if (!spec) return null;
-  const m = withAttrs(document.createElement("iframe"), node);
-  m.src = spec.src(node, framesTheme ?? scheme);
-  liveCopies.set(node, [m, spec]);
-  spec.made?.(m);
-  return m;
-}
-
 function copyElement(node, tag) {
   if (renamed.has(tag) || (tag.includes("-") && customElements.get(tag) && (rename(tag), true))) {
     // A copy must not upgrade: it would be a second, separately running widget.
@@ -303,8 +288,8 @@ function cloneOf(node) {
   } else {
     cloned++;
     const tag = node.localName;
-    m = (tag === "iframe" && liveCopy(node)) || copyElement(node, tag);
-    if (MEDIA.has(tag) && !liveCopies.has(node)) {
+    m = copyElement(node, tag);
+    if (MEDIA.has(tag)) {
       media.add(node);
       if (node.isConnected) sizeTo(m, node.offsetWidth, node.offsetHeight);
     }
@@ -440,10 +425,9 @@ function syncAttrs(el, names) {
     m.setAttribute("data-theme", themeName());
   }
   if (names.has("style") && sizes.has(m)) sizeTo(m, ...sizes.get(m));
-  if (names.has("src") && liveCopies.has(el)) {
-    const [copy, spec] = liveCopies.get(el);
-    copy.src = spec.src(el, framesTheme ?? scheme);
-  }
+  // A component that attached its shadow root after it was copied (the
+  // comments) says so with an attribute change.
+  if (el.shadowRoot) mirrorShadow(el, m);
 }
 
 // Copies what is pending, at most `limit` new elements; true when nothing is left.
@@ -705,10 +689,6 @@ export function holes() {
   return out;
 }
 
-export function liveFrames(spec) {
-  frameSpecs.push(spec);
-}
-
 /* ─── animations ──────────────────────────────────────────────────────────── */
 
 const nativeAnimate = Element.prototype.animate;
@@ -817,16 +797,6 @@ function adoptScheme(dark) {
   for (const m of themed) m.setAttribute("data-theme", themeName());
 }
 
-// The copy's frames change theme in their own time, so they are told first.
-function retheme(dark) {
-  if (framesTheme === dark) return;
-  framesTheme = dark;
-  for (const [el, [copy, spec]] of liveCopies) {
-    if (el.isConnected) spec.theme(copy, dark);
-    else liveCopies.delete(el);
-  }
-}
-
 /*
  * The copy takes a scheme in one forced style pass: a palette change reaches
  * every element through inherited colour anyway, so nothing smaller exists.
@@ -834,7 +804,6 @@ function retheme(dark) {
  */
 function flip(dark) {
   quietToken++;
-  retheme(dark);
   if (scheme === dark) return;
   adoptScheme(dark);
   swapAll();
@@ -886,7 +855,6 @@ function build() {
   rootEl.append(bodyEl);
   shadow.append(canvas, rootEl, tone, reveal);
   scheme = !real.classList.contains("dark");
-  framesTheme = scheme;
   toMirror.set(real, rootEl);
   toMirror.set(document.body, bodyEl);
   real.append(host);
@@ -926,7 +894,6 @@ export function prepare(intent) {
   if (live) return;
   const want = !real.classList.contains("dark");
   if (scheme === want) return;
-  idle(() => live || retheme(want));
   flipWhenQuiet(want, intent);
 }
 

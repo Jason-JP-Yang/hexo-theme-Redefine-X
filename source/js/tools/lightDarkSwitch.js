@@ -2,7 +2,6 @@ import { main } from "../main.js";
 import { onScroll } from "./scrollScheduler.js";
 import { inSlices } from "./frameSlices.js";
 import * as mirror from "./themeMirror.js";
-import * as giscus from "./giscusTwin.js";
 
 /**
  * Light/dark switch.
@@ -42,8 +41,6 @@ const EDGE = [
   [0.375, 1],
   [1.125, 0.5],
 ];
-// How long the copy keeps covering the comments while their frame changes theme.
-const LAND = 400;
 // Elements per subtree that hands the page's held transitions back.
 const CHUNK = 200;
 // Without plus-lighter the two sides cannot be summed: switch at once.
@@ -82,18 +79,23 @@ function apply(dark) {
 const announce = (dark) =>
   window.dispatchEvent(new CustomEvent("redefine:color-scheme-change", { detail: { isDark: dark } }));
 
-/** Splits a tree into subtrees of at most CHUNK elements; returns [root, size]. */
+/**
+ * Splits a tree into subtrees of at most CHUNK elements; returns [root, size].
+ * A component's shadow tree counts toward its host, which holds it whole:
+ * the hold is a page rule, so it reaches a shadow tree only by inheritance.
+ */
 function partition(top) {
   const out = [];
   const sizes = new Map();
   const count = (el) => {
     let n = 1;
     for (let c = el.firstElementChild; c; c = c.nextElementSibling) n += count(c);
+    for (let c = el.shadowRoot?.firstElementChild; c; c = c.nextElementSibling) n += count(c);
     sizes.set(el, n);
     return n;
   };
   const pick = (el) => {
-    if (sizes.get(el) <= CHUNK) return void out.push([el, sizes.get(el)]);
+    if (sizes.get(el) <= CHUNK || !el.firstElementChild) return void out.push([el, sizes.get(el)]);
     for (let c = el.firstElementChild; c; c = c.nextElementSibling) pick(c);
   };
   count(top);
@@ -367,15 +369,6 @@ function startLive(dark, btn) {
   r.anims[0].finished.then(() => end(r), () => {});
 }
 
-// Resolves after `ms`, or as soon as another switch is asked for.
-function linger(ms) {
-  return new Promise((resolve) => {
-    const started = performance.now();
-    const tick = () => (next !== null || performance.now() - started >= ms ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
-
 async function end(r) {
   if (r.ended) return;
   r.ended = true;
@@ -384,16 +377,6 @@ async function end(r) {
   if (r.dir > 0) {
     land(r.to);
     await nextFrame();
-    // The comments' frame changes theme in its own process: the copy, laid
-    // plainly over the page, keeps covering just them until it has.
-    const frames = giscus.landing(r.to);
-    if (frames.length) {
-      shade.remove();
-      cover.remove();
-      r.host.style.mixBlendMode = "";
-      cut(r.host, null, frames);
-      await linger(LAND);
-    }
   }
   r.unfollow();
   mirror.hide();
@@ -434,7 +417,6 @@ function turn(r) {
 // A tab nobody is looking at switches at once.
 function instant(dark) {
   land(dark);
-  giscus.landing(dark);
   turnGlyphs(dark, false);
   afterSwitch();
 }
